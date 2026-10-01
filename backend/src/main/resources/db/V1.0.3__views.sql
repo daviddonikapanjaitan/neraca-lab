@@ -9,10 +9,11 @@
 --                            net cash as % of market cap.
 --
 -- Flow figures of partial-year periods are annualised (x 12 / months)
--- in the *_annualized columns; prefer FY or TTM periods when available.
+-- in the *_annualized columns; v_ttm_financials gives trailing twelve months.
 -- Views are dropped and recreated on every start (they hold no data).
 -- =====================================================================
 
+DROP VIEW IF EXISTS v_ttm_financials;
 DROP VIEW IF EXISTS v_latest_valuation;
 DROP VIEW IF EXISTS v_valuation;
 DROP VIEW IF EXISTS v_key_metrics;
@@ -134,6 +135,7 @@ SELECT
 
     -- annualised flows (for valuation of partial-year periods)
     ROUND(revenue * annualize_factor, 4)                                            AS revenue_annualized,
+    ROUND(operating_income * annualize_factor, 4)                                   AS operating_income_annualized,
     ROUND(ebit * annualize_factor, 4)                                               AS ebit_annualized,
     ROUND(ebitda * annualize_factor, 4)                                             AS ebitda_annualized,
     ROUND(net_income_to_parent * annualize_factor, 4)                               AS net_income_to_parent_annualized,
@@ -156,14 +158,15 @@ WITH priced AS (
         km.*,
         px.price_date,
         px.close_price,
-        px.close_price * COALESCE(px.shares_outstanding, km.shares) AS market_cap
+        px.close_price * km.shares AS market_cap
     FROM v_key_metrics km
     JOIN LATERAL (
-        SELECT sp.price_date, sp.close_price, sp.shares_outstanding
-        FROM stock_price sp
-        WHERE sp.company_id = km.company_id
-          AND sp.price_date <= km.period_end
-        ORDER BY sp.price_date DESC
+        SELECT pd.trading_date AS price_date, pd.close_price
+        FROM price_daily pd
+        WHERE pd.company_id = km.company_id
+          AND pd.trading_date <= km.period_end
+          AND pd.close_price IS NOT NULL
+        ORDER BY pd.trading_date DESC
         LIMIT 1
     ) px ON TRUE
 ),
@@ -182,6 +185,7 @@ SELECT
     ROUND(market_cap / NULLIF(revenue_annualized, 0), 6)              AS price_to_sales_annualized,
     ROUND(enterprise_value / NULLIF(revenue_annualized, 0), 6)        AS ev_to_sales_annualized,
     ROUND(enterprise_value / NULLIF(ebit_annualized, 0), 4)           AS ev_to_ebit_annualized,
+    ROUND(enterprise_value / NULLIF(operating_income_annualized, 0), 4) AS ev_to_operating_income_annualized,
     ROUND(enterprise_value / NULLIF(ebitda_annualized, 0), 4)         AS ev_to_ebitda_annualized,
     ROUND(ebit_annualized / NULLIF(enterprise_value, 0), 6)           AS earnings_yield_annualized,
     ROUND(free_cash_flow_annualized / NULLIF(market_cap, 0), 6)       AS fcf_yield_annualized,
@@ -190,7 +194,7 @@ SELECT
 FROM ev;
 
 COMMENT ON VIEW v_valuation IS
-    'Valuation multiples per period using the last stock_price on or before period_end.';
+    'Valuation multiples per period using the last price_daily close on or before period_end.';
 
 -- ---------------------------------------------------------------------
 -- v_latest_valuation : latest price vs latest full report
@@ -210,13 +214,14 @@ priced AS (
         lp.*,
         px.price_date,
         px.close_price,
-        px.close_price * COALESCE(px.shares_outstanding, lp.shares) AS market_cap
+        px.close_price * lp.shares AS market_cap
     FROM latest_period lp
     JOIN LATERAL (
-        SELECT sp.price_date, sp.close_price, sp.shares_outstanding
-        FROM stock_price sp
-        WHERE sp.company_id = lp.company_id
-        ORDER BY sp.price_date DESC
+        SELECT pd.trading_date AS price_date, pd.close_price
+        FROM price_daily pd
+        WHERE pd.company_id = lp.company_id
+          AND pd.close_price IS NOT NULL
+        ORDER BY pd.trading_date DESC
         LIMIT 1
     ) px ON TRUE
 ),
@@ -235,6 +240,7 @@ SELECT
     ROUND(market_cap / NULLIF(revenue_annualized, 0), 6)              AS price_to_sales_annualized,
     ROUND(enterprise_value / NULLIF(revenue_annualized, 0), 6)        AS ev_to_sales_annualized,
     ROUND(enterprise_value / NULLIF(ebit_annualized, 0), 4)           AS ev_to_ebit_annualized,
+    ROUND(enterprise_value / NULLIF(operating_income_annualized, 0), 4) AS ev_to_operating_income_annualized,
     ROUND(enterprise_value / NULLIF(ebitda_annualized, 0), 4)         AS ev_to_ebitda_annualized,
     ROUND(ebit_annualized / NULLIF(enterprise_value, 0), 6)           AS earnings_yield_annualized,
     ROUND(free_cash_flow_annualized / NULLIF(market_cap, 0), 6)       AS fcf_yield_annualized,
@@ -243,4 +249,59 @@ SELECT
 FROM ev;
 
 COMMENT ON VIEW v_latest_valuation IS
-    'Current valuation: most recent stock_price against the most recent period with full statements.';
+    'Current valuation: most recent price_daily close against the most recent period with full statements.';
+
+-- ---------------------------------------------------------------------
+-- v_ttm_financials : trailing-twelve-month flows per period
+--   FY             : the fiscal year itself
+--   Q1 / H1 / 9M   : year-to-date + prior FY - prior-year same year-to-date
+-- Only year-to-date periods (Q1, H1, 9M, FY) qualify; a column is NULL when one
+-- of the three periods lacks it (e.g. no D&A for a comparative -> no EBITDA TTM).
+-- ---------------------------------------------------------------------
+CREATE VIEW v_ttm_financials AS
+WITH flows AS (
+    SELECT
+        rp.company_id, rp.period_id, rp.fiscal_year, rp.period_type, rp.period_end,
+        i.revenue, i.operating_income, i.ebit, i.ebitda,
+        i.net_income, i.net_income_to_parent,
+        cf.operating_cash_flow, cf.capital_expenditure
+    FROM reporting_period rp
+    LEFT JOIN income_statement i     ON i.period_id  = rp.period_id
+    LEFT JOIN cash_flow_statement cf ON cf.period_id = rp.period_id
+    WHERE rp.period_type IN ('Q1', 'H1', '9M', 'FY')
+),
+ttm AS (
+    SELECT
+        cur.company_id, cur.period_id, cur.fiscal_year, cur.period_type, cur.period_end,
+        CASE WHEN cur.period_type = 'FY' THEN cur.revenue
+             ELSE cur.revenue + fy.revenue - py.revenue END                              AS revenue_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.operating_income
+             ELSE cur.operating_income + fy.operating_income - py.operating_income END   AS operating_income_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.ebit
+             ELSE cur.ebit + fy.ebit - py.ebit END                                       AS ebit_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.ebitda
+             ELSE cur.ebitda + fy.ebitda - py.ebitda END                                 AS ebitda_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.net_income
+             ELSE cur.net_income + fy.net_income - py.net_income END                     AS net_income_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.net_income_to_parent
+             ELSE cur.net_income_to_parent + fy.net_income_to_parent
+                  - py.net_income_to_parent END                                          AS net_income_to_parent_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.operating_cash_flow
+             ELSE cur.operating_cash_flow + fy.operating_cash_flow
+                  - py.operating_cash_flow END                                           AS operating_cash_flow_ttm,
+        CASE WHEN cur.period_type = 'FY' THEN cur.capital_expenditure
+             ELSE cur.capital_expenditure + fy.capital_expenditure
+                  - py.capital_expenditure END                                           AS capital_expenditure_ttm
+    FROM flows cur
+    LEFT JOIN flows fy ON fy.company_id = cur.company_id
+                      AND fy.fiscal_year = cur.fiscal_year - 1 AND fy.period_type = 'FY'
+    LEFT JOIN flows py ON py.company_id = cur.company_id
+                      AND py.fiscal_year = cur.fiscal_year - 1 AND py.period_type = cur.period_type
+)
+SELECT
+    ttm.*,
+    operating_cash_flow_ttm + capital_expenditure_ttm AS free_cash_flow_ttm
+FROM ttm;
+
+COMMENT ON VIEW v_ttm_financials IS
+    'Trailing-twelve-month flows per year-to-date period: YTD + prior FY - prior-year YTD (FY = itself).';

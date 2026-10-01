@@ -263,37 +263,6 @@ COMMENT ON COLUMN cash_flow_statement.debt_repaid IS 'Repayments of bank loans, 
 COMMENT ON COLUMN cash_flow_statement.lease_payments IS 'Principal payments of lease liabilities (negative).';
 
 -- ---------------------------------------------------------------------
--- revenue_segment  (revenue breakdown notes)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS revenue_segment (
-    revenue_segment_id  BIGSERIAL PRIMARY KEY,
-
-    company_id          BIGINT NOT NULL
-        REFERENCES company(company_id),
-
-    period_id           BIGINT NOT NULL
-        REFERENCES reporting_period(period_id),
-
-    segment_type        VARCHAR(20) NOT NULL,
-    segment_name        VARCHAR(255) NOT NULL,
-    segment_name_en     VARCHAR(255),
-
-    revenue             NUMERIC(24,4) NOT NULL,
-
-    created_at          TIMESTAMPTZ DEFAULT now(),
-
-    CONSTRAINT uq_revenue_segment UNIQUE (company_id, period_id, segment_type, segment_name),
-    CONSTRAINT fk_revenue_segment_period_company
-        FOREIGN KEY (period_id, company_id)
-        REFERENCES reporting_period (period_id, company_id),
-    CONSTRAINT ck_revenue_segment_type
-        CHECK (segment_type IN ('PRODUCT', 'SERVICE', 'GEOGRAPHY', 'CUSTOMER', 'OTHER'))
-);
-
-COMMENT ON TABLE  revenue_segment IS 'Revenue breakdown as disclosed in the notes. Rows of one segment_type sum to income_statement.revenue.';
-COMMENT ON COLUMN revenue_segment.segment_name IS 'Segment name as written in the filing (original language).';
-
--- ---------------------------------------------------------------------
 -- corporate_action
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS corporate_action (
@@ -330,30 +299,4 @@ CREATE INDEX IF NOT EXISTS ix_corporate_action_company_date
 COMMENT ON COLUMN corporate_action.ratio_from IS 'Old shares in a split / rights ratio, e.g. 1 in a 1:5 split.';
 COMMENT ON COLUMN corporate_action.ratio_to IS 'New shares in a split / rights ratio, e.g. 5 in a 1:5 split.';
 
--- ---------------------------------------------------------------------
--- stock_price  (needed for valuation: P/E, EV/EBIT, FCF yield ...)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS stock_price (
-    stock_price_id      BIGSERIAL PRIMARY KEY,
-
-    company_id          BIGINT NOT NULL
-        REFERENCES company(company_id),
-
-    price_date          DATE NOT NULL,
-
-    open_price          NUMERIC(20,4),
-    high_price          NUMERIC(20,4),
-    low_price           NUMERIC(20,4),
-    close_price         NUMERIC(20,4) NOT NULL,
-    volume              NUMERIC(24,4),
-
-    shares_outstanding  NUMERIC(24,8),
-
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    CONSTRAINT uq_stock_price UNIQUE (company_id, price_date),
-    CONSTRAINT ck_stock_price_positive CHECK (close_price > 0)
-);
-
-COMMENT ON TABLE  stock_price IS 'Daily (or ad-hoc) closing prices in company.currency.';
-COMMENT ON COLUMN stock_price.shares_outstanding IS 'Optional; when NULL the valuation views use the latest balance sheet share count.';
+-- Segments, market data, share counts, metrics and valuation tables: V1.0.2__schema_market_valuation.sql
