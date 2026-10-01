@@ -1,0 +1,12 @@
+target/
+.idea/
+.settings/
+.vscode/
+.classpath
+.project
+.factorypath
+*.iml
+HELP.md
+Dockerfile
+docker-compose.yaml
+.env
