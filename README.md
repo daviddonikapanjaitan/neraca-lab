@@ -53,24 +53,28 @@ Spring SQL init (`spring.sql.init.*`) on every application start, in the order l
 `application.yaml`. Every script is idempotent (`IF NOT EXISTS`, upserts), so re-running is safe.
 Hibernate does not touch the schema (`ddl-auto: none`).
 
+All tables and views live in the PostgreSQL `public` schema (no separate schemas), so every
+table can reference any other with a plain foreign key. Objects are referenced unqualified
+(`company`, `income_statement`, ...).
+
 | Script                          | Content                                                        |
 |---------------------------------|----------------------------------------------------------------|
-| `V1.0.1__schema.sql`            | schemas `company`, `fundamental`, `market` and their tables    |
+| `V1.0.1__schema.sql`            | tables, keys and indexes                                       |
 | `V1.0.2__views.sql`             | analysis views (recreated on every start)                      |
 | `V1.0.3__data_HRTA_2026_H1.sql` | PT Hartadinata Abadi Tbk (HRTA) Q2-2026 filing data            |
 
 ### Tables
 
-| Table                             | Purpose                                                    |
-|-----------------------------------|------------------------------------------------------------|
-| `company.company`                 | company master data                                        |
-| `company.corporate_action`        | splits, rights issues, dividends, buybacks, ...            |
-| `fundamental.reporting_period`    | one row per company per period (`FY`, `Q1`-`Q4`, `H1`, `9M`, `TTM`) |
-| `fundamental.income_statement`    | income statement                                           |
-| `fundamental.balance_sheet`       | statement of financial position                            |
-| `fundamental.cash_flow_statement` | cash flow statement                                        |
-| `fundamental.revenue_segment`     | revenue breakdown from the notes                           |
-| `market.stock_price`              | share prices, needed for valuation views                   |
+| Table                 | Purpose                                                              |
+|-----------------------|----------------------------------------------------------------------|
+| `company`             | company master data                                                  |
+| `corporate_action`    | splits, rights issues, dividends, buybacks, ...                      |
+| `reporting_period`    | one row per company per period (`FY`, `Q1`-`Q4`, `H1`, `9M`, `TTM`) |
+| `income_statement`    | income statement                                                     |
+| `balance_sheet`       | statement of financial position                                      |
+| `cash_flow_statement` | cash flow statement                                                  |
+| `revenue_segment`     | revenue breakdown from the notes                                     |
+| `stock_price`         | share prices, needed for valuation views                             |
 
 Conventions: amounts in full units of the company currency; income-statement expenses are
 positive; cash-flow outflows are negative; `NULL` = not reported, `0` = reported as zero.
@@ -78,20 +82,20 @@ IDX "Kuartal II" filings are 6-month year-to-date, stored as `period_type = 'H1'
 
 ### Analysis views (Roaring Kitty / Keith Gill style deep value)
 
-| View                               | Content                                                                 |
-|------------------------------------|-------------------------------------------------------------------------|
-| `fundamental.v_key_metrics`        | net cash, tangible book, NCAV (net-net), liquidity, FCF, margins, ROE/ROA/ROIC, working-capital days |
-| `fundamental.v_valuation`          | P/E, P/B, P/TBV, EV/EBIT, EV/EBITDA, FCF yield at the price on period end |
-| `fundamental.v_latest_valuation`   | same multiples using the latest price and latest full report            |
+| View                 | Content                                                                                               |
+|----------------------|-------------------------------------------------------------------------------------------------------|
+| `v_key_metrics`      | net cash, tangible book, NCAV (net-net), liquidity, FCF, margins, ROE/ROA/ROIC, working-capital days |
+| `v_valuation`        | P/E, P/B, P/TBV, EV/EBIT, EV/EBITDA, FCF yield at the price on period end                             |
+| `v_latest_valuation` | same multiples using the latest price and latest full report                                          |
 
 Ratios are fractions (`0.25` = 25%). `*_annualized` columns scale partial-year flows by
 12 / period months. The valuation views return rows once prices are loaded, e.g.:
 
 ```sql
-INSERT INTO market.stock_price (company_id, price_date, close_price)
-SELECT company_id, DATE '2026-06-30', 1000 FROM company.company WHERE ticker = 'HRTA';
+INSERT INTO stock_price (company_id, price_date, close_price)
+SELECT company_id, DATE '2026-06-30', 1000 FROM company WHERE ticker = 'HRTA';
 
-SELECT * FROM fundamental.v_latest_valuation;
+SELECT * FROM v_latest_valuation;
 ```
 
 ### Adding a new financial statement
@@ -100,3 +104,13 @@ SELECT * FROM fundamental.v_latest_valuation;
 2. Create the next script, e.g. `V1.0.4__data_<TICKER>_<YEAR>_<PERIOD>.sql`, following the
    upsert pattern of `V1.0.3__data_HRTA_2026_H1.sql`.
 3. Add it to `spring.sql.init.data-locations` in `application.yaml` and restart the backend.
+
+### Running the scripts manually
+
+Without starting the backend, the scripts can be applied directly to the Docker database:
+
+```bash
+cd backend/src/main/resources/db
+cat V1.0.1__schema.sql V1.0.2__views.sql V1.0.3__data_HRTA_2026_H1.sql \
+  | docker exec -i neracalab-postgres psql -U <user> -d neracalab -v ON_ERROR_STOP=1
+```

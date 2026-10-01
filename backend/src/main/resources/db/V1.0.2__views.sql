@@ -13,14 +13,14 @@
 -- Views are dropped and recreated on every start (they hold no data).
 -- =====================================================================
 
-DROP VIEW IF EXISTS fundamental.v_latest_valuation;
-DROP VIEW IF EXISTS fundamental.v_valuation;
-DROP VIEW IF EXISTS fundamental.v_key_metrics;
+DROP VIEW IF EXISTS v_latest_valuation;
+DROP VIEW IF EXISTS v_valuation;
+DROP VIEW IF EXISTS v_key_metrics;
 
 -- ---------------------------------------------------------------------
--- fundamental.v_key_metrics : one row per company per reporting period
+-- v_key_metrics : one row per company per reporting period
 -- ---------------------------------------------------------------------
-CREATE VIEW fundamental.v_key_metrics AS
+CREATE VIEW v_key_metrics AS
 WITH base AS (
     SELECT
         c.company_id,
@@ -55,11 +55,11 @@ WITH base AS (
         cf.operating_cash_flow, cf.capital_expenditure, cf.lease_payments,
         cf.dividends_paid, cf.share_buybacks,
         cf.operating_cash_flow + cf.capital_expenditure                          AS free_cash_flow
-    FROM fundamental.reporting_period rp
-    JOIN company.company c                     ON c.company_id = rp.company_id
-    LEFT JOIN fundamental.income_statement i   ON i.period_id  = rp.period_id
-    LEFT JOIN fundamental.balance_sheet b      ON b.period_id  = rp.period_id
-    LEFT JOIN fundamental.cash_flow_statement cf ON cf.period_id = rp.period_id
+    FROM reporting_period rp
+    JOIN company c                     ON c.company_id = rp.company_id
+    LEFT JOIN income_statement i   ON i.period_id  = rp.period_id
+    LEFT JOIN balance_sheet b      ON b.period_id  = rp.period_id
+    LEFT JOIN cash_flow_statement cf ON cf.period_id = rp.period_id
 ),
 calc AS (
     SELECT
@@ -143,24 +143,24 @@ SELECT
     non_controlling_interest
 FROM calc;
 
-COMMENT ON VIEW fundamental.v_key_metrics IS
+COMMENT ON VIEW v_key_metrics IS
     'Per-period fundamentals and ratios. Ratios are fractions (0.25 = 25%). *_annualized columns scale partial-year flows by 12 / period_months.';
 
 -- ---------------------------------------------------------------------
--- fundamental.v_valuation : each period valued at the last price on or
+-- v_valuation : each period valued at the last price on or
 -- before its period_end (historical multiples)
 -- ---------------------------------------------------------------------
-CREATE VIEW fundamental.v_valuation AS
+CREATE VIEW v_valuation AS
 WITH priced AS (
     SELECT
         km.*,
         px.price_date,
         px.close_price,
         px.close_price * COALESCE(px.shares_outstanding, km.shares) AS market_cap
-    FROM fundamental.v_key_metrics km
+    FROM v_key_metrics km
     JOIN LATERAL (
         SELECT sp.price_date, sp.close_price, sp.shares_outstanding
-        FROM market.stock_price sp
+        FROM stock_price sp
         WHERE sp.company_id = km.company_id
           AND sp.price_date <= km.period_end
         ORDER BY sp.price_date DESC
@@ -189,17 +189,17 @@ SELECT
     ROUND(ncav / NULLIF(market_cap, 0), 6)                            AS ncav_to_market_cap
 FROM ev;
 
-COMMENT ON VIEW fundamental.v_valuation IS
-    'Valuation multiples per period using the last market.stock_price on or before period_end.';
+COMMENT ON VIEW v_valuation IS
+    'Valuation multiples per period using the last stock_price on or before period_end.';
 
 -- ---------------------------------------------------------------------
--- fundamental.v_latest_valuation : latest price vs latest full report
+-- v_latest_valuation : latest price vs latest full report
 -- (latest period that has both an income statement and a balance sheet)
 -- ---------------------------------------------------------------------
-CREATE VIEW fundamental.v_latest_valuation AS
+CREATE VIEW v_latest_valuation AS
 WITH latest_period AS (
     SELECT DISTINCT ON (km.company_id) km.*
-    FROM fundamental.v_key_metrics km
+    FROM v_key_metrics km
     WHERE km.revenue IS NOT NULL
       AND km.total_assets IS NOT NULL
     ORDER BY km.company_id, km.period_end DESC,
@@ -214,7 +214,7 @@ priced AS (
     FROM latest_period lp
     JOIN LATERAL (
         SELECT sp.price_date, sp.close_price, sp.shares_outstanding
-        FROM market.stock_price sp
+        FROM stock_price sp
         WHERE sp.company_id = lp.company_id
         ORDER BY sp.price_date DESC
         LIMIT 1
@@ -242,5 +242,5 @@ SELECT
     ROUND(ncav / NULLIF(market_cap, 0), 6)                            AS ncav_to_market_cap
 FROM ev;
 
-COMMENT ON VIEW fundamental.v_latest_valuation IS
-    'Current valuation: most recent market.stock_price against the most recent period with full statements.';
+COMMENT ON VIEW v_latest_valuation IS
+    'Current valuation: most recent stock_price against the most recent period with full statements.';

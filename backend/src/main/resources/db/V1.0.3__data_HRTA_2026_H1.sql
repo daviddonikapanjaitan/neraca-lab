@@ -35,7 +35,7 @@
 -- ---------------------------------------------------------------------
 -- company
 -- ---------------------------------------------------------------------
-INSERT INTO company.company (
+INSERT INTO company (
     ticker, exchange, cik, company_name, legal_name, industry, sector,
     country, currency, fiscal_year_end, ipo_date, active)
 VALUES (
@@ -49,25 +49,25 @@ ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE SET
     sector          = EXCLUDED.sector,
     country         = EXCLUDED.country,
     currency        = EXCLUDED.currency,
-    fiscal_year_end = GREATEST(company.company.fiscal_year_end, EXCLUDED.fiscal_year_end),
+    fiscal_year_end = GREATEST(company.fiscal_year_end, EXCLUDED.fiscal_year_end),
     updated_at      = now()
-WHERE (company.company.company_name, company.company.legal_name, company.company.industry,
-       company.company.sector, company.company.country, company.company.currency)
+WHERE (company.company_name, company.legal_name, company.industry,
+       company.sector, company.country, company.currency)
       IS DISTINCT FROM
       (EXCLUDED.company_name, EXCLUDED.legal_name, EXCLUDED.industry,
        EXCLUDED.sector, EXCLUDED.country, EXCLUDED.currency)
-   OR company.company.fiscal_year_end IS DISTINCT FROM
-      GREATEST(company.company.fiscal_year_end, EXCLUDED.fiscal_year_end);
+   OR company.fiscal_year_end IS DISTINCT FROM
+      GREATEST(company.fiscal_year_end, EXCLUDED.fiscal_year_end);
 
 -- ---------------------------------------------------------------------
 -- reporting periods
 -- ---------------------------------------------------------------------
-INSERT INTO fundamental.reporting_period (
+INSERT INTO reporting_period (
     company_id, fiscal_year, fiscal_quarter, period_type,
     period_start, period_end, filing_date, source_filing, audited)
 SELECT c.company_id, v.fiscal_year, v.fiscal_quarter, v.period_type,
        v.period_start, v.period_end, NULL, v.source_filing, v.audited
-FROM company.company c
+FROM company c
 CROSS JOIN (VALUES
     (2026, 2::SMALLINT,    'H1', DATE '2026-01-01', DATE '2026-06-30', 'FinancialStatement-2026-II-HRTA.xlsx', FALSE),
     (2025, 2::SMALLINT,    'H1', DATE '2025-01-01', DATE '2025-06-30', 'FinancialStatement-2026-II-HRTA.xlsx', FALSE),
@@ -78,13 +78,13 @@ ON CONFLICT ON CONSTRAINT uq_reporting_period DO UPDATE SET
     period_start  = EXCLUDED.period_start,
     period_end    = EXCLUDED.period_end,
     -- keep an already-set source/audit flag (e.g. FY 2025 loaded from the audited annual report)
-    source_filing = COALESCE(fundamental.reporting_period.source_filing, EXCLUDED.source_filing),
-    audited       = COALESCE(fundamental.reporting_period.audited, EXCLUDED.audited);
+    source_filing = COALESCE(reporting_period.source_filing, EXCLUDED.source_filing),
+    audited       = COALESCE(reporting_period.audited, EXCLUDED.audited);
 
 -- ---------------------------------------------------------------------
 -- income statement  (expenses positive)
 -- ---------------------------------------------------------------------
-INSERT INTO fundamental.income_statement (
+INSERT INTO income_statement (
     company_id, period_id,
     revenue, cost_of_revenue, gross_profit,
     operating_expenses, sga_expense, rd_expense,
@@ -105,8 +105,8 @@ SELECT rp.company_id, rp.period_id,
        v.net_income, v.net_income_to_parent,
        v.basic_eps, v.diluted_eps,
        v.basic_shares, v.diluted_shares
-FROM fundamental.reporting_period rp
-JOIN company.company c ON c.company_id = rp.company_id
+FROM reporting_period rp
+JOIN company c ON c.company_id = rp.company_id
 JOIN (VALUES
     -- ---------------- 2026 H1 (sheet 1311000, CurrentYearDuration) ----------------
     (2026, 'H1',
@@ -194,7 +194,7 @@ ON CONFLICT ON CONSTRAINT uq_income_statement DO UPDATE SET
 -- ---------------------------------------------------------------------
 -- balance sheet
 -- ---------------------------------------------------------------------
-INSERT INTO fundamental.balance_sheet (
+INSERT INTO balance_sheet (
     company_id, period_id,
     cash_and_equivalents, marketable_securities,
     accounts_receivable, inventory,
@@ -215,8 +215,8 @@ SELECT rp.company_id, rp.period_id,
        v.shareholders_equity, v.non_controlling_interest, v.total_equity,
        v.retained_earnings, v.goodwill, v.intangible_assets,
        v.shares_outstanding
-FROM fundamental.reporting_period rp
-JOIN company.company c ON c.company_id = rp.company_id
+FROM reporting_period rp
+JOIN company c ON c.company_id = rp.company_id
 JOIN (VALUES
     -- ---------------- 2026-06-30 (sheet 1210000, CurrentYearInstant) ----------------
     (2026, 'H1',
@@ -309,7 +309,7 @@ ON CONFLICT ON CONSTRAINT uq_balance_sheet DO UPDATE SET
 -- ---------------------------------------------------------------------
 -- cash flow statement  (inflow +, outflow -)
 -- ---------------------------------------------------------------------
-INSERT INTO fundamental.cash_flow_statement (
+INSERT INTO cash_flow_statement (
     company_id, period_id,
     operating_cash_flow, capital_expenditure,
     investing_cash_flow, financing_cash_flow,
@@ -322,8 +322,8 @@ SELECT rp.company_id, rp.period_id,
        v.acquisitions, v.share_buybacks, v.stock_issuance, v.dividends_paid,
        v.debt_issued, v.debt_repaid, v.lease_payments,
        v.cash_change, v.ending_cash
-FROM fundamental.reporting_period rp
-JOIN company.company c ON c.company_id = rp.company_id
+FROM reporting_period rp
+JOIN company c ON c.company_id = rp.company_id
 JOIN (VALUES
     -- ---------------- 2026 H1 (sheet 1510000, CurrentYearDuration) ----------------
     (2026, 'H1',
@@ -381,11 +381,11 @@ ON CONFLICT ON CONSTRAINT uq_cash_flow_statement DO UPDATE SET
 -- ---------------------------------------------------------------------
 -- revenue by type (sheet 1617000)
 -- ---------------------------------------------------------------------
-INSERT INTO fundamental.revenue_segment (
+INSERT INTO revenue_segment (
     company_id, period_id, segment_type, segment_name, segment_name_en, revenue)
 SELECT rp.company_id, rp.period_id, v.segment_type, v.segment_name, v.segment_name_en, v.revenue
-FROM fundamental.reporting_period rp
-JOIN company.company c ON c.company_id = rp.company_id
+FROM reporting_period rp
+JOIN company c ON c.company_id = rp.company_id
 JOIN (VALUES
     (2026, 'PRODUCT', 'Penjualan perhiasan dan logam mulia - Grosir', 'Jewelry and precious metal sales - Wholesale', 30199040866058::NUMERIC),
     (2026, 'PRODUCT', 'Penjualan perhiasan dan logam mulia - Toko',   'Jewelry and precious metal sales - Retail stores', 3484461583830::NUMERIC),

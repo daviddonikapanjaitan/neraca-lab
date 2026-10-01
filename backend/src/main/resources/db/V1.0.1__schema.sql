@@ -14,14 +14,10 @@
 --   * NULL means "not reported / not available"; 0 means "reported as zero".
 -- =====================================================================
 
-CREATE SCHEMA IF NOT EXISTS company;
-CREATE SCHEMA IF NOT EXISTS fundamental;
-CREATE SCHEMA IF NOT EXISTS market;
-
 -- ---------------------------------------------------------------------
--- company.company
+-- company
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS company.company (
+CREATE TABLE IF NOT EXISTS company (
     company_id          BIGSERIAL PRIMARY KEY,
     ticker              VARCHAR(20) NOT NULL,
     exchange            VARCHAR(50),
@@ -43,19 +39,19 @@ CREATE TABLE IF NOT EXISTS company.company (
     CONSTRAINT ck_company_currency CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$')
 );
 
-COMMENT ON TABLE  company.company IS 'Listed company master data.';
-COMMENT ON COLUMN company.company.cik IS 'SEC Central Index Key (US filers only).';
-COMMENT ON COLUMN company.company.currency IS 'ISO 4217 reporting currency of the financial statements.';
-COMMENT ON COLUMN company.company.fiscal_year_end IS 'Most recent fiscal year end date; its month/day define the fiscal calendar.';
+COMMENT ON TABLE  company IS 'Listed company master data.';
+COMMENT ON COLUMN company.cik IS 'SEC Central Index Key (US filers only).';
+COMMENT ON COLUMN company.currency IS 'ISO 4217 reporting currency of the financial statements.';
+COMMENT ON COLUMN company.fiscal_year_end IS 'Most recent fiscal year end date; its month/day define the fiscal calendar.';
 
 -- ---------------------------------------------------------------------
--- fundamental.reporting_period
+-- reporting_period
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS fundamental.reporting_period (
+CREATE TABLE IF NOT EXISTS reporting_period (
     period_id           BIGSERIAL PRIMARY KEY,
 
     company_id          BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     fiscal_year         INTEGER NOT NULL,
 
@@ -86,27 +82,27 @@ CREATE TABLE IF NOT EXISTS fundamental.reporting_period (
 );
 
 CREATE INDEX IF NOT EXISTS ix_reporting_period_company_end
-    ON fundamental.reporting_period (company_id, period_end);
+    ON reporting_period (company_id, period_end);
 
-COMMENT ON TABLE  fundamental.reporting_period IS 'One row per company per reported period.';
-COMMENT ON COLUMN fundamental.reporting_period.period_type IS
+COMMENT ON TABLE  reporting_period IS 'One row per company per reported period.';
+COMMENT ON COLUMN reporting_period.period_type IS
     'FY = full fiscal year; Q1..Q4 = single 3-month quarter; H1 = 6-month year-to-date; 9M = 9-month year-to-date; TTM = trailing twelve months. IDX "Kuartal II" filings are 6-month YTD, so they are stored as H1 with fiscal_quarter = 2.';
-COMMENT ON COLUMN fundamental.reporting_period.fiscal_quarter IS
+COMMENT ON COLUMN reporting_period.fiscal_quarter IS
     'Quarter in which the period ends (1-4); NULL for FY.';
-COMMENT ON COLUMN fundamental.reporting_period.source_filing IS 'Source document, e.g. the IDX XBRL workbook file name.';
-COMMENT ON COLUMN fundamental.reporting_period.audited IS 'TRUE audited, FALSE unaudited, NULL unknown.';
+COMMENT ON COLUMN reporting_period.source_filing IS 'Source document, e.g. the IDX XBRL workbook file name.';
+COMMENT ON COLUMN reporting_period.audited IS 'TRUE audited, FALSE unaudited, NULL unknown.';
 
 -- ---------------------------------------------------------------------
--- fundamental.income_statement
+-- income_statement
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS fundamental.income_statement (
+CREATE TABLE IF NOT EXISTS income_statement (
     income_statement_id BIGSERIAL PRIMARY KEY,
 
     company_id          BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     period_id           BIGINT NOT NULL
-        REFERENCES fundamental.reporting_period(period_id),
+        REFERENCES reporting_period(period_id),
 
     revenue             NUMERIC(24,4),
     cost_of_revenue     NUMERIC(24,4),
@@ -143,27 +139,27 @@ CREATE TABLE IF NOT EXISTS fundamental.income_statement (
     CONSTRAINT uq_income_statement UNIQUE (company_id, period_id),
     CONSTRAINT fk_income_statement_period_company
         FOREIGN KEY (period_id, company_id)
-        REFERENCES fundamental.reporting_period (period_id, company_id)
+        REFERENCES reporting_period (period_id, company_id)
 );
 
-COMMENT ON COLUMN fundamental.income_statement.operating_expenses IS 'All operating expenses below gross profit (selling, G&A, R&D, other operating).';
-COMMENT ON COLUMN fundamental.income_statement.depreciation IS 'Depreciation of PP&E plus right-of-use assets for the period.';
-COMMENT ON COLUMN fundamental.income_statement.income_tax IS 'Positive = tax expense, negative = tax benefit.';
-COMMENT ON COLUMN fundamental.income_statement.net_income IS 'Profit for the period, including non-controlling interests.';
-COMMENT ON COLUMN fundamental.income_statement.net_income_to_parent IS 'Profit attributable to owners of the parent (EPS numerator).';
-COMMENT ON COLUMN fundamental.income_statement.basic_shares IS 'Weighted average shares used for basic EPS.';
+COMMENT ON COLUMN income_statement.operating_expenses IS 'All operating expenses below gross profit (selling, G&A, R&D, other operating).';
+COMMENT ON COLUMN income_statement.depreciation IS 'Depreciation of PP&E plus right-of-use assets for the period.';
+COMMENT ON COLUMN income_statement.income_tax IS 'Positive = tax expense, negative = tax benefit.';
+COMMENT ON COLUMN income_statement.net_income IS 'Profit for the period, including non-controlling interests.';
+COMMENT ON COLUMN income_statement.net_income_to_parent IS 'Profit attributable to owners of the parent (EPS numerator).';
+COMMENT ON COLUMN income_statement.basic_shares IS 'Weighted average shares used for basic EPS.';
 
 -- ---------------------------------------------------------------------
--- fundamental.balance_sheet
+-- balance_sheet
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS fundamental.balance_sheet (
+CREATE TABLE IF NOT EXISTS balance_sheet (
     balance_sheet_id    BIGSERIAL PRIMARY KEY,
 
     company_id          BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     period_id           BIGINT NOT NULL
-        REFERENCES fundamental.reporting_period(period_id),
+        REFERENCES reporting_period(period_id),
 
     cash_and_equivalents NUMERIC(24,4),
     marketable_securities NUMERIC(24,4),
@@ -201,30 +197,30 @@ CREATE TABLE IF NOT EXISTS fundamental.balance_sheet (
     CONSTRAINT uq_balance_sheet UNIQUE (company_id, period_id),
     CONSTRAINT fk_balance_sheet_period_company
         FOREIGN KEY (period_id, company_id)
-        REFERENCES fundamental.reporting_period (period_id, company_id)
+        REFERENCES reporting_period (period_id, company_id)
 );
 
-COMMENT ON TABLE  fundamental.balance_sheet IS 'Statement of financial position at reporting_period.period_end.';
-COMMENT ON COLUMN fundamental.balance_sheet.deferred_revenue IS 'Contract liabilities / advances received from customers.';
-COMMENT ON COLUMN fundamental.balance_sheet.short_term_debt IS 'Interest-bearing debt due within 12 months (incl. current maturities), excl. leases.';
-COMMENT ON COLUMN fundamental.balance_sheet.long_term_debt IS 'Interest-bearing debt due after 12 months (bank loans, bonds, financing payables), excl. leases.';
-COMMENT ON COLUMN fundamental.balance_sheet.lease_liabilities IS 'Current + non-current lease liabilities.';
-COMMENT ON COLUMN fundamental.balance_sheet.shareholders_equity IS 'Equity attributable to owners of the parent.';
-COMMENT ON COLUMN fundamental.balance_sheet.total_equity IS 'shareholders_equity + non_controlling_interest.';
-COMMENT ON COLUMN fundamental.balance_sheet.retained_earnings IS 'Appropriated + unappropriated retained earnings.';
-COMMENT ON COLUMN fundamental.balance_sheet.shares_outstanding IS 'Issued shares less treasury shares at period end.';
+COMMENT ON TABLE  balance_sheet IS 'Statement of financial position at reporting_period.period_end.';
+COMMENT ON COLUMN balance_sheet.deferred_revenue IS 'Contract liabilities / advances received from customers.';
+COMMENT ON COLUMN balance_sheet.short_term_debt IS 'Interest-bearing debt due within 12 months (incl. current maturities), excl. leases.';
+COMMENT ON COLUMN balance_sheet.long_term_debt IS 'Interest-bearing debt due after 12 months (bank loans, bonds, financing payables), excl. leases.';
+COMMENT ON COLUMN balance_sheet.lease_liabilities IS 'Current + non-current lease liabilities.';
+COMMENT ON COLUMN balance_sheet.shareholders_equity IS 'Equity attributable to owners of the parent.';
+COMMENT ON COLUMN balance_sheet.total_equity IS 'shareholders_equity + non_controlling_interest.';
+COMMENT ON COLUMN balance_sheet.retained_earnings IS 'Appropriated + unappropriated retained earnings.';
+COMMENT ON COLUMN balance_sheet.shares_outstanding IS 'Issued shares less treasury shares at period end.';
 
 -- ---------------------------------------------------------------------
--- fundamental.cash_flow_statement
+-- cash_flow_statement
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS fundamental.cash_flow_statement (
+CREATE TABLE IF NOT EXISTS cash_flow_statement (
     cash_flow_id        BIGSERIAL PRIMARY KEY,
 
     company_id          BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     period_id           BIGINT NOT NULL
-        REFERENCES fundamental.reporting_period(period_id),
+        REFERENCES reporting_period(period_id),
 
     operating_cash_flow NUMERIC(24,4),
 
@@ -257,26 +253,26 @@ CREATE TABLE IF NOT EXISTS fundamental.cash_flow_statement (
     CONSTRAINT uq_cash_flow_statement UNIQUE (company_id, period_id),
     CONSTRAINT fk_cash_flow_statement_period_company
         FOREIGN KEY (period_id, company_id)
-        REFERENCES fundamental.reporting_period (period_id, company_id)
+        REFERENCES reporting_period (period_id, company_id)
 );
 
-COMMENT ON TABLE  fundamental.cash_flow_statement IS 'Signed as cash moves: inflow positive, outflow negative.';
-COMMENT ON COLUMN fundamental.cash_flow_statement.capital_expenditure IS 'Purchases of PP&E and intangibles incl. advances for PP&E (negative).';
-COMMENT ON COLUMN fundamental.cash_flow_statement.debt_issued IS 'Proceeds from bank loans, bonds and financing payables (positive).';
-COMMENT ON COLUMN fundamental.cash_flow_statement.debt_repaid IS 'Repayments of bank loans, bonds and financing payables (negative), excl. leases.';
-COMMENT ON COLUMN fundamental.cash_flow_statement.lease_payments IS 'Principal payments of lease liabilities (negative).';
+COMMENT ON TABLE  cash_flow_statement IS 'Signed as cash moves: inflow positive, outflow negative.';
+COMMENT ON COLUMN cash_flow_statement.capital_expenditure IS 'Purchases of PP&E and intangibles incl. advances for PP&E (negative).';
+COMMENT ON COLUMN cash_flow_statement.debt_issued IS 'Proceeds from bank loans, bonds and financing payables (positive).';
+COMMENT ON COLUMN cash_flow_statement.debt_repaid IS 'Repayments of bank loans, bonds and financing payables (negative), excl. leases.';
+COMMENT ON COLUMN cash_flow_statement.lease_payments IS 'Principal payments of lease liabilities (negative).';
 
 -- ---------------------------------------------------------------------
--- fundamental.revenue_segment  (revenue breakdown notes)
+-- revenue_segment  (revenue breakdown notes)
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS fundamental.revenue_segment (
+CREATE TABLE IF NOT EXISTS revenue_segment (
     revenue_segment_id  BIGSERIAL PRIMARY KEY,
 
     company_id          BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     period_id           BIGINT NOT NULL
-        REFERENCES fundamental.reporting_period(period_id),
+        REFERENCES reporting_period(period_id),
 
     segment_type        VARCHAR(20) NOT NULL,
     segment_name        VARCHAR(255) NOT NULL,
@@ -289,22 +285,22 @@ CREATE TABLE IF NOT EXISTS fundamental.revenue_segment (
     CONSTRAINT uq_revenue_segment UNIQUE (company_id, period_id, segment_type, segment_name),
     CONSTRAINT fk_revenue_segment_period_company
         FOREIGN KEY (period_id, company_id)
-        REFERENCES fundamental.reporting_period (period_id, company_id),
+        REFERENCES reporting_period (period_id, company_id),
     CONSTRAINT ck_revenue_segment_type
         CHECK (segment_type IN ('PRODUCT', 'SERVICE', 'GEOGRAPHY', 'CUSTOMER', 'OTHER'))
 );
 
-COMMENT ON TABLE  fundamental.revenue_segment IS 'Revenue breakdown as disclosed in the notes. Rows of one segment_type sum to income_statement.revenue.';
-COMMENT ON COLUMN fundamental.revenue_segment.segment_name IS 'Segment name as written in the filing (original language).';
+COMMENT ON TABLE  revenue_segment IS 'Revenue breakdown as disclosed in the notes. Rows of one segment_type sum to income_statement.revenue.';
+COMMENT ON COLUMN revenue_segment.segment_name IS 'Segment name as written in the filing (original language).';
 
 -- ---------------------------------------------------------------------
--- company.corporate_action
+-- corporate_action
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS company.corporate_action (
+CREATE TABLE IF NOT EXISTS corporate_action (
     corporate_action_id  BIGSERIAL PRIMARY KEY,
 
     company_id           BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     action_date          DATE NOT NULL,
 
@@ -329,19 +325,19 @@ CREATE TABLE IF NOT EXISTS company.corporate_action (
 );
 
 CREATE INDEX IF NOT EXISTS ix_corporate_action_company_date
-    ON company.corporate_action (company_id, action_date);
+    ON corporate_action (company_id, action_date);
 
-COMMENT ON COLUMN company.corporate_action.ratio_from IS 'Old shares in a split / rights ratio, e.g. 1 in a 1:5 split.';
-COMMENT ON COLUMN company.corporate_action.ratio_to IS 'New shares in a split / rights ratio, e.g. 5 in a 1:5 split.';
+COMMENT ON COLUMN corporate_action.ratio_from IS 'Old shares in a split / rights ratio, e.g. 1 in a 1:5 split.';
+COMMENT ON COLUMN corporate_action.ratio_to IS 'New shares in a split / rights ratio, e.g. 5 in a 1:5 split.';
 
 -- ---------------------------------------------------------------------
--- market.stock_price  (needed for valuation: P/E, EV/EBIT, FCF yield ...)
+-- stock_price  (needed for valuation: P/E, EV/EBIT, FCF yield ...)
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS market.stock_price (
+CREATE TABLE IF NOT EXISTS stock_price (
     stock_price_id      BIGSERIAL PRIMARY KEY,
 
     company_id          BIGINT NOT NULL
-        REFERENCES company.company(company_id),
+        REFERENCES company(company_id),
 
     price_date          DATE NOT NULL,
 
@@ -359,5 +355,5 @@ CREATE TABLE IF NOT EXISTS market.stock_price (
     CONSTRAINT ck_stock_price_positive CHECK (close_price > 0)
 );
 
-COMMENT ON TABLE  market.stock_price IS 'Daily (or ad-hoc) closing prices in company.currency.';
-COMMENT ON COLUMN market.stock_price.shares_outstanding IS 'Optional; when NULL the valuation views use the latest balance sheet share count.';
+COMMENT ON TABLE  stock_price IS 'Daily (or ad-hoc) closing prices in company.currency.';
+COMMENT ON COLUMN stock_price.shares_outstanding IS 'Optional; when NULL the valuation views use the latest balance sheet share count.';
