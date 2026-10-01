@@ -1,6 +1,30 @@
 spring:
   application:
     name: backend
+  config:
+    # Local secrets (OPENAI_API_KEY, ...) from backend/.env; the file is git- and docker-ignored.
+    # Real environment variables take precedence.
+    import: optional:file:.env[.properties]
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+  ai:
+    # Only chat is used; OpenRouter speaks the OpenAI API but has no embeddings / images / audio.
+    model:
+      embedding: none
+      image: none
+      audio:
+        speech: none
+        transcription: none
+      moderation: none
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}
+      chat:
+        model: ${OPENAI_MODEL:deepseek/deepseek-v4-flash-0731}
+        parallel-tool-calls: true
+        timeout: 180s
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/neracalab}
     username: ${DB_USERNAME:neracalab}
@@ -25,3 +49,10 @@ spring:
       # Schema is owned by the SQL scripts above; Hibernate must not alter it.
       ddl-auto: ${JPA_DDL_AUTO:none}
     open-in-view: false
+
+# AI ingestion agent (POST /api/v1/financial-statements/upload)
+neracalab:
+  ingestion:
+    max-iterations: 30      # model turns per execution round
+    reflection-rounds: 2    # extra rounds the reviewer may request
+    temperature: 0.0

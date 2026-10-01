@@ -15,6 +15,9 @@ foreign key.
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 
+New filings can also be loaded at runtime through the upload endpoint, which writes the same
+tables with the same rules (section 8 and [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)).
+
 The scripts are executed by Spring SQL init (`spring.sql.init.*`) on every application start,
 in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3, then data scripts
 V1.0.4-V1.0.6). No Flyway. Every statement is idempotent (`CREATE ... IF NOT EXISTS`,
@@ -647,7 +650,34 @@ cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql \
   | docker exec -i neracalab-postgres psql -U <user> -d neracalab -v ON_ERROR_STOP=1
 ```
 
-Adding a company or a new filing: put the files in `data/<TICKER>/xlsx` (and prices in
-`data/<TICKER>/price`), create data scripts following `V1.0.4__data_HRTA_financials.sql` and
-`V1.0.5__data_HRTA_market.sql`, and add them to `spring.sql.init.data-locations` in
-`application.yaml` **before** `V1.0.6__data_metrics_valuation.sql`, then restart the backend.
+## 8. Loading data
+
+There are two ways to get financial statements into the database:
+
+| Way                         | When                                     | How                                                                                          |
+|-----------------------------|------------------------------------------|----------------------------------------------------------------------------------------------|
+| Upload endpoint (preferred) | any new IDX XBRL filing                  | `POST /api/v1/financial-statements/upload`, see [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) |
+| SQL data script             | seed data that must exist on every start | `V1.0.4` / `V1.0.5` style scripts in `spring.sql.init.data-locations`                        |
+
+Write rules of the upload endpoint (the SQL scripts follow the same rules):
+
+| Rule                   | Effect                                                                                                                                                                                                                              |
+|------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Current period wins    | the filing's own period replaces stored rows of that period (`INSERTED` / `UPDATED`)                                                                                                                                                |
+| Comparatives fill gaps | prior-period and prior-year-end columns are inserted only when missing (`KEPT_EXISTING`), differences are reported                                                                                                                  |
+| Provenance             | `reporting_period.source_filing` / `audited` belong to the filing that reported the period as its current period; a period of unknown audit status takes the provenance of a filing that states it (e.g. the audited annual report) |
+| Fiscal year end        | `company.fiscal_year_end` advances to the latest fiscal year end seen                                                                                                                                                               |
+| Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines)                                                                                               |
+| Share counts           | `share_snapshot` at every date of the statements of changes in equity; known values are never replaced by NULL                                                                                                                      |
+| Derived data           | `refreshDerivedData` re-runs `V1.0.6__data_metrics_valuation.sql` after the last save                                                                                                                                               |
+
+Uploading the six HRTA filings into an empty database (in any order) reproduces the data of
+`V1.0.4__data_HRTA_financials.sql` and the share counts of `V1.0.5__data_HRTA_market.sql`
+exactly; only the English segment names may be worded differently. Prices are not part of a filing:
+load `price_daily` separately (e.g. `V1.0.5__data_HRTA_market.sql`), otherwise `market_snapshot` and
+`valuation_snapshot` stay empty for that company.
+
+Adding seed data as SQL: put the files in `data/<TICKER>/xlsx` (and prices in `data/<TICKER>/price`),
+create data scripts following `V1.0.4__data_HRTA_financials.sql` and `V1.0.5__data_HRTA_market.sql`,
+and add them to `spring.sql.init.data-locations` in `application.yaml` **before**
+`V1.0.6__data_metrics_valuation.sql`, then restart the backend.

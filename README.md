@@ -2,7 +2,7 @@
 
 Application for analyzing financial statements using LLM.
 
-- Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 + Redis 7
+- Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 + Redis 7 + Spring AI 2.0 (OpenRouter)
 - Frontend using: Next.js
 
 Assistant developer: Claude Code (Opus 5.5 LLM Model)
@@ -14,20 +14,23 @@ neraca_lab/
 ├── backend/                     Spring Boot application
 │   ├── Dockerfile
 │   ├── docker-compose.yaml      postgres + redis + backend
-│   └── src/main/resources/
-│       ├── application.yaml
-│       └── db/                  SQL scripts (no Flyway)
-│           ├── V1.0.1__schema.sql
-│           ├── V1.0.2__schema_market_valuation.sql
-│           ├── V1.0.3__views.sql
-│           ├── V1.0.4__data_HRTA_financials.sql
-│           ├── V1.0.5__data_HRTA_market.sql
-│           └── V1.0.6__data_metrics_valuation.sql
+│   ├── .env.example             template for backend/.env (AI key; .env is git-ignored)
+│   └── src/main/
+│       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository
+│       └── resources/
+│           ├── application.yaml
+│           └── db/              SQL scripts (no Flyway)
+│               ├── V1.0.1__schema.sql
+│               ├── V1.0.2__schema_market_valuation.sql
+│               ├── V1.0.3__views.sql
+│               ├── V1.0.4__data_HRTA_financials.sql
+│               ├── V1.0.5__data_HRTA_market.sql
+│               └── V1.0.6__data_metrics_valuation.sql
 ├── data/<TICKER>/               source data per company
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
-└── docs/v1_docs/                DB_SCHEMA_DOCS.md (full table / view reference)
+└── docs/v1_docs/                DB_SCHEMA_DOCS.md (tables / views), AI_INGESTION_DOCS.md (upload + agent)
 ```
 
 ## Running the backend
@@ -47,11 +50,47 @@ docker compose down              # stop (add -v to wipe the database volume)
 | postgres | 5432 | db/user/password `neracalab` |
 | redis    | 6379 | password `neracalab`         |
 
-Override the defaults with a `backend/.env` file (`DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`,
-`REDIS_PASSWORD`, `JAVA_OPTS`). Use real passwords outside local development.
+Configuration lives in `backend/.env` (copy `backend/.env.example`). It holds the AI settings
+(`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`) and optional overrides (`DB_NAME`,
+`DB_USERNAME`, `DB_PASSWORD`, `REDIS_PASSWORD`, `JAVA_OPTS`). The file is ignored by git and docker;
+never commit keys. Use real passwords outside local development.
 
 To run the backend from the IDE instead, start only the infrastructure with
 `docker compose up -d postgres redis`; `application.yaml` defaults to `localhost`.
+
+## Uploading financial statements (AI ingestion)
+
+```bash
+curl -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+     http://localhost:8080/api/v1/financial-statements/upload
+```
+
+`POST /api/v1/financial-statements/upload` takes an IDX XBRL workbook (`.xlsx` from idx.co.id).
+Java parses and validates it (Apache POI, accounting identity checks); a Spring AI agent with tool
+calling then stores the company, periods, statements, revenue segments and share counts, refreshes
+the derived metrics and verifies the result. It uses Plan-and-Execute, a tool calling loop with
+ReAct, sequential / parallel / conditional tool calling and a reflection review. Amounts never pass
+through the model, and the final status comes from a database read-back. The response contains the
+plan, every tool call and the verification. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md).
+
+| HTTP | Meaning                                                                      |
+|------|------------------------------------------------------------------------------|
+| 200  | `COMPLETED`: everything stored and verified by a database read-back          |
+| 202  | `INCOMPLETE`: something is pending or failed validation (see `verification`) |
+| 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template                 |
+| 502  | `FAILED`: the AI provider could not be reached                               |
+
+## Tests
+
+```bash
+cd backend
+./mvnw test        # needs the Docker Postgres (docker compose up -d postgres redis)
+```
+
+`FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
+data; `BackendApplicationTests` starts the application context. Uploading all six HRTA filings
+through the endpoint into an empty database reproduces the seed data exactly (see
+`docs/v1_docs/AI_INGESTION_DOCS.md`, section 5).
 
 ## Database
 
