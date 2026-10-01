@@ -50,3 +50,9 @@ next-env.d.ts
 
 ### Claude Code local settings ###
 .claude/settings.local.json
+
+### Serena (local MCP tooling data) ###
+.serena/
+
+### Local instruction notes ###
+INSTRUCTION.md

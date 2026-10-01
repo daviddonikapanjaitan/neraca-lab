@@ -53,6 +53,10 @@ services:
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-neracalab}
       JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
+      # AI ingestion (values from backend/.env, which compose reads automatically; never baked into the image)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek/deepseek-v4-flash-0731}
     ports:
       - "8080:8080"
 
