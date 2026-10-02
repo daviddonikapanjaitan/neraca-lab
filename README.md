@@ -16,6 +16,7 @@ neraca_lab/
 │   ├── docker-compose.yaml      postgres + redis + backend
 │   ├── .env.example             template for backend/.env (AI key; .env is git-ignored)
 │   └── src/main/
+│       ├── java/.../company/    company list / detail APIs, exchange and ticker codes
 │       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository
 │       └── resources/
 │           ├── application.yaml
@@ -30,7 +31,8 @@ neraca_lab/
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
-└── docs/v1_docs/                DB_SCHEMA_DOCS.md (tables / views), AI_INGESTION_DOCS.md (upload + agent)
+└── docs/v1_docs/                DB_SCHEMA_DOCS.md (tables / views), AI_INGESTION_DOCS.md (upload + agent),
+                                 COMPANY_API_DOCS.md (company list / detail APIs)
 ```
 
 ## Running the backend
@@ -80,6 +82,38 @@ plan, every tool call and the verification. Details: [`docs/v1_docs/AI_INGESTION
 | 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template                 |
 | 502  | `FAILED`: the AI provider could not be reached                               |
 
+A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
+`uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
+`ck_company_exchange`), so uploading the same company again, or concurrently, never creates a
+second row.
+
+## Company APIs
+
+```bash
+curl "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
+curl  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
+```
+
+| Endpoint                                     | Returns                                                                                                                                                                                                                                                  |
+|----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GET /api/v1/companies?exchange=IDX`         | companies of the exchange, ordered by ticker: master data plus number of periods, first / latest period and latest price date. `exchange` defaults to `IDX`                                                                                              |
+| `GET /api/v1/companies/{exchange}/{ticker}`  | `company`, `coverage` (row counts and date ranges per table), `periods` (most recent first, each with income statement, balance sheet, cash flow, segment figures and fundamental metrics), `segments`, `shareSnapshots`, `latestPrice`, `latestMarketSnapshot`, `valuations`, `corporateActions` |
+
+Exchange and ticker are case-insensitive (`idx/hrta` works). Amounts are full currency units with the
+database sign conventions; a statement that is not stored for a period is `null`. The detail is
+read in one REPEATABLE READ transaction, so it is consistent even while an upload is running.
+Daily prices are summarised (range in `coverage`, last day in `latestPrice`), not listed.
+
+| HTTP | Meaning                                                         |
+|------|-----------------------------------------------------------------|
+| 200  | OK                                                              |
+| 400  | unsupported exchange (lists `supportedExchanges`) or bad ticker |
+| 404  | no company with this ticker on this exchange                    |
+
+Supported exchanges are the constants of `company/Exchange.java` (currently `IDX`). Supporting
+NYSE, NASDAQ, SSE, ... later is one enum constant; the APIs then accept it. Full field reference:
+[`docs/v1_docs/COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md).
+
 ## Tests
 
 ```bash
@@ -88,7 +122,10 @@ cd backend
 ```
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
-data; `BackendApplicationTests` starts the application context. Uploading all six HRTA filings
+data; `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls both
+company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a second, lower-case,
+padded or exchange-less company row is rejected and that the ingestion upsert keeps one row, and
+`CompanyCodesTest` covers ticker / exchange normalisation. Uploading all six HRTA filings
 through the endpoint into an empty database reproduces the seed data exactly (see
 `docs/v1_docs/AI_INGESTION_DOCS.md`, section 5).
 

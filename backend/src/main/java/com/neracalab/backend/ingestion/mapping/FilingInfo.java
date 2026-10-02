@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import com.neracalab.backend.company.Tickers;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbook;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbookException;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbookReader;
@@ -45,7 +46,7 @@ public record FilingInfo(
             }
         }
         List<String> warnings = new ArrayList<>();
-        String ticker = required(info, "Entity code");
+        String ticker = ticker(required(info, "Entity code"));
         String submission = required(info, "Period of financial statements submissions");
         LocalDate start = date(info, "Current period start date");
         LocalDate end = date(info, "Current period end date");
@@ -69,7 +70,7 @@ public record FilingInfo(
         String rounding = required(info, "Level of rounding used in financial statements");
         return new FilingInfo(
                 workbook.fileName(),
-                ticker.toUpperCase(Locale.ROOT),
+                ticker,
                 required(info, "Entity name"),
                 stripCode(info.get("Sector")),
                 stripCode(info.get("Subsector")),
@@ -99,6 +100,15 @@ public record FilingInfo(
             return "Q1";
         }
         return null;
+    }
+
+    /** "hrta" -> "HRTA": the form stored in company.ticker, the key of the company together with the exchange. */
+    static String ticker(String entityCode) {
+        try {
+            return Tickers.normalize(entityCode);
+        } catch (Tickers.InvalidTickerException e) {
+            throw new IdxWorkbookException("General information 'Entity code' is not a ticker: " + e.getMessage());
+        }
     }
 
     /** "Diaudit / Audited" -> true, "Tidak Diaudit / Unaudit" -> false. */

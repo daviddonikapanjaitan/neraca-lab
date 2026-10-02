@@ -111,6 +111,15 @@ final status is decided by the deterministic database read-back, not by the mode
 | `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics)       |
 | `verifyStoredData`       | read  | database read-back: pending work and inconsistencies                                       |
 
+**One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
+trimmed and upper-cased (`Tickers.normalize`; a code that is not a ticker rejects the upload with
+422); the exchange is always `IDX`. `findCompany` looks the company up by that key, and
+`registerCompany` writes it with a single
+`INSERT ... ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE ... RETURNING`, so two
+uploads of the same company, even concurrent ones, end in one row. The database enforces the
+same rule independently: `uq_company_ticker_exchange`, `exchange NOT NULL`, and the upper-case
+checks `ck_company_ticker` / `ck_company_exchange`.
+
 ## 4. Workbook structure and mapping
 
 An IDX XBRL workbook has one sheet per taxonomy role. Used sheets:

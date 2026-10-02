@@ -16,7 +16,8 @@ foreign key.
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 
 New filings can also be loaded at runtime through the upload endpoint, which writes the same
-tables with the same rules (section 8 and [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)).
+tables with the same rules (section 8 and [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)). The stored
+data is read through the company APIs ([COMPANY_API_DOCS.md](COMPANY_API_DOCS.md)).
 
 The scripts are executed by Spring SQL init (`spring.sql.init.*`) on every application start,
 in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3, then data scripts
@@ -65,8 +66,8 @@ erDiagram
 
     company {
         BIGSERIAL company_id PK
-        VARCHAR ticker
-        VARCHAR exchange
+        VARCHAR ticker UK
+        VARCHAR exchange UK
         CHAR currency
     }
     reporting_period {
@@ -164,13 +165,17 @@ never point to a period or segment of another company.
 
 ### 3.1 `company`
 
-Listed company master data.
+Listed company master data. Exactly one row per `(ticker, exchange)`: the unique constraint
+plus the two format checks (upper case, no blanks) make a second row for the same company
+impossible, also for `hrta` or ` HRTA`. The AI ingestion registers a company with
+`INSERT ... ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE`, so concurrent
+uploads of the same company update the one row instead of inserting a second.
 
 | Column            | Type           | Null | Default | Description                                                           |
 |-------------------|----------------|------|---------|-----------------------------------------------------------------------|
 | `company_id`      | `BIGSERIAL`    | no   | serial  | PK                                                                    |
-| `ticker`          | `VARCHAR(20)`  | no   |         | Stock ticker, e.g. `HRTA`                                             |
-| `exchange`        | `VARCHAR(50)`  | yes  |         | Exchange, e.g. `IDX`                                                  |
+| `ticker`          | `VARCHAR(20)`  | no   |         | Stock ticker, upper case, e.g. `HRTA`                                 |
+| `exchange`        | `VARCHAR(50)`  | no   |         | Exchange code, upper case, e.g. `IDX`                                 |
 | `cik`             | `VARCHAR(20)`  | yes  |         | SEC Central Index Key (US filers only)                                |
 | `company_name`    | `VARCHAR(255)` | no   |         | Display name                                                          |
 | `legal_name`      | `VARCHAR(255)` | yes  |         | Full legal name                                                       |
@@ -187,6 +192,8 @@ Listed company master data.
 | Constraint                   | Definition                                     |
 |------------------------------|------------------------------------------------|
 | `uq_company_ticker_exchange` | `UNIQUE NULLS NOT DISTINCT (ticker, exchange)` |
+| `ck_company_ticker`          | `ticker ~ '^[A-Z0-9][A-Z0-9.-]*$'`             |
+| `ck_company_exchange`        | `exchange ~ '^[A-Z][A-Z0-9]*$'`                |
 | `ck_company_currency`        | `currency IS NULL OR currency ~ '^[A-Z]{3}$'`  |
 
 ### 3.2 `reporting_period`
@@ -666,6 +673,7 @@ Write rules of the upload endpoint (the SQL scripts follow the same rules):
 | Current period wins    | the filing's own period replaces stored rows of that period (`INSERTED` / `UPDATED`)                                                                                                                                                |
 | Comparatives fill gaps | prior-period and prior-year-end columns are inserted only when missing (`KEPT_EXISTING`), differences are reported                                                                                                                  |
 | Provenance             | `reporting_period.source_filing` / `audited` belong to the filing that reported the period as its current period; a period of unknown audit status takes the provenance of a filing that states it (e.g. the audited annual report) |
+| Company identity       | one `company` row per `(ticker, exchange)`: ticker normalised (trimmed, upper case), exchange `IDX`, atomic upsert on `uq_company_ticker_exchange`                                                                                  |
 | Fiscal year end        | `company.fiscal_year_end` advances to the latest fiscal year end seen                                                                                                                                                               |
 | Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines)                                                                                               |
 | Share counts           | `share_snapshot` at every date of the statements of changes in equity; known values are never replaced by NULL                                                                                                                      |

@@ -11,11 +11,14 @@ import java.util.Optional;
 import javax.sql.DataSource;
 
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.neracalab.backend.company.Exchange;
+import com.neracalab.backend.company.Tickers;
 import com.neracalab.backend.ingestion.mapping.FilingInfo;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.PeriodRef;
@@ -30,7 +33,8 @@ import com.neracalab.backend.ingestion.mapping.ShareCapital.ShareAt;
 @Repository
 public class IngestionRepository {
 
-    public static final String EXCHANGE = "IDX";
+    /** IDX XBRL filings only, so every ingested company is listed on IDX. */
+    public static final String EXCHANGE = Exchange.IDX.code();
     private static final String DERIVED_SCRIPT = "db/V1.0.6__data_metrics_valuation.sql";
 
     private final JdbcClient jdbc;
@@ -53,24 +57,33 @@ public class IngestionRepository {
 
     // ------------------------------------------------------------------ company
 
+    private static final String COMPANY_COLUMNS =
+            "company_id, ticker, company_name, legal_name, sector, industry, currency, fiscal_year_end";
+
+    private static final RowMapper<CompanyRow> COMPANY_ROW = (rs, i) -> new CompanyRow(rs.getLong(1), rs.getString(2),
+            rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7),
+            rs.getObject(8, LocalDate.class));
+
+    /** The company is identified by (ticker, exchange), the key of uq_company_ticker_exchange. */
     public Optional<CompanyRow> findCompany(String ticker) {
-        return jdbc.sql("""
-                        SELECT company_id, ticker, company_name, legal_name, sector, industry, currency, fiscal_year_end
-                        FROM company WHERE ticker = :ticker AND exchange = :exchange""")
-                .param("ticker", ticker).param("exchange", EXCHANGE)
-                .query((rs, i) -> new CompanyRow(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                        rs.getString(5), rs.getString(6), rs.getString(7),
-                        rs.getObject(8, LocalDate.class)))
+        return jdbc.sql("SELECT " + COMPANY_COLUMNS + " FROM company WHERE ticker = :ticker AND exchange = :exchange")
+                .param("ticker", Tickers.normalize(ticker)).param("exchange", EXCHANGE)
+                .query(COMPANY_ROW)
                 .optional();
     }
 
+    /**
+     * Inserts the company, or updates it when (ticker, exchange) already exists: a single atomic
+     * statement on uq_company_ticker_exchange, so concurrent uploads of the same company can never
+     * create a second row. Returns the stored row.
+     */
     @Transactional
     public CompanyRow upsertCompany(FilingInfo info, String companyName) {
         LocalDate fiscalYearEnd = info.current().isFullYear() ? info.current().end() : info.priorYearEnd().end();
-        jdbc.sql("""
+        return jdbc.sql("""
                         INSERT INTO company (ticker, exchange, company_name, legal_name, industry, sector,
                                              country, currency, fiscal_year_end, active)
-                        VALUES (:ticker, :exchange, :name, :legal, :industry, :sector, 'Indonesia', :currency, :fye, TRUE)
+                        VALUES (:ticker, :exchange, :name, :legal, :industry, :sector, :country, :currency, :fye, TRUE)
                         ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE SET
                             company_name    = EXCLUDED.company_name,
                             legal_name      = EXCLUDED.legal_name,
@@ -78,12 +91,14 @@ public class IngestionRepository {
                             sector          = COALESCE(EXCLUDED.sector, company.sector),
                             currency        = EXCLUDED.currency,
                             fiscal_year_end = GREATEST(company.fiscal_year_end, EXCLUDED.fiscal_year_end),
-                            updated_at      = now()""")
-                .param("ticker", info.ticker()).param("exchange", EXCHANGE).param("name", companyName)
-                .param("legal", info.legalName()).param("industry", info.industry()).param("sector", info.sector())
+                            updated_at      = now()
+                        RETURNING\s""" + COMPANY_COLUMNS)
+                .param("ticker", Tickers.normalize(info.ticker())).param("exchange", EXCHANGE)
+                .param("name", companyName).param("legal", info.legalName()).param("industry", info.industry())
+                .param("sector", info.sector()).param("country", Exchange.IDX.country())
                 .param("currency", info.currency()).param("fye", fiscalYearEnd)
-                .update();
-        return findCompany(info.ticker()).orElseThrow();
+                .query(COMPANY_ROW)
+                .single();
     }
 
     /** Keeps company.fiscal_year_end at the most recent fiscal year end seen in any filing. */
