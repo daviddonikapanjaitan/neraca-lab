@@ -102,6 +102,20 @@ cp backend/.env.example backend/.env      # Windows: copy backend\.env.example b
 `backend/.env` is ignored by git and docker; compose passes its values to the backend container at
 runtime, so they are never baked into an image.
 
+### 1.5 Price ingestion settings
+
+Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)):
+
+| Variable                 | Default | Meaning                                                              |
+|--------------------------|---------|----------------------------------------------------------------------|
+| `PRICE_PROVIDER`         | `yahoo` | `yahoo` (no key) or `eodhd`                                          |
+| `EODHD_API_TOKEN`        | -       | required for `eodhd`                                                 |
+| `PRICE_SCHEDULE_ENABLED` | `false` | `true`: queue every active IDX company at 17:30 WIB, Monday-Friday   |
+
+After changing backend code, rebuild with `docker compose up -d --build backend`; when the
+container keeps the old image (compose prints `Running` instead of `Recreated`), add
+`--force-recreate`.
+
 ## 2. Containers
 
 | Service  | Container            | Image                            | Host port | Health check                                 |

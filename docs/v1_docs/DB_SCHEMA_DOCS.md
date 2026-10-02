@@ -16,7 +16,8 @@ foreign key.
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 
 New filings can also be loaded at runtime through the upload endpoint, which writes the same
-tables with the same rules (section 8 and [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)). The stored
+tables with the same rules (section 8 and [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)), and daily
+prices through the price ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)). The stored
 data is read through the company APIs ([COMPANY_API_DOCS.md](COMPANY_API_DOCS.md)).
 
 The scripts are executed by Spring SQL init (`spring.sql.init.*`) on every application start,
@@ -143,7 +144,8 @@ erDiagram
     }
 ```
 
-Data flow of the derived tables (filled by `V1.0.6`):
+Data flow of the derived tables (filled by `V1.0.6` for all companies; after a price ingestion the
+same formulas run for that one company, see [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 2):
 
 ```text
 income_statement / balance_sheet / cash_flow_statement ──► v_key_metrics, v_ttm_financials
@@ -415,6 +417,10 @@ Constraints: `uq_price_daily UNIQUE (company_id, trading_date)`, `ck_price_daily
 (`close_price > 0`), `ck_price_daily_range` (`high_price >= low_price`), `ck_price_daily_volume`
 (`volume >= 0`).
 
+Filled by the seed scripts (HRTA) and by the price ingestion
+(`POST /api/v1/prices/ingestions`, [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)): trading days
+only, no holiday placeholders, no unfinished intraday bar; prices rounded to 4 decimals.
+
 ### 4.4 `share_snapshot`
 
 Share counts at a date.
@@ -455,6 +461,9 @@ Constraint: `uq_market_snapshot UNIQUE (company_id, snapshot_date)`.
 Price against trailing-twelve-month (TTM) fundamentals. One row per period end that has TTM
 figures, plus the latest trading day. Price = last close on or before `valuation_date`;
 fundamentals = latest period ended on or before it with TTM revenue and a balance sheet.
+Every price ingestion adds the new latest trading day and keeps the earlier "latest day" rows, so
+daily ingestion builds a valuation history; it also recalculates those earlier rows when prices
+are corrected.
 
 | Column                 | Type            | Formula / description                                                       |
 |------------------------|-----------------|-----------------------------------------------------------------------------|
@@ -664,6 +673,7 @@ There are two ways to get financial statements into the database:
 | Way                         | When                                     | How                                                                                          |
 |-----------------------------|------------------------------------------|----------------------------------------------------------------------------------------------|
 | Upload endpoint (preferred) | any new IDX XBRL filing                  | `POST /api/v1/financial-statements/upload`, see [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) |
+| Price ingestion             | daily prices of a stored company         | `POST /api/v1/prices/ingestions?exchange=IDX&ticker=...`, see [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) |
 | SQL data script             | seed data that must exist on every start | `V1.0.4` / `V1.0.5` style scripts in `spring.sql.init.data-locations`                        |
 
 Write rules of the upload endpoint (the SQL scripts follow the same rules):
@@ -675,15 +685,15 @@ Write rules of the upload endpoint (the SQL scripts follow the same rules):
 | Provenance             | `reporting_period.source_filing` / `audited` belong to the filing that reported the period as its current period; a period of unknown audit status takes the provenance of a filing that states it (e.g. the audited annual report) |
 | Company identity       | one `company` row per `(ticker, exchange)`: ticker normalised (trimmed, upper case), exchange `IDX`, atomic upsert on `uq_company_ticker_exchange`                                                                                  |
 | Fiscal year end        | `company.fiscal_year_end` advances to the latest fiscal year end seen                                                                                                                                                               |
-| Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines)                                                                                               |
+| Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines); a filing that leaves sheets 1617000 / 1618000 blank (e.g. INDF) stores no segments |
 | Share counts           | `share_snapshot` at every date of the statements of changes in equity; known values are never replaced by NULL                                                                                                                      |
 | Derived data           | `refreshDerivedData` re-runs `V1.0.6__data_metrics_valuation.sql` after the last save                                                                                                                                               |
 
 Uploading the six HRTA filings into an empty database (in any order) reproduces the data of
 `V1.0.4__data_HRTA_financials.sql` and the share counts of `V1.0.5__data_HRTA_market.sql`
 exactly; only the English segment names may be worded differently. Prices are not part of a filing:
-load `price_daily` separately (e.g. `V1.0.5__data_HRTA_market.sql`), otherwise `market_snapshot` and
-`valuation_snapshot` stay empty for that company.
+load `price_daily` with the price ingestion (or a seed script such as `V1.0.5__data_HRTA_market.sql`),
+otherwise `market_snapshot` and `valuation_snapshot` stay empty for that company.
 
 Adding seed data as SQL: put the files in `data/<TICKER>/xlsx` (and prices in `data/<TICKER>/price`),
 create data scripts following `V1.0.4__data_HRTA_financials.sql` and `V1.0.5__data_HRTA_market.sql`,

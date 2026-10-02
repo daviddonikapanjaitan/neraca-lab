@@ -160,8 +160,15 @@ Rules:
 - Unsupported (rejected with 422): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`).
 
+Revenue segments come only from the breakdown sheets `1617000` (by type) and `1618000` (by
+source). Some issuers leave both blank and disclose segments only in the PDF notes (e.g. INDF:
+the sheets contain the template labels without names or amounts); the upload then stores no
+segments for the filing, by design, and every other table as usual.
+
 Prices are not part of a filing; `market_snapshot` and `valuation_snapshot` need `price_daily`
-rows (loaded separately, e.g. `V1.0.5__data_HRTA_market.sql`).
+rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?exchange=IDX&ticker=...`,
+[PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)), or load a seed script such as
+`V1.0.5__data_HRTA_market.sql`.
 
 ## 5. Tests
 

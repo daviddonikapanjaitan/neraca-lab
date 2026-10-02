@@ -2,7 +2,8 @@
 
 Read-only APIs over the data in the database (see [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md)): which
 companies exist on an exchange, and everything stored for one company. Data gets in through the
-upload endpoint ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)) or the SQL seed scripts.
+upload endpoint ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)), the price ingestion
+([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)) or the SQL seed scripts.
 
 Code: `backend/src/main/java/com/neracalab/backend/company/`
 
@@ -12,7 +13,7 @@ Code: `backend/src/main/java/com/neracalab/backend/company/`
 | `CompanyController`      | company endpoints and error responses (ProblemDetail)                  |
 | `CompanyService`         | assembles the responses in one read-only REPEATABLE READ transaction   |
 | `CompanyQueryRepository` | SQL (JdbcClient), every query scoped to one company or exchange        |
-| `Exchange`               | supported exchanges (enum name = `company.exchange`)                   |
+| `Exchange`               | supported exchanges (enum name = `company.exchange`), trading time zone |
 | `Tickers`                | ticker normalisation (trim, upper case, format), shared with ingestion |
 
 The web frontend that uses these APIs is described in [FRONTEND_DOCS.md](FRONTEND_DOCS.md).
@@ -172,8 +173,10 @@ Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 3.1, [AI_INGESTION_DOCS.
 
 ## 6. Adding an exchange
 
-1. Add a constant to `Exchange` (code = value stored in `company.exchange`), e.g.
-   `NYSE("New York Stock Exchange", "United States")`.
+1. Add a constant to `Exchange` (code = value stored in `company.exchange`) with the time zone of its
+   trading sessions, e.g. `NYSE("New York Stock Exchange", "United States", ZoneId.of("America/New_York"))`.
+   The price providers then fail to compile until their `symbol` switch maps the new exchange
+   (e.g. Yahoo: no suffix for NYSE, `.HK` for HKEX), see [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 4.
 2. `GET /api/v1/exchanges` lists it and the company APIs accept it immediately (so the frontend's
    exchange filter offers it); the list is empty until companies of that exchange are loaded.
 3. The upload endpoint reads IDX XBRL workbooks only (`IngestionRepository.EXCHANGE = IDX`);
