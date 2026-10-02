@@ -1,0 +1,4 @@
+# Line endings that the start scripts need on every OS, whatever core.autocrlf says:
+# shell scripts must be LF (bash on Linux / macOS), batch files CRLF (cmd on Windows).
+*.sh   text eol=lf
+*.bat  text eol=crlf

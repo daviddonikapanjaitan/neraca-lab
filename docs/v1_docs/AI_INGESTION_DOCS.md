@@ -144,6 +144,7 @@ Statement sheets have a header row of XBRL contexts and one row per line item:
 | `PRIOR_YEAR_END` | -                             | interim filings only: PriorEndYearInstant |
 
 Rules:
+
 - Amounts are multiplied by the rounding level ("Satuan Penuh" 1, "Ribuan" 1,000, "Jutaan" 1,000,000).
 - Quarterly filings are year-to-date: Kuartal I = `Q1`, II = `H1`, III = `9M`, Tahunan = `FY`.
 - Checks (an ERROR blocks saving): revenue - cost = gross profit; operating income + finance income -
@@ -170,7 +171,8 @@ rows (loaded separately, e.g. `V1.0.5__data_HRTA_market.sql`).
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | End-to-end (manual)              | uploading all six filings through the endpoint into an empty database reproduces the seed data                                                                                                                                                       |
 
-Run the unit tests with `cd backend && ./mvnw test` (needs the Docker Postgres).
+Run the unit tests with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432: the full
+stack from the start scripts, or `docker compose up -d postgres redis` in `backend/`).
 
 End-to-end check of this version (empty database, all six HRTA filings uploaded through the
 endpoint, `deepseek/deepseek-v4-flash-0731` via OpenRouter):

@@ -8,13 +8,29 @@ Code: `backend/src/main/java/com/neracalab/backend/company/`
 
 | Class                    | Role                                                                   |
 |--------------------------|------------------------------------------------------------------------|
-| `CompanyController`      | endpoints and error responses (ProblemDetail)                          |
+| `ExchangeController`     | `GET /api/v1/exchanges`                                                |
+| `CompanyController`      | company endpoints and error responses (ProblemDetail)                  |
 | `CompanyService`         | assembles the responses in one read-only REPEATABLE READ transaction   |
 | `CompanyQueryRepository` | SQL (JdbcClient), every query scoped to one company or exchange        |
 | `Exchange`               | supported exchanges (enum name = `company.exchange`)                   |
 | `Tickers`                | ticker normalisation (trim, upper case, format), shared with ingestion |
 
-## 1. List companies of an exchange
+The web frontend that uses these APIs is described in [FRONTEND_DOCS.md](FRONTEND_DOCS.md).
+
+## 1. Supported exchanges
+
+```http
+GET /api/v1/exchanges
+```
+
+```json
+[ { "code": "IDX", "name": "Indonesia Stock Exchange", "country": "Indonesia" } ]
+```
+
+The constants of `Exchange`, in declaration order. `code` is the value for the `exchange`
+parameter / path segment of the company APIs (e.g. for an exchange filter).
+
+## 2. List companies of an exchange
 
 ```http
 GET /api/v1/companies?exchange=IDX
@@ -24,9 +40,9 @@ GET /api/v1/companies?exchange=IDX
 curl "http://localhost:8080/api/v1/companies?exchange=IDX"
 ```
 
-| Parameter  | Required | Default | Notes                                    |
-|------------|----------|---------|------------------------------------------|
-| `exchange` | no       | `IDX`   | case-insensitive; must be in `Exchange`  |
+| Parameter  | Required | Default | Notes                                   |
+|------------|----------|---------|-----------------------------------------|
+| `exchange` | no       | `IDX`   | case-insensitive; must be in `Exchange` |
 
 Response (companies ordered by ticker):
 
@@ -49,16 +65,16 @@ Response (companies ordered by ticker):
 }
 ```
 
-| Field                                  | Source                                                                                  |
-|----------------------------------------|-----------------------------------------------------------------------------------------|
-| master data                            | `company`                                                                               |
-| `periodCount`, `firstPeriodEnd`        | `reporting_period` (count, earliest `period_end`)                                       |
-| `latestPeriod`, `latestPeriodEnd`      | most recent `reporting_period` (`<fiscal_year> <period_type>`; the longest period wins on an equal end date) |
-| `latestPriceDate`                      | `max(price_daily.trading_date)`; `null` when no prices are loaded                       |
+| Field                             | Source                                                                                                       |
+|-----------------------------------|--------------------------------------------------------------------------------------------------------------|
+| master data                       | `company`                                                                                                    |
+| `periodCount`, `firstPeriodEnd`   | `reporting_period` (count, earliest `period_end`)                                                            |
+| `latestPeriod`, `latestPeriodEnd` | most recent `reporting_period` (`<fiscal_year> <period_type>`; the longest period wins on an equal end date) |
+| `latestPriceDate`                 | `max(price_daily.trading_date)`; `null` when no prices are loaded                                            |
 
 An exchange without companies returns `count: 0` and an empty list.
 
-## 2. Company detail
+## 3. Company detail
 
 ```http
 GET /api/v1/companies/{exchange}/{ticker}
@@ -71,20 +87,20 @@ curl http://localhost:8080/api/v1/companies/IDX/HRTA
 Exchange and ticker are case-insensitive (`/idx/hrta` works); the ticker is trimmed and
 upper-cased like at ingestion (`Tickers.normalize`).
 
-| Field                  | Content                                                                                           | Source                                                    |
-|------------------------|---------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
-| `company`              | all master data incl. `exchangeName`, `createdAt`, `updatedAt`                                     | `company`                                                 |
-| `coverage`             | row counts per table, first / latest period end, first / latest price date                         | all company tables                                        |
-| `periods[]`            | most recent first (longest first on equal end dates)                                               | `reporting_period`                                        |
-| `periods[].incomeStatement` / `balanceSheet` / `cashFlowStatement` | every statement column, camelCase; `null` when no row exists for the period | `income_statement`, `balance_sheet`, `cash_flow_statement` |
-| `periods[].segments[]` | segment figures of the period, largest revenue first                                               | `segment_financial` + `segment`                           |
-| `periods[].metrics`    | fundamental metrics by name: `{category, value, unit}`                                             | `financial_metric` with `metric_date = period_end`, category not `VALUATION` |
-| `segments[]`           | the company's segments / revenue lines                                                             | `segment`                                                 |
-| `shareSnapshots[]`     | share counts, most recent first                                                                    | `share_snapshot`                                          |
-| `latestPrice`          | last trading day (OHLCV); `null` without prices                                                    | `price_daily`                                             |
-| `latestMarketSnapshot` | last market cap / enterprise value; `null` without prices                                          | `market_snapshot`                                         |
-| `valuations[]`         | valuation snapshots, most recent first, with the `period` whose TTM figures they use               | `valuation_snapshot`                                      |
-| `corporateActions[]`   | most recent first                                                                                  | `corporate_action`                                        |
+| Field                                                              | Content                                                                              | Source                                                                       |
+|--------------------------------------------------------------------|--------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| `company`                                                          | all master data incl. `exchangeName`, `createdAt`, `updatedAt`                       | `company`                                                                    |
+| `coverage`                                                         | row counts per table, first / latest period end, first / latest price date           | all company tables                                                           |
+| `periods[]`                                                        | most recent first (longest first on equal end dates)                                 | `reporting_period`                                                           |
+| `periods[].incomeStatement` / `balanceSheet` / `cashFlowStatement` | every statement column, camelCase; `null` when no row exists for the period          | `income_statement`, `balance_sheet`, `cash_flow_statement`                   |
+| `periods[].segments[]`                                             | segment figures of the period, largest revenue first                                 | `segment_financial` + `segment`                                              |
+| `periods[].metrics`                                                | fundamental metrics by name: `{category, value, unit}`                               | `financial_metric` with `metric_date = period_end`, category not `VALUATION` |
+| `segments[]`                                                       | the company's segments / revenue lines                                               | `segment`                                                                    |
+| `shareSnapshots[]`                                                 | share counts, most recent first                                                      | `share_snapshot`                                                             |
+| `latestPrice`                                                      | last trading day (OHLCV); `null` without prices                                      | `price_daily`                                                                |
+| `latestMarketSnapshot`                                             | last market cap / enterprise value; `null` without prices                            | `market_snapshot`                                                            |
+| `valuations[]`                                                     | valuation snapshots, most recent first, with the `period` whose TTM figures they use | `valuation_snapshot`                                                         |
+| `corporateActions[]`                                               | most recent first                                                                    | `corporate_action`                                                           |
 
 Shortened example:
 
@@ -115,6 +131,7 @@ Shortened example:
 ```
 
 Conventions (same as the database):
+
 - Amounts in full units of `company.currency`; income-statement expenses positive, cash outflows
   negative; `null` = not reported, `0` = reported as zero. Numbers keep the database scale
   (e.g. `NUMERIC(24,4)` -> `123.0000`).
@@ -128,15 +145,15 @@ Conventions (same as the database):
 All queries of one response run in one read-only REPEATABLE READ transaction, so the response is
 a consistent snapshot even while an upload writes the same company.
 
-## 3. Errors
+## 4. Errors
 
 Errors are RFC 9457 ProblemDetail bodies (`application/problem+json`):
 
-| HTTP | `title`              | When                                                        |
-|------|----------------------|-------------------------------------------------------------|
-| 400  | Unsupported exchange | exchange not in `Exchange`; body lists `supportedExchanges` |
+| HTTP | `title`              | When                                                                 |
+|------|----------------------|----------------------------------------------------------------------|
+| 400  | Unsupported exchange | exchange not in `Exchange`; body lists `supportedExchanges`          |
 | 400  | Invalid ticker       | not 1-20 letters, digits, `.` or `-` starting with a letter or digit |
-| 404  | Company not found    | no company with this ticker on this exchange                |
+| 404  | Company not found    | no company with this ticker on this exchange                         |
 
 ```json
 { "title": "Unsupported exchange", "status": 400,
@@ -144,29 +161,31 @@ Errors are RFC 9457 ProblemDetail bodies (`application/problem+json`):
   "instance": "/api/v1/companies", "supportedExchanges": ["IDX"] }
 ```
 
-## 4. Company identity
+## 5. Company identity
 
 A company is identified by `(ticker, exchange)`, unique in the database
 (`uq_company_ticker_exchange`); `exchange` is `NOT NULL`, and the checks `ck_company_ticker` /
-`ck_company_exchange` keep both codes upper case without blanks, so `hrta` or ` HRTA` can never
+`ck_company_exchange` keep both codes upper case without blanks, so `hrta` or `" HRTA"` can never
 become a second row. The upload normalises the filing's ticker with the same `Tickers.normalize`
 and registers the company with one atomic `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING`.
 Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 3.1, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 3.
 
-## 5. Adding an exchange
+## 6. Adding an exchange
 
 1. Add a constant to `Exchange` (code = value stored in `company.exchange`), e.g.
    `NYSE("New York Stock Exchange", "United States")`.
-2. Both APIs accept it immediately; the list is empty until companies of that exchange are loaded.
+2. `GET /api/v1/exchanges` lists it and the company APIs accept it immediately (so the frontend's
+   exchange filter offers it); the list is empty until companies of that exchange are loaded.
 3. The upload endpoint reads IDX XBRL workbooks only (`IngestionRepository.EXCHANGE = IDX`);
    another exchange needs its own reader / mapper, or SQL data scripts.
 
-## 6. Tests
+## 7. Tests
 
-| Test                    | Covers                                                                                                     |
-|-------------------------|------------------------------------------------------------------------------------------------------------|
-| `CompanyControllerTest` | both endpoints over MockMvc against the HRTA seed data: ordering, figures, `null` statements, coverage, 400 / 404 |
-| `CompanyUniquenessTest` | duplicate, lower-case, padded and exchange-less rows rejected; ingestion upsert keeps one row              |
-| `CompanyCodesTest`      | ticker and exchange normalisation                                                                           |
+| Test                    | Covers                                                                                                                 |
+|-------------------------|------------------------------------------------------------------------------------------------------------------------|
+| `CompanyControllerTest` | all three endpoints over MockMvc against the HRTA seed data: ordering, figures, `null` statements, coverage, 400 / 404 |
+| `CompanyUniquenessTest` | duplicate, lower-case, padded and exchange-less rows rejected; ingestion upsert keeps one row                          |
+| `CompanyCodesTest`      | ticker and exchange normalisation                                                                                      |
 
-They need the Docker Postgres (`docker compose up -d postgres redis`), like `BackendApplicationTests`.
+Like `BackendApplicationTests`, they need the Postgres on localhost:5432 (the full stack from the
+start scripts, or `docker compose up -d postgres redis` in `backend/`).

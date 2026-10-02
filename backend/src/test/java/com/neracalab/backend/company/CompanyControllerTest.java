@@ -35,6 +35,19 @@ class CompanyControllerTest {
     @Autowired
     private JsonMapper json;
 
+    // ------------------------------------------------------------------ exchanges
+
+    @Test
+    void listsSupportedExchanges() throws Exception {
+        mvc.perform(get("/api/v1/exchanges"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.length()").value(Exchange.values().length))
+                .andExpect(jsonPath("$[0].code").value("IDX"))
+                .andExpect(jsonPath("$[0].name").value("Indonesia Stock Exchange"))
+                .andExpect(jsonPath("$[0].country").value("Indonesia"));
+    }
+
     // ------------------------------------------------------------------ list
 
     @Test

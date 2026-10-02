@@ -167,7 +167,7 @@ never point to a period or segment of another company.
 
 Listed company master data. Exactly one row per `(ticker, exchange)`: the unique constraint
 plus the two format checks (upper case, no blanks) make a second row for the same company
-impossible, also for `hrta` or ` HRTA`. The AI ingestion registers a company with
+impossible, also for `hrta` or `" HRTA"`. The AI ingestion registers a company with
 `INSERT ... ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE`, so concurrent
 uploads of the same company update the one row instead of inserting a second.
 
