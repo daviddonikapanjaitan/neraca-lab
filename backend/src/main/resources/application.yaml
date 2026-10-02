@@ -56,3 +56,19 @@ neracalab:
     max-iterations: 30      # model turns per execution round
     reflection-rounds: 2    # extra rounds the reviewer may request
     temperature: 0.0
+
+  # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
+  prices:
+    provider: ${PRICE_PROVIDER:yahoo}   # yahoo | eodhd (eodhd needs EODHD_API_TOKEN)
+    min-delay: 1s                       # random pause of min..max between two provider requests
+    max-delay: 2s
+    backoff: [15m, 30m, 60m]            # waits after consecutive HTTP 429; a 429 after the last one stops the run
+    session-close-cutoff: "17:00"       # exchange-local time from which today's bar is final
+    full-history-from: "1990-01-01"     # start of a full-history fetch
+    eodhd:
+      api-token: ${EODHD_API_TOKEN:}
+    schedule:
+      enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run over all active companies of the exchange
+      cron: "0 30 17 * * MON-FRI"
+      zone: Asia/Jakarta
+      exchange: IDX

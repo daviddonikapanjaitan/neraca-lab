@@ -1,5 +1,6 @@
 package com.neracalab.backend.company;
 
+import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -13,14 +14,16 @@ import java.util.Locale;
  */
 public enum Exchange {
 
-    IDX("Indonesia Stock Exchange", "Indonesia");
+    IDX("Indonesia Stock Exchange", "Indonesia", ZoneId.of("Asia/Jakarta"));
 
     private final String displayName;
     private final String country;
+    private final ZoneId zone;
 
-    Exchange(String displayName, String country) {
+    Exchange(String displayName, String country, ZoneId zone) {
         this.displayName = displayName;
         this.country = country;
+        this.zone = zone;
     }
 
     public String code() {
@@ -33,6 +36,11 @@ public enum Exchange {
 
     public String country() {
         return country;
+    }
+
+    /** Time zone of the trading sessions; trading dates are calendar days in this zone. */
+    public ZoneId zone() {
+        return zone;
     }
 
     /** Resolves a code case-insensitively, e.g. {@code "idx"} -> {@link #IDX}. */

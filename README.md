@@ -162,6 +162,52 @@ Supported exchanges are the constants of `company/Exchange.java` (currently `IDX
 NYSE, NASDAQ, SSE, ... later is one enum constant; the APIs then accept it. Full field reference:
 [`docs/v1_docs/COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md).
 
+## Daily price ingestion
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/prices/ingestions?exchange=IDX&ticker=HRTA"   # queue a job
+curl  http://localhost:8080/api/v1/prices/ingestions/{id}                               # job status / result
+curl  http://localhost:8080/api/v1/prices/ingestions                                    # provider, queue, recent jobs
+```
+
+| Endpoint                                                      | Does                                                                                                                                    |
+|---------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `POST /api/v1/prices/ingestions?exchange=&ticker=[&full=true]` | queues an ingestion: **202** with the new job, **200** with the job already queued / running for the company; 400 / 404 as the company APIs |
+| `GET /api/v1/prices/ingestions/{id}`                          | the job: `status` (`QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `FAILED`), `message`, `result` (requests, rows inserted / updated, valuation rows) |
+| `GET /api/v1/prices/ingestions`                               | `provider`, `pending` jobs and the recent jobs, most recent first                                                                        |
+
+A background worker (one thread) fetches the
+[Yahoo Finance chart API](https://query1.finance.yahoo.com/v8/finance/chart/HRTA.JK) (`HRTA.JK` for IDX) and never inside a web request;
+the frontend only reads the database. Per job:
+
+1. Range from `MAX(trading_date)` of the company (re-fetched as an overlap check) to today, or the full
+   history when nothing is stored or `full=true`. No request when the last completed trading day is
+   already stored. Today's bar counts only after 17:00 exchange time (`session-close-cutoff`).
+2. One request; holiday placeholders, zero-volume rows that repeat the previous close and invalid rows
+   are dropped. If the overlap day's close or adjusted close changed (dividend / split after it), the
+   full history is fetched once more and every stored day corrected.
+3. One transaction: upsert `price_daily`, then recalculate the company's `market_snapshot`,
+   `valuation_snapshot` (period ends, every earlier valuation date, the new latest day) and VALUATION
+   rows of `financial_metric`, with the formulas of `V1.0.6`.
+
+Polite crawling: one request at a time with a random 1-2 s pause, a browser User-Agent and one HTTP
+client with a cookie store. On HTTP 429 the queue pauses 15, 30, then 60 minutes and retries the
+same job; a 429 after that stops the run (queued jobs fail, re-submit later; each job resumes from
+`MAX(trading_date)`). Jobs live in memory and are lost on restart.
+
+| Setting (`application.yaml` / env)                    | Default                     |                                                     |
+|-------------------------------------------------------|-----------------------------|-----------------------------------------------------|
+| `neracalab.prices.provider` / `PRICE_PROVIDER`         | `yahoo`                     | `eodhd` switches to the paid EODHD API              |
+| `neracalab.prices.eodhd.api-token` / `EODHD_API_TOKEN` | empty                       | required for `eodhd`                                |
+| `neracalab.prices.min-delay`, `max-delay`             | `1s`, `2s`                  | pause between two requests                          |
+| `neracalab.prices.backoff`                            | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429                    |
+| `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: queues every active company of `IDX`   |
+| `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
+
+`full=true` re-fetches the whole history instead of starting at the latest stored day; a first
+ingestion and a re-adjusted history switch to it automatically. Details, job fields and known
+limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md).
+
 ## Frontend
 
 Next.js web app in `frontend/` with the
@@ -189,7 +235,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 38 tests
+(cd backend && ./mvnw test)                      # 66 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -199,7 +245,10 @@ exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` ch
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
 keeps one row, and `CompanyCodesTest` covers ticker / exchange normalisation. Uploading all six
 HRTA filings through the endpoint into an empty database reproduces the seed data exactly (see
-`docs/v1_docs/AI_INGESTION_DOCS.md`, section 5). The start / stop scripts are checked with
+`docs/v1_docs/AI_INGESTION_DOCS.md`, section 5). `PriceIngestionServiceTest` ingests stubbed prices
+into HRTA (rolled back) and checks the new rows and valuation, the re-adjustment re-fetch, the
+intraday cutoff and that the company-scoped valuation SQL matches `V1.0.6`; `PriceIngestionQueueTest`
+covers the 429 back-off, `YahooPriceProviderTest` parses a real Yahoo response. The start / stop scripts are checked with
 ShellCheck and bash 3.2; see `docs/v1_docs/DOCKER_DOCS.md`, section 6.
 
 ## Database
@@ -269,6 +318,11 @@ WHERE metric_name = 'ev_op' ORDER BY metric_date;
 ```
 
 ### Adding a new financial statement
+
+At runtime: upload the filing (`POST /api/v1/financial-statements/upload`), then load its prices
+(`POST /api/v1/prices/ingestions?exchange=IDX&ticker=<TICKER>`). Revenue segments are stored only
+when the filing fills the breakdown sheets 1617000 / 1618000 (INDF, for example, leaves them blank).
+As seed data that exists on every start:
 
 1. Put the filing in `data/<TICKER>/xlsx/` (and prices in `data/<TICKER>/price/`).
 2. Create the data script(s), e.g. `V1.0.7__data_<TICKER>_financials.sql`, following the
