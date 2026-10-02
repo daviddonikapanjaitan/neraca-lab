@@ -3,19 +3,59 @@
 Application for analyzing financial statements using LLM.
 
 - Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 + Redis 7 + Spring AI 2.0 (OpenRouter)
-- Frontend using: Next.js
+- Frontend using: Next.js 16 (React 19, TypeScript) + shadcn/ui with the shadcn-fintech theme + Tailwind CSS 4
 
 Assistant developer: Claude Code (Opus 5.5 LLM Model)
+
+## Quick start: full stack in Docker
+
+One script builds and starts everything (postgres, redis, backend, frontend) in Docker, waits
+until it is ready and opens <http://localhost:3000>. Only Docker is required (Docker Desktop on
+Windows / macOS, Docker Engine with the Compose plugin 2.20+ on Linux); no Java or Node.js.
+
+| OS      | Start                                            | Stop                                            |
+|---------|--------------------------------------------------|-------------------------------------------------|
+| Windows | `scripts\start-windows.bat` (or double-click it) | `scripts\stop-windows.bat` (or double-click it) |
+| macOS   | `./scripts/start-mac.sh`                         | `./scripts/stop-mac.sh`                         |
+| Linux   | `./scripts/start-linux.sh`                       | `./scripts/stop-linux.sh`                       |
+
+Stopping removes the containers but keeps the database data; it does nothing (and does not start
+Docker) when nothing is running. The start scripts also take `restart`, `status`,
+`logs [frontend|backend|postgres|redis]` and `help`.
+The first start downloads images and builds both apps (several minutes); later starts take seconds.
+The AI upload needs `backend/.env` with `OPENAI_API_KEY` (copy `backend/.env.example`); the rest
+works without it. Options, ports and troubleshooting:
+[`docs/v1_docs/DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md).
+
+| Service  | URL / port                                         |
+|----------|----------------------------------------------------|
+| frontend | <http://localhost:3000>                            |
+| backend  | <http://localhost:8080> (e.g. `/api/v1/exchanges`) |
+| postgres | localhost:5432 (db/user/password `neracalab`)      |
+| redis    | localhost:6379 (password `neracalab`)              |
+
+## Documentation
+
+| Document                                                    | Content                                                                   |
+|-------------------------------------------------------------|---------------------------------------------------------------------------|
+| [`DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md)             | start / stop scripts, containers, compose files, options, troubleshooting |
+| [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
+| [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
+| [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
+| [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 
 ## Project structure
 
 ```text
 neraca_lab/
+├── docker-compose.yaml          full stack: includes backend/docker-compose.yaml + frontend
+├── scripts/                     start-* and stop-* for Windows (.bat), macOS and Linux (.sh)
 ├── backend/                     Spring Boot application
 │   ├── Dockerfile
 │   ├── docker-compose.yaml      postgres + redis + backend
 │   ├── .env.example             template for backend/.env (AI key; .env is git-ignored)
 │   └── src/main/
+│       ├── java/.../company/    company list / detail APIs, exchange and ticker codes
 │       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository
 │       └── resources/
 │           ├── application.yaml
@@ -26,22 +66,29 @@ neraca_lab/
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               └── V1.0.6__data_metrics_valuation.sql
+├── frontend/                    Next.js web app (company list + company detail)
+│   ├── Dockerfile               standalone Next.js server (node server.js)
+│   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
+│   └── src/                     app/ (pages), components/ (ui = shadcn-fintech), lib/ (API client)
 ├── data/<TICKER>/               source data per company
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
-└── docs/v1_docs/                DB_SCHEMA_DOCS.md (tables / views), AI_INGESTION_DOCS.md (upload + agent)
+└── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
+                                 AI_INGESTION_DOCS.md, DB_SCHEMA_DOCS.md (see Documentation)
 ```
 
-## Running the backend
+## Running the backend only
 
-Requires Docker.
+Requires Docker. Uses the same containers and database as the full stack (compose project
+`backend`), so start one or the other. While the full stack runs, stop it with the stop script:
+`docker compose down` here only knows postgres, redis and backend, not the frontend.
 
 ```bash
 cd backend
 docker compose up -d --build     # start postgres, redis and backend
 docker compose logs -f backend   # follow logs
-docker compose down              # stop (add -v to wipe the database volume)
+docker compose down              # stop (add -v to also delete the database volume: all data)
 ```
 
 | Service  | Port | Default credentials          |
@@ -56,7 +103,8 @@ Configuration lives in `backend/.env` (copy `backend/.env.example`). It holds th
 never commit keys. Use real passwords outside local development.
 
 To run the backend from the IDE instead, start only the infrastructure with
-`docker compose up -d postgres redis`; `application.yaml` defaults to `localhost`.
+`docker compose up -d postgres redis` (in `backend/`); `application.yaml` defaults to `localhost`.
+The IDE backend uses port 8080, so stop the full stack (or the backend container) first.
 
 ## Uploading financial statements (AI ingestion)
 
@@ -80,17 +128,79 @@ plan, every tool call and the verification. Details: [`docs/v1_docs/AI_INGESTION
 | 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template                 |
 | 502  | `FAILED`: the AI provider could not be reached                               |
 
-## Tests
+A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
+`uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
+`ck_company_exchange`), so uploading the same company again, or concurrently, never creates a
+second row.
+
+## Company APIs
 
 ```bash
-cd backend
-./mvnw test        # needs the Docker Postgres (docker compose up -d postgres redis)
+curl  http://localhost:8080/api/v1/exchanges                 # supported exchanges
+curl "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
+curl  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
+```
+
+| Endpoint                                    | Returns                                                                                                                                                                                                                                                                                           |
+|---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GET /api/v1/exchanges`                     | supported exchanges: `code`, `name`, `country` (e.g. for an exchange filter)                                                                                                                                                                                                                      |
+| `GET /api/v1/companies?exchange=IDX`        | companies of the exchange, ordered by ticker: master data plus number of periods, first / latest period and latest price date. `exchange` defaults to `IDX`                                                                                                                                       |
+| `GET /api/v1/companies/{exchange}/{ticker}` | `company`, `coverage` (row counts and date ranges per table), `periods` (most recent first, each with income statement, balance sheet, cash flow, segment figures and fundamental metrics), `segments`, `shareSnapshots`, `latestPrice`, `latestMarketSnapshot`, `valuations`, `corporateActions` |
+
+Exchange and ticker are case-insensitive (`idx/hrta` works). Amounts are full currency units with the
+database sign conventions; a statement that is not stored for a period is `null`. The detail is
+read in one REPEATABLE READ transaction, so it is consistent even while an upload is running.
+Daily prices are summarised (range in `coverage`, last day in `latestPrice`), not listed.
+
+| HTTP | Meaning                                                         |
+|------|-----------------------------------------------------------------|
+| 200  | OK                                                              |
+| 400  | unsupported exchange (lists `supportedExchanges`) or bad ticker |
+| 404  | no company with this ticker on this exchange                    |
+
+Supported exchanges are the constants of `company/Exchange.java` (currently `IDX`). Supporting
+NYSE, NASDAQ, SSE, ... later is one enum constant; the APIs then accept it. Full field reference:
+[`docs/v1_docs/COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md).
+
+## Frontend
+
+Next.js web app in `frontend/` with the
+[shadcn-fintech](https://github.com/abderrahimghazali/shadcn-fintech) theme (MIT). Requires
+Node.js 20.9+ and a running backend.
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local    # only if the backend is not on http://localhost:8080
+npm run dev                   # http://localhost:3000
+```
+
+| Page                             | Content                                                                                                                                                            |
+|----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
+| `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
+
+Pages fetch the backend in Server Components (`NERACA_API_URL`, server-side only), so the
+backend needs no CORS setup. Details: [`docs/v1_docs/FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md).
+
+## Tests
+
+The backend tests need the Postgres on localhost:5432 (the full stack, or
+`cd backend && docker compose up -d postgres redis`).
+
+```bash
+(cd backend && ./mvnw test)                      # 38 tests
+(cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
-data; `BackendApplicationTests` starts the application context. Uploading all six HRTA filings
-through the endpoint into an empty database reproduces the seed data exactly (see
-`docs/v1_docs/AI_INGESTION_DOCS.md`, section 5).
+data; `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
+exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
+second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
+keeps one row, and `CompanyCodesTest` covers ticker / exchange normalisation. Uploading all six
+HRTA filings through the endpoint into an empty database reproduces the seed data exactly (see
+`docs/v1_docs/AI_INGESTION_DOCS.md`, section 5). The start / stop scripts are checked with
+ShellCheck and bash 3.2; see `docs/v1_docs/DOCKER_DOCS.md`, section 6.
 
 ## Database
 

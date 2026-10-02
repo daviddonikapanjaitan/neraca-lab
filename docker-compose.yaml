@@ -1,0 +1,33 @@
+# Neraca Lab full stack: postgres + redis + backend (backend/docker-compose.yaml) + frontend.
+#
+# Start with the scripts in scripts/ (start-linux.sh, start-mac.sh, start-windows.bat), or:
+#   docker compose up -d --build
+#
+# Same compose project ("backend") as backend/docker-compose.yaml: one set of containers and one
+# database volume, whichever file starts them. Requires Docker Compose 2.20+ (include).
+#
+#   frontend  http://localhost:3000   (FRONTEND_PORT)
+#   backend   http://localhost:8080   (BACKEND_PORT)
+#   postgres  localhost:5432          (POSTGRES_PORT)
+#   redis     localhost:6379          (REDIS_PORT)
+name: backend
+
+include:
+  # resolved from backend/ (build context, backend/.env with the AI settings)
+  - backend/docker-compose.yaml
+
+services:
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    container_name: neracalab-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      # server-side only: the browser talks to the frontend, the frontend to the backend container
+      NERACA_API_URL: http://backend:8080
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"

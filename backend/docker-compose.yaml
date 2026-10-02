@@ -1,3 +1,10 @@
+# Backend stack: postgres + redis + backend.
+# The full stack (this file + the frontend) is ../docker-compose.yaml, started by ../scripts/start-*.
+# Both files form the same compose project "backend", so they share the containers and the
+# database volume (backend_postgres-data).
+# Host ports can be changed with POSTGRES_PORT, REDIS_PORT and BACKEND_PORT.
+name: backend
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -8,7 +15,7 @@ services:
       POSTGRES_USER: ${DB_USERNAME:-neracalab}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-neracalab}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +30,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-neracalab}"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -58,7 +65,14 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}
       OPENAI_MODEL: ${OPENAI_MODEL:-deepseek/deepseek-v4-flash-0731}
     ports:
-      - "8080:8080"
+      - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      # ready once the API answers (first start also runs the SQL scripts)
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/v1/exchanges || exit 1"]
+      interval: 5s
+      timeout: 5s
+      start_period: 120s
+      retries: 24
 
 volumes:
   postgres-data:

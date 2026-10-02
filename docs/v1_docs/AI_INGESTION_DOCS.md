@@ -111,6 +111,15 @@ final status is decided by the deterministic database read-back, not by the mode
 | `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics)       |
 | `verifyStoredData`       | read  | database read-back: pending work and inconsistencies                                       |
 
+**One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
+trimmed and upper-cased (`Tickers.normalize`; a code that is not a ticker rejects the upload with
+422); the exchange is always `IDX`. `findCompany` looks the company up by that key, and
+`registerCompany` writes it with a single
+`INSERT ... ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE ... RETURNING`, so two
+uploads of the same company, even concurrent ones, end in one row. The database enforces the
+same rule independently: `uq_company_ticker_exchange`, `exchange NOT NULL`, and the upper-case
+checks `ck_company_ticker` / `ck_company_exchange`.
+
 ## 4. Workbook structure and mapping
 
 An IDX XBRL workbook has one sheet per taxonomy role. Used sheets:
@@ -135,6 +144,7 @@ Statement sheets have a header row of XBRL contexts and one row per line item:
 | `PRIOR_YEAR_END` | -                             | interim filings only: PriorEndYearInstant |
 
 Rules:
+
 - Amounts are multiplied by the rounding level ("Satuan Penuh" 1, "Ribuan" 1,000, "Jutaan" 1,000,000).
 - Quarterly filings are year-to-date: Kuartal I = `Q1`, II = `H1`, III = `9M`, Tahunan = `FY`.
 - Checks (an ERROR blocks saving): revenue - cost = gross profit; operating income + finance income -
@@ -161,7 +171,8 @@ rows (loaded separately, e.g. `V1.0.5__data_HRTA_market.sql`).
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | End-to-end (manual)              | uploading all six filings through the endpoint into an empty database reproduces the seed data                                                                                                                                                       |
 
-Run the unit tests with `cd backend && ./mvnw test` (needs the Docker Postgres).
+Run the unit tests with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432: the full
+stack from the start scripts, or `docker compose up -d postgres redis` in `backend/`).
 
 End-to-end check of this version (empty database, all six HRTA filings uploaded through the
 endpoint, `deepseek/deepseek-v4-flash-0731` via OpenRouter):

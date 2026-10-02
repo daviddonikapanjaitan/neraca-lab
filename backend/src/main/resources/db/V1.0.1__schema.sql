@@ -20,7 +20,7 @@
 CREATE TABLE IF NOT EXISTS company (
     company_id          BIGSERIAL PRIMARY KEY,
     ticker              VARCHAR(20) NOT NULL,
-    exchange            VARCHAR(50),
+    exchange            VARCHAR(50) NOT NULL,
     cik                 VARCHAR(20),
     company_name        VARCHAR(255) NOT NULL,
     legal_name          VARCHAR(255),
@@ -39,7 +39,21 @@ CREATE TABLE IF NOT EXISTS company (
     CONSTRAINT ck_company_currency CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$')
 );
 
-COMMENT ON TABLE  company IS 'Listed company master data.';
+-- One company per (ticker, exchange): uq_company_ticker_exchange plus the checks below,
+-- which keep both codes upper case without blanks, so a lower-case or padded ticker can
+-- never become a second row of the same company. The statements below also upgrade
+-- databases created before these rules: SET NOT NULL is a no-op when already set, and
+-- the checks are dropped and re-added (idempotent, the table is small).
+ALTER TABLE company ALTER COLUMN exchange SET NOT NULL;
+ALTER TABLE company
+    DROP CONSTRAINT IF EXISTS ck_company_ticker,
+    ADD  CONSTRAINT ck_company_ticker   CHECK (ticker ~ '^[A-Z0-9][A-Z0-9.-]*$'),
+    DROP CONSTRAINT IF EXISTS ck_company_exchange,
+    ADD  CONSTRAINT ck_company_exchange CHECK (exchange ~ '^[A-Z][A-Z0-9]*$');
+
+COMMENT ON TABLE  company IS 'Listed company master data. Unique per (ticker, exchange).';
+COMMENT ON COLUMN company.ticker IS 'Ticker code on the exchange, upper case (e.g. HRTA, BRK.B).';
+COMMENT ON COLUMN company.exchange IS 'Exchange code, upper case (e.g. IDX).';
 COMMENT ON COLUMN company.cik IS 'SEC Central Index Key (US filers only).';
 COMMENT ON COLUMN company.currency IS 'ISO 4217 reporting currency of the financial statements.';
 COMMENT ON COLUMN company.fiscal_year_end IS 'Most recent fiscal year end date; its month/day define the fiscal calendar.';
