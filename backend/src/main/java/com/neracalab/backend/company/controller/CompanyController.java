@@ -1,5 +1,8 @@
-package com.neracalab.backend.company;
+package com.neracalab.backend.company.controller;
 
+import com.neracalab.backend.company.CompanyDetailResponse;
+import com.neracalab.backend.company.CompanyListResponse;
+import com.neracalab.backend.company.CompanyService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;

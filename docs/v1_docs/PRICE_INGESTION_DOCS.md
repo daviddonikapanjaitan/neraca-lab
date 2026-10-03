@@ -41,6 +41,11 @@ by the financial statement upload or a seed script); the ingestion never creates
 The POST only queues: the provider is called by the background worker, never inside a web request,
 and the frontend reads prices from the database only.
 
+Every state change of a job is also recorded in the `ingestion_job` table (type `PRICE`,
+`PriceIngestionTracker`), so `GET /api/v1/ingestions` lists price jobs next to the uploads and keeps
+them after a restart ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)). The endpoints above still
+read the in-memory queue.
+
 ### Job
 
 ```json
@@ -144,8 +149,9 @@ their own job.
 minutes with the 1-2 s pause. Yahoo publishes no limits; a server in a cloud data centre is
 blocked much sooner than a home connection, which is when EODHD is the fallback.
 
-Jobs live in memory: a restart loses queued jobs and the job history (re-submit; nothing is
-fetched twice).
+The queue lives in memory: a restart loses queued jobs (re-submit; nothing is fetched twice).
+Every job is also recorded in `ingestion_job`, so the history survives restarts; jobs that were
+still active are marked `FAILED` (Interrupted) at the next start ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)).
 
 ## 4. Providers
 
@@ -189,7 +195,7 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
   split is wrong until share counts are adjusted (a `corporate_action` based adjustment is not
   implemented).
 - **Exchange holidays** are not known: a holiday simply returns no bar.
-- **Jobs are in memory** (section 3).
+- **The queue is in memory** (section 3); the job history is kept in `ingestion_job`.
 
 ## 7. Tests
 

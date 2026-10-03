@@ -19,7 +19,7 @@ exchange, and everything stored for one company. It reads the company APIs
 ## 2. Data flow
 
 ```text
-browser ──> Next.js server (Server Components) ──> Neraca Lab backend /api/v1/...
+browser ──> Next.js server (Server Components, Route Handlers /api/...) ──> Neraca Lab backend /api/v1/...
 ```
 
 - Pages are Server Components that call the backend from `src/lib/api.ts` with
@@ -39,6 +39,20 @@ browser ──> Next.js server (Server Components) ──> Neraca Lab backend /a
 | `GET /api/v1/exchanges`                     | exchange filter (page 1) |
 | `GET /api/v1/companies?exchange={code}`     | company list (page 1)    |
 | `GET /api/v1/companies/{exchange}/{ticker}` | company detail (page 2)  |
+| `GET /api/v1/ingestions?limit=100`          | ingestion page (page 3)  |
+| `GET /api/v1/prices/ingestions`             | ingestion page: configured price provider |
+
+The ingestion page also calls the backend from the browser through Next.js Route Handlers in
+`src/app/api/` (same server-side `NERACA_API_URL`; `forward()` in `src/lib/api.ts` passes status and
+ProblemDetail through; unreachable backend = 503):
+
+| Route Handler                               | Backend                                                  |
+|---------------------------------------------|----------------------------------------------------------|
+| `POST /api/financial-statements/upload`     | `POST /api/v1/financial-statements/upload`               |
+| `POST /api/prices/ingestions` (JSON body)   | `POST /api/v1/prices/ingestions?exchange=&ticker=&full=` |
+| `GET /api/ingestions?type=&status=&limit=`  | `GET /api/v1/ingestions` (table polling)                 |
+| `GET /api/ingestions/{id}`                  | `GET /api/v1/ingestions/{id}` (detail sheet)             |
+| `GET /api/ingestions/{id}/file`             | `GET /api/v1/ingestions/{id}/file` (download, streamed with name / type / size / checksum headers by `forwardFile()`) |
 
 ## 3. Pages
 
@@ -86,6 +100,25 @@ Statement tables:
 
 Unknown company: not-found page. Invalid ticker or unsupported exchange: the backend's 400 message.
 
+### 3.3 Ingestion - `/ingestion`
+
+Sidebar entry below Companies. Everything runs in the background
+([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)).
+
+| Element                    | Content                                                                                                                         |
+|----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 20 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
+| Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
+| Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
+| Jobs table                 | type tabs (all / financial statements / prices), status filter, job, status badge, progress (`stage` + `message`), requested, duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
+| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, timings, attempts, result summary (verification and agent metrics, or price days and valuation), raw JSON |
+
+Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
+upload, so a failure (e.g. backend unreachable) shows a message instead of a broken download.
+
+When a job seen in progress finishes, the page re-renders its server data (`router.refresh()`), so
+a new company appears in the ticker list and the latest price date is current.
+
 ## 4. Formatting
 
 `src/lib/format.ts` uses a fixed `en-US` locale so server and client render identical text (no
@@ -103,18 +136,21 @@ frontend/
     │   ├── layout.tsx                     fonts, ThemeProvider, TooltipProvider, metadata
     │   ├── page.tsx                       redirect to /companies
     │   ├── not-found.tsx                  404 page
-    │   └── (dashboard)/
-    │       ├── layout.tsx                 sidebar, breadcrumb, theme toggle
-    │       ├── error.tsx                  error boundary for unexpected errors
-    │       ├── companies/page.tsx         page 1 (+ loading.tsx)
-    │       └── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
+    │   ├── (dashboard)/
+    │   │   ├── layout.tsx                 sidebar, breadcrumb, theme toggle
+    │   │   ├── error.tsx                  error boundary for unexpected errors
+    │   │   ├── companies/page.tsx         page 1 (+ loading.tsx)
+    │   │   ├── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
+    │   │   └── ingestion/page.tsx         page 3 (+ loading.tsx)
+    │   └── api/                           Route Handlers proxying the ingestion APIs (section 2)
     ├── components/
     │   ├── ui/                            shadcn-fintech ui components
     │   ├── companies/                     company list client component
     │   ├── company/                       detail view, header, overview, statement tables, panels
+    │   ├── ingestion/                     upload card, price card, jobs table, job detail sheet, download button
     │   └── app-sidebar, dynamic-breadcrumb, empty-state, stat-tile, api-error-state, ...
     ├── hooks/use-mobile.ts
-    └── lib/                               api client, types, formatting, statements, links, tabs
+    └── lib/                               api client, types, formatting, statements, links, tabs, ingestion
 ```
 
 ## 6. Docker

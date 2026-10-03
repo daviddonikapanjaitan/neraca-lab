@@ -1,8 +1,9 @@
-package com.neracalab.backend.company;
+package com.neracalab.backend.company.controller;
 
 import java.util.Arrays;
 import java.util.List;
 
+import com.neracalab.backend.company.Exchange;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

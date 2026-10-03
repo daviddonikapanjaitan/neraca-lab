@@ -39,6 +39,7 @@ spring:
         - classpath:db/V1.0.1__schema.sql
         - classpath:db/V1.0.2__schema_market_valuation.sql
         - classpath:db/V1.0.3__views.sql
+        - classpath:db/V1.0.7__schema_ingestion.sql
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql

@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +32,8 @@ import com.neracalab.backend.price.provider.RateLimitedException;
  * last wait stops the run: the job and every queued job fail, and the next submission starts fresh.
  * <p>
  * At most one active job per company; jobs are lost on restart (re-submit; nothing is fetched twice).
+ * Every state change is also reported to the {@link Listener} ({@link PriceIngestionTracker} records
+ * it in {@code ingestion_job}); a listener failure never affects the job.
  */
 @Component
 public class PriceIngestionQueue implements SmartLifecycle {
@@ -41,8 +44,16 @@ public class PriceIngestionQueue implements SmartLifecycle {
     public record Submission(PriceIngestionJob job, boolean created) {
     }
 
+    /** Receives every state change of a job (submitted, running, waiting, finished), on the changing thread. */
+    @FunctionalInterface
+    public interface Listener {
+
+        void changed(PriceIngestionJob.View job);
+    }
+
     private final PriceIngestionService service;
     private final PriceProperties properties;
+    private final Listener listener;
     private final LinkedBlockingQueue<PriceIngestionJob> pending = new LinkedBlockingQueue<>();
     /** All known jobs in submission order; guarded by {@code this}. */
     private final Map<UUID, PriceIngestionJob> jobs = new LinkedHashMap<>();
@@ -50,9 +61,16 @@ public class PriceIngestionQueue implements SmartLifecycle {
     /** Consecutive HTTP 429 answers; worker thread only. */
     private int rateLimitStreak;
 
-    public PriceIngestionQueue(PriceIngestionService service, PriceProperties properties) {
+    @Autowired
+    public PriceIngestionQueue(PriceIngestionService service, PriceProperties properties, Listener listener) {
         this.service = service;
         this.properties = properties;
+        this.listener = listener;
+    }
+
+    /** Without listener (tests). */
+    PriceIngestionQueue(PriceIngestionService service, PriceProperties properties) {
+        this(service, properties, job -> { });
     }
 
     // ------------------------------------------------------------------ API
@@ -65,6 +83,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
         }
         PriceIngestionJob job = new PriceIngestionJob(company, full);
         jobs.put(job.id(), job);
+        report(job);   // before the worker can see the job, so QUEUED is never recorded after RUNNING
         pending.add(job);
         forgetOldJobs();
         return new Submission(job, true);
@@ -87,6 +106,14 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     public String providerName() {
         return service.providerName();
+    }
+
+    private void report(PriceIngestionJob job) {
+        try {
+            listener.changed(job.view());
+        } catch (RuntimeException e) {
+            log.warn("price ingestion job {}: state change not recorded: {}", job.id(), e.getMessage());
+        }
     }
 
     /** Drops the oldest finished jobs beyond {@code job-history}; active jobs are always kept. */
@@ -119,8 +146,10 @@ public class PriceIngestionQueue implements SmartLifecycle {
         CompanyRef company = job.company();
         while (true) {
             job.running();
+            report(job);
             try {
                 job.succeeded(service.ingest(company, job.full()));
+                report(job);
                 rateLimitStreak = 0;
                 return;
             } catch (RateLimitedException e) {
@@ -139,22 +168,26 @@ public class PriceIngestionQueue implements SmartLifecycle {
                 String message = e.getMessage() + "; queue paused for " + format(wait) + " (wait "
                         + rateLimitStreak + " of " + backoff.size() + "), then " + company.ticker() + " is retried";
                 job.waitingForRateLimit(resumeAt, message);
+                report(job);
                 log.warn(message);
                 try {
                     Thread.sleep(wait);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     job.failed("Stopped: the application is shutting down");
+                    report(job);
                     return;
                 }
             } catch (RuntimeException e) {
                 if (Thread.currentThread().isInterrupted()) {
                     job.failed("Stopped: the application is shutting down");
+                    report(job);
                     return;
                 }
                 String message = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
                 log.warn("{} {}: price ingestion failed: {}", company.exchange(), company.ticker(), message, e);
                 job.failed(message);
+                report(job);
                 return;
             }
         }
@@ -164,10 +197,12 @@ public class PriceIngestionQueue implements SmartLifecycle {
     private void stopRun(PriceIngestionJob job, RateLimitedException e) {
         String waits = properties.backoff().stream().map(PriceIngestionQueue::format).collect(Collectors.joining(", "));
         job.failed(e.getMessage() + " again after waiting " + waits + "; run stopped, submit again later");
+        report(job);
         List<PriceIngestionJob> dropped = new ArrayList<>();
         pending.drainTo(dropped);
         for (PriceIngestionJob queued : dropped) {
             queued.failed("Run stopped: " + providerName() + " kept answering HTTP 429; submit again later");
+            report(queued);
         }
         log.error("Price ingestion run stopped: {} kept answering HTTP 429 after waiting {}; {} queued job(s) dropped",
                 providerName(), waits, dropped.size());

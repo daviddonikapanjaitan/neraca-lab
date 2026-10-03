@@ -1,5 +1,6 @@
 package com.neracalab.backend.ingestion;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashMap;
@@ -9,7 +10,6 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
 
 import com.neracalab.backend.ingestion.IngestionResponse.Status;
 import com.neracalab.backend.ingestion.agent.AgentTrace;
@@ -24,7 +24,7 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbook;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbookException;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbookReader;
 
-/** Reads the upload, maps it deterministically, then lets the agent store it. */
+/** Reads an uploaded workbook, maps it deterministically, then lets the agent store it. */
 @Service
 public class IngestionService {
 
@@ -40,21 +40,39 @@ public class IngestionService {
         this.repository = repository;
     }
 
-    public IngestionResponse ingest(MultipartFile file) {
-        String fileName = file.getOriginalFilename() == null ? "upload.xlsx" : file.getOriginalFilename();
+    /**
+     * Reads and checks a workbook: an IDX XBRL financial statement in a supported template.
+     * Fast (no model call); the upload endpoint uses it to reject a wrong file before storing it.
+     *
+     * @throws IdxWorkbookException not an .xlsx, not an IDX XBRL workbook or an unsupported template
+     */
+    public IngestionSession prepare(byte[] content, String fileName) {
         IdxWorkbook workbook;
-        try (InputStream in = file.getInputStream()) {
+        try (InputStream in = new ByteArrayInputStream(content)) {
             workbook = reader.read(in, fileName);
         } catch (IOException e) {
             throw new IdxWorkbookException("Cannot read the upload: " + e.getMessage(), e);
         }
-        FilingMapper mapper = new FilingMapper(workbook);
+        FilingMapper mapper;
+        try {
+            mapper = new FilingMapper(workbook);
+        } catch (IdxWorkbookException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new IdxWorkbookException("Cannot map '" + fileName + "': " + e.getMessage(), e);
+        }
         if (!mapper.templateProblems().isEmpty()) {
             throw new IdxWorkbookException("Unsupported filing: " + String.join("; ", mapper.templateProblems()));
         }
-        IngestionSession session = new IngestionSession(mapper);
+        return new IngestionSession(mapper);
+    }
+
+    /** Lets the agent store a prepared workbook (takes minutes: model calls); an agent failure is returned as FAILED. */
+    public IngestionResponse run(IngestionSession session) {
+        FilingMapper mapper = session.mapper();
         long start = System.currentTimeMillis();
-        log.info("ingestion {} started: {} {} {}", session.id(), fileName, mapper.info().ticker(), mapper.info().current().key());
+        log.info("ingestion {} started: {} {} {}", session.id(), session.info().fileName(), mapper.info().ticker(),
+                mapper.info().current().key());
         try {
             IngestionAgent.Outcome outcome = agent.run(session);
             Status status = outcome.verification().complete() ? Status.COMPLETED : Status.INCOMPLETE;
