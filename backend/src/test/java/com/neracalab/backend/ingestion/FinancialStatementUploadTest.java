@@ -29,8 +29,12 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.context.WebApplicationContext;
 import org.springframework.test.web.servlet.ResultMatcher;
 
+import com.neracalab.backend.auth.Permission;
+import com.neracalab.backend.auth.TestAccounts;
+import com.neracalab.backend.auth.TestLogins;
 import com.neracalab.backend.ingestion.agent.IngestionAgent;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository;
 import com.neracalab.backend.job.IngestionJob;
@@ -54,7 +58,17 @@ class FinancialStatementUploadTest {
     private IngestionAgent agent;
 
     @Autowired
+    private WebApplicationContext context;
+
+    /** Sends the bearer token of a root session with every request. */
     private MockMvc mvc;
+    private String token;
+
+    @BeforeEach
+    void loginAsRoot() {
+        token = TestLogins.rootToken(context);
+        mvc = TestLogins.mockMvc(context, token);
+    }
 
     @Autowired
     private JsonMapper json;
@@ -73,17 +87,21 @@ class FinancialStatementUploadTest {
 
     @AfterEach
     void removeTestRows() throws Exception {
-        for (UUID id : createdJobs) {
-            awaitFinished(id);
-        }
-        if (!createdJobs.isEmpty()) {
-            jdbc.sql("DELETE FROM ingestion_job WHERE job_id IN (:ids)").param("ids", createdJobs).update();
-        }
-        if (!createdFiles.isEmpty()) {
-            jdbc.sql("""
-                            DELETE FROM ingestion_file f WHERE f.file_id IN (:ids)
-                            AND NOT EXISTS (SELECT 1 FROM ingestion_job j WHERE j.file_id = f.file_id)""")
-                    .param("ids", createdFiles).update();
+        try {
+            for (UUID id : createdJobs) {
+                awaitFinished(id);   // through the API, so before the logout below
+            }
+            if (!createdJobs.isEmpty()) {
+                jdbc.sql("DELETE FROM ingestion_job WHERE job_id IN (:ids)").param("ids", createdJobs).update();
+            }
+            if (!createdFiles.isEmpty()) {
+                jdbc.sql("""
+                                DELETE FROM ingestion_file f WHERE f.file_id IN (:ids)
+                                AND NOT EXISTS (SELECT 1 FROM ingestion_job j WHERE j.file_id = f.file_id)""")
+                        .param("ids", createdFiles).update();
+            }
+        } finally {
+            TestLogins.logout(context, token);
         }
     }
 
@@ -97,8 +115,13 @@ class FinancialStatementUploadTest {
         assertThat(first.file().fileName()).isEqualTo("FinancialStatement-2026-II-HRTA.xlsx");
         assertThat(first.file().checksumSha256()).isEqualTo(checksum);
         assertThat(first.file().sizeBytes()).isEqualTo(content.length);
+        // recorded as uploaded by the logged-in user (root)
+        long rootId = jdbc.sql("SELECT user_id FROM users WHERE root").query(Long.class).single();
+        assertThat(first.createdBy().userId()).isEqualTo(rootId);
+        assertThat(first.createdBy().username()).isEqualTo("admin");
 
         IngestionJob finished = awaitFinished(first.id());
+        assertThat(finished.createdBy()).isEqualTo(first.createdBy());
         assertThat(finished.status()).isEqualTo(IngestionJobStatus.FAILED);
         assertThat(finished.message()).isEqualTo("IllegalStateException: model offline (test)");
         assertThat(finished.stage()).startsWith("AI agent failed on HRTA");
@@ -204,6 +227,42 @@ class FinancialStatementUploadTest {
         ContentDisposition disposition = ContentDisposition.parse(response.getHeader("Content-Disposition"));
         assertThat(disposition.isAttachment()).isTrue();
         assertThat(disposition.getFilename()).isEqualTo(fileName);
+    }
+
+    @Test
+    void recordsTheUserWhoUploadsAndKeepsTheUsernameAfterTheUserIsDeleted() throws Exception {
+        TestAccounts accounts = new TestAccounts(context);
+        try {
+            long userId = accounts.user("uploader", accounts.role("ingest", Permission.INGESTION));
+            String userToken = accounts.token(userId);
+            String body = mvc.perform(multipart("/api/v1/financial-statements/upload")
+                            .file(new MockMultipartFile("file", WORKBOOK.getFileName().toString(),
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    Files.readAllBytes(WORKBOOK)))
+                            .header("Authorization", "Bearer " + userToken))
+                    .andExpect(status().is2xxSuccessful())
+                    .andReturn().getResponse().getContentAsString();
+            IngestionJob job = json.readValue(body, IngestionJob.class);
+            createdJobs.add(job.id());
+            if (!job.file().reused()) {
+                createdFiles.add(job.file().fileId());
+            }
+            if (job.createdBy().userId() != userId) {
+                // the same file was still being processed for another user: that job was returned
+                awaitFinished(job.id());
+                return;
+            }
+            assertThat(job.createdBy().username()).isEqualTo(accounts.name("uploader"));
+            awaitFinished(job.id());
+
+            jdbc.sql("DELETE FROM users WHERE user_id = :id").param("id", userId).update();
+            IngestionJob afterDelete = json.readValue(mvc.perform(get("/api/v1/ingestions/" + job.id()))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(), IngestionJob.class);
+            assertThat(afterDelete.createdBy().userId()).isNull();
+            assertThat(afterDelete.createdBy().username()).isEqualTo(accounts.name("uploader"));
+        } finally {
+            accounts.cleanup();
+        }
     }
 
     private IngestionJob upload(byte[] content, ResultMatcher expected) throws Exception {

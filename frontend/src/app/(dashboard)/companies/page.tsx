@@ -1,8 +1,10 @@
 import type { Metadata } from "next"
 
+import { AccessDenied } from "@/components/access-denied"
 import { ApiErrorState } from "@/components/api-error-state"
 import { CompaniesPageClient } from "@/components/companies/companies-page-client"
-import { ApiError, getCompanies, getExchanges } from "@/lib/api"
+import { ApiError, getCompanies, getExchanges, requireUser } from "@/lib/api"
+import { hasPermission, homePath } from "@/lib/permissions"
 import type { CompanyListResponse, Exchange } from "@/lib/types"
 
 export const metadata: Metadata = {
@@ -29,6 +31,11 @@ export default async function Page({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
+  const user = await requireUser()
+  if (!hasPermission(user, "COMPANIES")) {
+    return <AccessDenied permission="COMPANIES" homeHref={homePath(user)} />
+  }
+
   const params = await searchParams
   const raw = Array.isArray(params.exchange) ? params.exchange[0] : params.exchange
   const exchange = raw?.trim().toUpperCase() || DEFAULT_EXCHANGE

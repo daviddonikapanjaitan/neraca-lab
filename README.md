@@ -27,10 +27,13 @@ The AI upload needs `backend/.env` with `OPENAI_API_KEY` (copy `backend/.env.exa
 works without it. Options, ports and troubleshooting:
 [`docs/v1_docs/DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md).
 
+**Log in** at <http://localhost:3000> with the root user **`admin` / `admin`** (created at the first
+start), then change its password in Admin Center > User Management.
+
 | Service  | URL / port                                         |
 |----------|----------------------------------------------------|
 | frontend | <http://localhost:3000>                            |
-| backend  | <http://localhost:8080> (e.g. `/api/v1/exchanges`) |
+| backend  | <http://localhost:8080> (e.g. `/api/v1/health`)    |
 | postgres | localhost:5432 (db/user/password `neracalab`)      |
 | redis    | localhost:6379 (password `neracalab`)              |
 
@@ -44,6 +47,7 @@ works without it. Options, ports and troubleshooting:
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
+| [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 
 ## Project structure
@@ -62,6 +66,8 @@ neraca_lab/
 │       │                        stored files (checksum), background upload queue
 │       ├── java/.../price/      daily price ingestion: queue, providers, valuation refresh
 │       ├── java/.../job/        ingestion job progress (ingestion_job): list / detail / file download APIs
+│       ├── java/.../auth/       login, sessions, access check of every API, root user bootstrap
+│       ├── java/.../user/       user management, role management, profile (avatar)
 │       └── resources/
 │           ├── application.yaml
 │           └── db/              SQL scripts (no Flyway)
@@ -69,10 +75,12 @@ neraca_lab/
 │               ├── V1.0.2__schema_market_valuation.sql
 │               ├── V1.0.3__views.sql
 │               ├── V1.0.7__schema_ingestion.sql   (schema script, runs after V1.0.3)
+│               ├── V1.0.8__schema_auth.sql        (schema script: users, roles, sessions)
+│               ├── V1.0.9__schema_ingestion_created_by.sql   (who started an ingestion job)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               └── V1.0.6__data_metrics_valuation.sql
-├── frontend/                    Next.js web app (company list, company detail, ingestion)
+├── frontend/                    Next.js web app (login, companies, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
@@ -80,9 +88,12 @@ neraca_lab/
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
+│                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
+│                                INDF: xlsx 2024-III .. 2026-II only, load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
-                                 INGESTION_JOBS_DOCS.md, DB_SCHEMA_DOCS.md (see Documentation)
+                                 INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md
+                                 (see Documentation)
 ```
 
 ## Running the backend only
@@ -113,10 +124,35 @@ To run the backend from the IDE instead, start only the infrastructure with
 `docker compose up -d postgres redis` (in `backend/`); `application.yaml` defaults to `localhost`.
 The IDE backend uses port 8080, so stop the full stack (or the backend container) first.
 
+## Login, users, roles and permissions
+
+Every page and API needs a login (username and password); only `POST /api/v1/auth/login`,
+`POST /api/v1/auth/logout` and `GET /api/v1/health` are public. A user has one or more roles, a
+role has one or more permissions, and the backend checks them on every API request:
+
+| Permission  | Opens                                                                    |
+|-------------|--------------------------------------------------------------------------|
+| `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
+| `INGESTION` | Ingestion page, upload / price / job APIs (and the company list)         |
+| `COMPANIES` | Companies pages and company APIs                                         |
+
+The root user `admin` (initial password `admin`, dummy profile data) has the built-in
+Administrator role with every permission; it cannot be deleted, deactivated or lose that role.
+Usernames and emails are unique. On the profile page (avatar in the sidebar footer) users change
+only their picture, address, phone and date of birth.
+
+```bash
+TOKEN=$(curl -s -H "Content-Type: application/json" -d '{"username":"admin","password":"admin"}' \
+        http://localhost:8080/api/v1/auth/login | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+AUTH="Authorization: Bearer $TOKEN"     # used by the examples below
+```
+
+Details: [`docs/v1_docs/AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md).
+
 ## Uploading financial statements (AI ingestion)
 
 ```bash
-curl -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
@@ -130,8 +166,8 @@ the plan, every tool call and the verification. Details: [`docs/v1_docs/AI_INGES
 
 The upload is asynchronous. The workbook is checked, stored once per SHA-256 checksum in
 `ingestion_file` (re-uploading the same file reuses the stored copy and extracts it again), and the
-agent runs in the background. Every ingestion (uploads and prices) records its progress in
-`ingestion_job`; `GET /api/v1/ingestions` lists them, `GET /api/v1/ingestions/{id}` returns one
+agent runs in the background. Every ingestion (uploads and prices) records its progress and the
+user who started it in `ingestion_job`; `GET /api/v1/ingestions` lists them, `GET /api/v1/ingestions/{id}` returns one
 with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded workbook. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md).
 
 | HTTP | Meaning                                                                         |
@@ -148,9 +184,9 @@ second row.
 ## Company APIs
 
 ```bash
-curl  http://localhost:8080/api/v1/exchanges                 # supported exchanges
-curl "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
-curl  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
+curl -H "$AUTH"  http://localhost:8080/api/v1/exchanges                 # supported exchanges
+curl -H "$AUTH" "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
+curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
 ```
 
 | Endpoint                                    | Returns                                                                                                                                                                                                                                                                                           |
@@ -177,9 +213,9 @@ NYSE, NASDAQ, SSE, ... later is one enum constant; the APIs then accept it. Full
 ## Daily price ingestion
 
 ```bash
-curl -X POST "http://localhost:8080/api/v1/prices/ingestions?exchange=IDX&ticker=HRTA"   # queue a job
-curl  http://localhost:8080/api/v1/prices/ingestions/{id}                               # job status / result
-curl  http://localhost:8080/api/v1/prices/ingestions                                    # provider, queue, recent jobs
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/prices/ingestions?exchange=IDX&ticker=HRTA"   # queue a job
+curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions/{id}                               # job status / result
+curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                                    # provider, queue, recent jobs
 ```
 
 | Endpoint                                                      | Does                                                                                                                                    |
@@ -239,9 +275,14 @@ npm run dev                   # http://localhost:3000
 | `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/ingestion`                     | upload an IDX XBRL `.xlsx`, fetch prices (exchange / ticker dropdowns), live table of every ingestion job with details and file download |
+| `/login`                         | username / password login (every other page needs it)                                                                                                             |
+| `/admin/users`, `/admin/roles`   | Admin Center (`ADMIN`): add, view, update and delete users and roles                                                                                               |
+| `/profile`                       | own profile: picture, address, phone, date of birth (username and email are read-only)                                                                             |
 
 Pages fetch the backend in Server Components (`NERACA_API_URL`, server-side only), so the
-backend needs no CORS setup. The ingestion page's uploads, price requests, job polling and file
+backend needs no CORS setup. The login stores the session token in an httpOnly cookie; the
+Next.js server sends it to the backend as a bearer token, and the sidebar shows only the pages the
+user's permissions allow. The ingestion page's uploads, price requests, job polling and file
 downloads go through Next.js Route Handlers (`src/app/api/`), so the browser never calls the backend
 directly either. Details: [`docs/v1_docs/FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md).
 
@@ -251,7 +292,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 70 tests
+(cd backend && ./mvnw test)                      # 100 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -265,6 +306,9 @@ HRTA filings through the endpoint into an empty database reproduces the seed dat
 into HRTA (rolled back) and checks the new rows and valuation, the re-adjustment re-fetch, the
 intraday cutoff and that the company-scoped valuation SQL matches `V1.0.6`; `PriceIngestionQueueTest`
 covers the 429 back-off, `YahooPriceProviderTest` parses a real Yahoo response.
+`AuthControllerTest`, `AccessControlTest` and `EndpointAccessRulesTest` cover login, sessions and
+the permission of every API; `AdminUserControllerTest`, `AdminRoleControllerTest` and
+`ProfileControllerTest` the user, role and profile rules (see `docs/v1_docs/AUTH_DOCS.md`).
 `FinancialStatementUploadTest` (AI agent mocked) checks the asynchronous upload: immediate 202, the
 background job and its recorded stages, one stored file per checksum reused on re-upload, wrong
 files rejected without storing, the job list filters and the file download (identical bytes, the
@@ -294,6 +338,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.2__schema_market_valuation.sql` | segments, prices, share counts, market / valuation snapshots, metrics      |
 | `V1.0.3__views.sql`                   | analysis views (recreated on every start)                                  |
 | `V1.0.7__schema_ingestion.sql`        | uploaded workbooks (`ingestion_file`) and ingestion progress (`ingestion_job`) |
+| `V1.0.8__schema_auth.sql`             | users (profile, avatar), roles, role permissions, user roles, login sessions |
+| `V1.0.9__schema_ingestion_created_by.sql` | `ingestion_job.created_by`: the user who started each ingestion; `app_migration` |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
@@ -318,7 +364,10 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA, EV/OP .. |
 | `financial_metric`    | every calculated metric in long format (margins, returns, leverage, EV/OP) |
 | `ingestion_file`      | uploaded `.xlsx` workbooks (`BYTEA`), one row per SHA-256 checksum         |
-| `ingestion_job`       | progress of every upload and price ingestion (status, stage, result JSONB) |
+| `ingestion_job`       | progress of every upload and price ingestion (status, stage, result JSONB, started by which user) |
+| `users`               | accounts: unique username / email, BCrypt password, profile, avatar        |
+| `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`), assignments |
+| `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
 
 Conventions: amounts in full units of the company currency; income-statement expenses are
 positive; cash-flow outflows are negative; `NULL` = not reported, `0` = reported as zero.
@@ -354,7 +403,7 @@ when the filing fills the breakdown sheets 1617000 / 1618000 (INDF, for example,
 As seed data that exists on every start:
 
 1. Put the filing in `data/<TICKER>/xlsx/` (and prices in `data/<TICKER>/price/`).
-2. Create the data script(s), e.g. `V1.0.8__data_<TICKER>_financials.sql`, following the
+2. Create the data script(s), e.g. `V1.0.10__data_<TICKER>_financials.sql`, following the
    upsert pattern of `V1.0.4__data_HRTA_financials.sql` / `V1.0.5__data_HRTA_market.sql`.
 3. Add them to `spring.sql.init.data-locations` in `application.yaml` **before**
    `V1.0.6__data_metrics_valuation.sql`, which derives snapshots and metrics from all loaded
@@ -366,7 +415,7 @@ Without starting the backend, the scripts can be applied directly to the Docker 
 
 ```bash
 cd backend/src/main/resources/db
-cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql V1.0.7__schema_ingestion.sql \
+cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql V1.0.7__schema_ingestion.sql V1.0.8__schema_auth.sql V1.0.9__schema_ingestion_created_by.sql \
     V1.0.4__data_HRTA_financials.sql V1.0.5__data_HRTA_market.sql V1.0.6__data_metrics_valuation.sql \
   | docker exec -i neracalab-postgres psql -U <user> -d neracalab -v ON_ERROR_STOP=1
 ```

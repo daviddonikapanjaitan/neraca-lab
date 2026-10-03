@@ -13,8 +13,8 @@ export default function NotFound() {
         <h1 className="text-4xl font-bold tabular-nums">404</h1>
         <p className="text-muted-foreground">This page doesn&apos;t exist.</p>
       </div>
-      <Link href="/companies" className={buttonVariants()}>
-        Back to companies
+      <Link href="/" className={buttonVariants()}>
+        Back to Neraca Lab
       </Link>
     </div>
   )

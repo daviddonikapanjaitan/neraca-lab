@@ -23,6 +23,7 @@ import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobRepository.NewUpload;
 import com.neracalab.backend.job.IngestionJobStatus;
+import com.neracalab.backend.job.Requester;
 
 /**
  * Asynchronous financial statement uploads. {@link #submit} stores the workbook in
@@ -62,8 +63,12 @@ public class FinancialStatementQueue implements SmartLifecycle {
 
     // ------------------------------------------------------------------ API
 
-    /** Stores the file (or reuses the stored one with the same checksum) and queues its ingestion. */
-    public synchronized Submission submit(byte[] content, String fileName, String contentType) {
+    /**
+     * Stores the file (or reuses the stored one with the same checksum) and queues its ingestion,
+     * recorded as started by {@code requestedBy}. When the same file is already queued / running,
+     * that job is returned (it keeps its own requester).
+     */
+    public synchronized Submission submit(byte[] content, String fileName, String contentType, Requester requestedBy) {
         StoredFile file = files.store(content, fileName, contentType);
         Optional<UUID> active = jobs.activeUploadOf(file.fileId());
         if (active.isPresent()) {
@@ -75,9 +80,10 @@ public class FinancialStatementQueue implements SmartLifecycle {
         UUID id = UUID.randomUUID();
         String name = fileName.length() <= IngestionFileRepository.NAME_LENGTH
                 ? fileName : fileName.substring(0, IngestionFileRepository.NAME_LENGTH);
-        jobs.insertUpload(new NewUpload(id, file.fileId(), name, file.reused(), "Waiting in the upload queue"));
+        jobs.insertUpload(new NewUpload(id, file.fileId(), name, file.reused(), "Waiting in the upload queue", requestedBy));
         pending.add(new Task(id, file.fileId(), name));
-        log.info("upload job {} queued: {} (file {}{})", id, name, file.fileId(), file.reused() ? ", reused" : "");
+        log.info("upload job {} queued by {}: {} (file {}{})", id, requestedBy == null ? "-" : requestedBy.username(),
+                name, file.fileId(), file.reused() ? ", reused" : "");
         return new Submission(jobs.find(id).orElseThrow(), true);
     }
 

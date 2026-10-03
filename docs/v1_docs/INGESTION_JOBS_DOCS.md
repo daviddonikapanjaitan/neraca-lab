@@ -8,7 +8,9 @@ Every ingestion runs asynchronously in the background and records its progress i
 | Daily prices (Yahoo Finance)    | `POST /api/v1/prices/ingestions?exchange=&ticker=` | `PriceIngestionQueue`: one thread ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)) |
 
 Both write `ingestion_job` (one row per process); `GET /api/v1/ingestions` lists them. The
-frontend page `/ingestion` ([FRONTEND_DOCS.md](FRONTEND_DOCS.md)) uses these APIs.
+frontend page `/ingestion` ([FRONTEND_DOCS.md](FRONTEND_DOCS.md)) uses these APIs. Every API here
+needs the `INGESTION` permission. Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
+([AUTH_DOCS.md](AUTH_DOCS.md), section 3).
 
 Code: `backend/src/main/java/com/neracalab/backend/`
 
@@ -25,7 +27,7 @@ Code: `backend/src/main/java/com/neracalab/backend/`
 ## 1. Upload: stored once per checksum
 
 ```bash
-curl -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
@@ -61,10 +63,10 @@ steps, tool calls, rounds, saved rows, verification, metrics).
 ## 2. API
 
 ```bash
-curl "http://localhost:8080/api/v1/ingestions?limit=20"                       # all types
-curl "http://localhost:8080/api/v1/ingestions?type=PRICE&status=QUEUED,RUNNING" # filtered
-curl  http://localhost:8080/api/v1/ingestions/{id}                            # one job, with result
-curl -OJ http://localhost:8080/api/v1/ingestions/{id}/file                    # download the uploaded file
+curl -H "$AUTH" "http://localhost:8080/api/v1/ingestions?limit=20"                       # all types
+curl -H "$AUTH" "http://localhost:8080/api/v1/ingestions?type=PRICE&status=QUEUED,RUNNING" # filtered
+curl -H "$AUTH"  http://localhost:8080/api/v1/ingestions/{id}                            # one job, with result
+curl -H "$AUTH" -OJ http://localhost:8080/api/v1/ingestions/{id}/file                    # download the uploaded file
 ```
 
 | Parameter | Default | Values                                                                                       |
@@ -88,7 +90,8 @@ Unknown values and a limit out of range: 400 (`title: "Invalid parameter"`); unk
                 "checksumSha256": "77372cab...", "reused": true },
       "fullHistory": null, "attempts": 1, "message": null,
       "requestedAt": "2026-10-03T07:36:09.401Z", "startedAt": "2026-10-03T07:36:09.420Z",
-      "finishedAt": null, "resumeAt": null, "updatedAt": "2026-10-03T07:36:10.002Z", "result": null
+      "finishedAt": null, "resumeAt": null, "updatedAt": "2026-10-03T07:36:10.002Z",
+      "createdBy": { "userId": 3, "username": "budi", "fullName": "Budi Santoso" }, "result": null
     }
   ]
 }
@@ -104,6 +107,7 @@ Unknown values and a limit out of range: 400 (`title: "Invalid parameter"`); unk
 | `fullHistory` | price jobs only (`full=true`)                                                                 |
 | `attempts`    | runs of the job (more than 1 after price provider rate-limit waits)                           |
 | `message`     | why the job failed, is waiting (rate limit) or is incomplete                                  |
+| `createdBy`   | who started the job (section 3); `null` for a scheduled price run                             |
 | `result`      | only in `GET /api/v1/ingestions/{id}`: agent audit trail (upload) or price result (prices)    |
 
 The list is read from the database, so it survives restarts and keeps every job;
@@ -125,7 +129,27 @@ The same content uploaded twice under different names is stored once, but each j
 its own upload's name. 404 (`title: "File not found"`) for an unknown job and for a price job (no
 file); 400 for an id that is not a UUID.
 
-## 3. Restarts
+## 3. Who started a job
+
+Every job records the logged-in user who uploaded the workbook or requested the prices:
+`ingestion_job.created_by` (user id) and `created_by_username` (the username at that time). The
+API returns them as `createdBy`:
+
+| `createdBy`                                        | Meaning                                                        |
+|----------------------------------------------------|----------------------------------------------------------------|
+| `{userId, username, fullName}`                     | started by this user (`fullName` = the user's current name)    |
+| `{userId: null, username, fullName: null}`         | started by a user who has been deleted since (name kept)       |
+| `null`                                             | a scheduled price run (`neracalab.prices.schedule`), no user   |
+
+When an identical upload or a price request for a company finds a job already queued / running,
+that job is returned and keeps its own requester. The ingestion page shows "by <username>" in the
+jobs table and "Started by" in the job details.
+
+Jobs recorded before this column existed were attributed **once** to the root user `admin`: at
+startup, after the root user is ensured, `IngestionCreatorBackfill` sets their creator and records
+the migration in `app_migration`, so it never runs again (later scheduled runs stay `null`).
+
+## 4. Restarts
 
 The queues are in memory. At startup, before the web server accepts requests,
 `IngestionJobRecovery` marks every job still QUEUED / RUNNING / WAITING_RATE_LIMIT as `FAILED`
@@ -133,7 +157,7 @@ The queues are in memory. At startup, before the web server accepts requests,
 for one backend instance: a second instance (or a test run) on the same database also fails the jobs
 the first one is still running.
 
-## 4. Tables (`V1.0.7__schema_ingestion.sql`)
+## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`)
 
 `ingestion_file`: `file_id`, `file_name` (first upload), `content_type`, `size_bytes`,
 `checksum_sha256` (unique, lower-case hex), `content` (`BYTEA`), `created_at`.
@@ -141,15 +165,18 @@ the first one is still running.
 `ingestion_job`: `job_id` (UUID), `job_type`, `status`, `stage`, `exchange`, `ticker`, `file_id`
 (FK `ingestion_file`, required for uploads), `file_name` (this upload), `file_reused`,
 `full_history`, `attempts`, `message`, `result` (`JSONB`), `requested_at`, `started_at`,
-`finished_at`, `resume_at`, `updated_at`. Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md), section 4.8.
+`finished_at`, `resume_at`, `updated_at`, `created_by` (FK `users`, `ON DELETE SET NULL`),
+`created_by_username`. Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md), section 4.8.
 
-## 5. Tests
+## 6. Tests
 
 | Test                            | What it proves                                                                                                   |
 |---------------------------------|------------------------------------------------------------------------------------------------------------------|
 | `FinancialStatementUploadTest`  | upload returns 202 at once, the background job records stages and the result, the same file is stored once and reused, wrong files are rejected without storing, list filters / counts / errors (AI agent mocked) |
 | `FinancialStatementUploadTest` (download) | the downloaded bytes equal the upload, type / size / checksum headers, each job's own file name for one stored file, 404 / 400 |
-| `PriceIngestionControllerTest`  | a price job is recorded in `ingestion_job` with the same final state as the queue                                |
+| `FinancialStatementUploadTest` (creator) | an upload is recorded as started by the uploading user; after the user is deleted the job keeps the username |
+| `IngestionCreatorBackfillTest`  | existing jobs are attributed to the root user exactly once; later jobs without a user stay unattributed        |
+| `PriceIngestionControllerTest`  | a price job is recorded in `ingestion_job` with the same final state and requester as the queue                  |
 
 Both tests delete the rows they create. Because the application startup fails jobs left active,
 run the tests against a separate database when a backend on the same database is processing jobs

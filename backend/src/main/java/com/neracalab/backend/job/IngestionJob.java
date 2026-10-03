@@ -15,12 +15,24 @@ import tools.jackson.databind.JsonNode;
  * @param attempts    runs of the job (more than 1 after price provider rate-limit waits)
  * @param resumeAt    end of the current rate-limit wait (status WAITING_RATE_LIMIT)
  * @param message     why the job failed, is waiting or is incomplete
+ * @param createdBy   the user who started the job (upload or price request); {@code null} for a
+ *                    scheduled run
  * @param result      outcome of a finished job; only returned by {@code GET /api/v1/ingestions/{id}}
  */
 public record IngestionJob(UUID id, IngestionJobType type, IngestionJobStatus status, String stage,
                            String exchange, String ticker, FileRef file, Boolean fullHistory, int attempts,
                            String message, Instant requestedAt, Instant startedAt, Instant finishedAt,
-                           Instant resumeAt, Instant updatedAt, JsonNode result) {
+                           Instant resumeAt, Instant updatedAt, CreatedBy createdBy, JsonNode result) {
+
+    /**
+     * Who started a job.
+     *
+     * @param userId   {@code null} when the user has been deleted since
+     * @param username the username when the job was started
+     * @param fullName the user's current full name ({@code null}: none, or the user was deleted)
+     */
+    public record CreatedBy(Long userId, String username, String fullName) {
+    }
 
     /**
      * The workbook of an upload.

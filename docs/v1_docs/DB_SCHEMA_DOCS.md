@@ -12,6 +12,8 @@ foreign key.
 | `V1.0.2__schema_market_valuation.sql`     | segments, daily prices, share counts, market / valuation snapshots, metrics      |
 | `V1.0.3__views.sql`                       | 4 analysis views (dropped and recreated every start)                             |
 | `V1.0.7__schema_ingestion.sql`            | ingestion bookkeeping: uploaded workbooks, job progress (section 4.8)            |
+| `V1.0.8__schema_auth.sql`                 | users, roles, role permissions, user roles, login sessions (section 4.9)         |
+| `V1.0.9__schema_ingestion_created_by.sql` | who started an ingestion job (`ingestion_job.created_by`), `app_migration` (section 4.8) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
@@ -22,7 +24,7 @@ prices through the price ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DO
 data is read through the company APIs ([COMPANY_API_DOCS.md](COMPANY_API_DOCS.md)).
 
 The scripts are executed by Spring SQL init (`spring.sql.init.*`) on every application start,
-in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3 and V1.0.7, then data scripts
+in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3, V1.0.7, V1.0.8 and V1.0.9, then data scripts
 V1.0.4-V1.0.6). No Flyway. Every statement is idempotent (`CREATE ... IF NOT EXISTS`,
 `ON CONFLICT` upserts). Hibernate does not alter the schema (`ddl-auto: none`).
 `V1.0.2` also drops the replaced v0 tables `revenue_segment` and `stock_price` if they exist.
@@ -554,9 +556,34 @@ Bookkeeping of the ingestions; no other table references them. Full description:
 |                  | `full_history`                 | BOOLEAN      | price jobs                                                                      |
 |                  | `attempts`, `message`, `result`|              | runs, failure / wait reason, JSONB result                                       |
 |                  | `requested_at` ... `updated_at`| TIMESTAMPTZ  | `requested_at`, `started_at`, `finished_at`, `resume_at`, `updated_at`          |
+|                  | `created_by`                   | BIGINT FK    | `users`, `ON DELETE SET NULL`: who started the job; NULL = scheduled run or deleted user (V1.0.9) |
+|                  | `created_by_username`          | VARCHAR(50)  | the username at that time, kept after the user is deleted (V1.0.9)              |
+| `app_migration`  | `name` (PK), `applied_at`, `details` |        | one-time data migrations done by the backend, e.g. attributing jobs recorded before V1.0.9 to the root user (V1.0.9) |
 
 Indexes: `ix_ingestion_job_requested` (`requested_at DESC`), `ix_ingestion_job_file`,
-`ix_ingestion_job_active` (partial, active statuses).
+`ix_ingestion_job_active` (partial, active statuses), `ix_ingestion_job_created_by`.
+
+### 4.9 Users, roles and sessions (`V1.0.8__schema_auth.sql`)
+
+Login and access control; no business table references them. The root user and the built-in
+Administrator role are created by the backend at startup (`AuthBootstrap`), so the password is
+hashed with BCrypt. Rules and APIs: [AUTH_DOCS.md](AUTH_DOCS.md).
+
+| Table              | Column                                   | Type          | Notes                                                                 |
+|--------------------|------------------------------------------|---------------|-----------------------------------------------------------------------|
+| `users`            | `user_id`                                | BIGSERIAL PK  |                                                                       |
+|                    | `username`                               | VARCHAR(50)   | **unique** (`uq_users_username`), lower case `[a-z0-9._-]{3,50}` (check) |
+|                    | `email`                                  | VARCHAR(255)  | **unique** (`uq_users_email`), lower case (check)                     |
+|                    | `password_hash`                          | VARCHAR(100)  | BCrypt                                                                |
+|                    | `full_name`, `address`, `phone`, `dob`   |               | profile; `dob` after 1900-01-01                                       |
+|                    | `avatar`, `avatar_content_type`, `avatar_updated_at` | BYTEA, ... | profile picture (both or neither, check)                         |
+|                    | `active`                                 | BOOLEAN       | a deactivated user cannot log in                                      |
+|                    | `root`                                   | BOOLEAN       | the root user `admin`; at most one (`uq_users_root`)                  |
+| `roles`            | `role_id`, `name`, `description`         |               | name unique ignoring case (`uq_roles_name` on `lower(name)`)          |
+|                    | `system`                                 | BOOLEAN       | the built-in Administrator role; at most one (`uq_roles_system`)      |
+| `role_permissions` | `role_id` (FK, cascade), `permission`    |               | PK `(role_id, permission)`; `ADMIN`, `INGESTION`, `COMPANIES` (check)  |
+| `user_roles`       | `user_id` (FK, cascade), `role_id` (FK, cascade) |       | PK `(user_id, role_id)`                                               |
+| `user_sessions`    | `token_hash`, `user_id` (FK, cascade), `created_at`, `expires_at` | | SHA-256 of the bearer token, unique; `expires_at > created_at`      |
 
 ## 5. Views (`V1.0.3__views.sql`)
 
@@ -659,6 +686,11 @@ denominator yields `NULL` instead of an error.
 | `financial_metric`    |  370 | 286 fundamental + 84 valuation rows (incl. 8 `ev_op`)                                       |
 | `corporate_action`    |    0 |                                                                                             |
 
+Other companies have no seed script: their data comes from the upload. `data/INDF/xlsx` holds the
+IDX XBRL workbooks of PT Indofood Sukses Makmur Tbk (`INDF`) from 2024-III to 2026-II
+(`FinancialStatement-2024-III-INDF.xlsx` ... `FinancialStatement-2026-II-INDF.xlsx`) for that; their
+breakdown sheets 1617000 / 1618000 are blank, so they store no revenue segments.
+
 All values were cross-checked while generating the scripts: assets = liabilities + equity,
 pretax / net income and cash flow sections reconcile, balance-sheet cash = cash-flow ending
 cash, segments sum to revenue, EPS = profit to parent / shares, and every comparative equals
@@ -689,7 +721,7 @@ Run the scripts manually (without starting the backend):
 
 ```bash
 cd backend/src/main/resources/db
-cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql V1.0.7__schema_ingestion.sql \
+cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql V1.0.7__schema_ingestion.sql V1.0.8__schema_auth.sql V1.0.9__schema_ingestion_created_by.sql \
     V1.0.4__data_HRTA_financials.sql V1.0.5__data_HRTA_market.sql V1.0.6__data_metrics_valuation.sql \
   | docker exec -i neracalab-postgres psql -U <user> -d neracalab -v ON_ERROR_STOP=1
 ```

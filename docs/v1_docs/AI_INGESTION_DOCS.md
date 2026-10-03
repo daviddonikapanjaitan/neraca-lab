@@ -6,6 +6,9 @@ downloaded from idx.co.id) and an AI agent built with **Spring AI 2.0** stores i
 
 ## 1. Endpoint
 
+Needs the `INGESTION` permission. Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
+([AUTH_DOCS.md](AUTH_DOCS.md), section 3).
+
 ```http
 POST /api/v1/financial-statements/upload
 Content-Type: multipart/form-data
@@ -13,7 +16,7 @@ file=<FinancialStatement-2026-II-HRTA.xlsx>
 ```
 
 ```bash
-curl -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 

@@ -294,8 +294,19 @@ export interface IngestionJob {
   finishedAt: string | null
   resumeAt: string | null
   updatedAt: string
+  /** who started the job (upload or price request); null for a scheduled run */
+  createdBy: IngestionJobCreator | null
   /** only from GET /api/v1/ingestions/{id} */
   result: unknown
+}
+
+export interface IngestionJobCreator {
+  /** null when the user has been deleted since */
+  userId: number | null
+  /** username when the job was started */
+  username: string
+  /** current full name of the user */
+  fullName: string | null
 }
 
 export interface IngestionJobList {
@@ -312,4 +323,54 @@ export interface PriceQueue {
   provider: string
   /** jobs waiting in the price queue */
   pending: number
+}
+
+// Users, roles and permissions (docs/v1_docs/AUTH_DOCS.md)
+
+export type Permission = "ADMIN" | "INGESTION" | "COMPANIES"
+
+export interface UserRoleRef {
+  id: number
+  name: string
+  /** the built-in Administrator role */
+  system: boolean
+}
+
+export interface User {
+  id: number
+  username: string
+  email: string
+  fullName: string | null
+  address: string | null
+  phone: string | null
+  /** ISO date */
+  dob: string | null
+  active: boolean
+  /** the root user (admin): cannot be deleted, deactivated or lose the Administrator role */
+  root: boolean
+  hasAvatar: boolean
+  avatarUpdatedAt: string | null
+  roles: UserRoleRef[]
+  /** union of the permissions of all roles */
+  permissions: Permission[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Role {
+  id: number
+  name: string
+  description: string | null
+  /** the built-in Administrator role: only its description can be changed */
+  system: boolean
+  permissions: Permission[]
+  userCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PermissionInfo {
+  code: Permission
+  label: string
+  description: string
 }

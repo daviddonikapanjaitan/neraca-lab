@@ -13,7 +13,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { formatDate } from "@/lib/format"
-import { providerLabel, requestJson } from "@/lib/ingestion"
+import { requestJson } from "@/lib/client-api"
+import { providerLabel } from "@/lib/ingestion"
 import type { CompanySummary, Exchange, IngestionJob } from "@/lib/types"
 import { cn } from "@/lib/utils"
 

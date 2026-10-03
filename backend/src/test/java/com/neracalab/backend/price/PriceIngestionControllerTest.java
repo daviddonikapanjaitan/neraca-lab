@@ -11,6 +11,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,7 +21,9 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.context.WebApplicationContext;
 
+import com.neracalab.backend.auth.TestLogins;
 import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.IngestionJobType;
@@ -58,7 +62,22 @@ class PriceIngestionControllerTest {
     }
 
     @Autowired
+    private WebApplicationContext context;
+
+    /** Sends the bearer token of a root session with every request. */
     private MockMvc mvc;
+    private String token;
+
+    @BeforeEach
+    void loginAsRoot() {
+        token = TestLogins.rootToken(context);
+        mvc = TestLogins.mockMvc(context, token);
+    }
+
+    @AfterEach
+    void logout() {
+        TestLogins.logout(context, token);
+    }
 
     @Autowired
     private JsonMapper json;
@@ -98,6 +117,8 @@ class PriceIngestionControllerTest {
         assertThat(recorded.ticker()).isEqualTo("HRTA");
         assertThat(recorded.fullHistory()).isFalse();
         assertThat(recorded.file()).isNull();
+        assertThat(recorded.createdBy().username()).isEqualTo("admin");
+        assertThat(finished.requestedBy().username()).isEqualTo("admin");
         assertThat(recorded.attempts()).isEqualTo(finished.attempts());
         assertThat(recorded.message()).isEqualTo(finished.message());
         assertThat(recorded.finishedAt()).isNotNull();

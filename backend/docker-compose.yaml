@@ -68,11 +68,14 @@ services:
       PRICE_PROVIDER: ${PRICE_PROVIDER:-yahoo}
       EODHD_API_TOKEN: ${EODHD_API_TOKEN:-}
       PRICE_SCHEDULE_ENABLED: ${PRICE_SCHEDULE_ENABLED:-false}
+      # login: session length, initial password of the root user "admin" (first start only)
+      AUTH_SESSION_TTL: ${AUTH_SESSION_TTL:-12h}
+      AUTH_ROOT_PASSWORD: ${AUTH_ROOT_PASSWORD:-admin}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     healthcheck:
-      # ready once the API answers (first start also runs the SQL scripts)
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/v1/exchanges || exit 1"]
+      # ready once the API answers (first start also runs the SQL scripts); the only public read endpoint
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/v1/health || exit 1"]
       interval: 5s
       timeout: 5s
       start_period: 120s

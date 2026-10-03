@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
+import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.provider.RateLimitedException;
 
@@ -75,13 +76,22 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     // ------------------------------------------------------------------ API
 
-    public synchronized Submission submit(CompanyRef company, boolean full) {
+    /** A scheduled run (no user). */
+    public Submission submit(CompanyRef company, boolean full) {
+        return submit(company, full, null);
+    }
+
+    /**
+     * Queues an ingestion requested by a user ({@code null}: scheduled run). When the company already
+     * has an active job, that job is returned (it keeps its own requester).
+     */
+    public synchronized Submission submit(CompanyRef company, boolean full, Requester requestedBy) {
         for (PriceIngestionJob job : jobs.values()) {
             if (job.company().companyId() == company.companyId() && job.isActive()) {
                 return new Submission(job, false);
             }
         }
-        PriceIngestionJob job = new PriceIngestionJob(company, full);
+        PriceIngestionJob job = new PriceIngestionJob(company, full, requestedBy);
         jobs.put(job.id(), job);
         report(job);   // before the worker can see the job, so QUEUED is never recorded after RUNNING
         pending.add(job);

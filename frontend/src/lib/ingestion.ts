@@ -1,7 +1,7 @@
 // Ingestion page helpers shared by the client components and the route handlers.
 
 import { EMPTY } from "@/lib/format"
-import type { IngestionJobStatus, IngestionJobType } from "@/lib/types"
+import type { IngestionJobCreator, IngestionJobStatus, IngestionJobType } from "@/lib/types"
 
 /** Backend upload limit (spring.servlet.multipart.max-file-size: 20MB). */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -29,6 +29,13 @@ export const TYPE_LABEL: Record<IngestionJobType, string> = {
   PRICE: "Daily prices",
 }
 
+/** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */
+export function creatorLabel(creator: IngestionJobCreator | null): string {
+  if (!creator) return "Scheduled run"
+  if (creator.userId === null) return `${creator.username} (deleted user)`
+  return creator.fullName ? `${creator.fullName} (${creator.username})` : creator.username
+}
+
 /** 523787 -> "511.5 KB" */
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return EMPTY
@@ -47,30 +54,6 @@ export function formatDuration(ms: number | null | undefined): string {
   const rest = seconds % 60
   if (hours > 0) return `${hours}h ${minutes}m`
   return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`
-}
-
-/**
- * Client-side call of a Next.js route handler. Resolves with the JSON body and the HTTP status;
- * rejects with the ProblemDetail text of an error response.
- */
-export async function requestJson<T>(url: string, init?: RequestInit): Promise<{ status: number; body: T }> {
-  let response: Response
-  try {
-    response = await fetch(url, { cache: "no-store", ...init })
-  } catch {
-    throw new Error("Cannot reach the Neraca Lab server. Check your connection and try again.")
-  }
-  if (!response.ok) {
-    let detail = `Request failed with HTTP ${response.status}`
-    try {
-      const problem = (await response.json()) as { title?: string; detail?: string }
-      detail = problem.detail ?? problem.title ?? detail
-    } catch {
-      // not JSON: keep the default
-    }
-    throw new Error(detail)
-  }
-  return { status: response.status, body: (await response.json()) as T }
 }
 
 /** "yahoo" -> "Yahoo Finance" (neracalab.prices.provider) */

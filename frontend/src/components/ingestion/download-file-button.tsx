@@ -5,6 +5,7 @@ import { CircleAlertIcon, DownloadIcon, LoaderIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { problemOf } from "@/lib/client-api"
 
 /**
  * Downloads the workbook of an upload job (GET /api/ingestions/{id}/file) and saves it under the
@@ -35,14 +36,7 @@ export function DownloadFileButton({
         throw new Error("Cannot reach the Neraca Lab server. Check your connection and try again.")
       }
       if (!response.ok) {
-        let detail = `Download failed with HTTP ${response.status}`
-        try {
-          const problem = (await response.json()) as { title?: string; detail?: string }
-          detail = problem.detail ?? problem.title ?? detail
-        } catch {
-          // not JSON: keep the default
-        }
-        throw new Error(detail)
+        throw await problemOf(response)
       }
       const url = URL.createObjectURL(await response.blob())
       try {

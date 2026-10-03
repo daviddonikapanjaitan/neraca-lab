@@ -4,6 +4,10 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
+import com.neracalab.backend.auth.AuthenticatedUser;
+import com.neracalab.backend.auth.Permission;
+import com.neracalab.backend.job.Requester;
+import com.neracalab.backend.auth.RequiresPermission;
 import com.neracalab.backend.price.PriceDailyRepository;
 import com.neracalab.backend.price.PriceIngestionJob;
 import com.neracalab.backend.price.PriceIngestionQueue;
@@ -40,6 +44,7 @@ import com.neracalab.backend.price.PriceIngestionQueue.Submission;
  */
 @RestController
 @RequestMapping(path = "/api/v1/prices/ingestions", produces = MediaType.APPLICATION_JSON_VALUE)
+@RequiresPermission(Permission.INGESTION)
 public class PriceIngestionController {
 
     /** @param pending jobs waiting in the queue (excluding the running one) */
@@ -54,16 +59,20 @@ public class PriceIngestionController {
         this.prices = prices;
     }
 
-    /** @param full re-fetch the whole history instead of starting from the latest stored day */
+    /**
+     * @param full re-fetch the whole history instead of starting from the latest stored day
+     * @param user recorded as the requester of the job ({@code ingestion_job.created_by})
+     */
     @PostMapping
     public ResponseEntity<PriceIngestionJob.View> submit(@RequestParam("exchange") String exchange,
                                                          @RequestParam("ticker") String ticker,
-                                                         @RequestParam(name = "full", defaultValue = "false") boolean full) {
+                                                         @RequestParam(name = "full", defaultValue = "false") boolean full,
+                                                         AuthenticatedUser user) {
         Exchange ex = Exchange.of(exchange);
         String normalized = Tickers.normalize(ticker);
         CompanyRef company = prices.company(ex, normalized)
                 .orElseThrow(() -> new CompanyNotFoundException(ex.code(), normalized));
-        Submission submission = queue.submit(company, full);
+        Submission submission = queue.submit(company, full, Requester.of(user));
         PriceIngestionJob.View view = submission.job().view();
         return ResponseEntity.status(submission.created() ? HttpStatus.ACCEPTED : HttpStatus.OK)
                 .location(URI.create("/api/v1/prices/ingestions/" + view.id()))

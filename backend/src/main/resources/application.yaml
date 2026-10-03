@@ -40,6 +40,8 @@ spring:
         - classpath:db/V1.0.2__schema_market_valuation.sql
         - classpath:db/V1.0.3__views.sql
         - classpath:db/V1.0.7__schema_ingestion.sql
+        - classpath:db/V1.0.8__schema_auth.sql
+        - classpath:db/V1.0.9__schema_ingestion_created_by.sql
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -51,8 +53,13 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO:none}
     open-in-view: false
 
-# AI ingestion agent (POST /api/v1/financial-statements/upload)
 neracalab:
+  # Login (POST /api/v1/auth/login); every other API needs the bearer token of a session
+  auth:
+    session-ttl: ${AUTH_SESSION_TTL:12h}            # a login is valid this long
+    root-password: ${AUTH_ROOT_PASSWORD:admin}      # password of the root user "admin" when it is first created
+
+  # AI ingestion agent (POST /api/v1/financial-statements/upload)
   ingestion:
     max-iterations: 30      # model turns per execution round
     reflection-rounds: 2    # extra rounds the reviewer may request

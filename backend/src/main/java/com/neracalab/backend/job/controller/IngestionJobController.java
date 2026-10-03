@@ -7,6 +7,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
+import com.neracalab.backend.auth.Permission;
+import com.neracalab.backend.auth.RequiresPermission;
 import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobStatus;
@@ -33,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping(path = "/api/v1/ingestions", produces = MediaType.APPLICATION_JSON_VALUE)
+@RequiresPermission(Permission.INGESTION)
 public class IngestionJobController {
 
     static final int MAX_LIMIT = 500;
