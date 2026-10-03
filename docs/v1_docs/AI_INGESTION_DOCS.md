@@ -17,15 +17,24 @@ curl -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
-| HTTP | `status`     | Meaning                                                                                      |
-|------|--------------|----------------------------------------------------------------------------------------------|
-| 200  | `COMPLETED`  | everything in the filing is stored and the database read-back found nothing pending or wrong |
-| 202  | `INCOMPLETE` | the agent finished but something is pending or failed validation (see `verification`)        |
-| 422  | -            | not an .xlsx / not an IDX XBRL workbook / unsupported template (ProblemDetail body)          |
-| 413  | -            | file larger than 20 MB                                                                       |
-| 502  | `FAILED`     | the AI provider could not be reached or the agent crashed (`error`)                          |
+The upload is **asynchronous**: the request checks the workbook, stores it once per SHA-256
+checksum in `ingestion_file` (a known file is reused) and answers at once with a job; the agent runs
+in a background thread. Details of storage, job statuses and the job API:
+[INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md).
 
-The response is the full audit trail of the run:
+| HTTP | Meaning                                                                              |
+|------|--------------------------------------------------------------------------------------|
+| 202  | job queued (`Location: /api/v1/ingestions/{id}`)                                     |
+| 200  | the same file is already queued / being stored: that job                             |
+| 422  | not an .xlsx / not an IDX XBRL workbook / unsupported template (ProblemDetail body)  |
+| 413  | file larger than 20 MB                                                               |
+
+Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
+`SUCCEEDED` (everything stored and verified by a database read-back), `INCOMPLETE` -> `INCOMPLETE`
+(something is pending or failed validation, see `verification`), `FAILED` -> `FAILED` (the AI
+provider could not be reached or the agent crashed, see `error`).
+
+The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of the run:
 
 | Field                              | Content                                                                   |
 |------------------------------------|---------------------------------------------------------------------------|
@@ -176,6 +185,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
+| `FinancialStatementUploadTest`   | the asynchronous upload with a mocked agent: 202 job, background processing, stored once per checksum, wrong files rejected, file download; see [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)                                                     |
 | End-to-end (manual)              | uploading all six filings through the endpoint into an empty database reproduces the seed data                                                                                                                                                       |
 
 Run the unit tests with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432: the full

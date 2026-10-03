@@ -1,9 +1,12 @@
-package com.neracalab.backend.price;
+package com.neracalab.backend.price.controller;
 
 import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
+import com.neracalab.backend.price.PriceDailyRepository;
+import com.neracalab.backend.price.PriceIngestionJob;
+import com.neracalab.backend.price.PriceIngestionQueue;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;

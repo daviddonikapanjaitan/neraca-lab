@@ -42,6 +42,8 @@ works without it. Options, ports and troubleshooting:
 | [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
 | [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
+| [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
+| [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 
 ## Project structure
@@ -56,26 +58,31 @@ neraca_lab/
 │   ├── .env.example             template for backend/.env (AI key; .env is git-ignored)
 │   └── src/main/
 │       ├── java/.../company/    company list / detail APIs, exchange and ticker codes
-│       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository
+│       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository,
+│       │                        stored files (checksum), background upload queue
+│       ├── java/.../price/      daily price ingestion: queue, providers, valuation refresh
+│       ├── java/.../job/        ingestion job progress (ingestion_job): list / detail / file download APIs
 │       └── resources/
 │           ├── application.yaml
 │           └── db/              SQL scripts (no Flyway)
 │               ├── V1.0.1__schema.sql
 │               ├── V1.0.2__schema_market_valuation.sql
 │               ├── V1.0.3__views.sql
+│               ├── V1.0.7__schema_ingestion.sql   (schema script, runs after V1.0.3)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               └── V1.0.6__data_metrics_valuation.sql
-├── frontend/                    Next.js web app (company list + company detail)
+├── frontend/                    Next.js web app (company list, company detail, ingestion)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
-│   └── src/                     app/ (pages), components/ (ui = shadcn-fintech), lib/ (API client)
+│   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
 ├── data/<TICKER>/               source data per company
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
-                                 AI_INGESTION_DOCS.md, DB_SCHEMA_DOCS.md (see Documentation)
+                                 AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
+                                 INGESTION_JOBS_DOCS.md, DB_SCHEMA_DOCS.md (see Documentation)
 ```
 
 ## Running the backend only
@@ -118,15 +125,20 @@ Java parses and validates it (Apache POI, accounting identity checks); a Spring 
 calling then stores the company, periods, statements, revenue segments and share counts, refreshes
 the derived metrics and verifies the result. It uses Plan-and-Execute, a tool calling loop with
 ReAct, sequential / parallel / conditional tool calling and a reflection review. Amounts never pass
-through the model, and the final status comes from a database read-back. The response contains the
-plan, every tool call and the verification. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md).
+through the model, and the final status comes from a database read-back. The job result contains
+the plan, every tool call and the verification. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md).
 
-| HTTP | Meaning                                                                      |
-|------|------------------------------------------------------------------------------|
-| 200  | `COMPLETED`: everything stored and verified by a database read-back          |
-| 202  | `INCOMPLETE`: something is pending or failed validation (see `verification`) |
-| 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template                 |
-| 502  | `FAILED`: the AI provider could not be reached                               |
+The upload is asynchronous. The workbook is checked, stored once per SHA-256 checksum in
+`ingestion_file` (re-uploading the same file reuses the stored copy and extracts it again), and the
+agent runs in the background. Every ingestion (uploads and prices) records its progress in
+`ingestion_job`; `GET /api/v1/ingestions` lists them, `GET /api/v1/ingestions/{id}` returns one
+with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded workbook. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md).
+
+| HTTP | Meaning                                                                         |
+|------|---------------------------------------------------------------------------------|
+| 202  | job queued; final status `SUCCEEDED`, `INCOMPLETE` or `FAILED` in the job       |
+| 200  | the same file is already queued / being stored: that job                        |
+| 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template (nothing stored)   |
 
 A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
 `uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
@@ -193,7 +205,8 @@ the frontend only reads the database. Per job:
 Polite crawling: one request at a time with a random 1-2 s pause, a browser User-Agent and one HTTP
 client with a cookie store. On HTTP 429 the queue pauses 15, 30, then 60 minutes and retries the
 same job; a 429 after that stops the run (queued jobs fail, re-submit later; each job resumes from
-`MAX(trading_date)`). Jobs live in memory and are lost on restart.
+`MAX(trading_date)`). The queue lives in memory (a restart drops queued jobs; re-submit), but every
+job and its progress is also recorded in `ingestion_job` and listed by `GET /api/v1/ingestions`.
 
 | Setting (`application.yaml` / env)                    | Default                     |                                                     |
 |-------------------------------------------------------|-----------------------------|-----------------------------------------------------|
@@ -225,9 +238,12 @@ npm run dev                   # http://localhost:3000
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
+| `/ingestion`                     | upload an IDX XBRL `.xlsx`, fetch prices (exchange / ticker dropdowns), live table of every ingestion job with details and file download |
 
 Pages fetch the backend in Server Components (`NERACA_API_URL`, server-side only), so the
-backend needs no CORS setup. Details: [`docs/v1_docs/FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md).
+backend needs no CORS setup. The ingestion page's uploads, price requests, job polling and file
+downloads go through Next.js Route Handlers (`src/app/api/`), so the browser never calls the backend
+directly either. Details: [`docs/v1_docs/FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md).
 
 ## Tests
 
@@ -235,7 +251,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 66 tests
+(cd backend && ./mvnw test)                      # 70 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -248,7 +264,17 @@ HRTA filings through the endpoint into an empty database reproduces the seed dat
 `docs/v1_docs/AI_INGESTION_DOCS.md`, section 5). `PriceIngestionServiceTest` ingests stubbed prices
 into HRTA (rolled back) and checks the new rows and valuation, the re-adjustment re-fetch, the
 intraday cutoff and that the company-scoped valuation SQL matches `V1.0.6`; `PriceIngestionQueueTest`
-covers the 429 back-off, `YahooPriceProviderTest` parses a real Yahoo response. The start / stop scripts are checked with
+covers the 429 back-off, `YahooPriceProviderTest` parses a real Yahoo response.
+`FinancialStatementUploadTest` (AI agent mocked) checks the asynchronous upload: immediate 202, the
+background job and its recorded stages, one stored file per checksum reused on re-upload, wrong
+files rejected without storing, the job list filters and the file download (identical bytes, the
+name of each upload). `PriceIngestionControllerTest` also checks that price jobs are recorded in
+`ingestion_job`. The tests delete the job rows they create.
+
+The tests start the application, whose startup marks ingestion jobs left active as `FAILED`. Do not
+run them against the database of a backend that is processing jobs; point them at a separate
+database instead, e.g. `DB_URL=jdbc:postgresql://localhost:5432/neracalab_test ./mvnw test` (create
+it first with `CREATE DATABASE neracalab_test`; the scripts load the schema and seed data). The start / stop scripts are checked with
 ShellCheck and bash 3.2; see `docs/v1_docs/DOCKER_DOCS.md`, section 6.
 
 ## Database
@@ -267,6 +293,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.1__schema.sql`                  | core tables: company, periods, statements, corporate actions               |
 | `V1.0.2__schema_market_valuation.sql` | segments, prices, share counts, market / valuation snapshots, metrics      |
 | `V1.0.3__views.sql`                   | analysis views (recreated on every start)                                  |
+| `V1.0.7__schema_ingestion.sql`        | uploaded workbooks (`ingestion_file`) and ingestion progress (`ingestion_job`) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
@@ -290,6 +317,8 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `market_snapshot`     | daily market cap and enterprise value (derived)                            |
 | `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA, EV/OP .. |
 | `financial_metric`    | every calculated metric in long format (margins, returns, leverage, EV/OP) |
+| `ingestion_file`      | uploaded `.xlsx` workbooks (`BYTEA`), one row per SHA-256 checksum         |
+| `ingestion_job`       | progress of every upload and price ingestion (status, stage, result JSONB) |
 
 Conventions: amounts in full units of the company currency; income-statement expenses are
 positive; cash-flow outflows are negative; `NULL` = not reported, `0` = reported as zero.
@@ -325,7 +354,7 @@ when the filing fills the breakdown sheets 1617000 / 1618000 (INDF, for example,
 As seed data that exists on every start:
 
 1. Put the filing in `data/<TICKER>/xlsx/` (and prices in `data/<TICKER>/price/`).
-2. Create the data script(s), e.g. `V1.0.7__data_<TICKER>_financials.sql`, following the
+2. Create the data script(s), e.g. `V1.0.8__data_<TICKER>_financials.sql`, following the
    upsert pattern of `V1.0.4__data_HRTA_financials.sql` / `V1.0.5__data_HRTA_market.sql`.
 3. Add them to `spring.sql.init.data-locations` in `application.yaml` **before**
    `V1.0.6__data_metrics_valuation.sql`, which derives snapshots and metrics from all loaded
@@ -337,7 +366,7 @@ Without starting the backend, the scripts can be applied directly to the Docker 
 
 ```bash
 cd backend/src/main/resources/db
-cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql \
+cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql V1.0.7__schema_ingestion.sql \
     V1.0.4__data_HRTA_financials.sql V1.0.5__data_HRTA_market.sql V1.0.6__data_metrics_valuation.sql \
   | docker exec -i neracalab-postgres psql -U <user> -d neracalab -v ON_ERROR_STOP=1
 ```

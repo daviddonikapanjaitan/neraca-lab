@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Building2Icon, LandmarkIcon } from "lucide-react"
+import { Building2Icon, DatabaseZapIcon, LandmarkIcon } from "lucide-react"
 
 import {
   Sidebar,
@@ -19,6 +19,7 @@ import {
 
 const navMarket = [
   { title: "Companies", url: "/companies", icon: <Building2Icon /> },
+  { title: "Ingestion", url: "/ingestion", icon: <DatabaseZapIcon /> },
 ]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {

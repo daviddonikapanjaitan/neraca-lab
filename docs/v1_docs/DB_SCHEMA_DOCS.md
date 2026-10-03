@@ -11,6 +11,7 @@ foreign key.
 | `V1.0.1__schema.sql`                      | core tables: company, reporting periods, statements, corporate actions           |
 | `V1.0.2__schema_market_valuation.sql`     | segments, daily prices, share counts, market / valuation snapshots, metrics      |
 | `V1.0.3__views.sql`                       | 4 analysis views (dropped and recreated every start)                             |
+| `V1.0.7__schema_ingestion.sql`            | ingestion bookkeeping: uploaded workbooks, job progress (section 4.8)            |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
@@ -21,7 +22,7 @@ prices through the price ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DO
 data is read through the company APIs ([COMPANY_API_DOCS.md](COMPANY_API_DOCS.md)).
 
 The scripts are executed by Spring SQL init (`spring.sql.init.*`) on every application start,
-in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3, then data scripts
+in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3 and V1.0.7, then data scripts
 V1.0.4-V1.0.6). No Flyway. Every statement is idempotent (`CREATE ... IF NOT EXISTS`,
 `ON CONFLICT` upserts). Hibernate does not alter the schema (`ddl-auto: none`).
 `V1.0.2` also drops the replaced v0 tables `revenue_segment` and `stock_price` if they exist.
@@ -530,6 +531,33 @@ Metrics whose value cannot be calculated (missing input) are not stored.
 
 ---
 
+### 4.8 `ingestion_file` and `ingestion_job` (`V1.0.7__schema_ingestion.sql`)
+
+Bookkeeping of the ingestions; no other table references them. Full description:
+[INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md).
+
+| Table            | Column                         | Type         | Notes                                                                           |
+|------------------|--------------------------------|--------------|---------------------------------------------------------------------------------|
+| `ingestion_file` | `file_id`                      | BIGSERIAL PK |                                                                                 |
+|                  | `file_name`                    | VARCHAR(255) | name of the first upload of this content                                        |
+|                  | `content_type`                 | VARCHAR(255) | as sent by the client                                                           |
+|                  | `size_bytes`                   | BIGINT       | `> 0` and `= octet_length(content)` (check)                                     |
+|                  | `checksum_sha256`              | CHAR(64)     | lower-case hex, **unique**: one row per content                                 |
+|                  | `content`                      | BYTEA        | the workbook bytes                                                              |
+| `ingestion_job`  | `job_id`                       | UUID PK      |                                                                                 |
+|                  | `job_type`                     | VARCHAR(30)  | `FINANCIAL_STATEMENT`, `PRICE`                                                  |
+|                  | `status`                       | VARCHAR(30)  | `QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `INCOMPLETE`, `FAILED`  |
+|                  | `stage`                        | VARCHAR(500) | current step, or summary of a finished job                                      |
+|                  | `exchange`, `ticker`           | VARCHAR      | company of the job (upload: once the workbook is read)                          |
+|                  | `file_id`                      | BIGINT FK    | `ingestion_file`; required for `FINANCIAL_STATEMENT` (check)                    |
+|                  | `file_name`, `file_reused`     |              | name of this upload; TRUE when the stored file was reused                       |
+|                  | `full_history`                 | BOOLEAN      | price jobs                                                                      |
+|                  | `attempts`, `message`, `result`|              | runs, failure / wait reason, JSONB result                                       |
+|                  | `requested_at` ... `updated_at`| TIMESTAMPTZ  | `requested_at`, `started_at`, `finished_at`, `resume_at`, `updated_at`          |
+
+Indexes: `ix_ingestion_job_requested` (`requested_at DESC`), `ix_ingestion_job_file`,
+`ix_ingestion_job_active` (partial, active statuses).
+
 ## 5. Views (`V1.0.3__views.sql`)
 
 Deep-value checklist in the style of "Roaring Kitty" (Keith Gill): balance sheet first, then
@@ -661,7 +689,7 @@ Run the scripts manually (without starting the backend):
 
 ```bash
 cd backend/src/main/resources/db
-cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql \
+cat V1.0.1__schema.sql V1.0.2__schema_market_valuation.sql V1.0.3__views.sql V1.0.7__schema_ingestion.sql \
     V1.0.4__data_HRTA_financials.sql V1.0.5__data_HRTA_market.sql V1.0.6__data_metrics_valuation.sql \
   | docker exec -i neracalab-postgres psql -U <user> -d neracalab -v ON_ERROR_STOP=1
 ```

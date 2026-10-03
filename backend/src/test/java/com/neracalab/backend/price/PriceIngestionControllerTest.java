@@ -17,9 +17,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.neracalab.backend.company.Exchange;
+import com.neracalab.backend.job.IngestionJob;
+import com.neracalab.backend.job.IngestionJobType;
 import com.neracalab.backend.price.PriceIngestionJob.Status;
 import com.neracalab.backend.price.provider.PriceHistory;
 import com.neracalab.backend.price.provider.PriceProvider;
@@ -60,6 +63,9 @@ class PriceIngestionControllerTest {
     @Autowired
     private JsonMapper json;
 
+    @Autowired
+    private JdbcClient jdbc;
+
     @Test
     void queuesAnIngestionAndReportsTheJob() throws Exception {
         String body = mvc.perform(post("/api/v1/prices/ingestions").param("exchange", "idx").param("ticker", " hrta"))
@@ -83,6 +89,26 @@ class PriceIngestionControllerTest {
                 .andExpect(jsonPath("$.provider").value("stub"))
                 .andExpect(jsonPath("$.pending").isNumber())
                 .andExpect(jsonPath("$.jobs[?(@.id == '" + id + "')]").exists());
+
+        // every state change is also recorded in ingestion_job (GET /api/v1/ingestions)
+        IngestionJob recorded = awaitRecorded(id);
+        assertThat(recorded.type()).isEqualTo(IngestionJobType.PRICE);
+        assertThat(recorded.status().name()).isEqualTo(finished.status().name());
+        assertThat(recorded.exchange()).isEqualTo("IDX");
+        assertThat(recorded.ticker()).isEqualTo("HRTA");
+        assertThat(recorded.fullHistory()).isFalse();
+        assertThat(recorded.file()).isNull();
+        assertThat(recorded.attempts()).isEqualTo(finished.attempts());
+        assertThat(recorded.message()).isEqualTo(finished.message());
+        assertThat(recorded.finishedAt()).isNotNull();
+        if (finished.status() == Status.SUCCEEDED) {
+            assertThat(recorded.result().get("requests").asInt()).isZero();
+        }
+        mvc.perform(get("/api/v1/ingestions").param("type", "PRICE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jobs[?(@.id == '" + id + "')]").exists());
+
+        jdbc.sql("DELETE FROM ingestion_job WHERE job_id = :id").param("id", id).update();   // keep only real jobs
     }
 
     @Test
@@ -112,6 +138,21 @@ class PriceIngestionControllerTest {
         mvc.perform(get("/api/v1/prices/ingestions/" + UUID.randomUUID()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.title").value("Ingestion job not found"));
+    }
+
+    private IngestionJob awaitRecorded(UUID id) throws Exception {
+        Instant deadline = Instant.now().plusSeconds(20);
+        while (Instant.now().isBefore(deadline)) {
+            String body = mvc.perform(get("/api/v1/ingestions/" + id))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            IngestionJob job = json.readValue(body, IngestionJob.class);
+            if (!job.status().active()) {
+                return job;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("job " + id + " was not recorded as finished");
     }
 
     private PriceIngestionJob.View awaitFinished(UUID id) throws Exception {

@@ -255,3 +255,61 @@ export interface CompanyDetail {
   valuations: Valuation[]
   corporateActions: CorporateAction[]
 }
+
+// Ingestion jobs (docs/v1_docs/INGESTION_JOBS_DOCS.md)
+
+export type IngestionJobType = "FINANCIAL_STATEMENT" | "PRICE"
+
+export type IngestionJobStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "WAITING_RATE_LIMIT"
+  | "SUCCEEDED"
+  | "INCOMPLETE"
+  | "FAILED"
+
+export interface IngestionFile {
+  fileId: number
+  fileName: string
+  sizeBytes: number
+  checksumSha256: string
+  /** the same content was already stored, so the stored file was used */
+  reused: boolean
+}
+
+export interface IngestionJob {
+  id: string
+  type: IngestionJobType
+  status: IngestionJobStatus
+  /** current step of an active job, or a one-line summary of a finished one */
+  stage: string | null
+  exchange: string | null
+  ticker: string | null
+  file: IngestionFile | null
+  fullHistory: boolean | null
+  attempts: number
+  message: string | null
+  requestedAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  resumeAt: string | null
+  updatedAt: string
+  /** only from GET /api/v1/ingestions/{id} */
+  result: unknown
+}
+
+export interface IngestionJobList {
+  counts: Record<IngestionJobStatus, number>
+  active: number
+  limit: number
+  /** most recent first, without results */
+  jobs: IngestionJob[]
+}
+
+/** GET /api/v1/prices/ingestions (its in-memory job list is not used: the page reads ingestion_job) */
+export interface PriceQueue {
+  /** yahoo | eodhd */
+  provider: string
+  /** jobs waiting in the price queue */
+  pending: number
+}
