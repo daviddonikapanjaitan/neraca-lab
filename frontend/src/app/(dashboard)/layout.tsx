@@ -7,15 +7,19 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { requireUser } from "@/lib/api"
 
-export default function DashboardLayout({
+/** Every page inside the app needs a valid session; without one the browser goes to the login page. */
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const user = await requireUser()
+
   return (
     <SidebarProvider>
-      <AppSidebar />
+      <AppSidebar user={user} />
       <SidebarInset>
         <header className="flex h-16 shrink-0 items-center gap-2">
           <div className="flex min-w-0 items-center gap-2 px-4">

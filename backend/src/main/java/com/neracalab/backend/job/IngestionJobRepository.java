@@ -38,22 +38,28 @@ public class IngestionJobRepository {
     private static final String SELECT = """
             SELECT j.job_id, j.job_type, j.status, j.stage, j.exchange, j.ticker, j.file_id, j.file_name,
                    j.file_reused, j.full_history, j.attempts, j.message, j.requested_at, j.started_at,
-                   j.finished_at, j.resume_at, j.updated_at, f.size_bytes, f.checksum_sha256%s
+                   j.finished_at, j.resume_at, j.updated_at, f.size_bytes, f.checksum_sha256,
+                   j.created_by, j.created_by_username, u.full_name AS created_by_full_name%s
             FROM ingestion_job j
-            LEFT JOIN ingestion_file f ON f.file_id = j.file_id""";
+            LEFT JOIN ingestion_file f ON f.file_id = j.file_id
+            LEFT JOIN users u ON u.user_id = j.created_by""";
 
     /**
      * Full state of a job, written by {@link #save}.
      *
-     * @param result object serialized to JSON ({@code null}: none)
+     * @param result      object serialized to JSON ({@code null}: none)
+     * @param requestedBy user who started the job ({@code null}: scheduled run); only written when the
+     *                    row is inserted, later snapshots never change it
      */
     public record Snapshot(UUID id, IngestionJobType type, IngestionJobStatus status, String stage, String exchange,
                            String ticker, Boolean fullHistory, int attempts, String message, Instant requestedAt,
-                           Instant startedAt, Instant finishedAt, Instant resumeAt, Object result) {
+                           Instant startedAt, Instant finishedAt, Instant resumeAt, Object result,
+                           Requester requestedBy) {
     }
 
-    /** A new upload job. */
-    public record NewUpload(UUID id, long fileId, String fileName, boolean fileReused, String stage) {
+    /** A new upload job, started by {@code requestedBy}. */
+    public record NewUpload(UUID id, long fileId, String fileName, boolean fileReused, String stage,
+                            Requester requestedBy) {
     }
 
     private final JdbcClient jdbc;
@@ -66,14 +72,19 @@ public class IngestionJobRepository {
 
     // ------------------------------------------------------------------ writes
 
-    /** Inserts or fully replaces a job (the price queue writes every state change this way). File columns are kept. */
+    /**
+     * Inserts or fully replaces a job (the price queue writes every state change this way). File
+     * columns and the requester (created_by) are kept on update.
+     */
     public void save(Snapshot s) {
         jdbc.sql("""
                         INSERT INTO ingestion_job (
                             job_id, job_type, status, stage, exchange, ticker, full_history, attempts, message,
-                            result, requested_at, started_at, finished_at, resume_at, updated_at)
+                            result, requested_at, started_at, finished_at, resume_at, updated_at,
+                            created_by, created_by_username)
                         VALUES (:id, :type, :status, :stage, :exchange, :ticker, :full, :attempts, :message,
-                                CAST(:result AS jsonb), :requestedAt, :startedAt, :finishedAt, :resumeAt, now())
+                                CAST(:result AS jsonb), :requestedAt, :startedAt, :finishedAt, :resumeAt, now(),
+                                :createdBy, :createdByUsername)
                         ON CONFLICT (job_id) DO UPDATE SET
                             status       = EXCLUDED.status,
                             stage        = EXCLUDED.stage,
@@ -102,14 +113,17 @@ public class IngestionJobRepository {
                 .param("startedAt", timestamp(s.startedAt()), Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("finishedAt", timestamp(s.finishedAt()), Types.TIMESTAMP_WITH_TIMEZONE)
                 .param("resumeAt", timestamp(s.resumeAt()), Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("createdBy", s.requestedBy() == null ? null : s.requestedBy().userId(), Types.BIGINT)
+                .param("createdByUsername", s.requestedBy() == null ? null : s.requestedBy().username(), Types.VARCHAR)
                 .update();
     }
 
     /** A queued financial statement upload. */
     public void insertUpload(NewUpload upload) {
         jdbc.sql("""
-                        INSERT INTO ingestion_job (job_id, job_type, status, stage, file_id, file_name, file_reused)
-                        VALUES (:id, :type, :status, :stage, :fileId, :fileName, :reused)""")
+                        INSERT INTO ingestion_job (job_id, job_type, status, stage, file_id, file_name, file_reused,
+                                                   created_by, created_by_username)
+                        VALUES (:id, :type, :status, :stage, :fileId, :fileName, :reused, :createdBy, :createdByUsername)""")
                 .param("id", upload.id())
                 .param("type", IngestionJobType.FINANCIAL_STATEMENT.name())
                 .param("status", IngestionJobStatus.QUEUED.name())
@@ -117,6 +131,9 @@ public class IngestionJobRepository {
                 .param("fileId", upload.fileId())
                 .param("fileName", upload.fileName())
                 .param("reused", upload.fileReused())
+                .param("createdBy", upload.requestedBy() == null ? null : upload.requestedBy().userId(), Types.BIGINT)
+                .param("createdByUsername", upload.requestedBy() == null ? null : upload.requestedBy().username(),
+                        Types.VARCHAR)
                 .update();
     }
 
@@ -275,13 +292,20 @@ public class IngestionJobRepository {
             full = null;
         }
         JsonNode result = withResult ? fromJson(rs.getString("result")) : null;
+        Long createdById = rs.getLong("created_by");
+        if (rs.wasNull()) {
+            createdById = null;
+        }
+        String createdByUsername = rs.getString("created_by_username");
+        IngestionJob.CreatedBy createdBy = createdByUsername == null ? null
+                : new IngestionJob.CreatedBy(createdById, createdByUsername, rs.getString("created_by_full_name"));
         return new IngestionJob(rs.getObject("job_id", UUID.class),
                 IngestionJobType.valueOf(rs.getString("job_type")),
                 IngestionJobStatus.valueOf(rs.getString("status")),
                 rs.getString("stage"), rs.getString("exchange"), rs.getString("ticker"), file, full,
                 rs.getInt("attempts"), rs.getString("message"),
                 instant(rs, "requested_at"), instant(rs, "started_at"), instant(rs, "finished_at"),
-                instant(rs, "resume_at"), instant(rs, "updated_at"), result);
+                instant(rs, "resume_at"), instant(rs, "updated_at"), createdBy, result);
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

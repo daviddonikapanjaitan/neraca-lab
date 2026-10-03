@@ -24,7 +24,7 @@ public class PriceIngestionTracker implements PriceIngestionQueue.Listener {
     public void changed(PriceIngestionJob.View job) {
         jobs.save(new Snapshot(job.id(), IngestionJobType.PRICE, status(job.status()), stage(job), job.exchange(),
                 job.ticker(), job.full(), job.attempts(), job.message(), job.requestedAt(), job.startedAt(),
-                job.finishedAt(), job.resumeAt(), job.result()));
+                job.finishedAt(), job.resumeAt(), job.result(), job.requestedBy()));
     }
 
     static IngestionJobStatus status(PriceIngestionJob.Status status) {

@@ -21,10 +21,13 @@ Code: `backend/src/main/java/com/neracalab/backend/price/`
 
 ## 1. Endpoints
 
+Need the `INGESTION` permission. Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
+([AUTH_DOCS.md](AUTH_DOCS.md), section 3).
+
 ```bash
-curl -X POST "http://localhost:8080/api/v1/prices/ingestions?exchange=IDX&ticker=HRTA"   # queue a job
-curl  http://localhost:8080/api/v1/prices/ingestions/{id}                               # one job
-curl  http://localhost:8080/api/v1/prices/ingestions                                    # provider, queue, recent jobs
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/prices/ingestions?exchange=IDX&ticker=HRTA"   # queue a job
+curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions/{id}                               # one job
+curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                                    # provider, queue, recent jobs
 ```
 
 | Request                                                                 | Response                                                                                                    |
@@ -53,6 +56,7 @@ read the in-memory queue.
   "id": "49eafc30-35df-4852-bf56-155ce7e737f5", "exchange": "IDX", "ticker": "HRTA", "full": false,
   "status": "SUCCEEDED", "requestedAt": "2026-10-02T20:09:38.826Z", "startedAt": "2026-10-02T20:09:38.826Z",
   "finishedAt": "2026-10-02T20:09:40.044Z", "resumeAt": null, "attempts": 1, "message": null,
+  "requestedBy": { "userId": 1, "username": "admin" },
   "result": {
     "provider": "yahoo", "requests": 1, "requestedFrom": "2026-09-30", "requestedTo": "2026-10-03",
     "fullHistory": false, "reAdjusted": false, "barsReceived": 3, "barsSkipped": 0,
@@ -68,6 +72,7 @@ read the in-memory queue.
 | `status`     | `QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT` (queue paused until `resumeAt`), `SUCCEEDED`, `FAILED`           |
 | `attempts`   | runs of the job; more than 1 after rate-limit waits                                                       |
 | `message`    | why the job failed or is waiting                                                                          |
+| `requestedBy`| user who requested the prices (`ingestion_job.created_by`); `null` for a scheduled run                    |
 | `result`     | outcome of a `SUCCEEDED` job (below)                                                                      |
 
 | Result field        | Meaning                                                                                        |

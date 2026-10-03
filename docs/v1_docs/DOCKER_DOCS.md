@@ -111,6 +111,8 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `PRICE_PROVIDER`         | `yahoo` | `yahoo` (no key) or `eodhd`                                          |
 | `EODHD_API_TOKEN`        | -       | required for `eodhd`                                                 |
 | `PRICE_SCHEDULE_ENABLED` | `false` | `true`: queue every active IDX company at 17:30 WIB, Monday-Friday   |
+| `AUTH_SESSION_TTL`       | `12h`   | how long a login stays valid                                        |
+| `AUTH_ROOT_PASSWORD`     | `admin` | password of the root user `admin` when it is first created ([AUTH_DOCS.md](AUTH_DOCS.md)) |
 
 After changing backend code, rebuild with `docker compose up -d --build backend`; when the
 container keeps the old image (compose prints `Running` instead of `Recreated`), add
@@ -122,8 +124,8 @@ container keeps the old image (compose prints `Running` instead of `Recreated`),
 |----------|----------------------|----------------------------------|-----------|----------------------------------------------|
 | postgres | `neracalab-postgres` | `postgres:17-alpine`             | `5432`    | `pg_isready`                                 |
 | redis    | `neracalab-redis`    | `redis:7-alpine`                 | `6379`    | `redis-cli ping`                             |
-| backend  | `neracalab-backend`  | built from `backend/Dockerfile`  | `8080`    | `GET /api/v1/exchanges` (120 s start period) |
-| frontend | `neracalab-frontend` | built from `frontend/Dockerfile` | `3000`    | `GET /companies`                             |
+| backend  | `neracalab-backend`  | built from `backend/Dockerfile`  | `8080`    | `GET /api/v1/health` (120 s start period)    |
+| frontend | `neracalab-frontend` | built from `frontend/Dockerfile` | `3000`    | `GET /login`                                 |
 
 Start order follows the health checks: postgres and redis healthy, then the backend (its first
 start runs the SQL scripts and seeds HRTA), then the frontend.

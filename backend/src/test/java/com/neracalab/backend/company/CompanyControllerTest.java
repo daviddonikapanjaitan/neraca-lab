@@ -9,13 +9,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.LocalDate;
 import java.util.Comparator;
 
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.context.WebApplicationContext;
 
+import com.neracalab.backend.auth.TestLogins;
 import com.neracalab.backend.company.CompanyDetailResponse.Period;
 import com.neracalab.backend.company.CompanyListResponse.CompanySummary;
 
@@ -30,7 +34,22 @@ import tools.jackson.databind.json.JsonMapper;
 class CompanyControllerTest {
 
     @Autowired
+    private WebApplicationContext context;
+
+    /** Sends the bearer token of a root session with every request. */
     private MockMvc mvc;
+    private String token;
+
+    @BeforeEach
+    void loginAsRoot() {
+        token = TestLogins.rootToken(context);
+        mvc = TestLogins.mockMvc(context, token);
+    }
+
+    @AfterEach
+    void logout() {
+        TestLogins.logout(context, token);
+    }
 
     @Autowired
     private JsonMapper json;

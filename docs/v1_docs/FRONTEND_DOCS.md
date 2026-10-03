@@ -40,6 +40,8 @@ browser ──> Next.js server (Server Components, Route Handlers /api/...) ─�
 | `GET /api/v1/companies?exchange={code}`     | company list (page 1)    |
 | `GET /api/v1/companies/{exchange}/{ticker}` | company detail (page 2)  |
 | `GET /api/v1/ingestions?limit=100`          | ingestion page (page 3)  |
+| `GET /api/v1/auth/me`                       | every page: the logged-in user (layout, permission checks) |
+| `GET /api/v1/admin/users`, `/admin/roles`, `/admin/permissions` | Admin Center pages |
 | `GET /api/v1/prices/ingestions`             | ingestion page: configured price provider |
 
 The ingestion page also calls the backend from the browser through Next.js Route Handlers in
@@ -52,13 +54,30 @@ ProblemDetail through; unreachable backend = 503):
 | `POST /api/prices/ingestions` (JSON body)   | `POST /api/v1/prices/ingestions?exchange=&ticker=&full=` |
 | `GET /api/ingestions?type=&status=&limit=`  | `GET /api/v1/ingestions` (table polling)                 |
 | `GET /api/ingestions/{id}`                  | `GET /api/v1/ingestions/{id}` (detail sheet)             |
+| `POST /api/auth/login`, `POST /api/auth/logout` | `POST /api/v1/auth/login` / `logout`; login sets the httpOnly session cookie, logout removes it |
+| `/api/admin/users[/{id}[/avatar]]`, `/api/admin/roles[/{id}]`, `/api/admin/permissions` | `/api/v1/admin/...` (method and body passed on by `forwardRequest()`) |
+| `/api/profile`, `/api/profile/avatar`       | `/api/v1/profile`, `/api/v1/profile/avatar`              |
 | `GET /api/ingestions/{id}/file`             | `GET /api/v1/ingestions/{id}/file` (download, streamed with name / type / size / checksum headers by `forwardFile()`) |
+
+### Login and permissions
+
+- `POST /api/auth/login` logs in at the backend and stores the session token in the httpOnly cookie
+  `neraca_session` (SameSite=Lax, Secure over HTTPS, expiring with the session); JavaScript never
+  sees it. Every server-side backend call (`src/lib/api.ts`) sends it as `Authorization: Bearer`.
+- `src/proxy.ts` redirects every page without the cookie to `/login?next=<page>` (API routes are
+  excluded: the backend answers 401 there, and a proxy would limit request bodies to 10 MB).
+- The dashboard layout loads the user (`GET /api/v1/auth/me`); a missing or expired session goes to
+  `/login?expired=1`. A 401 of a client-side call does the same (`src/lib/client-api.ts`).
+- The sidebar shows only the pages the user's permissions allow; each page checks its permission
+  again and shows "No access" otherwise (the backend refuses the APIs with 403 anyway).
+- `/` opens the first allowed page: Companies, Ingestion, User Management, else the profile.
+  Rules: [AUTH_DOCS.md](AUTH_DOCS.md).
 
 ## 3. Pages
 
 ### 3.1 Company list - `/companies?exchange=IDX`
 
-`/` redirects here; `exchange` defaults to `IDX` and is case-insensitive.
+`/` redirects here for users with the `COMPANIES` permission; `exchange` defaults to `IDX` and is case-insensitive.
 
 | Element         | Content                                                                                                                              |
 |-----------------|--------------------------------------------------------------------------------------------------------------------------------------|
@@ -110,14 +129,41 @@ Sidebar entry below Companies. Everything runs in the background
 | Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 20 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
-| Jobs table                 | type tabs (all / financial statements / prices), status filter, job, status badge, progress (`stage` + `message`), requested, duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
-| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, timings, attempts, result summary (verification and agent metrics, or price days and valuation), raw JSON |
+| Jobs table                 | type tabs (all / financial statements / prices), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
+| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics, or price days and valuation), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
 upload, so a failure (e.g. backend unreachable) shows a message instead of a broken download.
 
 When a job seen in progress finishes, the page re-renders its server data (`router.refresh()`), so
 a new company appears in the ticker list and the latest price date is current.
+
+### 3.4 Login - `/login`
+
+Username and password (show / hide), the "session ended" note after an expiry, the error of the
+backend ("Invalid username or password", deactivated account). After the login the browser opens
+`next` (only same-site pages) or the first allowed page; a logged-in user opening `/login` goes there
+directly.
+
+### 3.5 Admin Center - `/admin/users`, `/admin/roles` (`ADMIN`)
+
+Sidebar group "Admin Center" below Ingestion, a dropdown with **User Management** and **Role
+Management** (`/admin` opens User Management).
+
+| Page            | Content                                                                                                                                  |
+|-----------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| User Management | tiles (users, active, deactivated, administrators), search, status filter, table (avatar, name, username, email, roles, status, updated); a row opens the sheet to view and edit; add user; delete with confirmation (disabled for the root user and yourself, with the reason) |
+| User sheet      | username (create only), email, password (create) / new password (edit, optional), full name, phone, date of birth, address, roles (checkboxes with their permissions; the Administrator role is locked for the root user), active (locked for the root user and yourself); field errors of the backend under each field |
+| Role Management | one tile per permission (how many roles have it), table (name, built-in badge, description, permissions, users, updated), add role, delete with confirmation (disabled for the built-in role and roles assigned to users) |
+| Role sheet      | name, description, the three permissions as checkboxes with their descriptions (at least one); the built-in role allows only the description |
+
+After a change the page data is reloaded from the server (`router.refresh()`).
+
+### 3.6 Profile - `/profile` (any logged-in user)
+
+Opened from the avatar in the sidebar footer (the log-out button sits next to it). Picture
+(upload PNG / JPEG / WebP / GIF up to 2 MB, remove; initials when there is none), roles and
+permissions, username, email and full name read-only, address, phone and date of birth editable.
 
 ## 4. Formatting
 
@@ -134,23 +180,29 @@ frontend/
 └── src/
     ├── app/
     │   ├── layout.tsx                     fonts, ThemeProvider, TooltipProvider, metadata
-    │   ├── page.tsx                       redirect to /companies
+    │   ├── page.tsx                       redirect to the first page the user may open
     │   ├── not-found.tsx                  404 page
     │   ├── (dashboard)/
     │   │   ├── layout.tsx                 sidebar, breadcrumb, theme toggle
     │   │   ├── error.tsx                  error boundary for unexpected errors
     │   │   ├── companies/page.tsx         page 1 (+ loading.tsx)
     │   │   ├── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
-    │   │   └── ingestion/page.tsx         page 3 (+ loading.tsx)
-    │   └── api/                           Route Handlers proxying the ingestion APIs (section 2)
+    │   │   ├── ingestion/page.tsx         page 3 (+ loading.tsx)
+    │   │   ├── admin/users/page.tsx, admin/roles/page.tsx   Admin Center (admin/page.tsx redirects)
+    │   │   └── profile/page.tsx           own profile
+    │   ├── login/page.tsx                 login (outside the dashboard layout)
+    │   └── api/                           Route Handlers: auth, admin, profile and ingestion APIs (section 2)
     ├── components/
     │   ├── ui/                            shadcn-fintech ui components
     │   ├── companies/                     company list client component
     │   ├── company/                       detail view, header, overview, statement tables, panels
     │   ├── ingestion/                     upload card, price card, jobs table, job detail sheet, download button
+    │   ├── admin/                         users / roles pages, user and role sheets, delete confirmation
+    │   ├── auth/, profile/                login form, profile page
     │   └── app-sidebar, dynamic-breadcrumb, empty-state, stat-tile, api-error-state, ...
     ├── hooks/use-mobile.ts
-    └── lib/                               api client, types, formatting, statements, links, tabs, ingestion
+    ├── lib/                               api client (server), client-api, permissions, types, formatting, ...
+    └── proxy.ts                           redirects pages without a session to /login
 ```
 
 ## 6. Docker

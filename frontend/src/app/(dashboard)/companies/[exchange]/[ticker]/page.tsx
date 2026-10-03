@@ -1,10 +1,12 @@
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
 
+import { AccessDenied } from "@/components/access-denied"
 import { ApiErrorState } from "@/components/api-error-state"
 import { CompanyDetailView } from "@/components/company/company-detail-view"
-import { ApiError, getCompanyDetail } from "@/lib/api"
+import { ApiError, getCompanyDetail, requireUser } from "@/lib/api"
 import { companiesHref } from "@/lib/links"
+import { hasPermission, homePath } from "@/lib/permissions"
 import { isDetailTab } from "@/lib/tabs"
 import type { CompanyDetail } from "@/lib/types"
 
@@ -45,6 +47,11 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 }
 
 export default async function Page({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
+  const user = await requireUser()
+  if (!hasPermission(user, "COMPANIES")) {
+    return <AccessDenied permission="COMPANIES" homeHref={homePath(user)} />
+  }
+
   const { detail, error } = await load(params)
 
   if (error?.status === 404) notFound()

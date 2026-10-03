@@ -209,7 +209,7 @@ cmd_start() {
   local url="http://localhost:$FRONTEND_PORT"
   printf '\n%sNeraca Lab is running%s\n' "$C_GREEN" "$C_RESET"
   printf '  Frontend   %s\n' "$url"
-  printf '  Backend    http://localhost:%s/api/v1/exchanges\n' "$BACKEND_PORT"
+  printf '  Backend    http://localhost:%s/api/v1/health\n' "$BACKEND_PORT"
   printf '  Postgres   localhost:%s  (db/user/password: neracalab)\n' "$POSTGRES_PORT"
   printf '\n  Logs: %s logs    Stop: %s\n\n' "$STACK_SCRIPT" "${STACK_STOP_SCRIPT:-$STACK_SCRIPT stop}"
   open_browser "$url"

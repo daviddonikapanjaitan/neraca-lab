@@ -1,5 +1,7 @@
 package com.neracalab.backend.company.controller;
 
+import com.neracalab.backend.auth.Permission;
+import com.neracalab.backend.auth.RequiresPermission;
 import com.neracalab.backend.company.CompanyDetailResponse;
 import com.neracalab.backend.company.CompanyListResponse;
 import com.neracalab.backend.company.CompanyService;
@@ -23,7 +25,8 @@ import com.neracalab.backend.company.Tickers.InvalidTickerException;
  *   <li>{@code GET /api/v1/companies?exchange=IDX} - companies of an exchange (default IDX)</li>
  *   <li>{@code GET /api/v1/companies/{exchange}/{ticker}} - everything stored for one company</li>
  * </ul>
- * Exchange and ticker codes are case-insensitive.
+ * Exchange and ticker codes are case-insensitive. Access: the list needs the COMPANIES or the
+ * INGESTION permission (the ingestion page lists the tickers), the detail needs COMPANIES.
  */
 @RestController
 @RequestMapping(path = "/api/v1/companies", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -35,11 +38,13 @@ public class CompanyController {
         this.service = service;
     }
 
+    @RequiresPermission({Permission.COMPANIES, Permission.INGESTION})
     @GetMapping
     public CompanyListResponse list(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange) {
         return service.list(exchange);
     }
 
+    @RequiresPermission(Permission.COMPANIES)
     @GetMapping("/{exchange}/{ticker}")
     public CompanyDetailResponse detail(@PathVariable("exchange") String exchange,
                                         @PathVariable("ticker") String ticker) {

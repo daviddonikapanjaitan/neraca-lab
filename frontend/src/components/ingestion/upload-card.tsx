@@ -12,7 +12,8 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { formatBytes, MAX_UPLOAD_BYTES, requestJson } from "@/lib/ingestion"
+import { requestJson } from "@/lib/client-api"
+import { formatBytes, MAX_UPLOAD_BYTES } from "@/lib/ingestion"
 import type { IngestionJob } from "@/lib/types"
 import { cn } from "@/lib/utils"
 

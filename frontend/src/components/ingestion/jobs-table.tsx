@@ -38,7 +38,8 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { EMPTY, formatTimestamp } from "@/lib/format"
-import { formatDuration, isActive, JOB_LIMIT, requestJson, TYPE_LABEL } from "@/lib/ingestion"
+import { requestJson } from "@/lib/client-api"
+import { creatorLabel, formatDuration, isActive, JOB_LIMIT, TYPE_LABEL } from "@/lib/ingestion"
 import type { IngestionJob, IngestionJobList, IngestionJobType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -316,8 +317,17 @@ export function JobsTable({
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="hidden text-xs tabular-nums text-muted-foreground lg:table-cell">
-                          {formatTimestamp(job.requestedAt)}
+                        <TableCell className="hidden text-xs lg:table-cell">
+                          <div className="tabular-nums text-muted-foreground">{formatTimestamp(job.requestedAt)}</div>
+                          <div className="max-w-[180px] truncate" title={creatorLabel(job.createdBy)}>
+                            {job.createdBy ? (
+                              <>
+                                by <span className="font-medium">{job.createdBy.username}</span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground">Scheduled run</span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="hidden text-right tabular-nums sm:table-cell">
                           {duration(job, now)}

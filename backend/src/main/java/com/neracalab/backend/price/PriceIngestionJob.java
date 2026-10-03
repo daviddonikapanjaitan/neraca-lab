@@ -3,6 +3,7 @@ package com.neracalab.backend.price;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.PriceIngestionService.Result;
 
@@ -29,17 +30,19 @@ public final class PriceIngestionJob {
      *
      * @param attempts runs of the job (more than 1 after rate-limit waits)
      * @param resumeAt end of the current rate-limit wait (status WAITING_RATE_LIMIT)
-     * @param message  why the job failed or is waiting
-     * @param result   outcome of a SUCCEEDED job
+     * @param message     why the job failed or is waiting
+     * @param result      outcome of a SUCCEEDED job
+     * @param requestedBy user who requested the prices ({@code null}: scheduled run)
      */
     public record View(UUID id, String exchange, String ticker, boolean full, Status status, Instant requestedAt,
                        Instant startedAt, Instant finishedAt, Instant resumeAt, int attempts, String message,
-                       Result result) {
+                       Result result, Requester requestedBy) {
     }
 
     private final UUID id = UUID.randomUUID();
     private final CompanyRef company;
     private final boolean full;
+    private final Requester requestedBy;
     private final Instant requestedAt = Instant.now();
 
     private Status status = Status.QUEUED;
@@ -50,9 +53,11 @@ public final class PriceIngestionJob {
     private String message;
     private Result result;
 
-    PriceIngestionJob(CompanyRef company, boolean full) {
+    /** @param requestedBy {@code null} for a scheduled run */
+    PriceIngestionJob(CompanyRef company, boolean full, Requester requestedBy) {
         this.company = company;
         this.full = full;
+        this.requestedBy = requestedBy;
     }
 
     public UUID id() {
@@ -102,6 +107,6 @@ public final class PriceIngestionJob {
 
     public synchronized View view() {
         return new View(id, company.exchange().code(), company.ticker(), full, status, requestedAt, startedAt,
-                finishedAt, resumeAt, attempts, message, result);
+                finishedAt, resumeAt, attempts, message, result, requestedBy);
     }
 }

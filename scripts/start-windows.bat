@@ -126,7 +126,7 @@ if errorlevel 1 exit /b 1
 echo.
 echo Neraca Lab is running
 echo   Frontend   http://localhost:%FRONTEND_PORT%
-echo   Backend    http://localhost:%BACKEND_PORT%/api/v1/exchanges
+echo   Backend    http://localhost:%BACKEND_PORT%/api/v1/health
 echo   Postgres   localhost:%POSTGRES_PORT%  (db/user/password: neracalab)
 echo.
 echo   Logs: %SCRIPT_NAME% logs    Stop: stop-windows.bat

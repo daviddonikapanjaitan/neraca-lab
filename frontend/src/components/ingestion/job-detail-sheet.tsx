@@ -10,7 +10,8 @@ import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { EMPTY, formatDate, formatNumber, formatTimestamp } from "@/lib/format"
-import { formatBytes, formatDuration, isActive, providerLabel, requestJson, TYPE_LABEL } from "@/lib/ingestion"
+import { requestJson } from "@/lib/client-api"
+import { creatorLabel, formatBytes, formatDuration, isActive, providerLabel, TYPE_LABEL } from "@/lib/ingestion"
 import { companyHref } from "@/lib/links"
 import type { IngestionJob } from "@/lib/types"
 
@@ -256,6 +257,7 @@ export function JobDetailSheet({
                 {shown.type === "PRICE" && (
                   <Field label="Mode">{shown.fullHistory ? "Full history" : "New trading days"}</Field>
                 )}
+                <Field label="Started by">{creatorLabel(shown.createdBy)}</Field>
                 <Field label="Requested">{formatTimestamp(shown.requestedAt)}</Field>
                 <Field label="Started">{formatTimestamp(shown.startedAt)}</Field>
                 <Field label="Finished">{formatTimestamp(shown.finishedAt)}</Field>

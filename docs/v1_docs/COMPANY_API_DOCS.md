@@ -18,6 +18,10 @@ Code: `backend/src/main/java/com/neracalab/backend/company/`
 
 The web frontend that uses these APIs is described in [FRONTEND_DOCS.md](FRONTEND_DOCS.md).
 
+Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
+([AUTH_DOCS.md](AUTH_DOCS.md), section 3). Access: `GET /api/v1/exchanges` any logged-in user;
+the company list needs the `COMPANIES` or `INGESTION` permission, the company detail `COMPANIES`.
+
 ## 1. Supported exchanges
 
 ```http
@@ -38,7 +42,7 @@ GET /api/v1/companies?exchange=IDX
 ```
 
 ```bash
-curl "http://localhost:8080/api/v1/companies?exchange=IDX"
+curl -H "$AUTH" "http://localhost:8080/api/v1/companies?exchange=IDX"
 ```
 
 | Parameter  | Required | Default | Notes                                   |
@@ -82,7 +86,7 @@ GET /api/v1/companies/{exchange}/{ticker}
 ```
 
 ```bash
-curl http://localhost:8080/api/v1/companies/IDX/HRTA
+curl -H "$AUTH" http://localhost:8080/api/v1/companies/IDX/HRTA
 ```
 
 Exchange and ticker are case-insensitive (`/idx/hrta` works); the ticker is trimmed and

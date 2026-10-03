@@ -3,6 +3,8 @@ package com.neracalab.backend.job.controller;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
+import com.neracalab.backend.auth.Permission;
+import com.neracalab.backend.auth.RequiresPermission;
 import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobRepository.UploadedFile;
 import org.springframework.http.ContentDisposition;
@@ -24,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
  * A separate controller: {@link IngestionJobController} produces JSON only.
  */
 @RestController
+@RequiresPermission(Permission.INGESTION)
 public class IngestionFileController {
 
     static final MediaType XLSX = MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

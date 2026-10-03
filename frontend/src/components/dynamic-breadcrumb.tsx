@@ -18,13 +18,25 @@ interface Crumb {
   href: string
 }
 
+const ADMIN_PAGES: Record<string, string> = {
+  users: "User Management",
+  roles: "Role Management",
+}
+
 /**
  * /companies                -> Companies
  * /companies/IDX/HRTA       -> Companies / IDX / HRTA
+ * /admin/users              -> Admin Center / User Management
  * The exchange crumb opens the company list filtered by that exchange.
  */
 function crumbs(pathname: string): Crumb[] {
   const segments = pathname.split("/").filter(Boolean).map((s) => decodeURIComponent(s))
+  if (segments[0] === "admin") {
+    const page = ADMIN_PAGES[segments[1] ?? ""]
+    return page
+      ? [{ label: "Admin Center", href: "/admin/users" }, { label: page, href: pathname }]
+      : [{ label: "Admin Center", href: "/admin/users" }]
+  }
   if (segments[0] !== "companies") {
     return segments.map((s, i) => ({
       label: s.charAt(0).toUpperCase() + s.slice(1),
