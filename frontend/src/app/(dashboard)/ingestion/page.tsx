@@ -3,10 +3,10 @@ import type { Metadata } from "next"
 import { AccessDenied } from "@/components/access-denied"
 import { ApiErrorState } from "@/components/api-error-state"
 import { IngestionPageClient } from "@/components/ingestion/ingestion-page-client"
-import { ApiError, getCompanies, getExchanges, getIngestions, getPriceQueue, requireUser } from "@/lib/api"
+import { ApiError, getCompanies, getExchanges, getFundamentalsStatus, getIngestions, getPriceQueue, requireUser } from "@/lib/api"
 import { JOB_LIMIT } from "@/lib/ingestion"
 import { hasPermission, homePath } from "@/lib/permissions"
-import type { CompanySummary, Exchange, IngestionJobList } from "@/lib/types"
+import type { CompanySummary, Exchange, FundamentalsStatus, IngestionJobList } from "@/lib/types"
 
 export const metadata: Metadata = {
   title: "Ingestion",
@@ -17,21 +17,23 @@ interface Data {
   companiesByExchange: Record<string, CompanySummary[]>
   provider: string
   jobs: IngestionJobList
+  fundamentals: FundamentalsStatus
 }
 
 async function load(): Promise<{ data: Data; error?: never } | { data?: never; error: ApiError }> {
   try {
-    const [exchanges, jobs, priceQueue] = await Promise.all([
+    const [exchanges, jobs, priceQueue, fundamentals] = await Promise.all([
       getExchanges(),
       getIngestions(JOB_LIMIT),
       getPriceQueue(),
+      getFundamentalsStatus("IDX"),
     ])
     const lists = await Promise.all(exchanges.map((e) => getCompanies(e.code)))
     const companiesByExchange: Record<string, CompanySummary[]> = {}
     exchanges.forEach((e, i) => {
       companiesByExchange[e.code] = lists[i].companies
     })
-    return { data: { exchanges, companiesByExchange, provider: priceQueue.provider, jobs } }
+    return { data: { exchanges, companiesByExchange, provider: priceQueue.provider, jobs, fundamentals } }
   } catch (error) {
     if (error instanceof ApiError) return { error }
     throw error

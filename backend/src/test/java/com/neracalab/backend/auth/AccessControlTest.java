@@ -42,6 +42,9 @@ class AccessControlTest {
         RULES.put("/api/v1/admin/users", Set.of(Permission.ADMIN));
         RULES.put("/api/v1/admin/roles", Set.of(Permission.ADMIN));
         RULES.put("/api/v1/admin/permissions", Set.of(Permission.ADMIN));
+        RULES.put("/api/v1/screenings", Set.of(Permission.SCREENING));
+        RULES.put("/api/v1/screenings/options", Set.of(Permission.SCREENING));
+        RULES.put("/api/v1/fundamentals/status?exchange=IDX", Set.of(Permission.INGESTION, Permission.SCREENING));
     }
 
     @Autowired

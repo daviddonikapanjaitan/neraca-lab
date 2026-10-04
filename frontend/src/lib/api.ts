@@ -11,10 +11,14 @@ import type {
   CompanyDetail,
   CompanyListResponse,
   Exchange,
+  FundamentalsStatus,
   IngestionJobList,
   PermissionInfo,
   PriceQueue,
   Role,
+  ScreeningOptions,
+  ScreeningReport,
+  ScreeningRun,
   User,
 } from "@/lib/types"
 
@@ -124,6 +128,22 @@ export const getIngestions = cache((limit: number) =>
 
 /** GET /api/v1/prices/ingestions (the configured price provider and the queue length) */
 export const getPriceQueue = cache(() => get<PriceQueue>("/api/v1/prices/ingestions"))
+
+/** GET /api/v1/fundamentals/status?exchange= (screening data stored, active ETL run) */
+export const getFundamentalsStatus = cache((exchange: string) =>
+  get<FundamentalsStatus>(`/api/v1/fundamentals/status?exchange=${encodeURIComponent(exchange)}`)
+)
+
+/** GET /api/v1/screenings/options */
+export const getScreeningOptions = cache(() => get<ScreeningOptions>("/api/v1/screenings/options"))
+
+/** GET /api/v1/screenings?limit= (most recent runs first) */
+export const getScreenings = cache((limit: number) => get<ScreeningRun[]>(`/api/v1/screenings?limit=${limit}`))
+
+/** GET /api/v1/screenings/{id}: the report */
+export const getScreening = cache((id: string) =>
+  get<ScreeningReport>(`/api/v1/screenings/${encodeURIComponent(id)}`)
+)
 
 /** GET /api/v1/admin/users */
 export const getUsers = cache(() => get<User[]>("/api/v1/admin/users"))

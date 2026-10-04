@@ -6,9 +6,10 @@ export function hasPermission(user: Pick<User, "permissions"> | null | undefined
   return !!user && user.permissions.includes(permission)
 }
 
-/** First page the user may open: companies, ingestion, admin center, else the own profile. */
+/** First page the user may open: companies, screening, ingestion, admin center, else the own profile. */
 export function homePath(user: Pick<User, "permissions">): string {
   if (hasPermission(user, "COMPANIES")) return "/companies"
+  if (hasPermission(user, "SCREENING")) return "/screening"
   if (hasPermission(user, "INGESTION")) return "/ingestion"
   if (hasPermission(user, "ADMIN")) return "/admin/users"
   return "/profile"
@@ -33,4 +34,5 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   ADMIN: "Admin",
   INGESTION: "Ingestion",
   COMPANIES: "Companies",
+  SCREENING: "Screening",
 }

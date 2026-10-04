@@ -24,6 +24,8 @@ import com.neracalab.backend.price.PriceProperties;
  *   <li>one request at a time ({@code synchronized}), and between two requests a random pause of
  *       {@code neracalab.prices.min-delay}..{@code max-delay} (default 1-2 s)</li>
  * </ul>
+ * The screening data ETL (Yahoo Finance screener and fundamentals) uses the same client, so price
+ * ingestion and ETL together never exceed the pacing towards Yahoo.
  * Error messages name host and path only, never the query string (it may carry an API token).
  */
 @Component
@@ -52,14 +54,29 @@ public class PacedHttpClient {
      * @throws PriceProviderException on a network error or when the thread is interrupted
      *                                (the interrupt flag is restored)
      */
-    public synchronized Response get(URI uri) {
-        HttpRequest request = HttpRequest.newBuilder(uri)
+    public Response get(URI uri) {
+        return send(builder(uri).GET().build());
+    }
+
+    /**
+     * POST {@code jsonBody} ({@code Content-Type: application/json}) to {@code uri} once, paced like
+     * {@link #get} (the Yahoo Finance screener of the stock screening).
+     */
+    public Response postJson(URI uri, String jsonBody) {
+        return send(builder(uri).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody)).build());
+    }
+
+    private HttpRequest.Builder builder(URI uri) {
+        return HttpRequest.newBuilder(uri)
                 .timeout(properties.requestTimeout())
                 .header("User-Agent", properties.userAgent())
                 .header("Accept", "application/json,text/plain,*/*")
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .GET()
-                .build();
+                .header("Accept-Language", "en-US,en;q=0.9");
+    }
+
+    private synchronized Response send(HttpRequest request) {
+        URI uri = request.uri();
         try {
             waitForTurn();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());

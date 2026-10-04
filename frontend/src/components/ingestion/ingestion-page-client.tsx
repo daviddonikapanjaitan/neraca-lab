@@ -3,21 +3,24 @@
 import { useCallback, useState } from "react"
 import { useRouter } from "next/navigation"
 
+import { FundamentalsCard } from "@/components/ingestion/fundamentals-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
 import { PriceCard } from "@/components/ingestion/price-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
-import type { CompanySummary, Exchange, IngestionJob, IngestionJobList } from "@/lib/types"
+import type { CompanySummary, Exchange, FundamentalsStatus, IngestionJob, IngestionJobList } from "@/lib/types"
 
 export function IngestionPageClient({
   exchanges,
   companiesByExchange,
   provider,
   jobs,
+  fundamentals,
 }: {
   exchanges: Exchange[]
   companiesByExchange: Record<string, CompanySummary[]>
   provider: string
   jobs: IngestionJobList
+  fundamentals: FundamentalsStatus
 }) {
   const router = useRouter()
   /** the job submitted last; the table reloads at once and watches it */
@@ -35,7 +38,7 @@ export function IngestionPageClient({
       <div className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold tracking-tight">Ingestion</h1>
         <p className="text-sm text-muted-foreground">
-          Load financial statements and daily prices into Neraca Lab. Every ingestion runs in the background;
+          Load financial statements, daily prices and the screening data into Neraca Lab. Every ingestion runs in the background;
           follow its progress in the table below.
         </p>
       </div>
@@ -48,6 +51,7 @@ export function IngestionPageClient({
           provider={provider}
           onSubmitted={submitted}
         />
+        <FundamentalsCard status={fundamentals} onSubmitted={submitted} />
       </div>
 
       <JobsTable initial={jobs} watch={watch} onJobFinished={jobFinished} />

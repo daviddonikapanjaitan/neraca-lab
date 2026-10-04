@@ -10,6 +10,7 @@ import {
   LandmarkIcon,
   LoaderIcon,
   LogOutIcon,
+  ScanSearchIcon,
   ShieldCheckIcon,
 } from "lucide-react"
 
@@ -36,6 +37,7 @@ import type { Permission, User } from "@/lib/types"
 
 const navMarket: { title: string; url: string; icon: React.ReactNode; permission: Permission }[] = [
   { title: "Companies", url: "/companies", icon: <Building2Icon />, permission: "COMPANIES" },
+  { title: "Screening", url: "/screening", icon: <ScanSearchIcon />, permission: "SCREENING" },
   { title: "Ingestion", url: "/ingestion", icon: <DatabaseZapIcon />, permission: "INGESTION" },
 ]
 

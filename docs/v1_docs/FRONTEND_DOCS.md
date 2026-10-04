@@ -57,6 +57,8 @@ ProblemDetail through; unreachable backend = 503):
 | `POST /api/auth/login`, `POST /api/auth/logout` | `POST /api/v1/auth/login` / `logout`; login sets the httpOnly session cookie, logout removes it |
 | `/api/admin/users[/{id}[/avatar]]`, `/api/admin/roles[/{id}]`, `/api/admin/permissions` | `/api/v1/admin/...` (method and body passed on by `forwardRequest()`) |
 | `/api/profile`, `/api/profile/avatar`       | `/api/v1/profile`, `/api/v1/profile/avatar`              |
+| `/api/screenings`, `/api/screenings/{id}`, `/api/screenings/{id}/pdf` | `/api/v1/screenings[...]` (list / start, report, PDF download) |
+| `/api/fundamentals/ingestions`              | `POST /api/v1/fundamentals/ingestions?exchange=&full=` (screening data ETL) |
 | `GET /api/ingestions/{id}/file`             | `GET /api/v1/ingestions/{id}/file` (download, streamed with name / type / size / checksum headers by `forwardFile()`) |
 
 ### Login and permissions
@@ -137,6 +139,21 @@ upload, so a failure (e.g. backend unreachable) shows a message instead of a bro
 
 When a job seen in progress finishes, the page re-renders its server data (`router.refresh()`), so
 a new company appears in the ticker list and the latest price date is current.
+
+### 3.3a Screening - `/screening`, `/screening/{id}` (`SCREENING`)
+
+Below Companies in the sidebar. The form chooses the stock exchange (IDX), the market cap (large,
+mid, small), the top N (1-50) and the investor agents (multi-select checkboxes: Buffett, Munger,
+Lynch, Fisher, Keith Gill, Risk); **Start screening** queues the run and opens its report. The
+saved screenings are listed below (refreshed every 3 s while one runs). The report page polls while
+the run is active (stage, cost) and then shows the executive summary, the final ranking (score per
+agent, conviction, news sentiment; a row opens the stock's details: thesis, red flags, news brief
+and the research agent's ReAct steps, headlines, metrics, every agent's reasoning, reflection and
+scorecard), the rest of the shortlist, the Stage 1 funnel, notes and Reflexion lessons, token usage,
+and **Download PDF**. Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
+
+The Ingestion page has a "Screening data" card (runs the ETL) and lists ETL runs and screenings in
+its jobs table (tabs "Screening data", "Screenings").
 
 ### 3.4 Login - `/login`
 

@@ -65,10 +65,11 @@ class AdminRoleControllerTest {
     void listsThePermissions() throws Exception {
         mvc.perform(get("/api/v1/admin/permissions").with(bearer(adminToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].code").value("ADMIN"))
                 .andExpect(jsonPath("$[1].code").value("INGESTION"))
                 .andExpect(jsonPath("$[2].code").value("COMPANIES"))
+                .andExpect(jsonPath("$[3].code").value("SCREENING"))
                 .andExpect(jsonPath("$[0].description").isString());
     }
 
@@ -122,12 +123,12 @@ class AdminRoleControllerTest {
         long system = jdbc.sql("SELECT role_id FROM roles WHERE system").query(Long.class).single();
         String description = jdbc.sql("SELECT coalesce(description, '') FROM roles WHERE system").query(String.class).single();
 
-        send(put("/api/v1/admin/roles/" + system), Map.of("name", "Root", "permissions", List.of("ADMIN", "INGESTION", "COMPANIES")))
+        send(put("/api/v1/admin/roles/" + system), Map.of("name", "Root", "permissions", List.of("ADMIN", "INGESTION", "COMPANIES", "SCREENING")))
                 .andExpect(status().isBadRequest());
         send(put("/api/v1/admin/roles/" + system), Map.of("name", "Administrator", "permissions", List.of("ADMIN")))
                 .andExpect(status().isBadRequest());
         send(put("/api/v1/admin/roles/" + system), Map.of("name", "Administrator", "description", "Everything",
-                "permissions", List.of("COMPANIES", "ADMIN", "INGESTION")))
+                "permissions", List.of("COMPANIES", "ADMIN", "INGESTION", "SCREENING")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.description").value("Everything"));
         mvc.perform(delete("/api/v1/admin/roles/" + system).with(bearer(adminToken)))

@@ -5,7 +5,7 @@ log in with **username and password**; what they may open comes from the **permi
 **roles**.
 
 ```text
-user ──< user_roles >── role ──< role_permissions (ADMIN | INGESTION | COMPANIES)
+user ──< user_roles >── role ──< role_permissions (ADMIN | INGESTION | COMPANIES | SCREENING)
 ```
 
 - A user has **one or more roles**; a role has **one or more permissions**; a user has the union
@@ -18,8 +18,9 @@ user ──< user_roles >── role ──< role_permissions (ADMIN | INGESTION
 | Permission  | Pages                                          | APIs                                                                                         |
 |-------------|------------------------------------------------|----------------------------------------------------------------------------------------------|
 | `ADMIN`     | Admin Center: User Management, Role Management | `/api/v1/admin/**` (users, roles, permissions, user avatars)                                 |
-| `INGESTION` | Ingestion                                      | `/api/v1/financial-statements/**`, `/api/v1/prices/ingestions/**`, `/api/v1/ingestions/**`, and the company **list** (ticker dropdown) |
+| `INGESTION` | Ingestion                                      | `/api/v1/financial-statements/**`, `/api/v1/prices/ingestions/**`, `/api/v1/ingestions/**`, `/api/v1/fundamentals/**`, and the company **list** (ticker dropdown) |
 | `COMPANIES` | Companies, company detail                      | `/api/v1/companies` (list), `/api/v1/companies/{exchange}/{ticker}` (detail)                  |
+| `SCREENING` | Screening, screening report                   | `/api/v1/screenings` (runs, reports, PDF), `/api/v1/fundamentals/status`                      |
 | any login   | Profile                                        | `/api/v1/auth/me`, `/api/v1/profile/**`, `/api/v1/exchanges`                                 |
 | public      | Login                                          | `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/health`                  |
 
@@ -145,7 +146,7 @@ birth and picture; username, email and name are managed in User Management.
 |--------------------|-----------------------------------------------------------------------------------------------------------|
 | `users`            | `username` / `email` unique and lower case, `password_hash` (BCrypt), `full_name`, `address`, `phone`, `dob`, `avatar` (BYTEA) + `avatar_content_type` + `avatar_updated_at`, `active`, `root` (at most one) |
 | `roles`            | `name` (unique ignoring case), `description`, `system` (the built-in role, at most one)                   |
-| `role_permissions` | `(role_id, permission)`, permission `ADMIN`, `INGESTION` or `COMPANIES`                                   |
+| `role_permissions` | `(role_id, permission)`, permission `ADMIN`, `INGESTION`, `COMPANIES` or `SCREENING`                                   |
 | `user_roles`       | `(user_id, role_id)`                                                                                      |
 | `user_sessions`    | `token_hash` (SHA-256, unique), `user_id`, `created_at`, `expires_at`                                     |
 

@@ -73,7 +73,7 @@ public class AuthBootstrap implements InitializingBean {
                 roleId = sameName.get();
                 jdbc.sql("UPDATE roles SET system = TRUE, updated_at = now() WHERE role_id = :id").param("id", roleId).update();
             } else {
-                roleId = roles.insert(ADMIN_ROLE, "Built-in role with every permission: admin center, ingestion and companies", true);
+                roleId = roles.insert(ADMIN_ROLE, "Built-in role with every permission: admin center, ingestion, companies and screening", true);
             }
             log.info("Created the built-in {} role", ADMIN_ROLE);
         }

@@ -27,6 +27,8 @@ export const STATUS_META: Record<IngestionJobStatus, { label: string; className:
 export const TYPE_LABEL: Record<IngestionJobType, string> = {
   FINANCIAL_STATEMENT: "Financial statement",
   PRICE: "Daily prices",
+  FUNDAMENTALS: "Screening data",
+  SCREENING: "AI screening",
 }
 
 /** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */

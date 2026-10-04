@@ -114,6 +114,17 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `AUTH_SESSION_TTL`       | `12h`   | how long a login stays valid                                        |
 | `AUTH_ROOT_PASSWORD`     | `admin` | password of the root user `admin` when it is first created ([AUTH_DOCS.md](AUTH_DOCS.md)) |
 
+### 1.6 AI screening settings
+
+Also in `backend/.env` (details: [SCREENING_DOCS.md](SCREENING_DOCS.md)); the screening's models run on
+the same `OPENAI_API_KEY` (OpenRouter):
+
+| Variable                         | Default | Meaning                                                              |
+|----------------------------------|---------|----------------------------------------------------------------------|
+| `TAVILY_API_KEY`                 | -       | Tavily news search of the research agent (without it: crawled sites only) |
+| `SCREENING_BUDGET_USD`           | `0.45`  | cost cap of one screening run                                        |
+| `SCREENING_ETL_SCHEDULE_ENABLED` | `true`  | daily screening data ETL (Yahoo Finance) at 18:00 WIB, Monday-Friday |
+
 After changing backend code, rebuild with `docker compose up -d --build backend`; when the
 container keeps the old image (compose prints `Running` instead of `Recreated`), add
 `--force-recreate`.

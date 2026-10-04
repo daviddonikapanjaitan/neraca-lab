@@ -257,6 +257,9 @@ export function JobDetailSheet({
                 {shown.type === "PRICE" && (
                   <Field label="Mode">{shown.fullHistory ? "Full history" : "New trading days"}</Field>
                 )}
+                {shown.type === "FUNDAMENTALS" && (
+                  <Field label="Mode">{shown.fullHistory ? "Every fundamental" : "Fundamentals due"}</Field>
+                )}
                 <Field label="Started by">{creatorLabel(shown.createdBy)}</Field>
                 <Field label="Requested">{formatTimestamp(shown.requestedAt)}</Field>
                 <Field label="Started">{formatTimestamp(shown.startedAt)}</Field>
@@ -270,11 +273,8 @@ export function JobDetailSheet({
                 <>
                   <Separator />
                   <h3 className="text-sm font-semibold">Result</h3>
-                  {shown.type === "FINANCIAL_STATEMENT" ? (
-                    <FilingSummary result={shown.result as FilingResult} />
-                  ) : (
-                    <PriceSummary result={shown.result as PriceResult} />
-                  )}
+                  {shown.type === "FINANCIAL_STATEMENT" && <FilingSummary result={shown.result as FilingResult} />}
+                  {shown.type === "PRICE" && <PriceSummary result={shown.result as PriceResult} />}
                   <details className="rounded-lg border">
                     <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
                       {shown.type === "FINANCIAL_STATEMENT"
@@ -286,6 +286,15 @@ export function JobDetailSheet({
                     </pre>
                   </details>
                 </>
+              )}
+
+              {shown.type === "SCREENING" && (
+                <Link
+                  href={`/screening/${shown.id}`}
+                  className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
+                >
+                  Open the screening report <ChevronRightIcon />
+                </Link>
               )}
 
               {shown.ticker && shown.exchange && !isActive(shown.status) && shown.status !== "FAILED" && (
