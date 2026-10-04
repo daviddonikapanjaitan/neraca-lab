@@ -14,6 +14,7 @@ foreign key.
 | `V1.0.7__schema_ingestion.sql`            | ingestion bookkeeping: uploaded workbooks, job progress (section 4.8)            |
 | `V1.0.8__schema_auth.sql`                 | users, roles, role permissions, user roles, login sessions (section 4.9)         |
 | `V1.0.9__schema_ingestion_created_by.sql` | who started an ingestion job (`ingestion_job.created_by`), `app_migration` (section 4.8) |
+| `V1.0.10__schema_screening.sql`           | AI stock screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage (section 4.10) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
@@ -584,6 +585,22 @@ hashed with BCrypt. Rules and APIs: [AUTH_DOCS.md](AUTH_DOCS.md).
 | `role_permissions` | `role_id` (FK, cascade), `permission`    |               | PK `(role_id, permission)`; `ADMIN`, `INGESTION`, `COMPANIES` (check)  |
 | `user_roles`       | `user_id` (FK, cascade), `role_id` (FK, cascade) |       | PK `(user_id, role_id)`                                               |
 | `user_sessions`    | `token_hash`, `user_id` (FK, cascade), `created_at`, `expires_at` | | SHA-256 of the bearer token, unique; `expires_at > created_at`      |
+
+### 4.10 AI stock screening (`V1.0.10__schema_screening.sql`)
+
+| Table                   | Content                                                                                          |
+|-------------------------|--------------------------------------------------------------------------------------------------|
+| `stock_listing`         | screening universe per exchange (Yahoo screener): ticker, symbol, name, sector, industry, board, active |
+| `fundamental_snapshot`  | one row per listing per day: market data (price, market cap, volumes, P/E, P/B, ...) and fundamentals (ratios, `annual` JSONB of four fiscal years), carried forward between refreshes |
+| `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the research agent |
+| `screening_run`         | one run (`run_id` = `ingestion_job.job_id`): parameters, funnel, synthesis, notes, tokens, cost |
+| `screening_candidate`   | Stage 1 shortlist of a run: metrics, quantitative score, news, overall score, rank, selected, thesis |
+| `screening_agent_score` | per candidate and agent: quantitative / AI / final score, verdict, reasoning, reflection         |
+| `screening_lesson`      | Reflexion memory: lessons per agent with their occurrence count                                  |
+| `llm_usage`             | every model call of a run: tokens, cost, duration, error                                         |
+
+The script also widens `ck_role_permissions_permission` (`SCREENING`) and `ck_ingestion_job_type`
+(`FUNDAMENTALS`, `SCREENING`). Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
 
 ## 5. Views (`V1.0.3__views.sql`)
 

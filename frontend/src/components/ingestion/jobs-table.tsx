@@ -6,10 +6,12 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   CircleXIcon,
+  DatabaseZapIcon,
   FileSpreadsheetIcon,
   HourglassIcon,
   LineChartIcon,
   LoaderIcon,
+  ScanSearchIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 
@@ -43,6 +45,13 @@ import { creatorLabel, formatDuration, isActive, JOB_LIMIT, TYPE_LABEL } from "@
 import type { IngestionJob, IngestionJobList, IngestionJobType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+const TYPE_ICON: Record<IngestionJobType, typeof FileSpreadsheetIcon> = {
+  FINANCIAL_STATEMENT: FileSpreadsheetIcon,
+  PRICE: LineChartIcon,
+  FUNDAMENTALS: DatabaseZapIcon,
+  SCREENING: ScanSearchIcon,
+}
+
 /** Refresh interval while a job is active, and otherwise. */
 const ACTIVE_POLL_MS = 2000
 const IDLE_POLL_MS = 10000
@@ -54,6 +63,8 @@ const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: "ALL", label: "All" },
   { value: "FINANCIAL_STATEMENT", label: "Financial statements" },
   { value: "PRICE", label: "Prices" },
+  { value: "FUNDAMENTALS", label: "Screening data" },
+  { value: "SCREENING", label: "Screenings" },
 ]
 
 const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: string }[] = [
@@ -259,7 +270,7 @@ export function JobsTable({
                 </TableHeader>
                 <TableBody>
                   {list.jobs.map((job) => {
-                    const Icon = job.type === "PRICE" ? LineChartIcon : FileSpreadsheetIcon
+                    const Icon = TYPE_ICON[job.type]
                     return (
                       <TableRow key={job.id} className="cursor-pointer" onClick={() => setSelected(job.id)}>
                         <TableCell className="pl-4">

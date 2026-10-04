@@ -8,7 +8,8 @@ public enum Permission {
 
     ADMIN("Admin", "Admin center: user management and role management pages and APIs"),
     INGESTION("Ingestion", "Ingestion page and APIs: financial statement uploads, price ingestion, jobs, file downloads"),
-    COMPANIES("Companies", "Companies pages and APIs: company list and company detail");
+    COMPANIES("Companies", "Companies pages and APIs: company list and company detail"),
+    SCREENING("Screening", "Screening page and APIs: AI stock screening runs, reports and PDF export");
 
     private final String label;
     private final String description;

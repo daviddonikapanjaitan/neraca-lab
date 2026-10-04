@@ -281,6 +281,19 @@ public class IngestionJobRepository {
                 .optional();
     }
 
+    /** The oldest active job of a type on an exchange, if any (one ETL run per exchange at a time). */
+    public Optional<UUID> activeJobOf(IngestionJobType type, String exchange) {
+        return jdbc.sql("""
+                        SELECT job_id FROM ingestion_job
+                        WHERE job_type = :type AND exchange = :exchange
+                          AND status IN ('QUEUED', 'RUNNING', 'WAITING_RATE_LIMIT')
+                        ORDER BY requested_at LIMIT 1""")
+                .param("type", type.name())
+                .param("exchange", exchange)
+                .query((rs, i) -> rs.getObject("job_id", UUID.class))
+                .optional();
+    }
+
     // ------------------------------------------------------------------ mapping
 
     private IngestionJob map(ResultSet rs, boolean withResult) throws SQLException {

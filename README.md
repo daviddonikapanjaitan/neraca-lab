@@ -1,6 +1,8 @@
 # Neraca Lab
 
-Application for analyzing financial statements using LLM.
+Application for analyzing financial statements using LLM, with an AI stock screener that ranks
+IDX stocks through the eyes of Warren Buffett, Charlie Munger, Peter Lynch, Philip Fisher,
+Keith Gill (Roaring Kitty) and a Risk agent.
 
 - Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 + Redis 7 + Spring AI 2.0 (OpenRouter)
 - Frontend using: Next.js 16 (React 19, TypeScript) + shadcn/ui with the shadcn-fintech theme + Tailwind CSS 4
@@ -23,8 +25,8 @@ Stopping removes the containers but keeps the database data; it does nothing (an
 Docker) when nothing is running. The start scripts also take `restart`, `status`,
 `logs [frontend|backend|postgres|redis]` and `help`.
 The first start downloads images and builds both apps (several minutes); later starts take seconds.
-The AI upload needs `backend/.env` with `OPENAI_API_KEY` (copy `backend/.env.example`); the rest
-works without it. Options, ports and troubleshooting:
+The AI upload and the AI screening need `backend/.env` with `OPENAI_API_KEY` (OpenRouter; copy
+`backend/.env.example`), the screening's news search also `TAVILY_API_KEY`; the rest works without them. Options, ports and troubleshooting:
 [`docs/v1_docs/DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md).
 
 **Log in** at <http://localhost:3000> with the root user **`admin` / `admin`** (created at the first
@@ -47,6 +49,7 @@ start), then change its password in Admin Center > User Management.
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
+| [`SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md)       | AI stock screening: daily ETL, Stage 1, agents (tool calling, ReAct, Reflection, Reflexion), cost, report, PDF |
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 
@@ -68,6 +71,9 @@ neraca_lab/
 │       ├── java/.../job/        ingestion job progress (ingestion_job): list / detail / file download APIs
 │       ├── java/.../auth/       login, sessions, access check of every API, root user bootstrap
 │       ├── java/.../user/       user management, role management, profile (avatar)
+│       ├── java/.../screening/  AI stock screening: data/ (Yahoo ETL), quant/ (Stage 1), news/
+│       │                        (crawlers, Tavily), agent/ (research, investor agents, reflection,
+│       │                        Reflexion, synthesis), report/ (PDF), queue, service, controller
 │       └── resources/
 │           ├── application.yaml
 │           └── db/              SQL scripts (no Flyway)
@@ -77,10 +83,11 @@ neraca_lab/
 │               ├── V1.0.7__schema_ingestion.sql   (schema script, runs after V1.0.3)
 │               ├── V1.0.8__schema_auth.sql        (schema script: users, roles, sessions)
 │               ├── V1.0.9__schema_ingestion_created_by.sql   (who started an ingestion job)
+│               ├── V1.0.10__schema_screening.sql  (AI screening: universe, snapshots, news, runs, usage)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               └── V1.0.6__data_metrics_valuation.sql
-├── frontend/                    Next.js web app (login, companies, ingestion, admin center, profile)
+├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
@@ -92,7 +99,8 @@ neraca_lab/
 │                                INDF: xlsx 2024-III .. 2026-II only, load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
-                                 INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md
+                                 INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
+                                 SCREENING_DOCS.md
                                  (see Documentation)
 ```
 
@@ -135,6 +143,7 @@ role has one or more permissions, and the backend checks them on every API reque
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
 | `INGESTION` | Ingestion page, upload / price / job APIs (and the company list)         |
 | `COMPANIES` | Companies pages and company APIs                                         |
+| `SCREENING` | Screening page, screening runs, reports and PDF export                   |
 
 The root user `admin` (initial password `admin`, dummy profile data) has the built-in
 Administrator role with every permission; it cannot be deleted, deactivated or lose that role.
@@ -257,6 +266,37 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 ingestion and a re-adjusted history switch to it automatically. Details, job fields and known
 limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md).
 
+## AI stock screening
+
+**Screening** in the sidebar (permission `SCREENING`): choose the exchange (IDX), the market cap
+(large >= Rp 10T, mid Rp 1-10T, small < Rp 1T), the top N (1-50, default 25) and the investor agents
+(multi-select). The run is a background job; its report is saved in the database, can be opened
+again and downloaded as PDF.
+
+```text
+[Daily ETL] Yahoo Finance -> PostgreSQL (837 IDX listings, daily market data, weekly fundamentals)
+[Stage 1, Java, no AI] tier, price, trading, liquidity, earnings, equity filters
+                       -> quantitative scorecard per agent -> shortlist = top N x 3 (max 100)
+[Stage 2, DeepSeek V4 Flash] research agent (tool calling + ReAct: EmitenNews, Pasardana,
+                       IDX Channel, Investor.id, Tavily) -> six independent investor agents
+                       -> Reflection (validator + critic) -> Reflexion (lessons across runs)
+[Synthesis, Claude Opus 5.5] executive summary, conviction, thesis, +-5 point adjustments
+[Report] database -> Screening page -> PDF; tokens and cost of every model call recorded
+```
+
+```bash
+curl -H "$AUTH" -H "Content-Type: application/json" http://localhost:8080/api/v1/screenings \
+     -d '{"exchange":"IDX","marketCapTier":"LARGE","topN":25,"agents":["BUFFETT","MUNGER","LYNCH","FISHER","GILL","RISK"]}'
+curl -H "$AUTH" http://localhost:8080/api/v1/screenings/{id}         # report (progress while running)
+curl -H "$AUTH" -OJ http://localhost:8080/api/v1/screenings/{id}/pdf # PDF
+```
+
+Each agent score is 60% quantitative scorecard + 40% AI judgement; the overall score is the
+average of the investor agents, blended 20% with the Risk agent (safety). Cost is capped at
+**$0.45 per run** (`SCREENING_BUDGET_USD`); a large-cap top 10 with all six agents (30 stocks
+analysed) cost $0.12. The daily ETL runs Monday-Friday 18:00 WIB and before each screening; the
+Ingestion page can start it by hand. Details: [`docs/v1_docs/SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md).
+
 ## Frontend
 
 Next.js web app in `frontend/` with the
@@ -274,7 +314,9 @@ npm run dev                   # http://localhost:3000
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
-| `/ingestion`                     | upload an IDX XBRL `.xlsx`, fetch prices (exchange / ticker dropdowns), live table of every ingestion job with details and file download |
+| `/screening`                     | AI stock screening: exchange, market cap, top N, investor agents (multi-select); saved screenings |
+| `/screening/{id}`                | screening report: progress, executive summary, ranking with per-agent scores, stock details (news, reasoning, reflection), funnel, token usage, PDF download |
+| `/ingestion`                     | upload an IDX XBRL `.xlsx`, fetch prices (exchange / ticker dropdowns), update the screening data, live table of every job with details and file download |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
 | `/admin/users`, `/admin/roles`   | Admin Center (`ADMIN`): add, view, update and delete users and roles                                                                                               |
 | `/profile`                       | own profile: picture, address, phone, date of birth (username and email are read-only)                                                                             |
@@ -292,7 +334,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 100 tests
+(cd backend && ./mvnw test)                      # 137 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -314,6 +356,11 @@ background job and its recorded stages, one stored file per checksum reused on r
 files rejected without storing, the job list filters and the file download (identical bytes, the
 name of each upload). `PriceIngestionControllerTest` also checks that price jobs are recorded in
 `ingestion_job`. The tests delete the job rows they create.
+Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), `YahooFundamentalsClientTest`
+(saved Yahoo responses), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist),
+`ScreeningAgentsTest` (scripted model: options, cost metering and budget, ReAct with a tool call,
+reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
+(pipeline mocked: validation, job, report, PDF); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
 
 The tests start the application, whose startup marks ingestion jobs left active as `FAILED`. Do not
 run them against the database of a backend that is processing jobs; point them at a separate
@@ -340,6 +387,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.7__schema_ingestion.sql`        | uploaded workbooks (`ingestion_file`) and ingestion progress (`ingestion_job`) |
 | `V1.0.8__schema_auth.sql`             | users (profile, avatar), roles, role permissions, user roles, login sessions |
 | `V1.0.9__schema_ingestion_created_by.sql` | `ingestion_job.created_by`: the user who started each ingestion; `app_migration` |
+| `V1.0.10__schema_screening.sql`       | AI screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
@@ -364,10 +412,14 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA, EV/OP .. |
 | `financial_metric`    | every calculated metric in long format (margins, returns, leverage, EV/OP) |
 | `ingestion_file`      | uploaded `.xlsx` workbooks (`BYTEA`), one row per SHA-256 checksum         |
-| `ingestion_job`       | progress of every upload and price ingestion (status, stage, result JSONB, started by which user) |
+| `ingestion_job`       | progress of every background job: uploads, prices, screening ETL, screenings (status, stage, result JSONB, started by which user) |
 | `users`               | accounts: unique username / email, BCrypt password, profile, avatar        |
-| `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`), assignments |
+| `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
+| `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
+| `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the screening research agent |
+| `screening_run`, `screening_candidate`, `screening_agent_score` | screening reports: parameters, shortlist, scores and reasoning |
+| `screening_lesson`, `llm_usage` | Reflexion memory; tokens and cost of every model call |
 
 Conventions: amounts in full units of the company currency; income-statement expenses are
 positive; cash-flow outflows are negative; `NULL` = not reported, `0` = reported as zero.

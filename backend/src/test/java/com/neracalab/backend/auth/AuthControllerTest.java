@@ -165,7 +165,7 @@ class AuthControllerTest {
                     .andExpect(jsonPath("$.active").value(true))
                     .andExpect(jsonPath("$.email").isString())
                     .andExpect(jsonPath("$.roles[?(@.name == 'Administrator' && @.system == true)]").exists())
-                    .andExpect(jsonPath("$.permissions.length()").value(3));
+                    .andExpect(jsonPath("$.permissions.length()").value(4));
         } finally {
             TestLogins.logout(context, token);
         }

@@ -42,6 +42,7 @@ spring:
         - classpath:db/V1.0.7__schema_ingestion.sql
         - classpath:db/V1.0.8__schema_auth.sql
         - classpath:db/V1.0.9__schema_ingestion_created_by.sql
+        - classpath:db/V1.0.10__schema_screening.sql
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -80,3 +81,49 @@ neracalab:
       cron: "0 30 17 * * MON-FRI"
       zone: Asia/Jakarta
       exchange: IDX
+
+  # AI stock screening (POST /api/v1/screenings); docs/v1_docs/SCREENING_DOCS.md
+  screening:
+    budget-usd: ${SCREENING_BUDGET_USD:0.45}       # hard cost cap of one run (all model calls)
+    synthesis-reserve-usd: 0.15                     # kept free for the final synthesis while Stage 2 runs
+    shortlist-multiplier: 3                         # Stage 1 shortlist = top N x 3 (75 for a top 25)
+    max-shortlist: 100
+    max-top-n: 50
+    llm-weight: 0.4                                 # agent score = 0.6 x quantitative + 0.4 x model score
+    risk-weight: 0.2                                # overall = 0.8 x investor average + 0.2 x Risk agent
+    large-cap-min: 10000000000000                   # Rp 10T
+    mid-cap-min: 1000000000000                      # Rp 1T (below: small cap)
+    min-price: 50                                   # IDX special-monitoring board trades below Rp 50
+    min-avg-daily-value-large: 5000000000           # Rp 5B traded per day
+    min-avg-daily-value-mid: 1000000000             # Rp 1B
+    min-avg-daily-value-small: 200000000            # Rp 200M
+    max-trade-age: 10d                              # no trade for longer = suspended
+    require-positive-earnings: true
+    excluded-tickers: []                            # e.g. known watchlist-board stocks
+    min-fundamentals-coverage: 0.5
+    llm:
+      research-model: ${SCREENING_RESEARCH_MODEL:deepseek/deepseek-v4-flash-0731}
+      agent-model: ${SCREENING_AGENT_MODEL:deepseek/deepseek-v4-flash-0731}
+      synthesis-model: ${SCREENING_SYNTHESIS_MODEL:anthropic/claude-opus-5.5}
+      synthesis-effort: low
+      provider-sort: price                          # OpenRouter: cheapest provider for the DeepSeek calls
+      concurrency: 8
+      research-iterations: 3
+      agent-max-tokens: 450
+      synthesis-max-tokens: 12000
+    news:
+      tavily-api-key: ${TAVILY_API_KEY:}
+      tavily-max-results: 5
+      cache-ttl: 12h                                # a source is asked about a ticker again after 12 h
+      max-age: 120d                                 # older articles are ignored
+      headlines-per-stock: 8
+      article-chars: 1500
+      min-delay: 1s                                 # pause between two requests to the same news site
+      max-delay: 2s
+    etl:
+      fundamentals-max-age: 7d                      # fundamentals are refreshed weekly, market data daily
+      schedule:
+        enabled: ${SCREENING_ETL_SCHEDULE_ENABLED:true}
+        cron: "0 0 18 * * MON-FRI"
+        zone: Asia/Jakarta
+        exchange: IDX

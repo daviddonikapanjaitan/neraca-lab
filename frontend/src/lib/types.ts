@@ -258,7 +258,7 @@ export interface CompanyDetail {
 
 // Ingestion jobs (docs/v1_docs/INGESTION_JOBS_DOCS.md)
 
-export type IngestionJobType = "FINANCIAL_STATEMENT" | "PRICE"
+export type IngestionJobType = "FINANCIAL_STATEMENT" | "PRICE" | "FUNDAMENTALS" | "SCREENING"
 
 export type IngestionJobStatus =
   | "QUEUED"
@@ -327,7 +327,7 @@ export interface PriceQueue {
 
 // Users, roles and permissions (docs/v1_docs/AUTH_DOCS.md)
 
-export type Permission = "ADMIN" | "INGESTION" | "COMPANIES"
+export type Permission = "ADMIN" | "INGESTION" | "COMPANIES" | "SCREENING"
 
 export interface UserRoleRef {
   id: number
@@ -373,4 +373,180 @@ export interface PermissionInfo {
   code: Permission
   label: string
   description: string
+}
+
+// AI stock screening (docs/v1_docs/SCREENING_DOCS.md)
+
+export type MarketCapTier = "LARGE" | "MID" | "SMALL"
+
+export type InvestorAgentCode = "BUFFETT" | "MUNGER" | "LYNCH" | "FISHER" | "GILL" | "RISK"
+
+export interface ScreeningOption {
+  code: string
+  label: string
+  description: string
+}
+
+/** GET /api/v1/screenings/options */
+export interface ScreeningOptions {
+  exchanges: ScreeningOption[]
+  marketCapTiers: ScreeningOption[]
+  agents: ScreeningOption[]
+  defaultTopN: number
+  maxTopN: number
+  shortlistMultiplier: number
+  maxShortlist: number
+  budgetUsd: number
+  data: {
+    exchange: string
+    listings: number
+    latestSnapshotDate: string | null
+    withFundamentals: number
+    /** queued / running screening data ETL, if any */
+    activeEtlJobId: string | null
+  }
+}
+
+/** One run as listed (and the head of the report). */
+export interface ScreeningRun {
+  id: string
+  status: IngestionJobStatus
+  stage: string | null
+  message: string | null
+  exchange: string
+  marketCapTier: MarketCapTier
+  topN: number
+  agents: InvestorAgentCode[]
+  snapshotDate: string | null
+  universeCount: number | null
+  eligibleCount: number | null
+  shortlistCount: number | null
+  selectedCount: number | null
+  budgetUsd: number
+  costUsd: number
+  promptTokens: number
+  completionTokens: number
+  reasoningTokens: number
+  cachedTokens: number
+  modelCalls: number
+  requestedAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  createdBy: IngestionJobCreator | null
+}
+
+export interface QuantPart {
+  key: string
+  label: string
+  value: number | null
+  weight: number
+  points: number | null
+}
+
+export interface AgentReflection {
+  issues?: { code: string; message: string }[]
+  original?: { score: number; verdict: string }
+  revised?: { score: number; verdict: string }
+  note?: string | null
+  changed?: boolean
+  error?: string
+}
+
+export interface AgentScore {
+  agent: InvestorAgentCode
+  label: string
+  quantScore: number | null
+  quantDetail: { score: number; coverage: number; parts: QuantPart[] } | null
+  llmScore: number | null
+  finalScore: number | null
+  verdict: string | null
+  thesis: string | null
+  strengths: string[] | null
+  concerns: string[] | null
+  reflection: AgentReflection | null
+  /** ASSESSED, REVISED (reviewed by the reflection critic) or QUANT_ONLY (no model answer) */
+  status: "ASSESSED" | "REVISED" | "QUANT_ONLY"
+}
+
+export interface NewsBriefView {
+  sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | "MIXED"
+  summary: string
+  catalysts: string[]
+  risks: string[]
+  sources: string[]
+}
+
+export interface CandidateNews {
+  brief: NewsBriefView | null
+  headlines: { title: string; url: string; source: string; publishedAt: string | null }[]
+  sources: { source: string; found: number; cached: boolean; error: string | null }[]
+  trace: { iteration: number; thought: string | null; tools: string[] }[]
+  modelUsed: boolean
+  fromCache: boolean
+  note: string | null
+}
+
+export interface ScreeningCandidate {
+  id: number
+  ticker: string
+  companyName: string
+  sector: string | null
+  industry: string | null
+  quantOverall: number | null
+  quantRank: number | null
+  overallScore: number | null
+  synthesisAdjustment: number | null
+  finalRank: number | null
+  /** in the final top N */
+  selected: boolean
+  conviction: "HIGH" | "MEDIUM" | "LOW" | null
+  thesis: string | null
+  metrics: Record<string, unknown> | null
+  news: CandidateNews | null
+  redFlags: string[] | null
+  agents: AgentScore[]
+}
+
+export interface ScreeningUsage {
+  stage: string
+  model: string
+  calls: number
+  promptTokens: number
+  completionTokens: number
+  reasoningTokens: number
+  cachedTokens: number
+  costUsd: number
+  costEstimated: boolean
+  errors: number
+}
+
+/** GET /api/v1/screenings/{id} */
+export interface ScreeningReport {
+  run: ScreeningRun
+  funnel: { key: string; label: string; remaining: number }[] | null
+  synthesis: {
+    executiveSummary: string | null
+    portfolioNotes: string[] | null
+    model: string | null
+    fallback: string | null
+  } | null
+  notes: {
+    messages?: string[]
+    lessonsLearned?: { agent: string; lesson: string; occurrencesInRun: number }[]
+    lessonsApplied?: Record<string, string[]>
+    budget?: { budgetUsd: number; spentUsd: number }
+  } | null
+  candidates: ScreeningCandidate[]
+  usage: ScreeningUsage[]
+}
+
+/** GET /api/v1/fundamentals/status */
+export interface FundamentalsStatus {
+  exchange: string
+  listings: number
+  latestSnapshotDate: string | null
+  withFundamentals: number
+  oldestFundamentalsAt: string | null
+  lastSyncAt: string | null
+  activeJobId: string | null
 }

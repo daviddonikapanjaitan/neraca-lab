@@ -68,6 +68,10 @@ services:
       PRICE_PROVIDER: ${PRICE_PROVIDER:-yahoo}
       EODHD_API_TOKEN: ${EODHD_API_TOKEN:-}
       PRICE_SCHEDULE_ENABLED: ${PRICE_SCHEDULE_ENABLED:-false}
+      # AI stock screening: Tavily news search, cost cap per run, daily screening data ETL
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SCREENING_BUDGET_USD: ${SCREENING_BUDGET_USD:-0.45}
+      SCREENING_ETL_SCHEDULE_ENABLED: ${SCREENING_ETL_SCHEDULE_ENABLED:-true}
       # login: session length, initial password of the root user "admin" (first start only)
       AUTH_SESSION_TTL: ${AUTH_SESSION_TTL:-12h}
       AUTH_ROOT_PASSWORD: ${AUTH_ROOT_PASSWORD:-admin}
