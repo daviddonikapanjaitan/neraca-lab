@@ -22,6 +22,7 @@ public final class AgentTrace {
     private final List<ToolInvocation> invocations = new CopyOnWriteArrayList<>();
     private final AtomicInteger modelCalls = new AtomicInteger();
     private final AtomicInteger parallelGroups = new AtomicInteger();
+    private final AtomicInteger modelRetries = new AtomicInteger();
 
     public void step(Step step) {
         steps.add(step);
@@ -33,6 +34,10 @@ public final class AgentTrace {
 
     public void modelCall() {
         modelCalls.incrementAndGet();
+    }
+
+    public void modelRetry() {
+        modelRetries.incrementAndGet();
     }
 
     public int nextParallelGroup() {
@@ -53,5 +58,9 @@ public final class AgentTrace {
 
     public int parallelGroups() {
         return parallelGroups.get();
+    }
+
+    public int modelRetries() {
+        return modelRetries.get();
     }
 }

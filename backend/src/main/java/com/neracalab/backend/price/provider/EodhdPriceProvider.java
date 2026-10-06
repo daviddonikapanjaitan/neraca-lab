@@ -27,7 +27,8 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>
  * Response: a JSON array of {@code {date, open, high, low, close, adjusted_close, volume}}.
  * Unlike Yahoo, EODHD's {@code close} is the raw close (not split-adjusted);
- * {@code adjusted_close} is split- and dividend-adjusted. The response has no currency.
+ * {@code adjusted_close} is split- and dividend-adjusted. The response has no currency: a listing
+ * is taken to trade in its exchange's currency ({@link Exchange#currency()}).
  */
 @Component
 @ConditionalOnProperty(prefix = "neracalab.prices", name = "provider", havingValue = "eodhd")
@@ -61,9 +62,14 @@ public class EodhdPriceProvider implements PriceProvider {
         };
     }
 
+    /** EODHD sends no currency: a listing trades in its exchange's currency (IDX: IDR). */
     @Override
     public PriceHistory fetch(Exchange exchange, String ticker, LocalDate from, LocalDate to) {
         String symbol = symbol(exchange, ticker);
+        return new PriceHistory(symbol, exchange.currency(), eod(symbol, from, to));
+    }
+
+    private List<DailyBar> eod(String symbol, LocalDate from, LocalDate to) {
         URI uri = URI.create(baseUrl + "/api/eod/" + URLEncoder.encode(symbol, StandardCharsets.UTF_8)
                 + "?from=" + from + "&to=" + to + "&period=d&order=a&fmt=json"
                 + "&api_token=" + URLEncoder.encode(apiToken, StandardCharsets.UTF_8));
@@ -96,7 +102,7 @@ public class EodhdPriceProvider implements PriceProvider {
                     price(row.path("close")), price(row.path("adjusted_close")),
                     row.path("volume").isNumber() ? row.path("volume").longValue() : null));
         }
-        return new PriceHistory(symbol, null, bars);
+        return bars;
     }
 
     private static BigDecimal price(JsonNode node) {

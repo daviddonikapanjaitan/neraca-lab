@@ -106,7 +106,12 @@ public class IngestionVerifier {
             }
             if (column == StatementColumn.CURRENT_PERIOD && p.balanceSheetCash() != null && p.endingCash() != null
                     && p.balanceSheetCash().compareTo(p.endingCash()) != 0) {
-                problems.add(period.key() + ": balance-sheet cash " + p.balanceSheetCash() + " != cash-flow ending cash " + p.endingCash());
+                String overdrafts = overdraftExplanation(session, column, p);
+                if (overdrafts != null) {
+                    notes.add(period.key() + ": " + overdrafts);
+                } else {
+                    problems.add(period.key() + ": balance-sheet cash " + p.balanceSheetCash() + " != cash-flow ending cash " + p.endingCash());
+                }
             }
             if (column == StatementColumn.CURRENT_PERIOD) {
                 compareCurrent(session, companyId, column, problems);
@@ -126,6 +131,34 @@ public class IngestionVerifier {
         return new Verification(pending.isEmpty() && problems.isEmpty(), pending, problems, expected, periods, rows, notes);
     }
 
+    /**
+     * Many issuers (e.g. GGRM) present cash and cash equivalents net of bank overdrafts in the cash flow
+     * statement while the balance sheet shows the overdrafts within short-term bank loans. That is the
+     * filing, not a storage error: accepted when the stored cash figures are the filing's own and the
+     * difference is positive and within the filing's short-term borrowings. Otherwise {@code null}.
+     */
+    static String overdraftExplanation(IngestionSession session, StatementColumn column, StoredPeriod p) {
+        BigDecimal filedCash = mapped(session, column, "balance_sheet", "cash_and_equivalents");
+        BigDecimal filedEnding = mapped(session, column, "cash_flow_statement", "ending_cash");
+        BigDecimal shortTermDebt = mapped(session, column, "balance_sheet", "short_term_debt");
+        if (filedCash == null || filedEnding == null || shortTermDebt == null
+                || filedCash.compareTo(p.balanceSheetCash()) != 0 || filedEnding.compareTo(p.endingCash()) != 0) {
+            return null;
+        }
+        BigDecimal difference = filedCash.subtract(filedEnding);
+        if (difference.signum() <= 0 || difference.compareTo(shortTermDebt) > 0) {
+            return null;
+        }
+        return "cash-flow ending cash " + filedEnding.toPlainString() + " is balance-sheet cash " + filedCash.toPlainString()
+                + " less " + difference.toPlainString() + ", within short-term borrowings " + shortTermDebt.toPlainString()
+                + ": bank overdrafts netted against cash in the cash flow statement, stored as filed";
+    }
+
+    private static BigDecimal mapped(IngestionSession session, StatementColumn column, String table, String field) {
+        return session.statements(column).stream().filter(s -> s.table().equals(table))
+                .map(s -> s.values().get(field)).filter(java.util.Objects::nonNull).findFirst().orElse(null);
+    }
+
     /** The stored current-period rows must equal the mapped values (they were written by this filing). */
     private void compareCurrent(IngestionSession session, long companyId, StatementColumn column, List<String> problems) {
         if (!session.savedStatements().containsKey(column)) {
@@ -140,8 +173,7 @@ public class IngestionVerifier {
                     statement.values().forEach((field, value) -> {
                         Object s = row.get(field);
                         BigDecimal stored = s == null ? null : new BigDecimal(s.toString());
-                        boolean same = stored == null ? value == null : value != null && stored.compareTo(value) == 0;
-                        if (!same) {
+                        if (!IngestionRepository.sameAsStored(stored, value)) {
                             problems.add(statement.period().key() + " " + statement.table() + "." + field
                                     + ": stored " + stored + " but the filing says " + value);
                         }

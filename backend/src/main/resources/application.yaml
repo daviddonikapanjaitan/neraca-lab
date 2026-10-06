@@ -43,9 +43,11 @@ spring:
         - classpath:db/V1.0.8__schema_auth.sql
         - classpath:db/V1.0.9__schema_ingestion_created_by.sql
         - classpath:db/V1.0.10__schema_screening.sql
+        - classpath:db/V1.0.11__schema_fx.sql
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
+        - classpath:db/V1.0.12__data_SMDR_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.6__data_metrics_valuation.sql
       continue-on-error: false
   jpa:
@@ -65,6 +67,8 @@ neracalab:
     max-iterations: 30      # model turns per execution round
     reflection-rounds: 2    # extra rounds the reviewer may request
     temperature: 0.0
+    model-retries: 2        # retries of a model call that failed transiently (timeout, network, 408/429/5xx)
+    retry-backoff: 5s       # pause before the first retry, doubled for each further one
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:
@@ -76,6 +80,8 @@ neracalab:
     full-history-from: "1990-01-01"     # start of a full-history fetch
     eodhd:
       api-token: ${EODHD_API_TOKEN:}
+    fx:
+      base-url: https://api.frankfurter.dev/v1   # ECB reference rates, converts listings quoted in another currency (INDY)
     schedule:
       enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run over all active companies of the exchange
       cron: "0 30 17 * * MON-FRI"

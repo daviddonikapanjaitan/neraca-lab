@@ -35,7 +35,10 @@ in a background thread. Details of storage, job statuses and the job API:
 Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
 `SUCCEEDED` (everything stored and verified by a database read-back), `INCOMPLETE` -> `INCOMPLETE`
 (something is pending or failed validation, see `verification`), `FAILED` -> `FAILED` (the AI
-provider could not be reached or the agent crashed, see `error`).
+provider could not be reached or the agent crashed, see `error`). A model call that fails
+transiently (read timeout, dropped connection, HTTP 408 / 429 / 5xx) is retried before the run is
+given up (`model-retries`, below); e.g. an OpenRouter response that stalled past the 180 s read
+timeout (`OpenAIInvalidDataException: Error reading response`) used to fail the whole job.
 
 The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of the run:
 
@@ -48,7 +51,7 @@ The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of t
 | `rounds`                           | per execution round: verification and the reviewer's reflection           |
 | `savedStatements`, `savedSegments` | rows written per column (`INSERTED`, `UPDATED`, `KEPT_EXISTING`)          |
 | `verification`                     | final deterministic database read-back                                    |
-| `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups      |
+| `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups, model retries |
 
 A typical filing takes 1-4 minutes and 10-30 model calls.
 
@@ -71,6 +74,9 @@ compose reads the same file and passes the values to the backend container at ru
 | `neracalab.ingestion.max-iterations`    | 30      | model turns per execution round                 |
 | `neracalab.ingestion.reflection-rounds` | 2       | extra execution rounds the reviewer may request |
 | `neracalab.ingestion.temperature`       | 0.0     | sampling temperature                            |
+| `neracalab.ingestion.model-retries`     | 2       | retries of a model call that failed transiently (timeout, network error, HTTP 408 / 429 / 5xx); other errors fail at once |
+| `neracalab.ingestion.retry-backoff`     | 5s      | pause before the first retry, doubled for each further one |
+| `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
 
 ## 3. Design: the model orchestrates, Java owns the numbers
 
@@ -118,10 +124,10 @@ final status is decided by the deterministic database read-back, not by the mode
 | `classifyIncomeLines`    | write | classifies unknown income-statement lines (re-validated: profit before tax must reconcile) |
 | `saveStatements`         | write | period + statements of a column (current period replaces, comparatives fill gaps only)     |
 | `extractRevenueSegments` | read  | revenue by type (else by source) of a column                                               |
-| `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing                             |
+| `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
 | `saveShareSnapshots`     | write | share counts at every date in the statements of changes in equity                          |
-| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics)       |
-| `verifyStoredData`       | read  | database read-back: pending work and inconsistencies                                       |
+| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL |
+| `verifyStoredData`       | read  | database read-back: pending work and inconsistencies (the final gate of `COMPLETED`)       |
 
 **One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
 trimmed and upper-cased (`Tickers.normalize`; a code that is not a ticker rejects the upload with
@@ -149,6 +155,45 @@ An IDX XBRL workbook has one sheet per taxonomy role. Used sheets:
 Statement sheets have a header row of XBRL contexts and one row per line item:
 `Indonesian label | value per context | English label`. Lines are matched on the English label.
 
+**Infrastructure Industry taxonomy.** Issuers of the infrastructure, utilities and transportation
+sector (e.g. SMDR, Samudera Indonesia, "K. Transportation & Logistic") file with the IDX
+"Infrastructure Industry" taxonomy: the same statement roles and line items as the General Industry
+one, under sheet codes starting with 3 instead of 1. `IdxWorkbookReader` maps them to the General codes,
+so the mapper is the same:
+
+| Role | General | Infrastructure |
+|------|---------|----------------|
+| balance sheet (current / non-current; by liquidity) | `1210000`, `1220000` | `3210000`, `3220000` |
+| profit or loss (by function; by nature; before tax) | `1311000`, `1312000`, `1321000`, `1322000` | `3311000`, `3312000`, `3321000`, `3322000` |
+| changes in equity | `1410000` (+`PY`) | `3410000` (+`PY`, pre-2023 `3410000 1 CurrentYear`) |
+| cash flow (direct; indirect) | `1510000`, `1520000` | `3510000`, `3520000` |
+| PP&E / right-of-use, revenue by type / source | `1611000`, `1612000`, `1617000`, `1618000` | `3611000`, `3612000`, `3617000`, `3618000` |
+
+Own labels of the taxonomy that the mapper reads: "Payments for acquisition of property and equipment"
+and "Payments for advances for purchase of property and equipment" (capex; General: "... property,
+plant and equipment"), "Short-term non-bank loans" (short-term debt). "Current other financial assets"
+is the General "Other current financial assets" (not a marketable security, as there). An unknown
+profit-or-loss line such as "Interconnection expenses" is classified by the agent
+(`classifyIncomeLines`, re-validated), like any unknown line. Sheet 1000000 is shared by all taxonomies.
+Other IDX taxonomies (financing, securities, insurance, banking, property) are not supported.
+
+**Pre-2023 template.** Filings for FY2022 and earlier (e.g. `FinancialStatement-2022-Tahunan-INDF.xlsx`,
+`-2022-Tahunan-HRTA.xlsx`) use an older layout, read into the same structure:
+
+| Difference                       | Pre-2023 template                                    | Current template                         |
+|----------------------------------|------------------------------------------------------|------------------------------------------|
+| statement context header         | period dates, e.g. `31 December 2022`                | `CurrentYearDuration`, `CurrentYearInstant`, ... |
+| roll-forward / equity sheet names | `1410000 1 CurrentYear`, `1410000 2 PriorYear` (also 1611000, 1612000) | `1410000`, `1410000PY`                    |
+| `xl/styles.xml` compression      | up to ~145:1                                         | ~20:1                                    |
+
+`IdxWorkbookReader` renames the sheets to the current names, and `StatementTable` accepts a date
+header (contexts are used by position: current period first, then prior). Apache POI's zip-bomb guard
+(default: reject an entry that inflates more than 100:1) is relaxed to 1000:1, with every entry
+capped at 100 MB uncompressed (real filings: under 6 MB). The revenue breakdown sheets `1617000` /
+`1618000` of this template are one table with the period dates above the value columns
+(`slot | name | current | prior | English slot`) and are read for both columns (GGRM, HRTA and INDY
+FY2022 fill them; INDF leaves them blank).
+
 | Column           | Income / cash flow context    | Balance sheet context                     |
 |------------------|-------------------------------|-------------------------------------------|
 | `CURRENT_PERIOD` | CurrentYearDuration           | CurrentYearInstant                        |
@@ -164,11 +209,51 @@ Rules:
   profit; parent + NCI = profit; assets = liabilities + equity; current + non-current totals; cash
   flow sections re-add to their totals (payments signed negative); net change and cash roll-forward.
 - Par value is not in the filing: it is inferred as the only standard par value for which
-  share capital / par is a whole number of shares that reproduces the reported basic EPS.
+  share capital / par is a whole number of shares that reproduces the reported basic EPS. This needs
+  share capital in rupiah. When no par value fits (a USD reporter: INDY's share capital is USD
+  56,892,154), shares outstanding come from an exact **EPS denominator** instead (basic EPS = profit
+  attributable to the parent / weighted shares outstanding, treasury shares excluded), accepted only when
+  share capital and treasury stock are unchanged through the period, there are no discontinued
+  operations, the EPS has enough decimals to fix the count to within one share, and profit / EPS is a
+  whole number. INDY FY2023: 119,683,800 / 0.0230042062839776 = 5,202,692,000 (5,210,192,000 listed
+  shares less 7,500,000 treasury shares, 0.144%). The count applies to every date of the filing with the
+  same share capital and treasury stock (INDY: 2021-12-31 .. 2023-12-31); weighted shares only to the
+  period it was derived from. The other INDY filings do not qualify (EPS 0.0019 allows 5.17 .. 5.45
+  billion shares; FY2022's 0.0868828938473089 gives 5,210,191,995, not a whole number) and store no
+  counts; valuations of later dates use the latest share snapshot, as for every company.
+  A count is carried only to dates of the same filing with the same share capital and treasury
+  stock; a stock split leaves share capital unchanged, so a split after the last filing that gave a
+  count is not visible (INDY's later EPS, 0.0019 .. 0.00196, agree with 5,202,692,000). SMDR (USD
+  reporter, EPS with 3 decimals, a 2023 stock split: 0.065 -> 0.005) gets no share counts from its
+  filings; they come from public sources instead (`V1.0.12__data_SMDR_shares.sql`): 3,275,120,000 shares
+  of Rp 25 until the 1:5 split of 2023-01-31, 16,375,600,000 of Rp 5 since (KSEI), no treasury stock,
+  consistent with every reported EPS. The prices are split-adjusted, so the counts are too:
+  16,375,600,000 at every date from 2020-12-31 (from when the filings show share capital unchanged);
+  earlier prices get no market cap. The script runs on start and after every upload (it needs the
+  company) and only fills counts that are empty. SMDR on 2026-10-05: USD 0.0221727 x 16,375,600,000 =
+  USD 363.1 million (Rp 398 x 16,375,600,000 = Rp 6.5 trillion), P/E 6.57.
+- Stored values are compared with the filing at the column's scale (amounts 4 decimals, EPS and share
+  counts 8), with the half-up rounding Postgres applies on insert: INDY's USD EPS 0.0868828938473089
+  is stored and verified as 0.08688289.
 - Depreciation = additions to accumulated depreciation (PP&E + right-of-use); amortization =
   intangibles opening + purchases - closing (current period only).
 - Current-period data replaces stored data; comparatives only fill gaps (differences are reported);
   a period of unknown audit status takes the provenance of a filing that states it.
+- A period's revenue breakdown is stored as a whole, from one filing: issuers re-cut the same revenue
+  between years (HRTA's FY2024 report splits FY2023 "Grosir" into "Grosir" + "Ekspor", the FY2023
+  report shows one "Grosir" line), so mixing two breakdowns counts revenue twice. The current period
+  replaces the period's breakdown (segments only an older filing reported are removed, listed in
+  `removedFromPeriod`); a comparative is saved only when the period has no breakdown yet.
+- Balance-sheet cash = cash-flow ending cash is checked for the current period. Many issuers present
+  cash in the cash flow statement net of bank overdrafts, which the balance sheet carries within
+  short-term bank loans (GGRM: ending cash 3,351,361 million vs. balance-sheet cash 3,613,292 million in
+  FY2025; the 261,931 million are the overdraft part of 761,931 million short-term bank loans). The
+  mapper reports this as a warning; the verification accepts it with a note when the stored figures are
+  the filing's own and the difference is positive and within short-term borrowings, otherwise it is a
+  problem (`INCOMPLETE`).
+- Restatements show up as comparative differences and are kept as filed in the period's own filing,
+  e.g. INDF's FY2023 report moves Rp 36,509 million of FY2022 operating payments to investing;
+  FY2022 keeps the FY2022 filing's figures.
 - Unsupported (rejected with 422): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`).
 
@@ -187,6 +272,11 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | Test                             | What it proves                                                                                                                                                                                                                                       |
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
+| `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets; the revenue breakdowns of GGRM, HRTA and INDY FY2022 reconcile to revenue in both columns, and HRTA / INDY FY2022 equal their FY2023 filings' comparatives |
+| `FilingMapperInfrastructureTest` (unit) | the Infrastructure Industry taxonomy: all five SMDR filings map without errors or unclassified lines; capex includes the infrastructure labels (FY2025: -81,650,677); every comparative column equals the previous filing's current column except SMDR's own reclassification of 161,196 from "Other income" to "Other gains (losses)" in FY2024 operating income; no share count is guessed |
+| `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
+| `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` -> `1xxxxxx` |
+| `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | `FinancialStatementUploadTest`   | the asynchronous upload with a mocked agent: 202 job, background processing, stored once per checksum, wrong files rejected, file download; see [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)                                                     |
 | End-to-end (manual)              | uploading all six filings through the endpoint into an empty database reproduces the seed data                                                                                                                                                       |
@@ -211,3 +301,23 @@ Compared with the validated seed: `reporting_period` (incl. source filing and au
 `share_snapshot` and `company` are identical (0 differences); only the English segment names are
 worded differently. The same result was obtained with the filings uploaded out of chronological
 order (2026-II, 2025-Tahunan, 2025-I, 2026-I, 2025-III, 2025-II).
+
+Older annual filings (pre-2023 template and later re-cut breakdowns), uploaded after the 2024 filings:
+
+| Filing                 | Status    | Duration | Model calls | Tool calls | Rounds | Note |
+|------------------------|-----------|---------:|------------:|-----------:|-------:|------|
+| INDF 2022-Tahunan      | SUCCEEDED | 50 s | 9 | 8 | 1 | pre-2023 template (rejected with 422 before: zip-bomb guard, date headers) |
+| HRTA 2022-Tahunan      | SUCCEEDED | 71 s | 10 | 9 | 1 | pre-2023 template |
+| HRTA 2023-Tahunan, before the segment fix | INCOMPLETE | 440 s | 39 | 36 | 3 | FY2024's comparative "Ekspor" segment left in FY2023: segments 17.13 T vs revenue 12.86 T; the agent cannot delete rows and retried |
+| HRTA 2023-Tahunan, after  | SUCCEEDED | 87 s | 13 | 13 | 1 | `removedFromPeriod: ["Penjualan perhiasan dan logam mulia - Ekspor"]`; FY2022 comparative `KEPT_EXISTING` |
+| GGRM 2022-Tahunan, before | INCOMPLETE | 192 s | 19 | 15 | | "balance-sheet cash 4,407,033 M != cash-flow ending cash 3,709,026 M" (cash net of bank overdrafts) |
+| GGRM 2024-Tahunan, before | FAILED | 206 s | 0 | 0 | | `OpenAIInvalidDataException: Error reading response` (OpenRouter read timeout, no retry) |
+| GGRM 2022 / 2024 / 2025-Tahunan, after | SUCCEEDED | 86 / 55 / 58 s | 12 / 11 / 12 | 13 / 12 / 13 | 1 | overdraft difference accepted as filed (note); 2022 with revenue segments from the pre-2023 sheets |
+| INDY 2022 / 2023-Tahunan, before | INCOMPLETE | 113 / 120 s | 18 / 18 | 13 / 15 | | "basic_eps: stored 0.08688289 but the filing says 0.0868828938473089" (USD EPS, NUMERIC(20,8)) |
+| INDY 2022 / 2023-Tahunan, after | SUCCEEDED | 49 / 57 s | 10 / 10 | 11 / 11 | 1 | compared at the stored scale; 2022 with revenue segments from the pre-2023 sheets |
+
+INDY's share counts come from the FY2023 filing's exact EPS denominator (5,202,692,000, section 4);
+the 2022, 2024, 2025 and 2026-II filings cannot give a count and `saveShareSnapshots` reports that
+(the filing still completes). The extra rounds of INDY 2024 / 2025 came from the agent retrying that
+save. Re-uploading INDY 2023-Tahunan stored the counts (SUCCEEDED, 61 s, 12 model calls, 0 tool
+errors); INDY then has market caps from 2022-01-03 and valuation snapshots for every period end.

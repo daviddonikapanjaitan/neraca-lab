@@ -56,7 +56,7 @@ public class IngestionTools {
     public record FilingOverview(String fileName, String ticker, String legalName, String sector, String industry,
                                  String currency, String rounding, String submission, boolean audited,
                                  String currentPeriod, List<ColumnOverview> columns, boolean shareCapitalResolvable,
-                                 String parValue, List<String> templateProblems, List<String> warnings) {
+                                 String shareCountBasis, List<String> templateProblems, List<String> warnings) {
     }
 
     @Tool(description = """
@@ -78,7 +78,7 @@ public class IngestionTools {
         shares.checks().stream().filter(c -> c.severity() == Check.Severity.WARNING).map(Check::message).forEach(warnings::add);
         return new FilingOverview(info.fileName(), info.ticker(), info.legalName(), info.sector(), info.industry(),
                 info.currency(), info.rounding(), info.submission(), info.audited(), info.current().key(), columns,
-                shares.resolved(), shares.resolved() ? shares.parValue().toPlainString() : null,
+                shares.resolved(), shares.basis(),
                 session.mapper().templateProblems(), warnings);
     }
 
@@ -318,13 +318,16 @@ public class IngestionTools {
 
     public enum SegmentType { PRODUCT, SERVICE, GEOGRAPHY, CUSTOMER, OTHER }
 
-    public record SegmentSaveResult(StatementColumn column, String period, List<String> saved, List<String> reusedExisting) {
+    public record SegmentSaveResult(StatementColumn column, String period, List<String> saved, List<String> reusedExisting,
+                                    List<String> removedFromPeriod) {
     }
 
     @Tool(description = """
             Saves the revenue segments of a column. Name every extracted segment exactly once; revenue \
             amounts come from the filing. An existing segment with the same name is reused with its stored \
-            type. Requires saveStatements of the same column first.""")
+            type. CURRENT_PERIOD replaces the period's whole breakdown (segments of older filings that this \
+            filing does not report are removed from the period); PRIOR_PERIOD only fills a period that has \
+            no breakdown yet. Requires saveStatements of the same column first.""")
     public SegmentSaveResult saveRevenueSegments(
             @ToolParam(description = "CURRENT_PERIOD or PRIOR_PERIOD") StatementColumn column,
             @ToolParam(description = "One entry per extracted segment") List<SegmentNaming> segments) {
@@ -369,6 +372,17 @@ public class IngestionTools {
             List<String> existingNames = repository.segments(company.companyId()).stream().map(SegmentRow::segmentName).toList();
             List<String> saved = new ArrayList<>();
             List<String> reused = new ArrayList<>();
+            List<String> removed = List.of();
+            // a breakdown is stored as a whole: filings may split the same revenue differently, and mixing
+            // two breakdowns of one period counts revenue twice
+            if (!current && !repository.segmentsWithRevenue(periodId).isEmpty()) {
+                for (SegmentExtraction.SegmentLine line : extraction.lines()) {
+                    saved.add(line.name() + " KEPT_EXISTING (the period already has a stored breakdown)");
+                }
+                session.segmentsSaved(column, saved);
+                return new SegmentSaveResult(column, extraction.period().key(), saved, reused, removed);
+            }
+            List<Long> segmentIds = new ArrayList<>();
             for (SegmentExtraction.SegmentLine line : extraction.lines()) {
                 SegmentNaming naming = byName.get(line.name());
                 SegmentRow row = repository.ensureSegment(company.companyId(), naming.segmentType().name(),
@@ -378,24 +392,30 @@ public class IngestionTools {
                 }
                 var outcome = repository.writeSegmentRevenue(company.companyId(), row.segmentId(), periodId, line.revenue(), current);
                 saved.add(row.segmentNameEn() + " [" + row.segmentType() + "] " + outcome);
+                segmentIds.add(row.segmentId());
+            }
+            if (current) {
+                removed = repository.removeOtherSegmentRevenue(periodId, segmentIds);
             }
             session.segmentsSaved(column, saved);
-            return new SegmentSaveResult(column, extraction.period().key(), saved, reused);
+            return new SegmentSaveResult(column, extraction.period().key(), saved, reused, removed);
         });
     }
 
-    public record ShareSaveResult(String parValue, List<String> snapshots, List<String> warnings) {
+    public record ShareSaveResult(String basis, List<String> snapshots, List<String> warnings) {
     }
 
     @Tool(description = """
-            Saves share counts at every date disclosed in the statements of changes in equity (par value is \
-            inferred from share capital and EPS). Requires the company.""")
+            Saves share counts at every date disclosed in the statements of changes in equity (par value \
+            inferred from share capital and EPS, or an exact EPS denominator when share capital is in another \
+            currency). Requires the company.""")
     public ShareSaveResult saveShareSnapshots() {
         return locked(() -> {
             CompanyRow company = requireCompany();
             var shares = session.shareCapital();
             if (!shares.resolved()) {
-                throw new IllegalStateException("Par value could not be inferred; share counts are not saved");
+                throw new IllegalStateException("Share counts could not be derived (no par value fits and the EPS is "
+                        + "not precise enough); share counts are not saved");
             }
             List<String> rows = new ArrayList<>();
             for (ShareAt s : shares.snapshots()) {
@@ -404,7 +424,7 @@ public class IngestionTools {
                         + " shares (" + s.source() + ")");
             }
             session.sharesSaved();
-            return new ShareSaveResult(shares.parValue().toPlainString(), rows,
+            return new ShareSaveResult(shares.basis(), rows,
                     shares.checks().stream().filter(c -> c.severity() == Check.Severity.WARNING).map(Check::message).toList());
         });
     }

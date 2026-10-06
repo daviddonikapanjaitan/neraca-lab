@@ -1,5 +1,7 @@
 package com.neracalab.backend.ingestion.agent;
 
+import java.time.Duration;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -9,10 +11,15 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param maxIterations    model turns per execution round (Tool Calling Loop guard)
  * @param reflectionRounds extra execution rounds the reviewer may request (Reflection Pattern)
  * @param temperature      sampling temperature; 0 for repeatable tool use
+ * @param modelRetries     extra attempts of a model call that failed transiently (timeout, network
+ *                         error, HTTP 408 / 429 / 5xx); the conversation is resent unchanged
+ * @param retryBackoff     pause before the first retry, doubled for each further one
  */
 @ConfigurationProperties("neracalab.ingestion")
 public record AgentProperties(
         @DefaultValue("30") int maxIterations,
         @DefaultValue("2") int reflectionRounds,
-        @DefaultValue("0.0") double temperature) {
+        @DefaultValue("0.0") double temperature,
+        @DefaultValue("2") int modelRetries,
+        @DefaultValue("5s") Duration retryBackoff) {
 }

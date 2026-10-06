@@ -28,6 +28,8 @@ import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.PriceIngestionService.Result;
 import com.neracalab.backend.price.provider.DailyBar;
+import com.neracalab.backend.price.provider.FxRateProvider;
+import com.neracalab.backend.price.provider.FxRateProvider.FxRate;
 import com.neracalab.backend.price.provider.PriceHistory;
 import com.neracalab.backend.price.provider.PriceProvider;
 import com.neracalab.backend.price.provider.PriceProviderException;
@@ -69,6 +71,7 @@ class PriceIngestionServiceTest {
 
     private CompanyRef hrta;
     private StubProvider provider;
+    private StubFx fx;
 
     @BeforeEach
     void seedState() {
@@ -82,10 +85,11 @@ class PriceIngestionServiceTest {
             jdbc.sql(delete).param("c", hrta.companyId()).param("d", SEED_END).update();
         }
         provider = new StubProvider();
+        fx = new StubFx();
     }
 
     private PriceIngestionService service(Clock clock) {
-        return new PriceIngestionService(provider, prices, valuations, transaction, TestPriceProperties.defaults(), clock);
+        return new PriceIngestionService(provider, fx, prices, valuations, transaction, TestPriceProperties.defaults(), clock);
     }
 
     @Test
@@ -231,22 +235,151 @@ class PriceIngestionServiceTest {
 
     /** A company with no price_daily rows, created inside the rolled-back test transaction. */
     private CompanyRef companyWithoutPrices() {
+        return companyWithoutPrices("IDR");
+    }
+
+    /** Same, reporting in {@code currency} (EUR: no real fx_rate_daily rows can interfere). */
+    private CompanyRef companyWithoutPrices(String currency) {
         long id = jdbc.sql("""
                         INSERT INTO company (ticker, exchange, company_name, currency)
-                        VALUES ('ZZTEST', 'IDX', 'Price ingestion test company', 'IDR')
+                        VALUES ('ZZTEST', 'IDX', 'Price ingestion test company', :currency)
                         RETURNING company_id""")
+                .param("currency", currency)
                 .query(Long.class).single();
         return prices.company(Exchange.IDX, "ZZTEST").filter(c -> c.companyId() == id).orElseThrow();
     }
 
-    @Test
-    void storesNothingWhenTheCurrencyDoesNotMatch() {
-        provider.respond(history("USD", bar("2026-10-01", "1", "1", "1", "1", "1", 5L)));
+    // ------------------------------------------------------------------ listing currency != reporting currency
 
-        assertThatThrownBy(() -> service(SATURDAY).ingest(hrta, false))
+    /**
+     * INDY case: quoted in IDR, reports in USD (here EUR). Each bar is divided by the rate of the last
+     * completed FX day before it; the rate of the last completed trading day itself (still moving at
+     * the close) is neither used nor stored.
+     */
+    @Test
+    void convertsAListingQuotedInAnotherCurrencyIntoTheReportingCurrency() {
+        CompanyRef company = companyWithoutPrices("EUR");
+        provider.respond(history("IDR",
+                bar("2026-10-01", "2400", "2440", "2380", "2420", "2420", 1000L),
+                bar("2026-10-02", "2420", "2460", "2400", "2450", "2450", 2000L)));
+        fx.respond(rate("2026-09-23", "15900"),                       // before the window: ignored
+                rate("2026-09-29", "16000"), rate("2026-09-30", "16500"),
+                rate("2026-10-01", "16600"), rate("2026-10-02", "16700"));
+
+        Result result = service(SATURDAY).ingest(company, false);
+
+        assertThat(provider.requests).containsExactly("1990-01-01.." + LocalDate.of(2026, 10, 3));
+        assertThat(fx.requests).containsExactly("EUR/IDR 2026-09-24..2026-10-01");
+        assertThat(result.requests()).isEqualTo(2);
+        assertThat(result.inserted()).isEqualTo(2);
+        assertThat(result.conversion()).isEqualTo(new PriceIngestionService.Conversion("IDR", "EUR", "stubfx EUR/IDR", 3, 0));
+        // 2026-10-01 with the 2026-09-30 rate, 2026-10-02 with the 2026-10-01 rate, 8 decimals half-up
+        assertThat(storedClose(company, "2026-10-01")).isEqualByComparingTo("0.14666667");   // 2420 / 16500
+        assertThat(storedClose(company, "2026-10-02")).isEqualByComparingTo("0.14759036");   // 2450 / 16600
+        Map<String, Object> high = jdbc.sql("""
+                        SELECT open_price, high_price, low_price, adjusted_close, volume FROM price_daily
+                        WHERE company_id = :c AND trading_date = DATE '2026-10-01'""")
+                .param("c", company.companyId()).query().singleRow();
+        assertThat((BigDecimal) high.get("open_price")).isEqualByComparingTo("0.14545455");     // 2400 / 16500
+        assertThat((BigDecimal) high.get("high_price")).isEqualByComparingTo("0.14787879");     // 2440 / 16500
+        assertThat((BigDecimal) high.get("low_price")).isEqualByComparingTo("0.14424242");      // 2380 / 16500
+        assertThat((BigDecimal) high.get("adjusted_close")).isEqualByComparingTo("0.14666667");
+        assertThat(((Number) high.get("volume")).longValue()).isEqualTo(1000L);                  // shares, not money
+        assertThat(fxRates("EUR", "IDR")).containsExactly(
+                Map.entry(LocalDate.of(2026, 9, 29), new BigDecimal("16000.00000000")),
+                Map.entry(LocalDate.of(2026, 9, 30), new BigDecimal("16500.00000000")),
+                Map.entry(LocalDate.of(2026, 10, 1), new BigDecimal("16600.00000000")));
+    }
+
+    @Test
+    void dropsBarsWithoutARecentRateInsteadOfGuessing() {
+        CompanyRef company = companyWithoutPrices("EUR");
+        provider.respond(history("IDR",
+                bar("2026-10-01", "2400", "2440", "2380", "2420", "2420", 1000L),
+                bar("2026-10-02", "2420", "2460", "2400", "2450", "2450", 2000L)));
+        fx.respond(rate("2026-10-01", "16600"));                       // nothing before 2026-10-01
+
+        Result result = service(SATURDAY).ingest(company, false);
+
+        assertThat(result.inserted()).isEqualTo(1);                   // 2026-10-02 only
+        assertThat(result.barsSkipped()).isEqualTo(1);
+        assertThat(result.conversion().barsWithoutRate()).isEqualTo(1);
+        assertThat(storedClose(company, "2026-10-02")).isEqualByComparingTo("0.14759036");
+        assertThat(prices.tradingDates(company.companyId(), LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 1))).isEmpty();
+    }
+
+    /** EODHD sends no currency: an IDX listing trades in IDR, so a non-IDR reporter is still converted. */
+    @Test
+    void aHistoryWithoutCurrencyIsTakenToTradeInTheExchangeCurrency() {
+        CompanyRef company = companyWithoutPrices("EUR");
+        provider.respond(history(null, bar("2026-10-02", "2420", "2460", "2400", "2450", "2450", 2000L)));
+        fx.respond(rate("2026-10-01", "16600"));
+
+        Result result = service(SATURDAY).ingest(company, false);
+
+        assertThat(result.conversion().listingCurrency()).isEqualTo("IDR");
+        assertThat(storedClose(company, "2026-10-02")).isEqualByComparingTo("0.14759036");
+    }
+
+    @Test
+    void aListingInTheReportingCurrencyIsStoredAsIs() {
+        CompanyRef company = companyWithoutPrices("IDR");
+        provider.respond(history(null, bar("2026-10-02", "2420", "2460", "2400", "2450", "2450", 2000L)));
+
+        Result result = service(SATURDAY).ingest(company, false);
+
+        assertThat(result.conversion()).isNull();
+        assertThat(provider.requests).hasSize(1);
+        assertThat(fx.requests).isEmpty();
+        assertThat(storedClose(company, "2026-10-02")).isEqualByComparingTo("2450");
+    }
+
+    @Test
+    void storesNothingWhenTheRatesAreUnavailable() {
+        CompanyRef company = companyWithoutPrices("EUR");
+        provider.respond(history("IDR", bar("2026-10-02", "2420", "2460", "2400", "2450", "2450", 2000L)));
+
+        assertThatThrownBy(() -> service(SATURDAY).ingest(company, false))
                 .isInstanceOf(PriceProviderException.class)
-                .hasMessageContaining("quoted in USD");
-        assertThat(prices.latestTradingDate(hrta.companyId())).contains(SEED_END);
+                .hasMessageContaining("stub fx unavailable");
+        assertThat(prices.latestTradingDate(company.companyId())).isEmpty();
+        assertThat(fxRates("EUR", "IDR")).isEmpty();
+    }
+
+    /** Rates of another source (e.g. left by an earlier source) are never used. */
+    @Test
+    void usesOnlyRatesOfTheActiveSource() {
+        CompanyRef company = companyWithoutPrices("EUR");
+        // the other source has 2026-10-01 (a bad 1660); the active source only 2026-09-30
+        prices.upsertFxRates("EUR", "IDR", "othersource", List.of(rate("2026-10-01", "1660")));
+        provider.respond(history("IDR", bar("2026-10-02", "2420", "2460", "2400", "2450", "2450", 2000L)));
+        fx.respond(rate("2026-09-30", "16500"));
+
+        service(SATURDAY).ingest(company, false);
+
+        assertThat(storedClose(company, "2026-10-02")).isEqualByComparingTo("0.14848485");   // 2450 / 16500, not / 1660
+    }
+
+    @Test
+    void convertsAtTheEightDecimalsOfPriceDaily() {
+        DailyBar converted = PriceIngestionService.convert(
+                bar("2026-10-02", "1", "3", "1", "2", "2", 7L), new BigDecimal("16644.1"));
+        assertThat(converted.close()).isEqualByComparingTo("0.00012016");     // 2 / 16644.1 = 0.000120162...
+        assertThat(converted.high()).isEqualByComparingTo("0.00018024");      // 3 / 16644.1 = 0.000180244...
+        assertThat(converted.volume()).isEqualTo(7L);
+    }
+
+    private BigDecimal storedClose(CompanyRef company, String date) {
+        return jdbc.sql("SELECT close_price FROM price_daily WHERE company_id = :c AND trading_date = :d")
+                .param("c", company.companyId()).param("d", LocalDate.parse(date)).query(BigDecimal.class).single();
+    }
+
+    private java.util.NavigableMap<LocalDate, BigDecimal> fxRates(String base, String quote) {
+        return prices.fxRates(base, quote, fx.name(), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 10, 31));
+    }
+
+    private static FxRate rate(String date, String rate) {
+        return new FxRate(LocalDate.parse(date), new BigDecimal(rate));
     }
 
     private Map<String, Object> valuation(String date) {
@@ -290,6 +423,32 @@ class PriceIngestionServiceTest {
                 throw new com.neracalab.backend.price.provider.SymbolNotFoundException("stub has no data for " + ticker);
             }
             return history;
+        }
+    }
+
+    /** Returns the queued rates and records each request as "BASE/QUOTE from..to"; throws when none are queued. */
+    static final class StubFx implements FxRateProvider {
+
+        final List<String> requests = new ArrayList<>();
+        private final Deque<List<FxRate>> responses = new ArrayDeque<>();
+
+        void respond(FxRate... rates) {
+            responses.add(List.of(rates));
+        }
+
+        @Override
+        public String name() {
+            return "stubfx";
+        }
+
+        @Override
+        public List<FxRate> fetch(String base, String quote, LocalDate from, LocalDate to) {
+            requests.add(base + "/" + quote + " " + from + ".." + to);
+            List<FxRate> rates = responses.poll();
+            if (rates == null) {
+                throw new PriceProviderException("stub fx unavailable");
+            }
+            return rates;
         }
     }
 }

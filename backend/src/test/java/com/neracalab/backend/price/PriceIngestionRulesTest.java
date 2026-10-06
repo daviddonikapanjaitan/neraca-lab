@@ -21,7 +21,7 @@ class PriceIngestionRulesTest {
     private static final LocalDate LAST = LocalDate.of(2026, 10, 2);
 
     private final PriceIngestionService service =
-            new PriceIngestionService(null, null, null, null, TestPriceProperties.defaults());
+            new PriceIngestionService(null, null, null, null, null, TestPriceProperties.defaults());
 
     @Test
     void keepsNormalBars() {

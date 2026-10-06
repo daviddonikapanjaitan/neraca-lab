@@ -51,7 +51,13 @@ WITH base AS (
 
         b.short_term_debt + b.long_term_debt + COALESCE(b.lease_liabilities, 0) AS total_debt,
         b.cash_and_equivalents + COALESCE(b.marketable_securities, 0)          AS cash_and_investments,
-        COALESCE(b.shares_outstanding, i.basic_shares)                          AS shares,
+        -- the period's own share count, else the latest share_snapshot on or before the period end
+        -- (the count market_snapshot uses; e.g. INDY, whose USD filings give a count only for FY2023)
+        COALESCE(b.shares_outstanding, i.basic_shares,
+                 (SELECT ss.shares_outstanding FROM share_snapshot ss
+                  WHERE ss.company_id = rp.company_id AND ss.snapshot_date <= rp.period_end
+                    AND ss.shares_outstanding IS NOT NULL
+                  ORDER BY ss.snapshot_date DESC LIMIT 1))                      AS shares,
 
         cf.operating_cash_flow, cf.capital_expenditure, cf.lease_payments,
         cf.dividends_paid, cf.share_buybacks,

@@ -41,6 +41,7 @@ public record PriceProperties(
         @DefaultValue("500") int jobHistory,
         @DefaultValue Yahoo yahoo,
         @DefaultValue Eodhd eodhd,
+        @DefaultValue Fx fx,
         @DefaultValue Schedule schedule) {
 
     public PriceProperties {
@@ -69,6 +70,14 @@ public record PriceProperties(
 
     /** @param apiToken EODHD API token (required when provider = eodhd) */
     public record Eodhd(@DefaultValue("https://eodhd.com") String baseUrl, @DefaultValue("") String apiToken) {
+    }
+
+    /**
+     * Exchange rates for companies that report in another currency than their listing trades in.
+     *
+     * @param baseUrl Frankfurter API (ECB reference rates)
+     */
+    public record Fx(@DefaultValue("https://api.frankfurter.dev/v1") String baseUrl) {
     }
 
     /**

@@ -84,8 +84,10 @@ neraca_lab/
 │               ├── V1.0.8__schema_auth.sql        (schema script: users, roles, sessions)
 │               ├── V1.0.9__schema_ingestion_created_by.sql   (who started an ingestion job)
 │               ├── V1.0.10__schema_screening.sql  (AI screening: universe, snapshots, news, runs, usage)
+│               ├── V1.0.11__schema_fx.sql         (fx_rate_daily: ECB rates for listings quoted in another currency)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
+│               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
 │               └── V1.0.6__data_metrics_valuation.sql
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
@@ -96,7 +98,10 @@ neraca_lab/
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
 │                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
-│                                INDF: xlsx 2024-III .. 2026-II only, load them with the upload (Ingestion page)
+│                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
+│                                INDY (2022 .. 2025 annual, 2026-II)
+│                                and SMDR (2022 .. 2025 annual, 2026-II, Infrastructure Industry taxonomy)
+│                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
@@ -185,6 +190,18 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 | 200  | the same file is already queued / being stored: that job                        |
 | 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template (nothing stored)   |
 
+Both IDX layouts are read: the current one (2023 onwards) and the pre-2023 one of FY2022 and earlier
+filings (date column headers, sheets `1410000 1 CurrentYear` / `2 PriorYear`, highly compressed
+styles). Two IDX taxonomies are supported: General Industry (`1xxxxxx` sheets) and Infrastructure
+Industry (`3xxxxxx` sheets, e.g. SMDR), which has the same statements under other codes. A period's revenue breakdown always comes from one filing: the period's own filing replaces
+it, a later filing's comparative only fills a period without one (issuers re-cut segments between
+years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
+accepted as filed; a model call that times out or hits a provider error is retried
+(`neracalab.ingestion.model-retries`, default 2). Values are verified at the stored column scale (e.g. INDY's 16-decimal
+USD EPS as `NUMERIC(20,8)`); the pre-2023 revenue sheets are read too. When no par value fits (USD
+share capital, INDY), shares outstanding come from an exact EPS denominator (INDY FY2023: 5,202,692,000)
+and periods without a count of their own use the latest share snapshot. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
+
 A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
 `uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
 `ck_company_exchange`), so uploading the same company again, or concurrently, never creates a
@@ -246,6 +263,13 @@ the frontend only reads the database. Per job:
 3. One transaction: upsert `price_daily`, then recalculate the company's `market_snapshot`,
    `valuation_snapshot` (period ends, every earlier valuation date, the new latest day) and VALUATION
    rows of `financial_metric`, with the formulas of `V1.0.6`.
+
+`price_daily` is in the company's reporting currency. A listing quoted in another currency (INDY:
+IDR on IDX, reports in USD) is converted before it is stored: each day / the ECB USD/IDR reference
+rate of the previous FX day (Frankfurter API, stored in `fx_rate_daily`; one extra request), 8
+decimals; days without a rate in the 7 days before are not stored. Yahoo's own `USDIDR=X` is not used
+(days off by a factor of 10). The UI shows prices and EPS below 1 with 6 decimals. Details:
+[`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 2.
 
 Polite crawling: one request at a time with a random 1-2 s pause, a browser User-Agent and one HTTP
 client with a cookie store. On HTTP 429 the queue pauses 15, 30, then 60 minutes and retries the
@@ -334,12 +358,22 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 137 tests
+(cd backend && ./mvnw test)                      # 181 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
-data; `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
+data; `FilingMapperLegacyTemplateTest` maps the pre-2023 INDF FY2022 filing and compares it with the
+FY2022 comparatives of the FY2023 filing; `IngestionRepositorySegmentsTest` checks that a period's
+own filing replaces its whole revenue breakdown (rolled back); `IngestionVerifierOverdraftTest` checks that
+GGRM's cash net of bank overdrafts (FY2022, FY2024, FY2025) is accepted as filed;
+`IngestionAgentRetryTest` that a model call is retried after a read timeout but not after a
+permanent error; `PriceIngestionServiceTest` also converts a listing quoted in another currency and
+`EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
+derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
+`FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
+`SmdrShareSeedTest` checks the SMDR share-count script (fills once, never replaces a stored count); `SameAsStoredTest` that filing values are compared at the stored column scale
+(INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
 keeps one row, and `CompanyCodesTest` covers ticker / exchange normalisation. Uploading all six
@@ -388,8 +422,10 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.8__schema_auth.sql`             | users (profile, avatar), roles, role permissions, user roles, login sessions |
 | `V1.0.9__schema_ingestion_created_by.sql` | `ingestion_job.created_by`: the user who started each ingestion; `app_migration` |
 | `V1.0.10__schema_screening.sql`       | AI screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage |
+| `V1.0.11__schema_fx.sql`              | `fx_rate_daily`: ECB reference rates for listings quoted in another currency (INDY, SMDR) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
+| `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).
