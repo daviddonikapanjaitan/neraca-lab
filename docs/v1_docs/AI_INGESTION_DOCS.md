@@ -155,6 +155,28 @@ An IDX XBRL workbook has one sheet per taxonomy role. Used sheets:
 Statement sheets have a header row of XBRL contexts and one row per line item:
 `Indonesian label | value per context | English label`. Lines are matched on the English label.
 
+**Infrastructure Industry taxonomy.** Issuers of the infrastructure, utilities and transportation
+sector (e.g. SMDR, Samudera Indonesia, "K. Transportation & Logistic") file with the IDX
+"Infrastructure Industry" taxonomy: the same statement roles and line items as the General Industry
+one, under sheet codes starting with 3 instead of 1. `IdxWorkbookReader` maps them to the General codes,
+so the mapper is the same:
+
+| Role | General | Infrastructure |
+|------|---------|----------------|
+| balance sheet (current / non-current; by liquidity) | `1210000`, `1220000` | `3210000`, `3220000` |
+| profit or loss (by function; by nature; before tax) | `1311000`, `1312000`, `1321000`, `1322000` | `3311000`, `3312000`, `3321000`, `3322000` |
+| changes in equity | `1410000` (+`PY`) | `3410000` (+`PY`, pre-2023 `3410000 1 CurrentYear`) |
+| cash flow (direct; indirect) | `1510000`, `1520000` | `3510000`, `3520000` |
+| PP&E / right-of-use, revenue by type / source | `1611000`, `1612000`, `1617000`, `1618000` | `3611000`, `3612000`, `3617000`, `3618000` |
+
+Own labels of the taxonomy that the mapper reads: "Payments for acquisition of property and equipment"
+and "Payments for advances for purchase of property and equipment" (capex; General: "... property,
+plant and equipment"), "Short-term non-bank loans" (short-term debt). "Current other financial assets"
+is the General "Other current financial assets" (not a marketable security, as there). An unknown
+profit-or-loss line such as "Interconnection expenses" is classified by the agent
+(`classifyIncomeLines`, re-validated), like any unknown line. Sheet 1000000 is shared by all taxonomies.
+Other IDX taxonomies (financing, securities, insurance, banking, property) are not supported.
+
 **Pre-2023 template.** Filings for FY2022 and earlier (e.g. `FinancialStatement-2022-Tahunan-INDF.xlsx`,
 `-2022-Tahunan-HRTA.xlsx`) use an older layout, read into the same structure:
 
@@ -199,6 +221,17 @@ Rules:
   period it was derived from. The other INDY filings do not qualify (EPS 0.0019 allows 5.17 .. 5.45
   billion shares; FY2022's 0.0868828938473089 gives 5,210,191,995, not a whole number) and store no
   counts; valuations of later dates use the latest share snapshot, as for every company.
+  A count is carried only to dates of the same filing with the same share capital and treasury
+  stock; a stock split leaves share capital unchanged, so a split after the last filing that gave a
+  count is not visible (INDY's later EPS, 0.0019 .. 0.00196, agree with 5,202,692,000). SMDR (USD
+  reporter, EPS with 3 decimals, a 2023 stock split: 0.065 -> 0.005) gets no share counts from its
+  filings; they come from public sources instead (`V1.0.12__data_SMDR_shares.sql`): 3,275,120,000 shares
+  of Rp 25 until the 1:5 split of 2023-01-31, 16,375,600,000 of Rp 5 since (KSEI), no treasury stock,
+  consistent with every reported EPS. The prices are split-adjusted, so the counts are too:
+  16,375,600,000 at every date from 2020-12-31 (from when the filings show share capital unchanged);
+  earlier prices get no market cap. The script runs on start and after every upload (it needs the
+  company) and only fills counts that are empty. SMDR on 2026-10-05: USD 0.0221727 x 16,375,600,000 =
+  USD 363.1 million (Rp 398 x 16,375,600,000 = Rp 6.5 trillion), P/E 6.57.
 - Stored values are compared with the filing at the column's scale (amounts 4 decimals, EPS and share
   counts 8), with the half-up rounding Postgres applies on insert: INDY's USD EPS 0.0868828938473089
   is stored and verified as 0.08688289.
@@ -240,6 +273,9 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
 | `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets; the revenue breakdowns of GGRM, HRTA and INDY FY2022 reconcile to revenue in both columns, and HRTA / INDY FY2022 equal their FY2023 filings' comparatives |
+| `FilingMapperInfrastructureTest` (unit) | the Infrastructure Industry taxonomy: all five SMDR filings map without errors or unclassified lines; capex includes the infrastructure labels (FY2025: -81,650,677); every comparative column equals the previous filing's current column except SMDR's own reclassification of 161,196 from "Other income" to "Other gains (losses)" in FY2024 operating income; no share count is guessed |
+| `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
+| `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` -> `1xxxxxx` |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | `FinancialStatementUploadTest`   | the asynchronous upload with a mocked agent: 202 job, background processing, stored once per checksum, wrong files rejected, file download; see [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)                                                     |

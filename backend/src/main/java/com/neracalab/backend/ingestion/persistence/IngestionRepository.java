@@ -38,6 +38,8 @@ public class IngestionRepository {
     /** IDX XBRL filings only, so every ingested company is listed on IDX. */
     public static final String EXCHANGE = Exchange.IDX.code();
     private static final String DERIVED_SCRIPT = "db/V1.0.6__data_metrics_valuation.sql";
+    /** Share counts from outside the filings; they need the company, which an upload may just have created. */
+    private static final String SHARE_SCRIPT = "db/V1.0.12__data_SMDR_shares.sql";
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
@@ -323,7 +325,8 @@ public class IngestionRepository {
 
     /** Re-runs V1.0.6: market_snapshot, valuation_snapshot and financial_metric for all companies. */
     public void refreshDerivedData() {
-        new ResourceDatabasePopulator(new ClassPathResource(DERIVED_SCRIPT)).execute(dataSource);
+        new ResourceDatabasePopulator(new ClassPathResource(SHARE_SCRIPT), new ClassPathResource(DERIVED_SCRIPT))
+                .execute(dataSource);
         // the script only inserts and updates: drop valuation metrics whose value became NULL (e.g. a
         // re-ingested period without EBITDA), as the price refresh does
         for (long companyId : jdbc.sql("SELECT company_id FROM company").query(Long.class).list()) {

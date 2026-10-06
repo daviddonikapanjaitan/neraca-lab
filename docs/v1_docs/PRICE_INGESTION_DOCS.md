@@ -137,7 +137,7 @@ snapshots (market cap) but no valuation snapshots.
 
 Prices are rounded to 4 decimals (Yahoo sends binary floats such as `2033.51953125`), like the seed.
 
-### Listings quoted in another currency (INDY)
+### Listings quoted in another currency (INDY, SMDR)
 
 INDY trades on IDX in IDR but reports in USD. Storing its IDR prices next to USD statements would make
 every valuation wrong by a factor of about 17,900, so the ingestion used to stop with "INDY.JK is
@@ -160,6 +160,11 @@ ticks (15,069.40 on 2024-12-26 against about 16,200), which no outlier threshold
 real 2008 moves. The ECB series has a rate for every TARGET business day (no gap over 5 days since
 2008). Verified on INDY: all 4,404 stored days (2008-06-11 .. 2026-10-05) were recomputed
 independently from the raw Yahoo IDR closes and the raw ECB rates, 0 close differences.
+
+SMDR (also IDR on IDX, USD reports) is converted the same way: 5,403 days, none without a rate
+(2026-10-05: IDR 398 / 17,950 = USD 0.02217270). Its share counts come from public sources
+(`V1.0.12__data_SMDR_shares.sql`, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so it has
+market caps from 2021-01-04.
 
 Market snapshots need share counts. INDY's come from its FY2023 filing (5,202,692,000, derived from
 the exact EPS denominator, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so its market

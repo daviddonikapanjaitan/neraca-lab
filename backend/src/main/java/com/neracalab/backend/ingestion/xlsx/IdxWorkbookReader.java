@@ -66,16 +66,25 @@ public class IdxWorkbookReader {
     }
 
     /**
-     * Pre-2023 IDX template: "1410000 1 CurrentYear" -> 1410000, "1410000 2 PriorYear" -> 1410000PY
-     * (the names of the current template).
+     * Sheet names of the "General Industry" taxonomy ({@link IdxSheets}):
+     * <ul>
+     *   <li>pre-2023 template: "1410000 1 CurrentYear" -> 1410000, "1410000 2 PriorYear" -> 1410000PY
+     *       (the names of the current template);</li>
+     *   <li>"Infrastructure Industry" taxonomy (e.g. SMDR): the same roles and line items under codes
+     *       starting with 3 instead of 1 (3210000 balance sheet, 3311000 profit or loss, 3410000 equity,
+     *       3510000 cash flow, 3611000 / 3612000 / 3617000 / 3618000 notes) -> 1210000, 1311000, ...</li>
+     * </ul>
+     * Sheet 1000000 (general information) is shared by all taxonomies.
      */
     static String canonicalName(String sheetName) {
         String name = sheetName.trim();
         if (name.matches("\\d{7} \\d+ CurrentYear")) {
-            return name.substring(0, 7);
+            name = name.substring(0, 7);
+        } else if (name.matches("\\d{7} \\d+ PriorYear")) {
+            name = name.substring(0, 7) + "PY";
         }
-        if (name.matches("\\d{7} \\d+ PriorYear")) {
-            return name.substring(0, 7) + "PY";
+        if (name.matches("3\\d{6}(PY)?")) {
+            name = "1" + name.substring(1);
         }
         return name;
     }

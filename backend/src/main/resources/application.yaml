@@ -47,6 +47,7 @@ spring:
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
+        - classpath:db/V1.0.12__data_SMDR_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.6__data_metrics_valuation.sql
       continue-on-error: false
   jpa:

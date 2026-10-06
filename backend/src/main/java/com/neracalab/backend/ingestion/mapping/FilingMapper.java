@@ -47,8 +47,10 @@ public final class FilingMapper {
             PROFIT_CONTINUING, PROFIT_DISCONTINUED, PROFIT, PROFIT_PARENT, PROFIT_NCI,
             EPS_BASIC, EPS_BASIC_DISC, EPS_DILUTED, EPS_DILUTED_DISC);
 
+    // labels of the General and the Infrastructure Industry taxonomy (the latter: "Short-term non-bank loans",
+    // "... property and equipment" instead of "... property, plant and equipment")
     private static final List<String> SHORT_TERM_DEBT = List.of(
-            "Short term bank loans", "Trust receipts payables",
+            "Short term bank loans", "Short-term non-bank loans", "Trust receipts payables",
             "Current maturities of bank loans", "Current maturities of non-bank financial insitutions loan",
             "Current maturities of secured loans", "Current maturities of unsecured loans",
             "Current maturities of step loans", "Current maturities of loans from government of the republic of indonesia",
@@ -72,6 +74,8 @@ public final class FilingMapper {
     private static final List<String> CAPEX = List.of(
             "Payments for acquisition of property, plant and equipment",
             "Payments for advances for purchase of property, plant and equipment",
+            "Payments for acquisition of property and equipment",
+            "Payments for advances for purchase of property and equipment",
             "Payments for acquisition of intangible assets");
     private static final List<String> ACQUISITIONS = List.of(
             "Payments for acquisition of subsidiaries", "Payments for acquisition of interests in joint ventures",
