@@ -23,6 +23,7 @@ public final class AgentTrace {
     private final AtomicInteger modelCalls = new AtomicInteger();
     private final AtomicInteger parallelGroups = new AtomicInteger();
     private final AtomicInteger modelRetries = new AtomicInteger();
+    private final java.util.Set<String> modelsUsed = new java.util.concurrent.ConcurrentSkipListSet<>();
 
     public void step(Step step) {
         steps.add(step);
@@ -62,5 +63,17 @@ public final class AgentTrace {
 
     public int modelRetries() {
         return modelRetries.get();
+    }
+
+    /** Records the model a response reports (the provider's id, e.g. deepseek/deepseek-v4-flash-0731). */
+    public void modelUsed(String model) {
+        if (model != null && !model.isBlank()) {
+            modelsUsed.add(model);
+        }
+    }
+
+    /** Distinct models the responses of this run came from, sorted. */
+    public List<String> modelsUsed() {
+        return List.copyOf(modelsUsed);
     }
 }

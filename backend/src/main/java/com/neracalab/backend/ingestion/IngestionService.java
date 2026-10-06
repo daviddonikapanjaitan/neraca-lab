@@ -101,7 +101,7 @@ public class IngestionService {
         AgentTrace trace = outcome == null ? new AgentTrace() : outcome.trace();
         var metrics = new IngestionResponse.Metrics(System.currentTimeMillis() - start, trace.modelCalls(),
                 trace.invocations().size(), (int) trace.invocations().stream().filter(AgentTrace.ToolInvocation::error).count(),
-                trace.parallelGroups(), trace.modelRetries());
+                trace.parallelGroups(), trace.modelRetries(), trace.modelsUsed());
         return new IngestionResponse(session.id(), status, info.fileName(), filing, company,
                 outcome == null ? null : outcome.plan(), outcome != null && outcome.planFromModel(),
                 outcome == null ? List.of() : outcome.rounds(), trace.steps(), trace.invocations(),
