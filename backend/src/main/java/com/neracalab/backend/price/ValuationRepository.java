@@ -267,7 +267,7 @@ public class ValuationRepository {
                 .update();
     }
 
-    int deleteStaleValuationMetrics(long companyId) {
+    public int deleteStaleValuationMetrics(long companyId) {
         return jdbc.sql("""
                         DELETE FROM financial_metric fm
                         WHERE fm.company_id = :c

@@ -380,7 +380,9 @@ Constraints: `uq_segment UNIQUE (company_id, segment_type, segment_name)`,
 ### 4.2 `segment_financial`
 
 Figures per segment per reporting period. Revenue rows of one period sum to
-`income_statement.revenue`.
+`income_statement.revenue`. A period's rows are one breakdown from one filing: the upload of the
+period's own filing replaces them as a whole (segments that only another filing reported are
+deleted), a later filing's comparative adds rows only to a period without any.
 
 | Column                 | Type            | Null | Description                                           |
 |------------------------|-----------------|------|-------------------------------------------------------|

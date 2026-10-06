@@ -86,7 +86,8 @@ class CompanyControllerTest {
         assertThat(hrta.legalName()).isEqualTo("PT Hartadinata Abadi Tbk");
         assertThat(hrta.currency()).isEqualTo("IDR");
         assertThat(hrta.periodCount()).isGreaterThanOrEqualTo(10);
-        assertThat(hrta.firstPeriodEnd()).isEqualTo(LocalDate.of(2024, 3, 31));
+        // the seed starts at 2024-03-31; ingested annual filings may add earlier years
+        assertThat(hrta.firstPeriodEnd()).isBeforeOrEqualTo(LocalDate.of(2024, 3, 31));
         assertThat(hrta.latestPeriodEnd()).isAfterOrEqualTo(LocalDate.of(2026, 6, 30));
         assertThat(hrta.latestPeriod()).isNotBlank();
         assertThat(hrta.latestPriceDate()).isAfterOrEqualTo(LocalDate.of(2026, 9, 30));

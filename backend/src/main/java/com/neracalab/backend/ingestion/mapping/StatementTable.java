@@ -57,7 +57,7 @@ public final class StatementTable {
         List<String> contexts = new ArrayList<>();
         for (int r = 0; r < sheet.rowCount() && header < 0; r++) {
             String first = sheet.text(r, 1);
-            if (sheet.cell(r, 0) == null && first != null && (first.endsWith("Duration") || first.endsWith("Instant"))) {
+            if (sheet.cell(r, 0) == null && first != null && isContextHeader(first)) {
                 header = r;
                 for (int c = 1; sheet.text(r, c) != null; c++) {
                     contexts.add(sheet.text(r, c));
@@ -81,6 +81,18 @@ public final class StatementTable {
             lines.add(new Line(r + 1, label, values));
         }
         return new StatementTable(sheet.name(), List.copyOf(contexts), List.copyOf(lines));
+    }
+
+    /**
+     * "CurrentYearDuration", "PriorEndYearInstant", ... or, in the pre-2023 IDX template, the period
+     * date ("31 December 2022"). Contexts are used by position (current first, then prior).
+     */
+    static boolean isContextHeader(String text) {
+        return text.endsWith("Duration") || text.endsWith("Instant") || isDateHeader(text);
+    }
+
+    static boolean isDateHeader(String text) {
+        return text.matches("\\d{1,2} \\p{L}+ \\d{4}");
     }
 
     public String sheet() {

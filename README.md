@@ -96,7 +96,7 @@ neraca_lab/
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
 │                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
-│                                INDF: xlsx 2024-III .. 2026-II only, load them with the upload (Ingestion page)
+│                                HRTA 2022 .. 2024 annual and INDF xlsx (2022 .. 2026-II): load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
@@ -184,6 +184,12 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 | 202  | job queued; final status `SUCCEEDED`, `INCOMPLETE` or `FAILED` in the job       |
 | 200  | the same file is already queued / being stored: that job                        |
 | 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template (nothing stored)   |
+
+Both IDX layouts are read: the current one (2023 onwards) and the pre-2023 one of FY2022 and earlier
+filings (date column headers, sheets `1410000 1 CurrentYear` / `2 PriorYear`, highly compressed
+styles). A period's revenue breakdown always comes from one filing: the period's own filing replaces
+it, a later filing's comparative only fills a period without one (issuers re-cut segments between
+years, mixing them counts revenue twice). Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
 
 A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
 `uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
@@ -334,12 +340,14 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 137 tests
+(cd backend && ./mvnw test)                      # 139 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
-data; `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
+data; `FilingMapperLegacyTemplateTest` maps the pre-2023 INDF FY2022 filing and compares it with the
+FY2022 comparatives of the FY2023 filing; `IngestionRepositorySegmentsTest` checks that a period's
+own filing replaces its whole revenue breakdown (rolled back); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
 keeps one row, and `CompanyCodesTest` covers ticker / exchange normalisation. Uploading all six

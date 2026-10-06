@@ -318,13 +318,16 @@ public class IngestionTools {
 
     public enum SegmentType { PRODUCT, SERVICE, GEOGRAPHY, CUSTOMER, OTHER }
 
-    public record SegmentSaveResult(StatementColumn column, String period, List<String> saved, List<String> reusedExisting) {
+    public record SegmentSaveResult(StatementColumn column, String period, List<String> saved, List<String> reusedExisting,
+                                    List<String> removedFromPeriod) {
     }
 
     @Tool(description = """
             Saves the revenue segments of a column. Name every extracted segment exactly once; revenue \
             amounts come from the filing. An existing segment with the same name is reused with its stored \
-            type. Requires saveStatements of the same column first.""")
+            type. CURRENT_PERIOD replaces the period's whole breakdown (segments of older filings that this \
+            filing does not report are removed from the period); PRIOR_PERIOD only fills a period that has \
+            no breakdown yet. Requires saveStatements of the same column first.""")
     public SegmentSaveResult saveRevenueSegments(
             @ToolParam(description = "CURRENT_PERIOD or PRIOR_PERIOD") StatementColumn column,
             @ToolParam(description = "One entry per extracted segment") List<SegmentNaming> segments) {
@@ -369,6 +372,17 @@ public class IngestionTools {
             List<String> existingNames = repository.segments(company.companyId()).stream().map(SegmentRow::segmentName).toList();
             List<String> saved = new ArrayList<>();
             List<String> reused = new ArrayList<>();
+            List<String> removed = List.of();
+            // a breakdown is stored as a whole: filings may split the same revenue differently, and mixing
+            // two breakdowns of one period counts revenue twice
+            if (!current && !repository.segmentsWithRevenue(periodId).isEmpty()) {
+                for (SegmentExtraction.SegmentLine line : extraction.lines()) {
+                    saved.add(line.name() + " KEPT_EXISTING (the period already has a stored breakdown)");
+                }
+                session.segmentsSaved(column, saved);
+                return new SegmentSaveResult(column, extraction.period().key(), saved, reused, removed);
+            }
+            List<Long> segmentIds = new ArrayList<>();
             for (SegmentExtraction.SegmentLine line : extraction.lines()) {
                 SegmentNaming naming = byName.get(line.name());
                 SegmentRow row = repository.ensureSegment(company.companyId(), naming.segmentType().name(),
@@ -378,9 +392,13 @@ public class IngestionTools {
                 }
                 var outcome = repository.writeSegmentRevenue(company.companyId(), row.segmentId(), periodId, line.revenue(), current);
                 saved.add(row.segmentNameEn() + " [" + row.segmentType() + "] " + outcome);
+                segmentIds.add(row.segmentId());
+            }
+            if (current) {
+                removed = repository.removeOtherSegmentRevenue(periodId, segmentIds);
             }
             session.segmentsSaved(column, saved);
-            return new SegmentSaveResult(column, extraction.period().key(), saved, reused);
+            return new SegmentSaveResult(column, extraction.period().key(), saved, reused, removed);
         });
     }
 

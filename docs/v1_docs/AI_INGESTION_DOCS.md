@@ -118,9 +118,9 @@ final status is decided by the deterministic database read-back, not by the mode
 | `classifyIncomeLines`    | write | classifies unknown income-statement lines (re-validated: profit before tax must reconcile) |
 | `saveStatements`         | write | period + statements of a column (current period replaces, comparatives fill gaps only)     |
 | `extractRevenueSegments` | read  | revenue by type (else by source) of a column                                               |
-| `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing                             |
+| `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
 | `saveShareSnapshots`     | write | share counts at every date in the statements of changes in equity                          |
-| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics)       |
+| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL |
 | `verifyStoredData`       | read  | database read-back: pending work and inconsistencies                                       |
 
 **One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
@@ -149,6 +149,21 @@ An IDX XBRL workbook has one sheet per taxonomy role. Used sheets:
 Statement sheets have a header row of XBRL contexts and one row per line item:
 `Indonesian label | value per context | English label`. Lines are matched on the English label.
 
+**Pre-2023 template.** Filings for FY2022 and earlier (e.g. `FinancialStatement-2022-Tahunan-INDF.xlsx`,
+`-2022-Tahunan-HRTA.xlsx`) use an older layout, read into the same structure:
+
+| Difference                       | Pre-2023 template                                    | Current template                         |
+|----------------------------------|------------------------------------------------------|------------------------------------------|
+| statement context header         | period dates, e.g. `31 December 2022`                | `CurrentYearDuration`, `CurrentYearInstant`, ... |
+| roll-forward / equity sheet names | `1410000 1 CurrentYear`, `1410000 2 PriorYear` (also 1611000, 1612000) | `1410000`, `1410000PY`                    |
+| `xl/styles.xml` compression      | up to ~145:1                                         | ~20:1                                    |
+
+`IdxWorkbookReader` renames the sheets to the current names, and `StatementTable` accepts a date
+header (contexts are used by position: current period first, then prior). Apache POI's zip-bomb guard
+(default: reject an entry that inflates more than 100:1) is relaxed to 1000:1, with every entry
+capped at 100 MB uncompressed (real filings: under 6 MB). The revenue breakdown sheets of this
+template are a single table with date headers; they are not read (INDF FY2022 leaves them blank).
+
 | Column           | Income / cash flow context    | Balance sheet context                     |
 |------------------|-------------------------------|-------------------------------------------|
 | `CURRENT_PERIOD` | CurrentYearDuration           | CurrentYearInstant                        |
@@ -169,6 +184,14 @@ Rules:
   intangibles opening + purchases - closing (current period only).
 - Current-period data replaces stored data; comparatives only fill gaps (differences are reported);
   a period of unknown audit status takes the provenance of a filing that states it.
+- A period's revenue breakdown is stored as a whole, from one filing: issuers re-cut the same revenue
+  between years (HRTA's FY2024 report splits FY2023 "Grosir" into "Grosir" + "Ekspor", the FY2023
+  report shows one "Grosir" line), so mixing two breakdowns counts revenue twice. The current period
+  replaces the period's breakdown (segments only an older filing reported are removed, listed in
+  `removedFromPeriod`); a comparative is saved only when the period has no breakdown yet.
+- Restatements show up as comparative differences and are kept as filed in the period's own filing,
+  e.g. INDF's FY2023 report moves Rp 36,509 million of FY2022 operating payments to investing;
+  FY2022 keeps the FY2022 filing's figures.
 - Unsupported (rejected with 422): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`).
 
@@ -187,6 +210,8 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | Test                             | What it proves                                                                                                                                                                                                                                       |
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
+| `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets |
+| `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | `FinancialStatementUploadTest`   | the asynchronous upload with a mocked agent: 202 job, background processing, stored once per checksum, wrong files rejected, file download; see [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)                                                     |
 | End-to-end (manual)              | uploading all six filings through the endpoint into an empty database reproduces the seed data                                                                                                                                                       |
@@ -211,3 +236,12 @@ Compared with the validated seed: `reporting_period` (incl. source filing and au
 `share_snapshot` and `company` are identical (0 differences); only the English segment names are
 worded differently. The same result was obtained with the filings uploaded out of chronological
 order (2026-II, 2025-Tahunan, 2025-I, 2026-I, 2025-III, 2025-II).
+
+Older annual filings (pre-2023 template and later re-cut breakdowns), uploaded after the 2024 filings:
+
+| Filing                 | Status    | Duration | Model calls | Tool calls | Rounds | Note |
+|------------------------|-----------|---------:|------------:|-----------:|-------:|------|
+| INDF 2022-Tahunan      | SUCCEEDED | 50 s | 9 | 8 | 1 | pre-2023 template (rejected with 422 before: zip-bomb guard, date headers) |
+| HRTA 2022-Tahunan      | SUCCEEDED | 71 s | 10 | 9 | 1 | pre-2023 template |
+| HRTA 2023-Tahunan, before the segment fix | INCOMPLETE | 440 s | 39 | 36 | 3 | FY2024's comparative "Ekspor" segment left in FY2023: segments 17.13 T vs revenue 12.86 T; the agent cannot delete rows and retried |
+| HRTA 2023-Tahunan, after  | SUCCEEDED | 87 s | 13 | 13 | 1 | `removedFromPeriod: ["Penjualan perhiasan dan logam mulia - Ekspor"]`; FY2022 comparative `KEPT_EXISTING` |

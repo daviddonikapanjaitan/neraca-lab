@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DateUtil;
@@ -38,12 +39,20 @@ public class IdxWorkbookReader {
             IdxSheets.PPE, IdxSheets.PPE_PRIOR_YEAR, IdxSheets.RIGHT_OF_USE, IdxSheets.RIGHT_OF_USE_PRIOR_YEAR,
             IdxSheets.REVENUE_BY_TYPE, IdxSheets.REVENUE_BY_SOURCE);
 
+    static {
+        // Pre-2023 IDX workbooks compress xl/styles.xml ~140:1, past POI's default 100:1 zip-bomb
+        // ratio. Allow 1000:1, but bound every entry at 100 MB (real filings: under 6 MB).
+        ZipSecureFile.setMinInflateRatio(0.001);
+        ZipSecureFile.setMaxEntrySize(100L * 1024 * 1024);
+    }
+
     public IdxWorkbook read(InputStream in, String fileName) {
         Map<String, RawSheet> sheets = new LinkedHashMap<>();
         try (Workbook wb = new XSSFWorkbook(in)) {
             for (Sheet sheet : wb) {
-                if (SHEETS.contains(sheet.getSheetName())) {
-                    sheets.put(sheet.getSheetName(), toRaw(sheet));
+                String name = canonicalName(sheet.getSheetName());
+                if (SHEETS.contains(name)) {
+                    sheets.put(name, toRaw(sheet, name));
                 }
             }
         } catch (IOException | RuntimeException e) {
@@ -56,7 +65,22 @@ public class IdxWorkbookReader {
         return new IdxWorkbook(fileName, sheets);
     }
 
-    private static RawSheet toRaw(Sheet sheet) {
+    /**
+     * Pre-2023 IDX template: "1410000 1 CurrentYear" -> 1410000, "1410000 2 PriorYear" -> 1410000PY
+     * (the names of the current template).
+     */
+    static String canonicalName(String sheetName) {
+        String name = sheetName.trim();
+        if (name.matches("\\d{7} \\d+ CurrentYear")) {
+            return name.substring(0, 7);
+        }
+        if (name.matches("\\d{7} \\d+ PriorYear")) {
+            return name.substring(0, 7) + "PY";
+        }
+        return name;
+    }
+
+    private static RawSheet toRaw(Sheet sheet, String name) {
         List<List<Object>> rows = new ArrayList<>();
         for (int r = 0; r <= sheet.getLastRowNum(); r++) {
             Row row = sheet.getRow(r);
@@ -68,7 +92,7 @@ public class IdxWorkbookReader {
             }
             rows.add(cells);
         }
-        return new RawSheet(sheet.getSheetName(), rows);
+        return new RawSheet(name, rows);
     }
 
     private static Object value(Cell cell) {

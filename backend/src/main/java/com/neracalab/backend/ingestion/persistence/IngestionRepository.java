@@ -23,6 +23,7 @@ import com.neracalab.backend.ingestion.mapping.FilingInfo;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.PeriodRef;
 import com.neracalab.backend.ingestion.mapping.ShareCapital.ShareAt;
+import com.neracalab.backend.price.ValuationRepository;
 
 /**
  * Writes ingested filings with the same upsert semantics as the SQL data scripts.
@@ -39,10 +40,12 @@ public class IngestionRepository {
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
+    private final ValuationRepository valuations;
 
-    public IngestionRepository(JdbcClient jdbc, DataSource dataSource) {
+    public IngestionRepository(JdbcClient jdbc, DataSource dataSource, ValuationRepository valuations) {
         this.jdbc = jdbc;
         this.dataSource = dataSource;
+        this.valuations = valuations;
     }
 
     public record CompanyRow(long companyId, String ticker, String companyName, String legalName, String sector,
@@ -256,6 +259,33 @@ public class IngestionRepository {
         return stored.isPresent() ? WriteOutcome.UPDATED : WriteOutcome.INSERTED;
     }
 
+    /** Segment ids that have revenue stored for the period. */
+    public List<Long> segmentsWithRevenue(long periodId) {
+        return jdbc.sql("SELECT segment_id FROM segment_financial WHERE period_id = :p ORDER BY segment_id")
+                .param("p", periodId).query(Long.class).list();
+    }
+
+    /**
+     * Deletes the period's segment revenue of every segment not in {@code keep}: a breakdown is
+     * replaced as a whole, so a segment that only an older filing reported (e.g. a later year's
+     * comparative split "Wholesale" into "Wholesale" + "Export") is not counted twice.
+     *
+     * @return the names of the removed segments
+     */
+    @Transactional
+    public List<String> removeOtherSegmentRevenue(long periodId, List<Long> keep) {
+        if (keep.isEmpty()) {
+            throw new IllegalArgumentException("A breakdown keeps at least one segment");
+        }
+        List<String> removed = jdbc.sql("""
+                        SELECT s.segment_name FROM segment_financial sf JOIN segment s ON s.segment_id = sf.segment_id
+                        WHERE sf.period_id = :p AND sf.segment_id NOT IN (:keep) ORDER BY s.segment_name""")
+                .param("p", periodId).param("keep", keep).query(String.class).list();
+        jdbc.sql("DELETE FROM segment_financial WHERE period_id = :p AND segment_id NOT IN (:keep)")
+                .param("p", periodId).param("keep", keep).update();
+        return removed;
+    }
+
     // ------------------------------------------------------------------ shares
 
     /** Upserts a share snapshot; known values are never replaced by NULL. */
@@ -280,6 +310,11 @@ public class IngestionRepository {
     /** Re-runs V1.0.6: market_snapshot, valuation_snapshot and financial_metric for all companies. */
     public void refreshDerivedData() {
         new ResourceDatabasePopulator(new ClassPathResource(DERIVED_SCRIPT)).execute(dataSource);
+        // the script only inserts and updates: drop valuation metrics whose value became NULL (e.g. a
+        // re-ingested period without EBITDA), as the price refresh does
+        for (long companyId : jdbc.sql("SELECT company_id FROM company").query(Long.class).list()) {
+            valuations.deleteStaleValuationMetrics(companyId);
+        }
     }
 
     public record StoredPeriod(String period, boolean incomeStatement, boolean balanceSheet, boolean cashFlow,
