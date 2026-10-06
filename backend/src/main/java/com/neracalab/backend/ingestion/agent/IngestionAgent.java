@@ -20,6 +20,7 @@ import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
@@ -57,14 +58,28 @@ public class IngestionAgent {
     private final IngestionVerifier verifier;
     private final AgentProperties properties;
     private final JsonMapper json;
+    private final String model;
 
+    /**
+     * @param model the configured chat model ({@code spring.ai.openai.chat.model}, env {@code OPENAI_MODEL}).
+     *              It is set on every request: Spring AI 2.0's {@code OpenAiChatOptions} fills a missing model
+     *              with its own default ({@code gpt-5-mini}), and per-request options override the configured
+     *              default, so options built without a model silently switched every call to gpt-5-mini.
+     */
     public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
-                          AgentProperties properties, JsonMapper json) {
+                          AgentProperties properties, JsonMapper json,
+                          @Value("${spring.ai.openai.chat.model}") String model) {
         this.chatModel = chatModel;
         this.repository = repository;
         this.verifier = verifier;
         this.properties = properties;
         this.json = json;
+        this.model = model;
+    }
+
+    /** Per-request options with the configured model (never Spring AI's default, see the constructor). */
+    OpenAiChatOptions.Builder options() {
+        return OpenAiChatOptions.builder().model(model).temperature(properties.temperature());
     }
 
     // ------------------------------------------------------------------ structured outputs
@@ -168,7 +183,7 @@ public class IngestionAgent {
                 new SystemMessage(Prompts.PLANNER),
                 new UserMessage("Filing overview:\n" + overview + "\n\nTool catalog:\n" + tools
                         + "\n" + converter.getFormat())),
-                OpenAiChatOptions.builder().temperature(properties.temperature()).build());
+                options().build());
         String text = call(prompt, trace).getResult().getOutput().getText();
         IngestionPlan plan = converter.convert(text);
         if (plan == null || plan.steps() == null || plan.steps().isEmpty()) {
@@ -205,10 +220,9 @@ public class IngestionAgent {
                            AgentTrace trace, int round) {
         for (int iteration = 1; iteration <= properties.maxIterations(); iteration++) {
             Map<String, ToolCallback> offered = offeredTools(session, catalog);
-            OpenAiChatOptions options = OpenAiChatOptions.builder()
+            OpenAiChatOptions options = options()
                     .toolCallbacks(new ArrayList<>(offered.values()))
                     .parallelToolCalls(true)
-                    .temperature(properties.temperature())
                     .build();
             ChatResponse response = call(new Prompt(history, options), trace);
             AssistantMessage message = response.getResult().getOutput();
@@ -274,7 +288,7 @@ public class IngestionAgent {
 
                         %s""".formatted(round, toJson(plan), String.join("\n", actions), finalMessage,
                         toJson(verification), converter.getFormat()))),
-                OpenAiChatOptions.builder().temperature(properties.temperature()).build());
+                options().build());
         try {
             Reflection reflection = converter.convert(call(prompt, trace).getResult().getOutput().getText());
             if (reflection == null) {
@@ -302,7 +316,11 @@ public class IngestionAgent {
         for (int attempt = 0; ; attempt++) {
             trace.modelCall();
             try {
-                return chatModel.call(prompt);
+                ChatResponse response = chatModel.call(prompt);
+                if (response != null && response.getMetadata() != null) {
+                    trace.modelUsed(response.getMetadata().getModel());
+                }
+                return response;
             } catch (RuntimeException e) {
                 if (attempt >= properties.modelRetries() || !isTransient(e)) {
                     throw e;

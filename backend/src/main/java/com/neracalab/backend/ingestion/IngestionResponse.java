@@ -44,6 +44,6 @@ public record IngestionResponse(
     }
 
     public record Metrics(long durationMs, int modelCalls, int toolCalls, int toolErrors, int parallelToolGroups,
-                          int modelRetries) {
+                          int modelRetries, List<String> models) {
     }
 }

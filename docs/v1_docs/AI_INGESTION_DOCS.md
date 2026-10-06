@@ -51,7 +51,7 @@ The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of t
 | `rounds`                           | per execution round: verification and the reviewer's reflection           |
 | `savedStatements`, `savedSegments` | rows written per column (`INSERTED`, `UPDATED`, `KEPT_EXISTING`)          |
 | `verification`                     | final deterministic database read-back                                    |
-| `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups, model retries |
+| `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups, model retries, models the responses report |
 
 A typical filing takes 1-4 minutes and 10-30 model calls.
 
@@ -68,6 +68,15 @@ OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
 `application.yaml` imports it (`spring.config.import: optional:file:.env[.properties]`) and points
 the Spring AI OpenAI client at OpenRouter; real environment variables take precedence. Docker
 compose reads the same file and passes the values to the backend container at runtime.
+
+**Every request names `OPENAI_MODEL`.** Spring AI 2.0's `OpenAiChatOptions` fills a missing model
+with its own default, `gpt-5-mini`, and per-request options override the configured default. The
+agent's planner, executor and reviewer built their options without a model, so until this was fixed
+every ingestion call went to `openai/gpt-5-mini` on OpenRouter, whatever `OPENAI_MODEL` said (the
+stock screening was not affected: `LlmGateway` always sets its model). `IngestionAgent.options()` now
+sets the configured model on every request (`IngestionAgentModelTest` pins both the Spring AI default
+and the fix), and the job result lists the models the responses report (`metrics.models`, e.g.
+`["deepseek/deepseek-v4-flash-0731"]`), so a substitution is visible in the job.
 
 | Property                                | Default | Meaning                                         |
 |-----------------------------------------|---------|-------------------------------------------------|
@@ -274,6 +283,9 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
 | `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets; the revenue breakdowns of GGRM, HRTA and INDY FY2022 reconcile to revenue in both columns, and HRTA / INDY FY2022 equal their FY2023 filings' comparatives |
 | `FilingMapperInfrastructureTest` (unit) | the Infrastructure Industry taxonomy: all five SMDR filings map without errors or unclassified lines; capex includes the infrastructure labels (FY2025: -81,650,677); every comparative column equals the previous filing's current column except SMDR's own reclassification of 161,196 from "Other income" to "Other gains (losses)" in FY2024 operating income; no share count is guessed |
+| `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
+| `IngestionAgentModelTest` (unit) | Spring AI fills a missing model with `gpt-5-mini`; the agent's options name the configured model and the model a response reports is recorded in `metrics.models` |
+| `ConfiguredChatModel` (test helper) | the model the agent tests use, never written in Java: `spring.ai.openai.chat.model` from `application.yaml` (`${OPENAI_MODEL:<default>}`), with `OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default (the application's own precedence) |
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` -> `1xxxxxx` |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
@@ -285,7 +297,10 @@ Run the unit tests with `cd backend && ./mvnw test` (needs the Postgres on local
 stack from the start scripts, or `docker compose up -d postgres redis` in `backend/`).
 
 End-to-end check of this version (empty database, all six HRTA filings uploaded through the
-endpoint, `deepseek/deepseek-v4-flash-0731` via OpenRouter):
+endpoint via OpenRouter). Correction: these runs and every run below were made before the model fix
+(section 2), so they ran on `openai/gpt-5-mini`, not the configured `deepseek/deepseek-v4-flash-0731`.
+First run on DeepSeek after the fix: SMDR 2026-II, SUCCEEDED, 317 s, 12 model calls, 2 retried read
+timeouts, `metrics.models = ["deepseek/deepseek-v4-flash-0731"]`.
 
 | Filing       | Status    | Duration | Model calls | Tool calls | Tool errors | Parallel groups | Rounds |
 |--------------|-----------|---------:|------------:|-----------:|------------:|----------------:|-------:|

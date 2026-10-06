@@ -46,7 +46,8 @@ class IngestionAgentRetryTest {
     }
 
     private static IngestionAgent agent(ChatModel model) {
-        return new IngestionAgent(model, null, null, new AgentProperties(30, 2, 0.0, 2, Duration.ofMillis(1)), null);
+        return new IngestionAgent(model, null, null, new AgentProperties(30, 2, 0.0, 2, Duration.ofMillis(1)), null,
+                ConfiguredChatModel.name());
     }
 
     private static RuntimeException readTimeout() {

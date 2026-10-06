@@ -131,7 +131,9 @@ docker compose down              # stop (add -v to also delete the database volu
 Configuration lives in `backend/.env` (copy `backend/.env.example`). It holds the AI settings
 (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`) and optional overrides (`DB_NAME`,
 `DB_USERNAME`, `DB_PASSWORD`, `REDIS_PASSWORD`, `JAVA_OPTS`). The file is ignored by git and docker;
-never commit keys. Use real passwords outside local development.
+never commit keys. Use real passwords outside local development. The AI upload sends `OPENAI_MODEL` with every
+request (Spring AI 2.0 otherwise substitutes its default `gpt-5-mini`, which earlier versions of the
+upload did); each job's `metrics.models` shows the model OpenRouter answered with.
 
 To run the backend from the IDE instead, start only the infrastructure with
 `docker compose up -d postgres redis` (in `backend/`); `application.yaml` defaults to `localhost`.
@@ -358,7 +360,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 181 tests
+(cd backend && ./mvnw test)                      # 183 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -368,7 +370,10 @@ FY2022 comparatives of the FY2023 filing; `IngestionRepositorySegmentsTest` chec
 own filing replaces its whole revenue breakdown (rolled back); `IngestionVerifierOverdraftTest` checks that
 GGRM's cash net of bank overdrafts (FY2022, FY2024, FY2025) is accepted as filed;
 `IngestionAgentRetryTest` that a model call is retried after a read timeout but not after a
-permanent error; `PriceIngestionServiceTest` also converts a listing quoted in another currency and
+permanent error; `IngestionAgentModelTest` that every ingestion request names the configured model
+(Spring AI's own default would be `gpt-5-mini`). Both take the model from the configuration, not from
+Java code: `ConfiguredChatModel` resolves `spring.ai.openai.chat.model` of `application.yaml` with
+`OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default; `PriceIngestionServiceTest` also converts a listing quoted in another currency and
 `EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
 derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
