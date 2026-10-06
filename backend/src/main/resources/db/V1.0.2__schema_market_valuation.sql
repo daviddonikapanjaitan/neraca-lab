@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS price_daily (
     CONSTRAINT ck_price_daily_volume CHECK (volume IS NULL OR volume >= 0)
 );
 
-COMMENT ON TABLE  price_daily IS 'Daily prices in company.currency, one row per trading day.';
+COMMENT ON TABLE  price_daily IS 'Daily prices in company.currency, one row per trading day. A listing quoted in another currency (INDY: IDR quote, USD reporting) is converted with fx_rate_daily.';
 COMMENT ON COLUMN price_daily.adjusted_close IS 'Close adjusted for splits and cash dividends (provider adjustment).';
 COMMENT ON COLUMN price_daily.volume IS 'Traded volume in shares.';
 

@@ -98,7 +98,9 @@ neraca_lab/
 │                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
 │                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
 │                                and INDY (2022 .. 2025 annual, 2026-II)
-│                                xlsx: load them with the upload (Ingestion page)
+│                                xlsx: load them with the upload (Ingestion page);
+│                                SMDR (2022 .. 2025 annual, 2026-II): source files only, not yet checked;
+│                                the mapper reads no share capital from them (no share counts)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
@@ -194,8 +196,9 @@ it, a later filing's comparative only fills a period without one (issuers re-cut
 years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
 accepted as filed; a model call that times out or hits a provider error is retried
 (`neracalab.ingestion.model-retries`, default 2). Values are verified at the stored column scale (e.g. INDY's 16-decimal
-USD EPS as `NUMERIC(20,8)`); the pre-2023 revenue sheets are read too. USD reporters (INDY) get no
-share counts, since the par value cannot be inferred from USD share capital. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
+USD EPS as `NUMERIC(20,8)`); the pre-2023 revenue sheets are read too. When no par value fits (USD
+share capital, INDY), shares outstanding come from an exact EPS denominator (INDY FY2023: 5,202,692,000)
+and periods without a count of their own use the latest share snapshot. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
 
 A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
 `uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
@@ -258,6 +261,13 @@ the frontend only reads the database. Per job:
 3. One transaction: upsert `price_daily`, then recalculate the company's `market_snapshot`,
    `valuation_snapshot` (period ends, every earlier valuation date, the new latest day) and VALUATION
    rows of `financial_metric`, with the formulas of `V1.0.6`.
+
+`price_daily` is in the company's reporting currency. A listing quoted in another currency (INDY:
+IDR on IDX, reports in USD) is converted before it is stored: each day / the ECB USD/IDR reference
+rate of the previous FX day (Frankfurter API, stored in `fx_rate_daily`; one extra request), 8
+decimals; days without a rate in the 7 days before are not stored. Yahoo's own `USDIDR=X` is not used
+(days off by a factor of 10). The UI shows prices and EPS below 1 with 6 decimals. Details:
+[`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 2.
 
 Polite crawling: one request at a time with a random 1-2 s pause, a browser User-Agent and one HTTP
 client with a cookie store. On HTTP 429 the queue pauses 15, 30, then 60 minutes and retries the
@@ -346,7 +356,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 153 tests
+(cd backend && ./mvnw test)                      # 169 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -356,7 +366,9 @@ FY2022 comparatives of the FY2023 filing; `IngestionRepositorySegmentsTest` chec
 own filing replaces its whole revenue breakdown (rolled back); `IngestionVerifierOverdraftTest` checks that
 GGRM's cash net of bank overdrafts (FY2022, FY2024, FY2025) is accepted as filed;
 `IngestionAgentRetryTest` that a model call is retried after a read timeout but not after a
-permanent error; `SameAsStoredTest` that filing values are compared at the stored column scale
+permanent error; `PriceIngestionServiceTest` also converts a listing quoted in another currency and
+`EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
+derives INDY's share count from the FY2023 EPS and no count from the other INDY filings; `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert

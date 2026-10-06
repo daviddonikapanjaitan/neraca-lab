@@ -62,6 +62,11 @@ class YahooPriceProviderTest {
         assertThat(PacedHttpClient.retryAfter(null)).isNull();
     }
 
+    @Test
+    void anIdxListingTradesInRupiah() {
+        assertThat(Exchange.IDX.currency()).isEqualTo("IDR");
+    }
+
     private static String resource() throws IOException {
         try (InputStream in = YahooPriceProviderTest.class
                 .getResourceAsStream("/price/yahoo_HRTA.JK_2026-06-10_2026-06-17.json")) {

@@ -111,8 +111,11 @@ values in older days, or after switching the provider. Both send one request per
    - holiday placeholders without a close (Yahoo sends `null` in every array),
    - zero-volume rows with open = high = low = close (holiday rows repeating the previous close),
    - rows the `price_daily` checks would reject (close <= 0, high < low, volume < 0);
-   one bar per date (the last one wins). The provider's currency must equal `company.currency`,
-   otherwise nothing is stored.
+   one bar per date (the last one wins).
+   **Currency.** `price_daily` is in `company.currency`. A listing that trades in another currency
+   than the company reports in is converted (see "Listings quoted in another currency" below); the
+   listing currency is the provider's (`meta.currency` of Yahoo), or the exchange's when the provider
+   does not say (EODHD; IDX: IDR).
 3. **Overlap check.** When close or adjusted close of the re-fetched latest stored day differ from
    the stored values, the provider has re-based its history (a dividend or split after that day
    changes every earlier adjusted close; Yahoo's `close` is split-adjusted too). The full history is
@@ -133,6 +136,36 @@ exactly the rows of `V1.0.6`. A company without financial statements gets prices
 snapshots (market cap) but no valuation snapshots.
 
 Prices are rounded to 4 decimals (Yahoo sends binary floats such as `2033.51953125`), like the seed.
+
+### Listings quoted in another currency (INDY)
+
+INDY trades on IDX in IDR but reports in USD. Storing its IDR prices next to USD statements would make
+every valuation wrong by a factor of about 17,900, so the ingestion used to stop with "INDY.JK is
+quoted in IDR but INDY reports in USD; nothing stored". Now the prices are converted into the
+reporting currency before they are stored, so `price_daily` stays in `company.currency` and every
+valuation query, view and API works unchanged:
+
+| Step | Rule |
+|------|------|
+| Rates | ECB euro foreign exchange reference rates through the Frankfurter API (`GET https://api.frankfurter.dev/v1/{from}..{to}?base=USD&symbols=IDR`, free, no key, one request per ingestion), stored in `fx_rate_daily` (`source = 'ecb'`) |
+| Rate of a day | the rate of the last FX day **before** the trading day (Monday uses Friday's). The ECB fixes around 16:00 CET, after the IDX close, so the trading day's own rate is unknown at the close; using it would also make a run before the fixing differ from a later one, which the next run would take for a provider re-adjustment |
+| Stored rates | only days before the last completed trading day; only rates of the active source are read |
+| Conversion | open, high, low, close, adjusted close / rate, half-up to the 8 decimals of `price_daily`; volume (shares) unchanged. INDY 2026-10-05: IDR 2,570 / 17,950 (2026-10-02) = USD 0.14317549 |
+| No rate | a bar without a rate in the 7 days before it is not stored (counted as skipped, `conversion.barsWithoutRate`), never guessed |
+| Result | `conversion`: listing and stored currency, `fxSource` (`ecb USD/IDR`), rates received, bars without a rate; shown in the job detail ("Currency") |
+
+Yahoo's own `USDIDR=X` is deliberately not used: its history has days off by a factor of 10
+(888.11 on 2010-11-01, 892 on 2012-02-07), weeks of a stale 9,612.45 (Oct-Dec 2013) and other bad
+ticks (15,069.40 on 2024-12-26 against about 16,200), which no outlier threshold separates from the
+real 2008 moves. The ECB series has a rate for every TARGET business day (no gap over 5 days since
+2008). Verified on INDY: all 4,404 stored days (2008-06-11 .. 2026-10-05) were recomputed
+independently from the raw Yahoo IDR closes and the raw ECB rates, 0 close differences.
+
+Market snapshots need share counts. INDY's come from its FY2023 filing (5,202,692,000, derived from
+the exact EPS denominator, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so its market
+caps start on 2022-01-03 (the first trading day after the first share snapshot, 2021-12-31); earlier
+prices have no market cap. INDY on 2026-10-05: USD 0.14317549 x 5,202,692,000 = USD 744.9 million
+(Rp 2,570 x 5,202,692,000 = Rp 13.4 trillion).
 
 ## 3. Polite crawling
 
@@ -163,7 +196,8 @@ still active are marked `FAILED` (Interrupted) at the next start ([INGESTION_JOB
 | Provider            | Request                                                                                                          | Symbol (IDX) | Notes                                                                                                   |
 |---------------------|------------------------------------------------------------------------------------------------------------------|--------------|---------------------------------------------------------------------------------------------------------|
 | `yahoo` (default)   | `GET https://query1.finance.yahoo.com/v8/finance/chart/HRTA.JK?period1=..&period2=..&interval=1d&events=div,split&includeAdjustedClose=true` | `HRTA.JK`    | unofficial, no key; `close` split-adjusted, `adjclose` split- and dividend-adjusted; dates from `meta.exchangeTimezoneName`; 404 / `chart.error` "Not Found" = unknown symbol |
-| `eodhd`             | `GET https://eodhd.com/api/eod/HRTA.JK?from=..&to=..&period=d&order=a&fmt=json&api_token=..`                     | `HRTA.JK`    | paid API key; `close` raw, `adjusted_close` split- and dividend-adjusted; no currency in the response; 401 / 402 / 403 = token or plan limit. Not yet tested against the live API |
+| `eodhd`             | `GET https://eodhd.com/api/eod/HRTA.JK?from=..&to=..&period=d&order=a&fmt=json&api_token=..`                     | `HRTA.JK`    | paid API key; `close` raw, `adjusted_close` split- and dividend-adjusted; no currency in the response (the exchange's currency is assumed: IDX = IDR); 401 / 402 / 403 = token or plan limit. Not yet tested against the live API |
+| exchange rates (`EcbFxRateProvider`) | `GET https://api.frankfurter.dev/v1/2026-09-28..2026-10-05?base=USD&symbols=IDR` | -            | ECB reference rates, independent of `provider`; used only for listings quoted in another currency than the company reports in; 404 = unknown currency |
 
 The exchange suffix is a `switch` over `Exchange` in each provider, so adding an exchange constant
 does not compile until both providers map it. Error messages name host and path only, never the
@@ -186,6 +220,7 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 | `connect-timeout`, `request-timeout` | `10s`, `30s`        | HTTP timeouts                                                             |
 | `job-history`                | `500`                       | finished jobs kept in memory                                              |
 | `yahoo.base-url`             | `https://query1.finance.yahoo.com` | `query2.finance.yahoo.com` serves the same API                     |
+| `fx.base-url`                | `https://api.frankfurter.dev/v1` | ECB reference rates for listings quoted in another currency (INDY) |
 | `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: queues every active company of `schedule.exchange`           |
 | `schedule.cron`, `schedule.zone`, `schedule.exchange` | `0 30 17 * * MON-FRI`, `Asia/Jakarta`, `IDX` | when and for which exchange              |
 
@@ -200,13 +235,18 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
   split is wrong until share counts are adjusted (a `corporate_action` based adjustment is not
   implemented).
 - **Exchange holidays** are not known: a holiday simply returns no bar.
+- **Yahoo's adjusted close jitters** on older days: two identical requests return different
+  `adjclose` floats for about half of INDY's history (in the 4th decimal after rounding). Recent days
+  are stable, so the overlap check is not affected, but a full re-fetch rewrites such days with
+  differences of about 1e-6 (relative).
 - **The queue is in memory** (section 3); the job history is kept in `ingestion_job`.
 
 ## 7. Tests
 
 | Test                          | Covers                                                                                                                                       |
 |-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `PriceIngestionServiceTest`   | against the Docker Postgres with a stub provider, each test rolled back: incremental fetch with new rows, market / valuation snapshot and metrics of the new day; intraday cutoff; no request when up to date; full re-fetch after re-adjustment; currency mismatch stores nothing; first ingestion of a company without prices; the company-scoped valuation SQL produces exactly the `V1.0.6` rows |
+| `PriceIngestionServiceTest`   | against the Docker Postgres with a stub provider, each test rolled back: incremental fetch with new rows, market / valuation snapshot and metrics of the new day; intraday cutoff; no request when up to date; full re-fetch after re-adjustment; first ingestion of a company without prices; the company-scoped valuation SQL produces exactly the `V1.0.6` rows; a listing quoted in another currency: conversion with the previous FX day's rate at 8 decimals, rates of the trading day and before the window not used, bars without a rate dropped, EODHD (no currency) converted with the exchange currency, same-currency listings untouched, no rates = nothing stored, rates of another source ignored |
+| `EcbFxRateProviderTest`       | a real Frankfurter response: business days only, quote units per base unit; wrong base and missing rates rejected; days without the quote ignored |
 | `PriceIngestionQueueTest`     | 429 back-off and retry of the same job, run stop and failed queued jobs, back-off reset after a success, other failures, one active job per company |
 | `PriceIngestionControllerTest`| the endpoints over MockMvc: 202 + `Location`, job polling, queue listing, 400 / 404                                                           |
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |

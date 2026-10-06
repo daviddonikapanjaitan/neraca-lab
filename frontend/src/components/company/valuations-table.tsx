@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { formatCompact, formatDate, formatMultiple, formatNumber, formatPercent } from "@/lib/format"
+import { formatCompact, formatDate, formatMultiple, formatPercent, formatPrice } from "@/lib/format"
 import type { Valuation } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -22,11 +22,11 @@ type Column = {
 }
 
 const COLUMNS: Column[] = [
-  { label: "Price", title: "Last close on or before the valuation date", render: (v) => formatNumber(v.sharePrice, 2) },
+  { label: "Price", title: "Last close on or before the valuation date", render: (v) => formatPrice(v.sharePrice) },
   { label: "Market cap", title: "Price x shares outstanding", render: (v) => formatCompact(v.marketCap) },
   { label: "EV", title: "Market cap + debt incl. leases - cash and investments + NCI", render: (v) => formatCompact(v.enterpriseValue) },
   { label: "Revenue TTM", title: "Trailing twelve months revenue", render: (v) => formatCompact(v.revenueTtm) },
-  { label: "EPS TTM", title: "TTM profit to parent / shares outstanding", render: (v) => formatNumber(v.epsTtm, 2) },
+  { label: "EPS TTM", title: "TTM profit to parent / shares outstanding", render: (v) => formatPrice(v.epsTtm) },
   { label: "P/E", title: "Price / EPS TTM", render: (v) => formatMultiple(v.peRatio) },
   { label: "P/B", title: "Market cap / equity attributable to the parent", render: (v) => formatMultiple(v.pbRatio) },
   { label: "P/S", title: "Market cap / revenue TTM", render: (v) => formatMultiple(v.psRatio) },

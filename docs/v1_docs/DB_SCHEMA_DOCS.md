@@ -404,7 +404,8 @@ Index `ix_segment_financial_period (period_id)`.
 
 ### 4.3 `price_daily`
 
-Daily prices in `company.currency`, one row per trading day.
+Daily prices in `company.currency`, one row per trading day. A listing quoted in another currency
+(INDY: IDR on IDX, reports in USD) is converted with `fx_rate_daily` before it is stored.
 
 | Column           | Type            | Null | Description                                             |
 |------------------|-----------------|------|---------------------------------------------------------|
@@ -588,7 +589,25 @@ hashed with BCrypt. Rules and APIs: [AUTH_DOCS.md](AUTH_DOCS.md).
 | `user_roles`       | `user_id` (FK, cascade), `role_id` (FK, cascade) |       | PK `(user_id, role_id)`                                               |
 | `user_sessions`    | `token_hash`, `user_id` (FK, cascade), `created_at`, `expires_at` | | SHA-256 of the bearer token, unique; `expires_at > created_at`      |
 
-### 4.10 AI stock screening (`V1.0.10__schema_screening.sql`)
+### 4.10 `fx_rate_daily` (`V1.0.11__schema_fx.sql`)
+
+Daily reference exchange rates used by the price ingestion to convert listing prices into the
+reporting currency ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)).
+
+| Column           | Type            | Null | Description                                                       |
+|------------------|-----------------|------|-------------------------------------------------------------------|
+| `fx_rate_id`     | `BIGSERIAL`     | no   | PK                                                                |
+| `base_currency`  | `CHAR(3)`       | no   | e.g. `USD`                                                        |
+| `quote_currency` | `CHAR(3)`       | no   | e.g. `IDR`                                                        |
+| `rate_date`      | `DATE`          | no   | ECB business day                                                  |
+| `rate`           | `NUMERIC(20,8)` | no   | quote units per 1 base unit (USD/IDR 17,913 on 2026-10-05)       |
+| `source`         | `VARCHAR(20)`   | no   | `ecb` (ECB reference rates via Frankfurter)                       |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | no |                                                             |
+
+Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)`,
+`ck_fx_rate_daily_positive` (`rate > 0`), `ck_fx_rate_daily_currencies` (ISO codes, base <> quote).
+
+### 4.11 AI stock screening (`V1.0.10__schema_screening.sql`)
 
 | Table                   | Content                                                                                          |
 |-------------------------|--------------------------------------------------------------------------------------------------|
@@ -621,6 +640,11 @@ One row per company per reporting period. Partial-year flows are annualised in t
 | Headline figures       | `revenue`, `gross_profit`, `ebit`, `ebitda`, `net_income`, `net_income_to_parent`, `operating_cash_flow`, `capital_expenditure`, `free_cash_flow`, `fcf_after_leases`, `cash_and_investments`, `current_assets`, `total_assets`, `current_liabilities`, `total_liabilities`, `total_debt`, `net_debt`, `shareholders_equity`, `total_equity`, `tangible_book_value`, `ncav`, `working_capital`, `shares`, `non_controlling_interest` |
 | Balance sheet strength | `current_ratio`, `quick_ratio`, `cash_ratio`, `debt_to_equity`, `net_debt_to_equity`, `liabilities_to_equity`, `equity_to_assets`, `net_debt_to_ebitda_annualized`                                                                                                                                                                                                                                                                   |
 | Per share              | `book_value_per_share`, `tangible_book_per_share`, `cash_per_share`, `net_cash_per_share`, `ncav_per_share`, `fcf_per_share`, `eps`                                                                                                                                                                                                                                                                                                  |
+
+`shares` is the period's own count (`balance_sheet.shares_outstanding`, else
+`income_statement.basic_shares`), else the latest `share_snapshot.shares_outstanding` on or before the
+period end, the count `market_snapshot` uses. The fallback matters only for periods whose filing gives
+no count (INDY: the USD filings give one only for FY2023); every other company's figures are unchanged.
 | Cash generation        | `fcf_margin`, `ocf_to_net_income`, `capex_to_revenue`                                                                                                                                                                                                                                                                                                                                                                                |
 | Profitability          | `gross_margin`, `operating_margin`, `ebitda_margin`, `net_margin`, `effective_tax_rate`, `interest_coverage`, `roe_annualized`, `roa_annualized`, `roic_annualized`                                                                                                                                                                                                                                                                  |
 | Efficiency (days)      | `inventory_days`, `receivable_days`, `payable_days`, `cash_conversion_cycle_days`                                                                                                                                                                                                                                                                                                                                                    |

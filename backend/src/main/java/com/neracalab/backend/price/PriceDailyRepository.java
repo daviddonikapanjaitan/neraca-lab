@@ -5,8 +5,10 @@ import java.sql.Types;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.List;
+import java.util.NavigableMap;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Repository;
 
 import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.price.provider.DailyBar;
+import com.neracalab.backend.price.provider.FxRateProvider.FxRate;
 
 /** Companies and price_daily rows for the price ingestion. */
 @Repository
@@ -113,5 +116,40 @@ public class PriceDailyRepository {
             changed += Math.max(count, 0);
         }
         return changed;
+    }
+
+    // ------------------------------------------------------------------ exchange rates
+
+    private static final String FX_UPSERT = """
+            INSERT INTO fx_rate_daily (base_currency, quote_currency, rate_date, rate, source)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT ON CONSTRAINT uq_fx_rate_daily DO UPDATE SET
+                rate = EXCLUDED.rate, source = EXCLUDED.source, updated_at = now()
+            WHERE fx_rate_daily.rate IS DISTINCT FROM EXCLUDED.rate""";
+
+    private static final int[] FX_UPSERT_TYPES = {Types.CHAR, Types.CHAR, Types.DATE, Types.NUMERIC, Types.VARCHAR};
+
+    /** Upserts daily rates (quote units per 1 base unit) of {@code source}; non-positive rates are ignored. */
+    public void upsertFxRates(String base, String quote, String source, List<FxRate> rates) {
+        List<Object[]> args = rates.stream()
+                .filter(r -> r.date() != null && r.rate() != null && r.rate().signum() > 0)
+                .map(r -> new Object[] {base, quote, r.date(), r.rate(), source})
+                .toList();
+        if (!args.isEmpty()) {
+            jdbcTemplate.batchUpdate(FX_UPSERT, args, FX_UPSERT_TYPES);
+        }
+    }
+
+    /** Stored rates of base/quote delivered by {@code source}, from {@code from} to {@code to} (inclusive), by date. */
+    public NavigableMap<LocalDate, BigDecimal> fxRates(String base, String quote, String source, LocalDate from, LocalDate to) {
+        NavigableMap<LocalDate, BigDecimal> rates = new TreeMap<>();
+        jdbc.sql("""
+                        SELECT rate_date, rate FROM fx_rate_daily
+                        WHERE base_currency = :b AND quote_currency = :q AND source = :s
+                          AND rate_date BETWEEN :from AND :to""")
+                .param("b", base).param("q", quote).param("s", source).param("from", from).param("to", to)
+                .query((rs, i) -> rates.put(rs.getObject("rate_date", LocalDate.class), rs.getBigDecimal("rate")))
+                .list();
+        return rates;
     }
 }

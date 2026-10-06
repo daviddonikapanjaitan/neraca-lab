@@ -28,7 +28,7 @@ class PriceIngestionQueueTest {
 
     private static final CompanyRef HRTA = new CompanyRef(1, Exchange.IDX, "HRTA", "IDR");
     private static final CompanyRef INDF = new CompanyRef(7, Exchange.IDX, "INDF", "IDR");
-    private static final Result OK = new Result("fake", 1, null, null, false, false, 0, 0, 0, 0, 0, null, null);
+    private static final Result OK = new Result("fake", 1, null, null, false, false, 0, 0, 0, 0, 0, null, null, null);
 
     private PriceIngestionQueue queue;
 
@@ -159,7 +159,7 @@ class PriceIngestionQueueTest {
         private final Map<Long, Integer> calls = new HashMap<>();
 
         ScriptedService() {
-            super(null, null, null, null, TestPriceProperties.defaults());
+            super(null, null, null, null, null, TestPriceProperties.defaults());
         }
 
         @SafeVarargs

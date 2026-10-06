@@ -14,6 +14,7 @@ public final class TestPriceProperties {
                 "Mozilla/5.0 test", Duration.ofSeconds(10), Duration.ofSeconds(30), 500,
                 new PriceProperties.Yahoo("https://query1.finance.yahoo.com"),
                 new PriceProperties.Eodhd("https://eodhd.com", ""),
+                new PriceProperties.Fx("https://api.frankfurter.dev/v1"),
                 new PriceProperties.Schedule(false, "0 30 17 * * MON-FRI", "Asia/Jakarta", "IDX"));
     }
 

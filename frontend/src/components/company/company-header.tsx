@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
-import { EMPTY, formatCompact, formatDate, formatNumber } from "@/lib/format"
+import { EMPTY, formatCompact, formatDate, formatPrice } from "@/lib/format"
 import type { CompanyDetail } from "@/lib/types"
 
 export function CompanyHeader({ detail }: { detail: CompanyDetail }) {
@@ -40,7 +40,7 @@ export function CompanyHeader({ detail }: { detail: CompanyDetail }) {
           <div>
             <p className="text-xs text-muted-foreground">Last close</p>
             <p className="text-2xl font-semibold tracking-tight tabular-nums">
-              {latestPrice ? formatNumber(latestPrice.closePrice, 2) : EMPTY}
+              {latestPrice ? formatPrice(latestPrice.closePrice) : EMPTY}
             </p>
             <p className="text-[11px] text-muted-foreground">
               {latestPrice ? `${company.currency ?? ""} · ${formatDate(latestPrice.tradingDate)}` : "No price data"}

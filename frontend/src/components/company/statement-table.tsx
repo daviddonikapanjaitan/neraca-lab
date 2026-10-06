@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { formatDate, formatNumber, formatScaled, type AmountScale } from "@/lib/format"
+import { formatDate, formatPrice, formatScaled, type AmountScale } from "@/lib/format"
 import type { LineItem } from "@/lib/statements"
 import type { Period } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -92,7 +92,7 @@ export function StatementTable<T>({
                       typeof value === "number" && value < 0 && "text-rose-600 dark:text-rose-400"
                     )}
                   >
-                    {item.unscaled ? formatNumber(value, 2) : formatScaled(value, scale)}
+                    {item.unscaled ? formatPrice(value) : formatScaled(value, scale)}
                   </TableCell>
                 )
               })}

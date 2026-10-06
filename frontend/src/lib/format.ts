@@ -16,6 +16,15 @@ export function formatNumber(value: number | null | undefined, maximumFractionDi
   return value.toLocaleString(LOCALE, { maximumFractionDigits, minimumFractionDigits: 0 })
 }
 
+/**
+ * Share price: 2 decimals, 6 below 1 so that prices converted into a reporting currency stay
+ * readable (INDY trades in IDR but reports in USD: 0.14666667 -> "0.146667", not "0.15").
+ */
+export function formatPrice(value: number | null | undefined): string {
+  if (!isNumber(value)) return EMPTY
+  return formatNumber(value, Math.abs(value) >= 1 ? 2 : 6)
+}
+
 /** 33806129682661 -> "33.81T" (with currency: "IDR 33.81T") */
 export function formatCompact(value: number | null | undefined, currency?: string | null): string {
   if (!isNumber(value)) return EMPTY

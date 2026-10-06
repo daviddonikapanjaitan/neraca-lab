@@ -57,6 +57,14 @@ interface PriceResult {
   unchanged?: number
   latestTradingDate?: string | null
   valuation?: { marketSnapshots?: number; valuationSnapshots?: number; valuationMetrics?: number } | null
+  /** Set when the listing trades in another currency than the company reports in (INDY: IDR -> USD). */
+  conversion?: {
+    listingCurrency?: string
+    priceCurrency?: string
+    fxSource?: string | null
+    fxRatesReceived?: number
+    barsWithoutRate?: number
+  } | null
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -147,6 +155,16 @@ function PriceSummary({ result }: { result: PriceResult }) {
         {count(result.barsReceived)} received · {count(result.barsSkipped)} skipped
       </Field>
       <Field label="Latest day">{formatDate(result.latestTradingDate)}</Field>
+      {result.conversion && (
+        <Field label="Currency">
+          Quoted in {result.conversion.listingCurrency}, stored in {result.conversion.priceCurrency}
+          {result.conversion.fxSource
+            ? ` (${result.conversion.fxSource}, ${count(result.conversion.fxRatesReceived)} rates)`
+            : ""}
+          {(result.conversion.barsWithoutRate ?? 0) > 0 &&
+            ` · ${count(result.conversion.barsWithoutRate)} days without a rate not stored`}
+        </Field>
+      )}
       {result.valuation && (
         <Field label="Valuation">
           {count(result.valuation.marketSnapshots)} market snapshots · {count(result.valuation.valuationSnapshots)}{" "}

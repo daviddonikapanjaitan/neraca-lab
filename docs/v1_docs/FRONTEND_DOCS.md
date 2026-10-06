@@ -132,7 +132,7 @@ Sidebar entry below Companies. Everything runs in the background
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
 | Jobs table                 | type tabs (all / financial statements / prices), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
-| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days and valuation), raw JSON |
+| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
 upload, so a failure (e.g. backend unreachable) shows a message instead of a broken download.
@@ -186,7 +186,10 @@ permissions, username, email and full name read-only, address, phone and date of
 
 `src/lib/format.ts` uses a fixed `en-US` locale so server and client render identical text (no
 hydration mismatches). Missing values show `—`. Compact amounts use `K / M / B / T`
-(`IDR 33.81T`); dates are `30 Jun 2026` (parsed from ISO strings, no time-zone shifts).
+(`IDR 33.81T`); dates are `30 Jun 2026` (parsed from ISO strings, no time-zone shifts). Share prices and
+per-share amounts (`formatPrice`: header, market panel, valuations, EPS and share rows of the
+statements) keep 2 decimals, 6 below 1, so prices converted into a reporting currency stay readable
+(INDY in USD: `0.143175`, not `0.14`).
 
 ## 5. Structure
 

@@ -14,16 +14,18 @@ import java.util.Locale;
  */
 public enum Exchange {
 
-    IDX("Indonesia Stock Exchange", "Indonesia", ZoneId.of("Asia/Jakarta"));
+    IDX("Indonesia Stock Exchange", "Indonesia", ZoneId.of("Asia/Jakarta"), "IDR");
 
     private final String displayName;
     private final String country;
     private final ZoneId zone;
+    private final String currency;
 
-    Exchange(String displayName, String country, ZoneId zone) {
+    Exchange(String displayName, String country, ZoneId zone, String currency) {
         this.displayName = displayName;
         this.country = country;
         this.zone = zone;
+        this.currency = currency;
     }
 
     public String code() {
@@ -41,6 +43,14 @@ public enum Exchange {
     /** Time zone of the trading sessions; trading dates are calendar days in this zone. */
     public ZoneId zone() {
         return zone;
+    }
+
+    /**
+     * ISO 4217 currency the listings trade in (IDX: IDR). A company may report in another currency
+     * (e.g. INDY reports in USD); its prices are then converted, see PriceIngestionService.
+     */
+    public String currency() {
+        return currency;
     }
 
     /** Resolves a code case-insensitively, e.g. {@code "idx"} -> {@link #IDX}. */

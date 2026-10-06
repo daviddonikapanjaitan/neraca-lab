@@ -730,6 +730,7 @@ public final class FilingMapper {
         }
         List<Position> positions = new ArrayList<>();
         Map<String, BigDecimal[]> startEnd = new LinkedHashMap<>();   // sheet -> {start common, end common}
+        Map<String, BigDecimal[]> treasuryStartEnd = new LinkedHashMap<>();   // sheet -> {start, end}, 0 when none
         for (String sheetName : List.of(IdxSheets.EQUITY, IdxSheets.EQUITY_PRIOR_YEAR)) {
             RawSheet sheet = workbook.sheet(sheetName).orElse(null);
             if (sheet == null) {
@@ -756,6 +757,7 @@ public final class FilingMapper {
             LocalDate startDate = (currentYear ? info.current() : info.prior()).start().minusDays(1);
             LocalDate endDate = (currentYear ? info.current() : info.prior()).end();
             BigDecimal[] se = new BigDecimal[2];
+            BigDecimal[] te = new BigDecimal[2];
             for (int r = headerRow + 1; r < sheet.rowCount(); r++) {
                 String english = sheet.text(r, sheet.width(r) - 1);
                 boolean start = "Equity position, beginning of the period".equals(english);
@@ -769,14 +771,16 @@ public final class FilingMapper {
                     continue;
                 }
                 se[start ? 0 : 1] = common;
+                te[start ? 0 : 1] = treasury == null ? ZERO : treasury;
                 positions.add(new Position(start ? startDate : endDate, common, treasury,
                         sheetName + (start ? " beginning" : " end") + " of period"));
             }
             startEnd.put(sheetName, se);
+            treasuryStartEnd.put(sheetName, te);
         }
         if (positions.isEmpty()) {
             checks.add(Check.warning("share_capital", "No share capital in the statements of changes in equity"));
-            return new ShareCapital(null, List.of(), null, null, checks);
+            return new ShareCapital(null, null, List.of(), null, null, checks);
         }
 
         BigDecimal[] currentYear = startEnd.get(IdxSheets.EQUITY);
@@ -785,20 +789,44 @@ public final class FilingMapper {
         if (par == null) {
             par = inferParValue(StatementColumn.PRIOR_PERIOD, priorYear == null ? null : priorYear[1], checks);
         }
-        if (par == null) {
-            checks.add(Check.warning("par_value", "Par value could not be inferred uniquely from share capital and EPS; "
-                    + "share counts are left empty"));
-        } else {
+        EpsShares epsShares = null;
+        String basis = null;
+        if (par != null) {
+            basis = "par value " + par.toPlainString();
             checks.add(Check.ok("par_value", "Inferred par value " + par.toPlainString() + " per share"));
+        } else {
+            epsShares = sharesFromEps(StatementColumn.CURRENT_PERIOD, currentYear, treasuryStartEnd.get(IdxSheets.EQUITY));
+            if (epsShares == null) {
+                epsShares = sharesFromEps(StatementColumn.PRIOR_PERIOD, priorYear, treasuryStartEnd.get(IdxSheets.EQUITY_PRIOR_YEAR));
+            }
+            if (epsShares != null) {
+                basis = epsShares.basis();
+                checks.add(Check.ok("shares_from_eps", "Par value not inferable (share capital in "
+                        + info.currency() + "); shares outstanding from the EPS denominator: " + basis));
+            } else {
+                checks.add(Check.warning("par_value", "Par value could not be inferred uniquely from share capital and EPS, "
+                        + "and the EPS is not precise enough to give the share count; share counts are left empty"));
+            }
         }
 
-        BigDecimal weightedCurrent = weighted(currentYear, par);
-        BigDecimal weightedPrior = weighted(priorYear, par);
+        // weighted shares only for the period whose EPS gave the count: another period's EPS may use another
+        // denominator (INDY's FY2022 EPS implies 5,210,191,995 shares, FY2023's exactly 5,202,692,000)
+        BigDecimal weightedCurrent = epsShares == null ? weighted(currentYear, par)
+                : epsShares.column() == StatementColumn.CURRENT_PERIOD ? epsShares.shares() : null;
+        BigDecimal weightedPrior = epsShares == null ? weighted(priorYear, par)
+                : epsShares.column() == StatementColumn.PRIOR_PERIOD ? epsShares.shares() : null;
         Map<LocalDate, ShareAt> byDate = new LinkedHashMap<>();
         for (Position p : positions) {
             boolean treasury = p.treasury() != null && p.treasury().signum() != 0;
-            BigDecimal shares = par == null || treasury ? null : p.common().divide(par);
-            if (treasury) {
+            BigDecimal shares;
+            if (epsShares != null) {
+                // the EPS denominator excludes treasury shares: valid wherever share capital and treasury
+                // stock are those of the period it was derived from
+                shares = epsShares.matches(p.common(), p.treasury()) ? epsShares.shares() : null;
+            } else {
+                shares = par == null || treasury ? null : p.common().divide(par);
+            }
+            if (treasury && shares == null) {
                 checks.add(Check.warning("treasury", "Treasury stock at " + p.date()
                         + "; the treasury share count is not in the filing, shares outstanding left empty"));
             }
@@ -812,7 +840,69 @@ public final class FilingMapper {
                 byDate.put(p.date(), new ShareAt(p.date(), p.common(), shares, treasury ? null : ZERO, basic, p.source()));
             }
         }
-        return new ShareCapital(par, List.copyOf(byDate.values()), weightedCurrent, weightedPrior, checks);
+        return new ShareCapital(par, basis, List.copyOf(byDate.values()), weightedCurrent, weightedPrior, checks);
+    }
+
+    /**
+     * Shares outstanding from the EPS denominator of one period, at the share capital and treasury
+     * stock that held throughout it.
+     */
+    record EpsShares(StatementColumn column, BigDecimal shares, BigDecimal common, BigDecimal treasury, String basis) {
+
+        boolean matches(BigDecimal otherCommon, BigDecimal otherTreasury) {
+            BigDecimal t = otherTreasury == null ? ZERO : otherTreasury;
+            return otherCommon != null && otherCommon.compareTo(common) == 0 && t.compareTo(treasury) == 0;
+        }
+    }
+
+    /**
+     * Fallback when no par value fits, e.g. a USD reporter whose share capital is the rupiah par value
+     * converted at historical rates (INDY: share capital USD 56,892,154). Basic EPS
+     * = profit attributable to the parent / weighted shares outstanding (treasury shares excluded), so
+     * the share count is profit / EPS - but only when the result is exact:
+     * <ul>
+     *   <li>share capital and treasury stock unchanged through the period (weighted = outstanding),</li>
+     *   <li>no discontinued operations (EPS is "from continuing operations"),</li>
+     *   <li>the EPS has enough decimals to fix the count to within one share (INDY's 0.0019 does not:
+     *       it allows 5.17 .. 5.45 billion shares),</li>
+     *   <li>profit / EPS is a whole number (within 0.01; INDY FY2023: 119,683,800 / 0.0230042062839776 =
+     *       5,202,692,000.0000005).</li>
+     * </ul>
+     */
+    private EpsShares sharesFromEps(StatementColumn column, BigDecimal[] commonStartEnd, BigDecimal[] treasuryStartEnd) {
+        int ctx = durationIndex(column);
+        if (income == null || ctx < 0 || commonStartEnd == null || treasuryStartEnd == null
+                || commonStartEnd[0] == null || commonStartEnd[1] == null
+                || commonStartEnd[0].compareTo(commonStartEnd[1]) != 0
+                || treasuryStartEnd[0] == null || treasuryStartEnd[1] == null
+                || treasuryStartEnd[0].compareTo(treasuryStartEnd[1]) != 0) {
+            return null;
+        }
+        BigDecimal discontinued = amount(income.value(PROFIT_DISCONTINUED, ctx));
+        BigDecimal epsDiscontinued = income.value(EPS_BASIC_DISC, ctx);
+        if ((discontinued != null && discontinued.signum() != 0) || (epsDiscontinued != null && epsDiscontinued.signum() != 0)) {
+            return null;
+        }
+        BigDecimal parent = amount(income.value(PROFIT_PARENT, ctx));
+        BigDecimal eps = income.value(EPS_BASIC, ctx);
+        if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
+            return null;
+        }
+        // half a unit in the EPS's last decimal moves profit / EPS by about profit * halfUlp / EPS^2
+        BigDecimal halfUlp = BigDecimal.ONE.movePointLeft(Math.max(0, eps.stripTrailingZeros().scale()))
+                .divide(BigDecimal.valueOf(2));
+        BigDecimal uncertainty = parent.abs().multiply(halfUlp).divide(eps.multiply(eps), 10, RoundingMode.HALF_UP);
+        if (uncertainty.compareTo(new BigDecimal("0.5")) >= 0) {
+            return null;
+        }
+        BigDecimal implied = parent.divide(eps, 6, RoundingMode.HALF_UP);
+        BigDecimal shares = implied.setScale(0, RoundingMode.HALF_UP);
+        if (shares.signum() <= 0 || implied.subtract(shares).abs().compareTo(new BigDecimal("0.01")) > 0) {
+            return null;
+        }
+        return new EpsShares(column, shares, commonStartEnd[1], treasuryStartEnd[1],
+                period(column).key() + ": profit attributable to the parent " + parent.toPlainString()
+                        + " / basic EPS " + eps.toPlainString() + " = " + shares.toPlainString() + " shares outstanding");
     }
 
     /** Weighted shares = shares outstanding when share capital did not change during the period. */

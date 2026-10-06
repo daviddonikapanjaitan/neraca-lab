@@ -56,7 +56,7 @@ public class IngestionTools {
     public record FilingOverview(String fileName, String ticker, String legalName, String sector, String industry,
                                  String currency, String rounding, String submission, boolean audited,
                                  String currentPeriod, List<ColumnOverview> columns, boolean shareCapitalResolvable,
-                                 String parValue, List<String> templateProblems, List<String> warnings) {
+                                 String shareCountBasis, List<String> templateProblems, List<String> warnings) {
     }
 
     @Tool(description = """
@@ -78,7 +78,7 @@ public class IngestionTools {
         shares.checks().stream().filter(c -> c.severity() == Check.Severity.WARNING).map(Check::message).forEach(warnings::add);
         return new FilingOverview(info.fileName(), info.ticker(), info.legalName(), info.sector(), info.industry(),
                 info.currency(), info.rounding(), info.submission(), info.audited(), info.current().key(), columns,
-                shares.resolved(), shares.resolved() ? shares.parValue().toPlainString() : null,
+                shares.resolved(), shares.basis(),
                 session.mapper().templateProblems(), warnings);
     }
 
@@ -402,18 +402,20 @@ public class IngestionTools {
         });
     }
 
-    public record ShareSaveResult(String parValue, List<String> snapshots, List<String> warnings) {
+    public record ShareSaveResult(String basis, List<String> snapshots, List<String> warnings) {
     }
 
     @Tool(description = """
-            Saves share counts at every date disclosed in the statements of changes in equity (par value is \
-            inferred from share capital and EPS). Requires the company.""")
+            Saves share counts at every date disclosed in the statements of changes in equity (par value \
+            inferred from share capital and EPS, or an exact EPS denominator when share capital is in another \
+            currency). Requires the company.""")
     public ShareSaveResult saveShareSnapshots() {
         return locked(() -> {
             CompanyRow company = requireCompany();
             var shares = session.shareCapital();
             if (!shares.resolved()) {
-                throw new IllegalStateException("Par value could not be inferred; share counts are not saved");
+                throw new IllegalStateException("Share counts could not be derived (no par value fits and the EPS is "
+                        + "not precise enough); share counts are not saved");
             }
             List<String> rows = new ArrayList<>();
             for (ShareAt s : shares.snapshots()) {
@@ -422,7 +424,7 @@ public class IngestionTools {
                         + " shares (" + s.source() + ")");
             }
             session.sharesSaved();
-            return new ShareSaveResult(shares.parValue().toPlainString(), rows,
+            return new ShareSaveResult(shares.basis(), rows,
                     shares.checks().stream().filter(c -> c.severity() == Check.Severity.WARNING).map(Check::message).toList());
         });
     }

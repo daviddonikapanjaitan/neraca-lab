@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { EMPTY, formatCompact, formatDate, formatNumber, titleCase } from "@/lib/format"
+import { EMPTY, formatCompact, formatDate, formatNumber, formatPrice, titleCase } from "@/lib/format"
 import type { CompanyDetail } from "@/lib/types"
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -42,11 +42,11 @@ export function MarketPanel({ detail }: { detail: CompanyDetail }) {
           <CardContent>
             {latestPrice ? (
               <dl className="divide-y text-sm">
-                <Fact label="Open" value={formatNumber(latestPrice.openPrice, 2)} />
-                <Fact label="High" value={formatNumber(latestPrice.highPrice, 2)} />
-                <Fact label="Low" value={formatNumber(latestPrice.lowPrice, 2)} />
-                <Fact label="Close" value={formatNumber(latestPrice.closePrice, 2)} />
-                <Fact label="Adjusted close" value={formatNumber(latestPrice.adjustedClose, 2)} />
+                <Fact label="Open" value={formatPrice(latestPrice.openPrice)} />
+                <Fact label="High" value={formatPrice(latestPrice.highPrice)} />
+                <Fact label="Low" value={formatPrice(latestPrice.lowPrice)} />
+                <Fact label="Close" value={formatPrice(latestPrice.closePrice)} />
+                <Fact label="Adjusted close" value={formatPrice(latestPrice.adjustedClose)} />
                 <Fact label="Volume" value={formatNumber(latestPrice.volume, 0)} />
               </dl>
             ) : (
@@ -65,7 +65,7 @@ export function MarketPanel({ detail }: { detail: CompanyDetail }) {
           <CardContent>
             {latestMarketSnapshot ? (
               <dl className="divide-y text-sm">
-                <Fact label="Share price" value={formatNumber(latestMarketSnapshot.sharePrice, 2)} />
+                <Fact label="Share price" value={formatPrice(latestMarketSnapshot.sharePrice)} />
                 <Fact label="Shares outstanding" value={formatNumber(latestMarketSnapshot.sharesOutstanding, 0)} />
                 <Fact label="Market cap" value={formatCompact(latestMarketSnapshot.marketCap, currency)} />
                 <Fact label="Enterprise value" value={formatCompact(latestMarketSnapshot.enterpriseValue, currency)} />

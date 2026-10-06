@@ -188,9 +188,17 @@ Rules:
   flow sections re-add to their totals (payments signed negative); net change and cash roll-forward.
 - Par value is not in the filing: it is inferred as the only standard par value for which
   share capital / par is a whole number of shares that reproduces the reported basic EPS. This needs
-  share capital in rupiah; for a USD reporter (e.g. INDY: share capital in USD, par Rp 10) no par value
-  fits, `saveShareSnapshots` reports "Par value could not be inferred" and no share counts are stored
-  (no market cap / valuation for the company until share counts are loaded otherwise).
+  share capital in rupiah. When no par value fits (a USD reporter: INDY's share capital is USD
+  56,892,154), shares outstanding come from an exact **EPS denominator** instead (basic EPS = profit
+  attributable to the parent / weighted shares outstanding, treasury shares excluded), accepted only when
+  share capital and treasury stock are unchanged through the period, there are no discontinued
+  operations, the EPS has enough decimals to fix the count to within one share, and profit / EPS is a
+  whole number. INDY FY2023: 119,683,800 / 0.0230042062839776 = 5,202,692,000 (5,210,192,000 listed
+  shares less 7,500,000 treasury shares, 0.144%). The count applies to every date of the filing with the
+  same share capital and treasury stock (INDY: 2021-12-31 .. 2023-12-31); weighted shares only to the
+  period it was derived from. The other INDY filings do not qualify (EPS 0.0019 allows 5.17 .. 5.45
+  billion shares; FY2022's 0.0868828938473089 gives 5,210,191,995, not a whole number) and store no
+  counts; valuations of later dates use the latest share snapshot, as for every company.
 - Stored values are compared with the filing at the column's scale (amounts 4 decimals, EPS and share
   counts 8), with the half-up rounding Postgres applies on insert: INDY's USD EPS 0.0868828938473089
   is stored and verified as 0.08688289.
@@ -272,6 +280,8 @@ Older annual filings (pre-2023 template and later re-cut breakdowns), uploaded a
 | INDY 2022 / 2023-Tahunan, before | INCOMPLETE | 113 / 120 s | 18 / 18 | 13 / 15 | | "basic_eps: stored 0.08688289 but the filing says 0.0868828938473089" (USD EPS, NUMERIC(20,8)) |
 | INDY 2022 / 2023-Tahunan, after | SUCCEEDED | 49 / 57 s | 10 / 10 | 11 / 11 | 1 | compared at the stored scale; 2022 with revenue segments from the pre-2023 sheets |
 
-INDY (USD reporter) stores no share counts: its share capital is in USD while the par value is in
-rupiah, so the par value cannot be inferred (`saveShareSnapshots` reports it; the filing still
-completes). The extra rounds of INDY 2024 / 2025 come from the agent retrying that save.
+INDY's share counts come from the FY2023 filing's exact EPS denominator (5,202,692,000, section 4);
+the 2022, 2024, 2025 and 2026-II filings cannot give a count and `saveShareSnapshots` reports that
+(the filing still completes). The extra rounds of INDY 2024 / 2025 came from the agent retrying that
+save. Re-uploading INDY 2023-Tahunan stored the counts (SUCCEEDED, 61 s, 12 model calls, 0 tool
+errors); INDY then has market caps from 2022-01-03 and valuation snapshots for every period end.

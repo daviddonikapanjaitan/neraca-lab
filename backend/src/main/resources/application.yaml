@@ -43,6 +43,7 @@ spring:
         - classpath:db/V1.0.8__schema_auth.sql
         - classpath:db/V1.0.9__schema_ingestion_created_by.sql
         - classpath:db/V1.0.10__schema_screening.sql
+        - classpath:db/V1.0.11__schema_fx.sql
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -78,6 +79,8 @@ neracalab:
     full-history-from: "1990-01-01"     # start of a full-history fetch
     eodhd:
       api-token: ${EODHD_API_TOKEN:}
+    fx:
+      base-url: https://api.frankfurter.dev/v1   # ECB reference rates, converts listings quoted in another currency (INDY)
     schedule:
       enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run over all active companies of the exchange
       cron: "0 30 17 * * MON-FRI"
