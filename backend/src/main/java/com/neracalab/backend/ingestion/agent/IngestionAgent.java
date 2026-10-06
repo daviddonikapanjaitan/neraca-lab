@@ -23,6 +23,8 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
+import com.openai.errors.OpenAIIoException;
+import com.openai.errors.OpenAIServiceException;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -167,8 +169,7 @@ public class IngestionAgent {
                 new UserMessage("Filing overview:\n" + overview + "\n\nTool catalog:\n" + tools
                         + "\n" + converter.getFormat())),
                 OpenAiChatOptions.builder().temperature(properties.temperature()).build());
-        trace.modelCall();
-        String text = chatModel.call(prompt).getResult().getOutput().getText();
+        String text = call(prompt, trace).getResult().getOutput().getText();
         IngestionPlan plan = converter.convert(text);
         if (plan == null || plan.steps() == null || plan.steps().isEmpty()) {
             throw new IllegalStateException("empty plan");
@@ -209,8 +210,7 @@ public class IngestionAgent {
                     .parallelToolCalls(true)
                     .temperature(properties.temperature())
                     .build();
-            trace.modelCall();
-            ChatResponse response = chatModel.call(new Prompt(history, options));
+            ChatResponse response = call(new Prompt(history, options), trace);
             AssistantMessage message = response.getResult().getOutput();
             history.add(message);
             List<String> requested = message.getToolCalls().stream().map(AssistantMessage.ToolCall::name).toList();
@@ -276,8 +276,7 @@ public class IngestionAgent {
                         toJson(verification), converter.getFormat()))),
                 OpenAiChatOptions.builder().temperature(properties.temperature()).build());
         try {
-            trace.modelCall();
-            Reflection reflection = converter.convert(chatModel.call(prompt).getResult().getOutput().getText());
+            Reflection reflection = converter.convert(call(prompt, trace).getResult().getOutput().getText());
             if (reflection == null) {
                 throw new IllegalStateException("empty reflection");
             }
@@ -290,6 +289,50 @@ public class IngestionAgent {
             return new Reflection(verification.complete(), "Reviewer output unusable: " + ToolExecutor.rootMessage(e),
                     verification.problems(), verification.pending());
         }
+    }
+
+    // ------------------------------------------------------------------ model calls
+
+    /**
+     * One model call, retried on transient provider failures (a stalled response read, a dropped
+     * connection, HTTP 408 / 429 / 5xx): a single hiccup of the provider must not fail an ingestion
+     * whose work so far is intact. Other failures (bad request, authentication) are thrown at once.
+     */
+    ChatResponse call(Prompt prompt, AgentTrace trace) {
+        for (int attempt = 0; ; attempt++) {
+            trace.modelCall();
+            try {
+                return chatModel.call(prompt);
+            } catch (RuntimeException e) {
+                if (attempt >= properties.modelRetries() || !isTransient(e)) {
+                    throw e;
+                }
+                long pause = properties.retryBackoff().toMillis() << attempt;
+                trace.modelRetry();
+                log.warn("model call failed transiently ({}), retry {} of {} in {} ms", ToolExecutor.rootMessage(e),
+                        attempt + 1, properties.modelRetries(), pause);
+                try {
+                    Thread.sleep(pause);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
+    /** Timeouts and I/O errors anywhere in the cause chain, or a retryable HTTP status. */
+    static boolean isTransient(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.io.IOException || t instanceof OpenAIIoException) {
+                return true;
+            }
+            if (t instanceof OpenAIServiceException service) {
+                int status = service.statusCode();
+                return status == 408 || status == 429 || status >= 500;
+            }
+        }
+        return false;
     }
 
     private String toJson(Object value) {

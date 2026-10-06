@@ -11,8 +11,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import com.neracalab.backend.ingestion.xlsx.IdxSheets;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbook;
@@ -57,6 +60,40 @@ class FilingMapperLegacyTemplateTest {
         assertThat(compared).isGreaterThan(40);
 
         assertThat(legacy.depreciation(fy2022)).isNotNull();    // from "1611000 1 CurrentYear" / "1612000 1 CurrentYear"
+        assertThat(legacy.segments(fy2022, null)).isEmpty();      // INDF leaves 1617000 / 1618000 blank
+    }
+
+    /** Revenue by type of the pre-2023 template: one table, the period dates above the value columns. */
+    @ParameterizedTest
+    @CsvSource({"GGRM, 3", "HRTA, 5", "INDY, 3"})
+    void legacyRevenueSegmentsReconcileInBothColumns(String ticker, int segmentsFy2022) throws Exception {
+        FilingMapper legacy = mapper(ticker, "2022-Tahunan");
+        ShareCapital shares = legacy.shareCapital();
+        for (StatementColumn column : legacy.columns()) {
+            BigDecimal revenue = legacy.incomeStatement(column, Map.of(), shares).orElseThrow().values().get("revenue");
+            SegmentExtraction segments = legacy.segments(column, revenue).orElseThrow();
+            assertThat(segments.hasErrors()).as(ticker + " " + column + " " + segments.checks()).isFalse();
+            assertThat(segments.lines().stream().map(SegmentExtraction.SegmentLine::revenue).reduce(BigDecimal.ZERO, BigDecimal::add))
+                    .isEqualByComparingTo(revenue);
+        }
+        assertThat(legacy.segments(StatementColumn.CURRENT_PERIOD, null).orElseThrow().lines()).hasSize(segmentsFy2022);
+    }
+
+    /** FY2022 by the FY2022 filing (pre-2023 template) = FY2022 by the FY2023 filing's comparative. */
+    @ParameterizedTest
+    @CsvSource({"HRTA", "INDY"})
+    void legacyRevenueSegmentsMatchTheNextFilingsComparative(String ticker) throws Exception {
+        Map<String, BigDecimal> legacy = segmentRevenue(mapper(ticker, "2022-Tahunan"), StatementColumn.CURRENT_PERIOD);
+        Map<String, BigDecimal> next = segmentRevenue(mapper(ticker, "2023-Tahunan"), StatementColumn.PRIOR_PERIOD);
+        assertThat(legacy).isNotEmpty();
+        assertThat(legacy.keySet()).isEqualTo(next.keySet());
+        legacy.forEach((name, revenue) -> assertThat(revenue).as(ticker + " " + name).isEqualByComparingTo(next.get(name)));
+    }
+
+    private static Map<String, BigDecimal> segmentRevenue(FilingMapper mapper, StatementColumn column) {
+        Map<String, BigDecimal> byName = new TreeMap<>();
+        mapper.segments(column, null).orElseThrow().lines().forEach(l -> byName.put(l.name(), l.revenue()));
+        return byName;
     }
 
     private static int compare(Optional<MappedStatement> legacy, Optional<MappedStatement> next, List<String> mismatches) {
@@ -79,9 +116,17 @@ class FilingMapperLegacyTemplateTest {
         return compared;
     }
 
+    private static FilingMapper mapper(String ticker, String filing) throws Exception {
+        return mapper(Path.of("..", "data", ticker, "xlsx").resolve("FinancialStatement-" + filing + "-" + ticker + ".xlsx"));
+    }
+
     private static FilingMapper mapper(String fileName) throws Exception {
-        Path file = DATA.resolve(fileName);
-        assumeTrue(Files.exists(file), "INDF source data not available: " + file);
+        return mapper(DATA.resolve(fileName));
+    }
+
+    private static FilingMapper mapper(Path file) throws Exception {
+        String fileName = file.getFileName().toString();
+        assumeTrue(Files.exists(file), "source data not available: " + file);
         IdxWorkbook workbook;
         try (InputStream in = Files.newInputStream(file)) {
             workbook = new IdxWorkbookReader().read(in, fileName);

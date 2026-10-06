@@ -631,26 +631,49 @@ public final class FilingMapper {
     }
 
     private Optional<SegmentExtraction> segments(RawSheet sheet, StatementColumn column, int side, BigDecimal incomeRevenue) {
+        // current template: one block per context, "CurrentYearDuration" above
+        //   Indonesian slot | name | value | English slot
+        // pre-2023 template: one table, period dates above the value columns
+        //   Indonesian slot | name | value current | value prior | English slot
         int headerRow = -1;
-        int offset = -1;
+        int nameCol = -1;
+        int valueCol = -1;
+        int englishCol = -1;
         String context = side == 0 ? "CurrentYearDuration" : "PriorYearDuration";
-        for (int r = 0; r < sheet.rowCount() && offset < 0; r++) {
+        for (int r = 0; r < sheet.rowCount() && headerRow < 0; r++) {
             for (int c = 0; c < sheet.width(r); c++) {
                 if (context.equals(sheet.text(r, c))) {
                     headerRow = r;
-                    offset = c;
+                    nameCol = c + 1;
+                    valueCol = c + 2;
+                    englishCol = c + 3;
                     break;
                 }
             }
         }
-        if (offset < 0) {
+        for (int r = 0; r < sheet.rowCount() && headerRow < 0; r++) {
+            List<Integer> dates = new ArrayList<>();
+            for (int c = 0; c < sheet.width(r); c++) {
+                String t = sheet.text(r, c);
+                if (t != null && StatementTable.isDateHeader(t)) {
+                    dates.add(c);
+                }
+            }
+            if (dates.size() > side && dates.size() >= 2) {
+                headerRow = r;
+                nameCol = dates.getFirst() - 1;
+                valueCol = dates.get(side);
+                englishCol = dates.getLast() + 1;
+            }
+        }
+        if (headerRow < 0 || nameCol < 0) {
             return Optional.empty();
         }
         List<SegmentLine> lines = new ArrayList<>();
         BigDecimal total = null;
         for (int r = headerRow + 1; r < sheet.rowCount(); r++) {
-            String english = sheet.text(r, offset + 3);
-            BigDecimal value = sheet.number(r, offset + 2);
+            String english = sheet.text(r, englishCol);
+            BigDecimal value = sheet.number(r, valueCol);
             if (english == null || value == null) {
                 continue;
             }
@@ -662,7 +685,7 @@ public final class FilingMapper {
             if (type == null) {
                 continue;   // subtotal (Service revenue / Product revenue / Domestic revenue / ...)
             }
-            String name = sheet.text(r, offset + 1);
+            String name = sheet.text(r, nameCol);
             lines.add(new SegmentLine(name == null ? english : name, type, amount(value),
                     english.toLowerCase(Locale.ROOT).startsWith("other ")));
         }

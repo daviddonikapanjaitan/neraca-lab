@@ -96,7 +96,9 @@ neraca_lab/
 │   ├── pdf/                     the same filings as PDF
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
 │                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
-│                                HRTA 2022 .. 2024 annual and INDF xlsx (2022 .. 2026-II): load them with the upload (Ingestion page)
+│                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
+│                                and INDY (2022 .. 2025 annual, 2026-II)
+│                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
@@ -189,7 +191,11 @@ Both IDX layouts are read: the current one (2023 onwards) and the pre-2023 one o
 filings (date column headers, sheets `1410000 1 CurrentYear` / `2 PriorYear`, highly compressed
 styles). A period's revenue breakdown always comes from one filing: the period's own filing replaces
 it, a later filing's comparative only fills a period without one (issuers re-cut segments between
-years, mixing them counts revenue twice). Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
+years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
+accepted as filed; a model call that times out or hits a provider error is retried
+(`neracalab.ingestion.model-retries`, default 2). Values are verified at the stored column scale (e.g. INDY's 16-decimal
+USD EPS as `NUMERIC(20,8)`); the pre-2023 revenue sheets are read too. USD reporters (INDY) get no
+share counts, since the par value cannot be inferred from USD share capital. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
 
 A company exists once per `(ticker, exchange)`: the upload upserts it on the database constraint
 `uq_company_ticker_exchange`, and both codes are stored upper case (checks `ck_company_ticker`,
@@ -340,14 +346,18 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 139 tests
+(cd backend && ./mvnw test)                      # 153 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
 data; `FilingMapperLegacyTemplateTest` maps the pre-2023 INDF FY2022 filing and compares it with the
 FY2022 comparatives of the FY2023 filing; `IngestionRepositorySegmentsTest` checks that a period's
-own filing replaces its whole revenue breakdown (rolled back); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
+own filing replaces its whole revenue breakdown (rolled back); `IngestionVerifierOverdraftTest` checks that
+GGRM's cash net of bank overdrafts (FY2022, FY2024, FY2025) is accepted as filed;
+`IngestionAgentRetryTest` that a model call is retried after a read timeout but not after a
+permanent error; `SameAsStoredTest` that filing values are compared at the stored column scale
+(INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
 keeps one row, and `CompanyCodesTest` covers ticker / exchange normalisation. Uploading all six

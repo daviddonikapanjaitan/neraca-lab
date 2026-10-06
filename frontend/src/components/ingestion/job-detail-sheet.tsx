@@ -32,7 +32,13 @@ interface FilingResult {
   verification?: { complete?: boolean; pending?: string[]; problems?: string[] } | null
   savedStatements?: Record<string, unknown[]>
   savedSegments?: Record<string, unknown[]>
-  metrics?: { durationMs?: number; modelCalls?: number; toolCalls?: number; toolErrors?: number } | null
+  metrics?: {
+    durationMs?: number
+    modelCalls?: number
+    toolCalls?: number
+    toolErrors?: number
+    modelRetries?: number
+  } | null
   error?: string | null
 }
 
@@ -115,6 +121,7 @@ function FilingSummary({ result }: { result: FilingResult }) {
         <Field label="AI agent">
           {formatDuration(result.metrics.durationMs)} · {count(result.metrics.modelCalls)} model calls ·{" "}
           {count(result.metrics.toolCalls)} tool calls ({count(result.metrics.toolErrors)} errors)
+          {(result.metrics.modelRetries ?? 0) > 0 && <> · {count(result.metrics.modelRetries)} model retries</>}
         </Field>
       )}
     </dl>

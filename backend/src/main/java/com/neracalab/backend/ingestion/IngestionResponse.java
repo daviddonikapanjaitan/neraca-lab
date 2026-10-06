@@ -43,6 +43,7 @@ public record IngestionResponse(
     public record Company(Long companyId, String ticker, String companyName) {
     }
 
-    public record Metrics(long durationMs, int modelCalls, int toolCalls, int toolErrors, int parallelToolGroups) {
+    public record Metrics(long durationMs, int modelCalls, int toolCalls, int toolErrors, int parallelToolGroups,
+                          int modelRetries) {
     }
 }

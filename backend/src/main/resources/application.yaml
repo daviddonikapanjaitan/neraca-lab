@@ -65,6 +65,8 @@ neracalab:
     max-iterations: 30      # model turns per execution round
     reflection-rounds: 2    # extra rounds the reviewer may request
     temperature: 0.0
+    model-retries: 2        # retries of a model call that failed transiently (timeout, network, 408/429/5xx)
+    retry-backoff: 5s       # pause before the first retry, doubled for each further one
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:

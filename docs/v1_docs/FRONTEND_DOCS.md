@@ -132,7 +132,7 @@ Sidebar entry below Companies. Everything runs in the background
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
 | Jobs table                 | type tabs (all / financial statements / prices), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
-| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics, or price days and valuation), raw JSON |
+| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days and valuation), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
 upload, so a failure (e.g. backend unreachable) shows a message instead of a broken download.

@@ -35,7 +35,10 @@ in a background thread. Details of storage, job statuses and the job API:
 Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
 `SUCCEEDED` (everything stored and verified by a database read-back), `INCOMPLETE` -> `INCOMPLETE`
 (something is pending or failed validation, see `verification`), `FAILED` -> `FAILED` (the AI
-provider could not be reached or the agent crashed, see `error`).
+provider could not be reached or the agent crashed, see `error`). A model call that fails
+transiently (read timeout, dropped connection, HTTP 408 / 429 / 5xx) is retried before the run is
+given up (`model-retries`, below); e.g. an OpenRouter response that stalled past the 180 s read
+timeout (`OpenAIInvalidDataException: Error reading response`) used to fail the whole job.
 
 The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of the run:
 
@@ -48,7 +51,7 @@ The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of t
 | `rounds`                           | per execution round: verification and the reviewer's reflection           |
 | `savedStatements`, `savedSegments` | rows written per column (`INSERTED`, `UPDATED`, `KEPT_EXISTING`)          |
 | `verification`                     | final deterministic database read-back                                    |
-| `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups      |
+| `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups, model retries |
 
 A typical filing takes 1-4 minutes and 10-30 model calls.
 
@@ -71,6 +74,9 @@ compose reads the same file and passes the values to the backend container at ru
 | `neracalab.ingestion.max-iterations`    | 30      | model turns per execution round                 |
 | `neracalab.ingestion.reflection-rounds` | 2       | extra execution rounds the reviewer may request |
 | `neracalab.ingestion.temperature`       | 0.0     | sampling temperature                            |
+| `neracalab.ingestion.model-retries`     | 2       | retries of a model call that failed transiently (timeout, network error, HTTP 408 / 429 / 5xx); other errors fail at once |
+| `neracalab.ingestion.retry-backoff`     | 5s      | pause before the first retry, doubled for each further one |
+| `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
 
 ## 3. Design: the model orchestrates, Java owns the numbers
 
@@ -121,7 +127,7 @@ final status is decided by the deterministic database read-back, not by the mode
 | `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
 | `saveShareSnapshots`     | write | share counts at every date in the statements of changes in equity                          |
 | `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL |
-| `verifyStoredData`       | read  | database read-back: pending work and inconsistencies                                       |
+| `verifyStoredData`       | read  | database read-back: pending work and inconsistencies (the final gate of `COMPLETED`)       |
 
 **One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
 trimmed and upper-cased (`Tickers.normalize`; a code that is not a ticker rejects the upload with
@@ -161,8 +167,10 @@ Statement sheets have a header row of XBRL contexts and one row per line item:
 `IdxWorkbookReader` renames the sheets to the current names, and `StatementTable` accepts a date
 header (contexts are used by position: current period first, then prior). Apache POI's zip-bomb guard
 (default: reject an entry that inflates more than 100:1) is relaxed to 1000:1, with every entry
-capped at 100 MB uncompressed (real filings: under 6 MB). The revenue breakdown sheets of this
-template are a single table with date headers; they are not read (INDF FY2022 leaves them blank).
+capped at 100 MB uncompressed (real filings: under 6 MB). The revenue breakdown sheets `1617000` /
+`1618000` of this template are one table with the period dates above the value columns
+(`slot | name | current | prior | English slot`) and are read for both columns (GGRM, HRTA and INDY
+FY2022 fill them; INDF leaves them blank).
 
 | Column           | Income / cash flow context    | Balance sheet context                     |
 |------------------|-------------------------------|-------------------------------------------|
@@ -179,7 +187,13 @@ Rules:
   profit; parent + NCI = profit; assets = liabilities + equity; current + non-current totals; cash
   flow sections re-add to their totals (payments signed negative); net change and cash roll-forward.
 - Par value is not in the filing: it is inferred as the only standard par value for which
-  share capital / par is a whole number of shares that reproduces the reported basic EPS.
+  share capital / par is a whole number of shares that reproduces the reported basic EPS. This needs
+  share capital in rupiah; for a USD reporter (e.g. INDY: share capital in USD, par Rp 10) no par value
+  fits, `saveShareSnapshots` reports "Par value could not be inferred" and no share counts are stored
+  (no market cap / valuation for the company until share counts are loaded otherwise).
+- Stored values are compared with the filing at the column's scale (amounts 4 decimals, EPS and share
+  counts 8), with the half-up rounding Postgres applies on insert: INDY's USD EPS 0.0868828938473089
+  is stored and verified as 0.08688289.
 - Depreciation = additions to accumulated depreciation (PP&E + right-of-use); amortization =
   intangibles opening + purchases - closing (current period only).
 - Current-period data replaces stored data; comparatives only fill gaps (differences are reported);
@@ -189,6 +203,13 @@ Rules:
   report shows one "Grosir" line), so mixing two breakdowns counts revenue twice. The current period
   replaces the period's breakdown (segments only an older filing reported are removed, listed in
   `removedFromPeriod`); a comparative is saved only when the period has no breakdown yet.
+- Balance-sheet cash = cash-flow ending cash is checked for the current period. Many issuers present
+  cash in the cash flow statement net of bank overdrafts, which the balance sheet carries within
+  short-term bank loans (GGRM: ending cash 3,351,361 million vs. balance-sheet cash 3,613,292 million in
+  FY2025; the 261,931 million are the overdraft part of 761,931 million short-term bank loans). The
+  mapper reports this as a warning; the verification accepts it with a note when the stored figures are
+  the filing's own and the difference is positive and within short-term borrowings, otherwise it is a
+  problem (`INCOMPLETE`).
 - Restatements show up as comparative differences and are kept as filed in the period's own filing,
   e.g. INDF's FY2023 report moves Rp 36,509 million of FY2022 operating payments to investing;
   FY2022 keeps the FY2022 filing's figures.
@@ -210,7 +231,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | Test                             | What it proves                                                                                                                                                                                                                                       |
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
-| `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets |
+| `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets; the revenue breakdowns of GGRM, HRTA and INDY FY2022 reconcile to revenue in both columns, and HRTA / INDY FY2022 equal their FY2023 filings' comparatives |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | `FinancialStatementUploadTest`   | the asynchronous upload with a mocked agent: 202 job, background processing, stored once per checksum, wrong files rejected, file download; see [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)                                                     |
@@ -245,3 +266,12 @@ Older annual filings (pre-2023 template and later re-cut breakdowns), uploaded a
 | HRTA 2022-Tahunan      | SUCCEEDED | 71 s | 10 | 9 | 1 | pre-2023 template |
 | HRTA 2023-Tahunan, before the segment fix | INCOMPLETE | 440 s | 39 | 36 | 3 | FY2024's comparative "Ekspor" segment left in FY2023: segments 17.13 T vs revenue 12.86 T; the agent cannot delete rows and retried |
 | HRTA 2023-Tahunan, after  | SUCCEEDED | 87 s | 13 | 13 | 1 | `removedFromPeriod: ["Penjualan perhiasan dan logam mulia - Ekspor"]`; FY2022 comparative `KEPT_EXISTING` |
+| GGRM 2022-Tahunan, before | INCOMPLETE | 192 s | 19 | 15 | | "balance-sheet cash 4,407,033 M != cash-flow ending cash 3,709,026 M" (cash net of bank overdrafts) |
+| GGRM 2024-Tahunan, before | FAILED | 206 s | 0 | 0 | | `OpenAIInvalidDataException: Error reading response` (OpenRouter read timeout, no retry) |
+| GGRM 2022 / 2024 / 2025-Tahunan, after | SUCCEEDED | 86 / 55 / 58 s | 12 / 11 / 12 | 13 / 12 / 13 | 1 | overdraft difference accepted as filed (note); 2022 with revenue segments from the pre-2023 sheets |
+| INDY 2022 / 2023-Tahunan, before | INCOMPLETE | 113 / 120 s | 18 / 18 | 13 / 15 | | "basic_eps: stored 0.08688289 but the filing says 0.0868828938473089" (USD EPS, NUMERIC(20,8)) |
+| INDY 2022 / 2023-Tahunan, after | SUCCEEDED | 49 / 57 s | 10 / 10 | 11 / 11 | 1 | compared at the stored scale; 2022 with revenue segments from the pre-2023 sheets |
+
+INDY (USD reporter) stores no share counts: its share capital is in USD while the par value is in
+rupiah, so the par value cannot be inferred (`saveShareSnapshots` reports it; the filing still
+completes). The extra rounds of INDY 2024 / 2025 come from the agent retrying that save.

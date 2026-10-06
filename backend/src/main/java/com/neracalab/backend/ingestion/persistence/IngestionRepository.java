@@ -1,6 +1,7 @@
 package com.neracalab.backend.ingestion.persistence;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -202,13 +203,26 @@ public class IngestionRepository {
             }
             Object s = stored.get(column);
             BigDecimal sv = s == null ? null : new BigDecimal(s.toString());
-            boolean same = sv == null ? value == null : value != null && sv.compareTo(value) == 0;
-            if (!same) {
+            if (!sameAsStored(sv, value)) {
                 diffs.add(column + ": stored " + (sv == null ? "NULL" : sv.toPlainString())
                         + ", filing " + (value == null ? "NULL" : value.toPlainString()));
             }
         });
         return diffs;
+    }
+
+    /**
+     * Whether a stored value is the filing's value. The database keeps a column's scale (4 decimals
+     * for amounts, 8 for EPS and share counts) and rounds half away from zero on insert, so a filing
+     * value with more decimals, e.g. INDY's USD EPS 0.0868828938473089, is compared at the stored
+     * scale (0.08688289).
+     */
+    public static boolean sameAsStored(BigDecimal stored, BigDecimal filed) {
+        if (stored == null || filed == null) {
+            return stored == null && filed == null;
+        }
+        BigDecimal comparable = filed.scale() > stored.scale() ? filed.setScale(stored.scale(), RoundingMode.HALF_UP) : filed;
+        return stored.compareTo(comparable) == 0;
     }
 
     // ------------------------------------------------------------------ segments
