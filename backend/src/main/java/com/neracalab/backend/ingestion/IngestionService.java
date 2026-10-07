@@ -15,6 +15,7 @@ import com.neracalab.backend.ingestion.IngestionResponse.Status;
 import com.neracalab.backend.ingestion.agent.AgentTrace;
 import com.neracalab.backend.ingestion.agent.IngestionAgent;
 import com.neracalab.backend.ingestion.agent.IngestionSession;
+import com.neracalab.backend.ingestion.agent.JobDeadline;
 import com.neracalab.backend.ingestion.mapping.FilingInfo;
 import com.neracalab.backend.ingestion.mapping.FilingMapper;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
@@ -78,10 +79,23 @@ public class IngestionService {
                 mapper.info().current().key());
         try {
             webShareCounts.complete(session);
+            session.deadline().check("the AI agent started");
             IngestionAgent.Outcome outcome = agent.run(session);
             Status status = outcome.verification().complete() ? Status.COMPLETED : Status.INCOMPLETE;
             log.info("ingestion {} finished: {}", session.id(), status);
             return response(session, outcome, status, null, start);
+        } catch (JobDeadline.JobTimeoutException e) {
+            log.warn("ingestion {} stopped: {}", session.id(), e.getMessage());
+            // keep market / valuation data consistent with what was saved before the limit
+            if (session.hasWrites() && !session.isDerivedCurrent()) {
+                try {
+                    repository.refreshDerivedData();
+                    session.derivedRefreshed();
+                } catch (RuntimeException refresh) {
+                    log.error("ingestion {}: derived data refresh after the time limit failed", session.id(), refresh);
+                }
+            }
+            return response(session, null, Status.FAILED, e.getMessage(), start);
         } catch (RuntimeException e) {
             log.error("ingestion {} failed", session.id(), e);
             return response(session, null, Status.FAILED, e.getClass().getSimpleName() + ": " + e.getMessage(), start);

@@ -82,6 +82,55 @@ class FilingMapperAsgrTest {
                         .values().get("total_assets"));
     }
 
+    /**
+     * SIMP (Salim Ivomas Pratama): its FY2023 workbook carries full amounts under "In Million" and tags no revenue
+     * (only gross profit); its H1 2026 workbook files the EPS in millions (0.0000563514954 for Rp 56.35).
+     */
+    @Test
+    void simpFilingQuirks() throws Exception {
+        FilingMapper fy2023 = simp("2023-Tahunan");
+        assertThat(fy2023.templateProblems()).isEmpty();
+        assertThat(fy2023.unit()).isEqualByComparingTo("1");
+        MappedStatement income = fy2023.incomeStatement(StatementColumn.CURRENT_PERIOD, Map.of(), fy2023.shareCapital()).orElseThrow();
+        assertThat(income.hasErrors()).isFalse();
+        assertThat(income.checks()).anyMatch(c -> c.rule().equals("revenue") && c.severity() == Check.Severity.WARNING);
+        assertThat(income.values().get("revenue")).isNull();
+        assertThat(income.values().get("cost_of_revenue")).isNull();
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo(m(3358216));
+        assertThat(income.values().get("pretax_income")).isEqualByComparingTo(m(1487689));
+        // FY2024's comparative carries the FY2023 revenue the FY2023 filing did not tag
+        FilingMapper fy2024 = simp("2024-Tahunan");
+        assertThat(fy2024.incomeStatement(StatementColumn.PRIOR_PERIOD, Map.of(), fy2024.shareCapital()).orElseThrow()
+                .values().get("revenue")).isEqualByComparingTo(m(16002643));
+
+        FilingMapper h1 = simp("2026-II");
+        assertThat(h1.templateProblems()).isEmpty();
+        assertThat(h1.unit()).isEqualByComparingTo("1000000");
+        assertThat(h1.warnings()).singleElement().asString().contains("EPS is filed in its rounding unit");
+        MappedStatement h1Income = h1.incomeStatement(StatementColumn.CURRENT_PERIOD, Map.of(), h1.shareCapital()).orElseThrow();
+        assertThat(h1Income.hasErrors()).isFalse();
+        assertThat(h1Income.values().get("basic_eps")).isEqualByComparingTo("56.35149545425516");
+        assertThat(h1Income.values().get("revenue")).isEqualByComparingTo(m(9624696));
+        assertThat(h1.shareCapital().resolved()).isTrue();
+        for (String filing : List.of("2022-Tahunan", "2023-Tahunan", "2024-Tahunan", "2025-Tahunan", "2026-II")) {
+            FilingMapper m = simp(filing);
+            IngestionSession session = new IngestionSession(m);
+            for (StatementColumn column : m.columns()) {
+                for (MappedStatement s : session.statements(column)) {
+                    assertThat(s.hasErrors()).as(filing + " " + column + " " + s.table()).isFalse();
+                }
+            }
+        }
+    }
+
+    private static FilingMapper simp(String filing) throws Exception {
+        Path file = Path.of("..", "data", "SIMP", "xlsx", "FinancialStatement-" + filing + "-SIMP.xlsx");
+        assumeTrue(Files.exists(file), "SIMP source data not available: " + file);
+        try (InputStream in = Files.newInputStream(file)) {
+            return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));
+        }
+    }
+
     /** The current column reports the line once: nothing is changed there. */
     @Test
     void singleReportIsKept() throws Exception {

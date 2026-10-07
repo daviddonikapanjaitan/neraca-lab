@@ -59,6 +59,8 @@ public class IngestionAgent {
     private final AgentProperties properties;
     private final JsonMapper json;
     private final String model;
+    private final boolean reasoning;
+    private final java.time.Duration callTimeout;
 
     /**
      * @param model the configured chat model ({@code spring.ai.openai.chat.model}, env {@code OPENAI_MODEL}).
@@ -67,19 +69,42 @@ public class IngestionAgent {
      *              default, so options built without a model silently switched every call to gpt-5-mini.
      */
     public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
+                          AgentProperties properties, JsonMapper json, String model) {
+        this(chatModel, repository, verifier, properties, json, model, true, java.time.Duration.ZERO);
+    }
+
+    /**
+     * @param reasoning   {@code neracalab.ingestion.model-reasoning}: let a reasoning model think before it answers.
+     *                    Off by default: the agent only picks tools (every number is computed and verified in
+     *                    Java), and DeepSeek V4 Flash spent 69 s and 8,773 reasoning tokens on one plan - past
+     *                    OpenRouter's 60 s cut-off, so planner and reviewer calls failed three times (3+ minutes
+     *                    per job) - against 10 s without reasoning. Sent as {@code "reasoning": {"enabled": false}}.
+     * @param callTimeout {@code neracalab.ingestion.model-call-timeout}: longest one model call may take before it
+     *                    counts as a stalled provider response and is retried (0 = only the HTTP read timeout)
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
                           AgentProperties properties, JsonMapper json,
-                          @Value("${spring.ai.openai.chat.model}") String model) {
+                          @Value("${spring.ai.openai.chat.model}") String model,
+                          @Value("${neracalab.ingestion.model-reasoning:false}") boolean reasoning,
+                          @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout) {
         this.chatModel = chatModel;
         this.repository = repository;
         this.verifier = verifier;
         this.properties = properties;
         this.json = json;
         this.model = model;
+        this.reasoning = reasoning;
+        this.callTimeout = callTimeout;
     }
 
     /** Per-request options with the configured model (never Spring AI's default, see the constructor). */
     OpenAiChatOptions.Builder options() {
-        return OpenAiChatOptions.builder().model(model).temperature(properties.temperature());
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().model(model).temperature(properties.temperature());
+        if (!reasoning) {
+            builder.extraBody(Map.of("reasoning", Map.of("enabled", false)));
+        }
+        return builder;
     }
 
     // ------------------------------------------------------------------ structured outputs
@@ -104,7 +129,7 @@ public class IngestionAgent {
     // ------------------------------------------------------------------ run
 
     public Outcome run(IngestionSession session) {
-        AgentTrace trace = new AgentTrace();
+        AgentTrace trace = new AgentTrace(session.deadline());
         IngestionTools tools = new IngestionTools(session, repository, verifier);
         Map<String, ToolCallback> catalog = new LinkedHashMap<>();
         for (ToolCallback cb : ToolCallbacks.from(tools)) {
@@ -117,6 +142,8 @@ public class IngestionAgent {
         boolean planFromModel = true;
         try {
             plan = plan(overview, catalog, trace);
+        } catch (JobDeadline.JobTimeoutException e) {
+            throw e;
         } catch (RuntimeException e) {
             log.warn("Planner output unusable, using the default plan: {}", e.getMessage());
             session.note("Planner output could not be parsed (" + ToolExecutor.rootMessage(e) + "); default plan used");
@@ -139,9 +166,32 @@ public class IngestionAgent {
         int maxRounds = 1 + properties.reflectionRounds();
         for (int round = 1; round <= maxRounds; round++) {
             int before = trace.steps().size();
-            String finalMessage = execute(history, session, catalog, trace, round);
+            String finalMessage;
+            boolean modelFailed = false;
+            try {
+                finalMessage = execute(history, session, catalog, trace, round);
+            } catch (JobDeadline.JobTimeoutException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                if (!isTransient(e)) {
+                    throw e;
+                }
+                // the provider kept failing after the retries: finish the standard steps without the model
+                log.warn("model failed in round {} ({}); finishing the remaining steps without it", round, e.getMessage());
+                List<String> steps = DeterministicFinisher.finish(tools, session, repository, trace.deadline());
+                session.note("The model failed after its retries (" + ToolExecutor.rootMessage(e)
+                        + "); the remaining standard steps were done without it: " + steps);
+                finalMessage = "(model unavailable; remaining steps done deterministically)";
+                modelFailed = true;
+            }
             int iterations = trace.steps().size() - before;
+            trace.deadline().check("verifying the stored data");
             IngestionVerifier.Verification verification = verifier.verify(session);
+            if (modelFailed) {
+                rounds.add(new Round(round, iterations, finalMessage, verification, new Reflection(verification.complete(),
+                        "Model unavailable: the deterministic verification decides", verification.problems(), List.of())));
+                break;
+            }
             Reflection reflection = reflect(plan, trace, finalMessage, verification, round);
             rounds.add(new Round(round, iterations, finalMessage, verification, reflection));
             log.info("round {}: verification complete={} pending={} problems={}; reviewer complete={} issues={}",
@@ -164,6 +214,7 @@ public class IngestionAgent {
         }
 
         // ---- safety net: derived data must reflect the final state, whatever the model did
+        trace.deadline().check("the final refresh and verification");
         if (session.hasWrites() && !session.isDerivedCurrent()) {
             repository.refreshDerivedData();
             session.derivedRefreshed();
@@ -297,6 +348,8 @@ public class IngestionAgent {
             return new Reflection(reflection.complete(), reflection.assessment(),
                     reflection.issues() == null ? List.of() : reflection.issues(),
                     reflection.nextActions() == null ? List.of() : reflection.nextActions());
+        } catch (JobDeadline.JobTimeoutException e) {
+            throw e;
         } catch (RuntimeException e) {
             log.warn("Reviewer output unusable: {}", e.getMessage());
             // fall back to the deterministic verification alone
@@ -311,12 +364,16 @@ public class IngestionAgent {
      * One model call, retried on transient provider failures (a stalled response read, a dropped
      * connection, HTTP 408 / 429 / 5xx): a single hiccup of the provider must not fail an ingestion
      * whose work so far is intact. Other failures (bad request, authentication) are thrown at once.
+     * With a job deadline ({@link AgentTrace#deadline()}) the call waits at most until it: the request is
+     * then abandoned (a model call has no side effects) and {@link JobDeadline.JobTimeoutException} thrown.
      */
     ChatResponse call(Prompt prompt, AgentTrace trace) {
+        JobDeadline deadline = trace.deadline();
         for (int attempt = 0; ; attempt++) {
+            deadline.check("a model call");
             trace.modelCall();
             try {
-                ChatResponse response = chatModel.call(prompt);
+                ChatResponse response = deadline.isNone() && !hasCallTimeout() ? chatModel.call(prompt) : callWithin(prompt, deadline);
                 if (response != null && response.getMetadata() != null) {
                     trace.modelUsed(response.getMetadata().getModel());
                 }
@@ -325,7 +382,15 @@ public class IngestionAgent {
                 if (attempt >= properties.modelRetries() || !isTransient(e)) {
                     throw e;
                 }
+                if (e instanceof JobDeadline.JobTimeoutException) {
+                    throw e;
+                }
                 long pause = properties.retryBackoff().toMillis() << attempt;
+                if (!deadline.isNone() && deadline.remaining().toMillis() <= pause) {
+                    deadline.check("a model call");
+                    throw new JobDeadline.JobTimeoutException(deadline.limit(), "retrying a failed model call ("
+                            + ToolExecutor.rootMessage(e) + ")");
+                }
                 trace.modelRetry();
                 log.warn("model call failed transiently ({}), retry {} of {} in {} ms", ToolExecutor.rootMessage(e),
                         attempt + 1, properties.modelRetries(), pause);
@@ -336,6 +401,46 @@ public class IngestionAgent {
                     throw e;
                 }
             }
+        }
+    }
+
+    /** Daemon threads for model calls bounded by a job deadline; an abandoned call ends with its HTTP timeout. */
+    private static final java.util.concurrent.ExecutorService MODEL_CALLS = java.util.concurrent.Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "ingestion-model-call");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private boolean hasCallTimeout() {
+        return callTimeout != null && !callTimeout.isZero() && !callTimeout.isNegative();
+    }
+
+    /**
+     * A model call that waits at most until the job deadline and at most {@link #callTimeout}. Past the deadline the
+     * job stops; past the call timeout the call counts as a stalled response (an I/O timeout, so it is retried).
+     */
+    private ChatResponse callWithin(Prompt prompt, JobDeadline deadline) {
+        long untilDeadline = deadline.isNone() ? Long.MAX_VALUE : Math.max(1, deadline.remaining().toMillis());
+        long wait = hasCallTimeout() ? Math.min(untilDeadline, callTimeout.toMillis()) : untilDeadline;
+        java.util.concurrent.Future<ChatResponse> future = MODEL_CALLS.submit(() -> chatModel.call(prompt));
+        try {
+            return future.get(wait, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            future.cancel(true);
+            if (deadline.passed() || wait == untilDeadline) {
+                throw new JobDeadline.JobTimeoutException(deadline.limit(), "a model call finished");
+            }
+            throw new IllegalStateException("model call took longer than " + JobDeadline.describe(callTimeout),
+                    new java.net.SocketTimeoutException("no model response within " + callTimeout.toSeconds() + " s"));
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException(e.getCause());
+        } catch (InterruptedException e) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the model", e);
         }
     }
 

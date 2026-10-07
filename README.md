@@ -104,8 +104,9 @@ neraca_lab/
 │                                SMDR (2022 .. 2025 annual, 2026-II, Infrastructure Industry taxonomy)
 │                                BNGA (2022 .. 2025 annual, 2026-II) and BTPN (2022 .. 2025 annual), banks:
 │                                Financial and Sharia Industry taxonomy
-│                                and ASGR (2022 .. 2025 annual, 2026-II; the FY2023 workbook declares "In Million"
-│                                but carries full amounts)
+│                                ASGR, SIMP and CEKA (2022 .. 2025 annual, 2026-II; quirks: full amounts under "In Million",
+│                                EPS filed in millions, revenue not tagged, one amount reported twice, a product in two
+│                                revenue slots, a cash flow section without activity)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -209,11 +210,19 @@ they never replace a stored count (`neracalab.ingestion.web-share-counts`, on by
 Workbooks are not trusted blindly: a declared rounding level contradicted by the amounts (ASGR FY2023:
 "In Million" over full amounts) is corrected when the filing's own EPS confirms it, and an amount a
 filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other gains (losses)") is
-counted once when only that makes profit before tax reconcile; both are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
+counted once when only that makes profit before tax reconcile; an EPS filed in the rounding unit (SIMP
+H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
+without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
+stored values). All of these are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
 it, a later filing's comparative only fills a period without one (issuers re-cut segments between
 years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
 accepted as filed; a model call that times out or hits a provider error is retried
-(`neracalab.ingestion.model-retries`, default 2). Values are verified at the stored column scale (e.g. INDY's 16-decimal
+(`neracalab.ingestion.model-retries`, default 2; a call stalled for 45 s is retried, `model-call-timeout`), the
+agent runs the model without reasoning (`model-reasoning: false`: a plan in 10 s instead of 69 s; a filing in 1-2
+minutes instead of 4-15), a model that fails mid-run after its retries no longer fails the job (the remaining
+standard steps are done deterministically and verified), and an upload job that runs longer than
+`neracalab.ingestion.job-timeout` (default 5 minutes, queue time excluded) is stopped and FAILED; what it
+saved before the limit is kept. Values are verified at the stored column scale (e.g. INDY's 16-decimal
 USD EPS as `NUMERIC(20,8)`); the pre-2023 revenue sheets are read too. When no par value fits (USD
 share capital, INDY), shares outstanding come from an exact EPS denominator (INDY FY2023: 5,202,692,000)
 and periods without a count of their own use the latest share snapshot. Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 4.
@@ -392,7 +401,10 @@ Java code: `ConfiguredChatModel` resolves `spring.ai.openai.chat.model` of `appl
 derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
 `FilingMapperFinancialTest` maps the five BNGA and four BTPN filings (Financial and Sharia Industry taxonomy, banks);
-`FilingMapperAsgrTest` the five ASGR filings (full amounts under an "In Million" label, an amount reported twice);
+`FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `FilingMapperCekaTest` the five CEKA filings;
+`JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
+wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the

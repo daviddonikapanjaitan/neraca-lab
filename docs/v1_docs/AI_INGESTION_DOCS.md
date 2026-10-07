@@ -53,7 +53,39 @@ The job `result` (in `GET /api/v1/ingestions/{id}`) is the full audit trail of t
 | `verification`                     | final deterministic database read-back                                    |
 | `metrics`                          | duration, model calls, tool calls, tool errors, parallel tool groups, model retries, models the responses report |
 
-A typical filing takes 1-4 minutes and 10-30 model calls.
+A typical filing takes 1-2 minutes and 10-15 model calls (CEKA: 72-129 s, 11 calls, no retries).
+
+**Speed.** Most of a job's time used to be spent waiting for the model, not working: DeepSeek V4 Flash
+(a reasoning model) thought for over a minute before answering the planner and the reviewer, OpenRouter
+reset such calls after 60 s ("stream was reset: CANCEL"), and each was retried twice before falling back
+(planner: 3 min 16 s for the default plan anyway; 25 of the last 30 jobs had `planFromModel: false` and
+2+ model retries, and took 4-5 minutes). Measured on the real planner request (CEKA FY2025): reasoning on
+69 s / 8,773 reasoning tokens, `reasoning.effort: low` > 150 s, reasoning off 10 s / 0 reasoning tokens with
+a complete plan. The agent only picks tools - every number is computed and verified in Java - so it runs
+without reasoning (`model-reasoning: false`), and a call that still stalls is abandoned after 45 s and
+retried (`model-call-timeout`) instead of waiting for the 180 s read timeout.
+
+When the model still fails mid-run after its retries (a provider that keeps stalling), the run is not
+failed: `DeterministicFinisher` does the remaining standard steps with the agent's own tools (find /
+register the company, save every column that extracts ready, save revenue segments under the filing's
+names and slot types, save share counts, refresh derived data), and the deterministic verification decides
+COMPLETED / INCOMPLETE; anything that needs judgement (an unclassified income line, a column failing its
+checks) stays open, and the job notes list every step.
+
+Measured on the five CEKA filings with the real model after these changes: 129 s, 107 s, 72 s, 79 s, 86 s,
+all COMPLETED and verified, 0 model retries, the plan from the model (before: 517-903 s, failed or
+incomplete; earlier filings typically 220-310 s with 2-3 retries).
+
+**Time limit.** An upload job may run at most `neracalab.ingestion.job-timeout` (default 5 minutes,
+env `INGESTION_JOB_TIMEOUT`), counted from the moment it starts running (waiting in the queue does not
+count). At the limit the job is stopped and `FAILED` with the stage "Stopped after the 5 minutes limit
+on <filing>" and a message naming the step it stopped before (`JobDeadline`). It really stops: a model
+call waits at most until the limit (the request is abandoned; a model call writes nothing), a retry is
+not started when its pause would end after the limit, no tool - in particular no write - starts after
+it, and the planner's and reviewer's fallbacks do not swallow it. What was saved before the limit is
+kept (derived data is refreshed for it); submit the file again to retry. A single stalled model call
+can take up to the 180 s read timeout, so a slow provider can use up most of the limit (CEKA FY2024 /
+FY2025 ran 8-9 minutes on three timed-out OpenRouter responses before the limit existed).
 
 ## 2. Configuration
 
@@ -84,7 +116,10 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.reflection-rounds` | 2       | extra execution rounds the reviewer may request |
 | `neracalab.ingestion.temperature`       | 0.0     | sampling temperature                            |
 | `neracalab.ingestion.model-retries`     | 2       | retries of a model call that failed transiently (timeout, network error, HTTP 408 / 429 / 5xx); other errors fail at once |
-| `neracalab.ingestion.retry-backoff`     | 5s      | pause before the first retry, doubled for each further one |
+| `neracalab.ingestion.retry-backoff`     | 2s      | pause before the first retry, doubled for each further one |
+| `neracalab.ingestion.model-reasoning`   | false   | let a reasoning model think before answering; off sends `"reasoning": {"enabled": false}` (env `INGESTION_MODEL_REASONING`) |
+| `neracalab.ingestion.model-call-timeout`| 45s     | a model call taking longer counts as a stalled response and is retried (env `INGESTION_MODEL_CALL_TIMEOUT`) |
+| `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
 | `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
 
 ## 3. Design: the model orchestrates, Java owns the numbers
@@ -333,7 +368,27 @@ Rules:
   plausible share count (ASGR: 1,348,780,500) with full amounts and an impossible one (> 10^13) with the
   declared unit. The checks keep the declared rounding as their tolerance. A unit under which the EPS
   implies an impossible share count is a template problem (rejected), never stored.
-- **One amount reported twice in a column.** ASGR's H1 2026 filing reports an H1 2025 loss both as
+- **EPS filed in the rounding unit.** SIMP's H1 2026 workbook has its amounts correctly in millions but
+  files the basic EPS in millions too (0.0000563514954 for Rp 56.35). Profit / EPS then gives the real
+  share count (15.5 billion) from the filed figures and an impossible one with the declared unit, while the
+  amounts are not whole multiples of the unit (which tells this case from full amounts): the per-share
+  figures are multiplied by the unit, with a warning. Plausible share counts: 10^6 .. 10^13.
+- **Revenue not tagged.** SIMP's FY2023 workbook tags only "Total gross profit", no "Sales and revenue"
+  or cost. When neither is reported but gross profit is, and profit before tax reconciles from it, revenue
+  and cost of revenue are left empty with a warning (instead of blocking the filing).
+- **Gaps filled across filings.** A comparative column fills the fields a stored row has empty
+  (outcome `FILLED_GAPS`, e.g. SIMP FY2023 revenue from the FY2024 filing) and never changes a stored
+  value; the period's own filing replaces stored values, but a field it does not report keeps the value
+  another filing stored. Whatever the upload order, SIMP FY2023 ends with the revenue of the FY2024
+  filing and every other figure of its own filing.
+- **A cash flow section without any activity.** CEKA's H1 2026 cash flow has no financing line and no
+  financing total. A missing section total counts as 0 (warning) only when the section has no reported
+  line and the other totals add up to the net change in cash exactly (228,589,953,937 - 9,003,638,218 =
+  219,586,315,719); otherwise it is an error as before.
+- **One amount reported twice in a column.** Also a specific line and a residual "Other ..." line with
+  the same amount (CEKA H1 2025: "Interest and finance costs" and "Other expenses" 79,134; interest paid
+  79,134): counted once on the specific line, only when profit before tax then reconciles exactly.
+- **One amount reported twice in a column (signed line).** ASGR's H1 2026 filing reports an H1 2025 loss both as
   "Other expenses" 2,750 and as "Other gains (losses)" -2,750 (millions); profit before tax 139,690
   counts it once. When profit before tax does not reconcile, an expense (income) line and a signed
   gains / losses line with the same contribution are treated as one amount, counted once on the signed
@@ -344,6 +399,11 @@ Rules:
   by nature (`1312000` / `1322000`) in the General and Infrastructure taxonomies; the current /
   non-current balance sheet (`4210000`) and profit or loss by function (`4311000` / `4321000`) in the
   Financial taxonomy.
+
+Segments are stored by name; a name a breakdown files on several lines (CEKA: "Produk Palm Kernel" as
+domestic revenue 2 and export revenue 1) is qualified by its slot, "Produk Palm Kernel (domestik)" /
+"(ekspor)" (before, the second line overwrote the first: CEKA FY2025 segments summed to 6.34 instead of
+9.73 trillion). Names filed once keep their name; a name that still repeats blocks the breakdown.
 
 Revenue segments come only from the breakdown sheets `1617000` (by type) and `1618000` (by
 source). Some issuers leave both blank and disclose segments only in the PDF notes (e.g. INDF:
@@ -362,13 +422,19 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
 | `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets; the revenue breakdowns of GGRM, HRTA and INDY FY2022 reconcile to revenue in both columns, and HRTA / INDY FY2022 equal their FY2023 filings' comparatives |
 | `FilingMapperInfrastructureTest` (unit) | the Infrastructure Industry taxonomy: all five SMDR filings map without errors or unclassified lines; capex includes the infrastructure labels (FY2025: -81,650,677); every comparative column equals the previous filing's current column except SMDR's own reclassification of 161,196 from "Other income" to "Other gains (losses)" in FY2024 operating income; no share count is guessed |
+| `ModelSpeedSettingsTest` (unit, local HTTP server) | the real Spring AI client sends `"reasoning": {"enabled": false}` (and nothing when reasoning is on); a call slower than the per-call timeout is retried at once and a fast answer used; a call that always stalls gives up after the retries in under 3 s |
+| `DeterministicFinisherTest` (Docker Postgres, rolled back) | a model failing every call: HRTA H1 2026 is still stored, refreshed and verified complete by the deterministic finish; display names from legal names; segments keep the filing's names and types and reuse stored English names |
+| `JobDeadlineTest` (unit) | the time limit inside the agent: a slow model call stops at it, no retry pause past it, no model call and no tool after it, the planner's fallback does not swallow it |
+| `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit |
+| `FilingMapperCekaTest` (unit) | all five CEKA filings without errors; "Produk Palm Kernel" domestic and export kept as two segments (FY2025 total = revenue 9,733,304,188,977); a repeated name blocks the breakdown; H1 2026 financing 0 without lines or total; H1 2025 interest also filed as "Other expenses" counted once |
 | `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
 | `IngestionAgentModelTest` (unit) | Spring AI fills a missing model with `gpt-5-mini`; the agent's options name the configured model and the model a response reports is recorded in `metrics.models` |
 | `ConfiguredChatModel` (test helper) | the model the agent tests use, never written in Java: `spring.ai.openai.chat.model` from `application.yaml` (`${OPENAI_MODEL:<default>}`), with `OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default (the application's own precedence) |
 | `BngaShareSeedTest`              | the BNGA share-count script fills the five audited year-end counts (2021 .. 2025), outstanding + treasury = issued at every date, runs idempotently and never replaces a count already stored (rolled back) |
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
 | `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
-| `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook) |
+| `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
+| `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |

@@ -24,6 +24,20 @@ public final class AgentTrace {
     private final AtomicInteger parallelGroups = new AtomicInteger();
     private final AtomicInteger modelRetries = new AtomicInteger();
     private final java.util.Set<String> modelsUsed = new java.util.concurrent.ConcurrentSkipListSet<>();
+    private final JobDeadline deadline;
+
+    public AgentTrace() {
+        this(JobDeadline.NONE);
+    }
+
+    /** @param deadline the time limit of the run: model calls and tools stop at it */
+    public AgentTrace(JobDeadline deadline) {
+        this.deadline = deadline;
+    }
+
+    JobDeadline deadline() {
+        return deadline;
+    }
 
     public void step(Step step) {
         steps.add(step);
