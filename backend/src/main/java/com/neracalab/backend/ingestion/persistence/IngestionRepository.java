@@ -57,7 +57,11 @@ public class IngestionRepository {
     }
 
     /** Outcome of writing one row. */
-    public enum WriteOutcome { INSERTED, UPDATED, KEPT_EXISTING }
+    /**
+     * INSERTED / UPDATED: written by the period's own filing; FILLED_GAPS: a comparative filled fields the stored
+     * row had empty (e.g. revenue a filing did not tag); KEPT_EXISTING: a comparative changed nothing.
+     */
+    public enum WriteOutcome { INSERTED, UPDATED, FILLED_GAPS, KEPT_EXISTING }
 
     public record WriteResult(String table, String period, WriteOutcome outcome, List<String> differences) {
     }
@@ -149,6 +153,12 @@ public class IngestionRepository {
         return periodId(companyId, period).orElseThrow();
     }
 
+    /** The filing a period's data came from (its own filing, else the first filing that stated it). */
+    public Optional<String> sourceFiling(long periodId) {
+        return jdbc.sql("SELECT source_filing FROM reporting_period WHERE period_id = :p").param("p", periodId)
+                .query((rs, i) -> rs.getString(1)).optional();
+    }
+
     public Optional<Long> periodId(long companyId, PeriodRef period) {
         return jdbc.sql("""
                         SELECT period_id FROM reporting_period
@@ -161,7 +171,10 @@ public class IngestionRepository {
 
     /**
      * Writes one mapped statement. {@code overwrite} = the statement belongs to the filing's current
-     * period; otherwise an existing row is kept and only compared.
+     * period: its values replace the stored ones, except that a field the filing does not report (NULL) keeps
+     * the value another filing stored (e.g. SIMP's FY2023 filing tags no revenue; its FY2024 filing's
+     * comparative does). Otherwise (a comparative) an existing row keeps every stored value and only its
+     * empty fields are filled.
      */
     @Transactional
     public WriteResult writeStatement(long companyId, long periodId, MappedStatement statement, boolean overwrite) {
@@ -169,13 +182,32 @@ public class IngestionRepository {
         Map<String, BigDecimal> values = statement.values();
         Optional<Map<String, Object>> existing = readStatement(table, periodId);
         if (existing.isPresent() && !overwrite) {
-            return new WriteResult(table, statement.period().key(), WriteOutcome.KEPT_EXISTING,
-                    differences(existing.get(), values));
+            List<String> gaps = values.keySet().stream()
+                    .filter(c -> values.get(c) != null && existing.get().get(c) == null).toList();
+            if (gaps.isEmpty()) {
+                return new WriteResult(table, statement.period().key(), WriteOutcome.KEPT_EXISTING,
+                        differences(existing.get(), values));
+            }
+            var fill = jdbc.sql("UPDATE " + table + " SET "
+                            + String.join(", ", gaps.stream().map(c -> c + " = COALESCE(" + c + ", :" + c + ")").toList())
+                            + " WHERE period_id = :period_id")
+                    .param("period_id", periodId);
+            for (String c : gaps) {
+                fill = fill.param(c, values.get(c), java.sql.Types.NUMERIC);
+            }
+            fill.update();
+            List<String> notes = new ArrayList<>(gaps.stream().map(c -> c + ": filled " + values.get(c).toPlainString()).toList());
+            differences(existing.get(), values).stream()
+                    .filter(d -> gaps.stream().noneMatch(g -> d.startsWith(g + ":")))
+                    .forEach(notes::add);
+            return new WriteResult(table, statement.period().key(), WriteOutcome.FILLED_GAPS, notes);
         }
         List<String> columns = new ArrayList<>(values.keySet());
         String insertCols = String.join(", ", columns);
         String params = String.join(", ", columns.stream().map(c -> ":" + c).toList());
-        String updates = String.join(",\n    ", columns.stream().map(c -> c + " = EXCLUDED." + c).toList());
+        String updates = String.join(",\n    ", columns.stream()
+                .map(c -> statement.rejected().contains(c) ? c + " = EXCLUDED." + c
+                        : c + " = COALESCE(EXCLUDED." + c + ", " + table + "." + c + ")").toList());
         String constraint = "uq_" + table;
         var spec = jdbc.sql("INSERT INTO " + table + " (company_id, period_id, " + insertCols + ")\n"
                         + "VALUES (:company_id, :period_id, " + params + ")\n"

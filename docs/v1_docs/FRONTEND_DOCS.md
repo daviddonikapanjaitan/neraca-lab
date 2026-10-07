@@ -39,12 +39,12 @@ browser ──> Next.js server (Server Components, Route Handlers /api/...) ─�
 | `GET /api/v1/exchanges`                     | exchange filter (page 1) |
 | `GET /api/v1/companies?exchange={code}`     | company list (page 1)    |
 | `GET /api/v1/companies/{exchange}/{ticker}` | company detail (page 2)  |
-| `GET /api/v1/ingestions?limit=100`          | ingestion page (page 3)  |
+| `GET /api/v1/ingestions?limit=100`          | every Ingestion page (page 3): jobs table |
 | `GET /api/v1/auth/me`                       | every page: the logged-in user (layout, permission checks) |
 | `GET /api/v1/admin/users`, `/admin/roles`, `/admin/permissions` | Admin Center pages |
-| `GET /api/v1/prices/ingestions`             | ingestion page: configured price provider |
+| `GET /api/v1/prices/ingestions`             | Price Ingestion page: configured price provider |
 
-The ingestion page also calls the backend from the browser through Next.js Route Handlers in
+The Ingestion pages also call the backend from the browser through Next.js Route Handlers in
 `src/app/api/` (same server-side `NERACA_API_URL`; `forward()` in `src/lib/api.ts` passes status and
 ProblemDetail through; unreachable backend = 503):
 
@@ -72,7 +72,7 @@ ProblemDetail through; unreachable backend = 503):
   `/login?expired=1`. A 401 of a client-side call does the same (`src/lib/client-api.ts`).
 - The sidebar shows only the pages the user's permissions allow; each page checks its permission
   again and shows "No access" otherwise (the backend refuses the APIs with 403 anyway).
-- `/` opens the first allowed page: Companies, Ingestion, User Management, else the profile.
+- `/` opens the first allowed page: Companies, Screening, Ingestion (IDX XBRL), User Management, else the profile.
   Rules: [AUTH_DOCS.md](AUTH_DOCS.md).
 
 ## 3. Pages
@@ -121,10 +121,22 @@ Statement tables:
 
 Unknown company: not-found page. Invalid ticker or unsupported exchange: the backend's 400 message.
 
-### 3.3 Ingestion - `/ingestion`
+### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data` (`INGESTION`)
 
-Sidebar entry below Companies. Everything runs in the background
+Sidebar entry below Screening, a dropdown like the Admin Center with three pages (`/ingestion` opens the
+first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and breadcrumbs come from
+`src/lib/ingestion-sections.ts`. Everything runs in the background
 ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)).
+
+| Page                         | Card                                                                                  |
+|------------------------------|---------------------------------------------------------------------------------------|
+| IDX XBRL (`/ingestion/xbrl`) | Financial statement upload                                                            |
+| Price Ingestion (`/ingestion/prices`) | Price ingestion (exchanges, stored companies and the price provider are loaded for this page only) |
+| Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
+
+Every page shows its card, then the summary tiles and the jobs table with **all** ingestion jobs (tabs
+filter by type, starting on "All"). Server side: `components/ingestion/ingestion-page.tsx` (permission
+check, the page's data plus the jobs list, error state); client side: `ingestion-page-client.tsx`.
 
 | Element                    | Content                                                                                                                         |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
@@ -152,8 +164,8 @@ and the research agent's ReAct steps, headlines, metrics, every agent's reasonin
 scorecard), the rest of the shortlist, the Stage 1 funnel, notes and Reflexion lessons, token usage,
 and **Download PDF**. Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
 
-The Ingestion page has a "Screening data" card (runs the ETL) and lists ETL runs and screenings in
-its jobs table (tabs "Screening data", "Screenings").
+The Ingestion page "Screening Data IDX" has the "Screening data" card (runs the ETL); every Ingestion page
+lists ETL runs and screenings in its jobs table (tabs "Screening data", "Screenings").
 
 ### 3.4 Login - `/login`
 
@@ -207,7 +219,7 @@ frontend/
     │   │   ├── error.tsx                  error boundary for unexpected errors
     │   │   ├── companies/page.tsx         page 1 (+ loading.tsx)
     │   │   ├── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
-    │   │   ├── ingestion/page.tsx         page 3 (+ loading.tsx)
+    │   │   ├── ingestion/xbrl, prices, screening-data/page.tsx   page 3 (+ loading.tsx; ingestion/page.tsx redirects)
     │   │   ├── admin/users/page.tsx, admin/roles/page.tsx   Admin Center (admin/page.tsx redirects)
     │   │   └── profile/page.tsx           own profile
     │   ├── login/page.tsx                 login (outside the dashboard layout)
@@ -216,7 +228,7 @@ frontend/
     │   ├── ui/                            shadcn-fintech ui components
     │   ├── companies/                     company list client component
     │   ├── company/                       detail view, header, overview, statement tables, panels
-    │   ├── ingestion/                     upload card, price card, jobs table, job detail sheet, download button
+    │   ├── ingestion/                     page (server) and page client, upload / price / screening data cards, jobs table, job detail sheet, download button
     │   ├── admin/                         users / roles pages, user and role sheets, delete confirmation
     │   ├── auth/, profile/                login form, profile page
     │   └── app-sidebar, dynamic-breadcrumb, empty-state, stat-tile, api-error-state, ...

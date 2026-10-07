@@ -77,7 +77,7 @@ final class Prompts {
             - the verification report has no pending items and no problems,
             - tool errors were resolved, not ignored; segment names and types look sensible.
             Read expectedPerPeriod and notes of the verification first: what they describe as expected \
-            (e.g. no balance sheet for an interim comparative, KEPT_EXISTING for comparatives, empty market \
+            (e.g. no balance sheet for an interim comparative, KEPT_EXISTING or FILLED_GAPS for comparatives, empty market \
             snapshots without prices) is by design and not an issue.
             If something is missing or wrong, set complete=false and list the issues and the concrete next \
             actions (tool name and arguments) the executor must take. Only list actions the tools can perform. \

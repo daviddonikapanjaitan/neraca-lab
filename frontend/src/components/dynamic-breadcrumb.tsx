@@ -12,6 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
+import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 
 interface Crumb {
   label: string
@@ -27,6 +28,7 @@ const ADMIN_PAGES: Record<string, string> = {
  * /companies                -> Companies
  * /companies/IDX/HRTA       -> Companies / IDX / HRTA
  * /admin/users              -> Admin Center / User Management
+ * /ingestion/prices         -> Ingestion / Price Ingestion
  * /screening/<id>           -> Screening / Report
  * The exchange crumb opens the company list filtered by that exchange.
  */
@@ -37,6 +39,12 @@ function crumbs(pathname: string): Crumb[] {
     return page
       ? [{ label: "Admin Center", href: "/admin/users" }, { label: page, href: pathname }]
       : [{ label: "Admin Center", href: "/admin/users" }]
+  }
+  if (segments[0] === "ingestion") {
+    const page = INGESTION_SECTIONS.find((s) => s.href === `/ingestion/${segments[1] ?? ""}`)
+    return page
+      ? [{ label: "Ingestion", href: INGESTION_HOME }, { label: page.title, href: page.href }]
+      : [{ label: "Ingestion", href: INGESTION_HOME }]
   }
   if (segments[0] === "screening") {
     return segments.length > 1

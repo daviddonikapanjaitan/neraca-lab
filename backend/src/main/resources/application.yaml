@@ -69,8 +69,11 @@ neracalab:
     reflection-rounds: 2    # extra rounds the reviewer may request
     temperature: 0.0
     model-retries: 2        # retries of a model call that failed transiently (timeout, network, 408/429/5xx)
-    retry-backoff: 5s       # pause before the first retry, doubled for each further one
+    retry-backoff: 2s       # pause before the first retry, doubled for each further one
+    model-reasoning: ${INGESTION_MODEL_REASONING:false}   # let a reasoning model think first (slow: 69 s vs 10 s per plan)
+    model-call-timeout: ${INGESTION_MODEL_CALL_TIMEOUT:45s}   # a model call taking longer counts as stalled and is retried
     web-share-counts: ${INGESTION_WEB_SHARE_COUNTS:true}   # Yahoo Finance share counts when a filing gives none
+    job-timeout: ${INGESTION_JOB_TIMEOUT:5m}   # an upload job running longer is stopped and FAILED (queue time not counted)
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:

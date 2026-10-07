@@ -10,7 +10,7 @@ Every ingestion runs asynchronously in the background and records its progress i
 | AI stock screening              | `POST /api/v1/screenings`                      | `ScreeningQueue`: one thread ([SCREENING_DOCS.md](SCREENING_DOCS.md)) |
 
 Both write `ingestion_job` (one row per process); `GET /api/v1/ingestions` lists them. The
-frontend page `/ingestion` ([FRONTEND_DOCS.md](FRONTEND_DOCS.md)) uses these APIs. Every API here
+frontend Ingestion pages (`/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, [FRONTEND_DOCS.md](FRONTEND_DOCS.md)) uses these APIs. Every API here
 needs the `INGESTION` permission. Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
 ([AUTH_DOCS.md](AUTH_DOCS.md), section 3).
 
@@ -58,6 +58,11 @@ Upload stages: `Waiting in the upload queue` -> `Reading the workbook` -> `AI ag
 | `SUCCEEDED`  | agent `COMPLETED`: everything stored and verified by the database read-back             |
 | `INCOMPLETE` | agent `INCOMPLETE`: stored, the verification lists pending items / problems (`message`) |
 | `FAILED`     | the workbook could not be read, or the agent failed (AI provider unreachable, ...)      |
+| `FAILED`     | the job ran longer than `neracalab.ingestion.job-timeout` (5 minutes, from the start of the run; queue time not counted): stage `Stopped after the 5 minutes limit on <filing> (...)`; what was saved before the limit is kept |
+
+A typical upload job takes 1-2 minutes (the AI model runs without reasoning; a model call stalled for 45 s is
+retried, and a model that keeps failing mid-run no longer fails the job: the remaining standard steps are done
+deterministically and verified), see [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 1.
 
 The job `result` is the agent's full audit trail (the former synchronous response: filing, plan,
 steps, tool calls, rounds, saved rows, verification, metrics).
@@ -87,7 +92,7 @@ Unknown values and a limit out of range: 400 (`title: "Invalid parameter"`); unk
   "jobs": [
     {
       "id": "701b5b9b-8d18-41f0-9250-6ed0cae50c30", "type": "FINANCIAL_STATEMENT", "status": "RUNNING",
-      "stage": "AI agent is storing HRTA 2026 H1 (usually 1-4 minutes)", "exchange": "IDX", "ticker": "HRTA",
+      "stage": "AI agent is storing HRTA 2026 H1 (usually 1-2 minutes, stopped after 5 minutes)", "exchange": "IDX", "ticker": "HRTA",
       "file": { "fileId": 7, "fileName": "FinancialStatement-2026-II-HRTA.xlsx", "sizeBytes": 523787,
                 "checksumSha256": "77372cab...", "reused": true },
       "fullHistory": null, "attempts": 1, "message": null,
@@ -144,7 +149,7 @@ API returns them as `createdBy`:
 | `null`                                             | a scheduled price run (`neracalab.prices.schedule`), no user   |
 
 When an identical upload or a price request for a company finds a job already queued / running,
-that job is returned and keeps its own requester. The ingestion page shows "by <username>" in the
+that job is returned and keeps its own requester. The Ingestion pages show "by <username>" in the
 jobs table and "Started by" in the job details.
 
 Jobs recorded before this column existed were attributed **once** to the root user `admin`: at

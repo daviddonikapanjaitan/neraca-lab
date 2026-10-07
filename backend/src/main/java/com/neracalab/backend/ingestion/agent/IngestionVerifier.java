@@ -24,7 +24,8 @@ public class IngestionVerifier {
 
     private static final List<String> NOTES = List.of(
             "Interim filings contain no balance sheet for the prior-year comparative period (only for the prior year end).",
-            "Comparative columns never overwrite stored data: KEPT_EXISTING is the expected outcome when a period is already stored.",
+            "Comparative columns never overwrite stored data of another filing: KEPT_EXISTING (or FILLED_GAPS, when they filled fields the stored row had empty) is the expected outcome when a period is already stored; a period this filing itself wrote earlier is refreshed (UPDATED).",
+            "A field the filing does not report (e.g. revenue a filer did not tag) keeps the value another filing stored.",
             "A period's source_filing is the filing that reported it as its current period, else the first filing that stated it.");
 
     private final IngestionRepository repository;
@@ -173,7 +174,9 @@ public class IngestionVerifier {
                     statement.values().forEach((field, value) -> {
                         Object s = row.get(field);
                         BigDecimal stored = s == null ? null : new BigDecimal(s.toString());
-                        if (!IngestionRepository.sameAsStored(stored, value)) {
+                        // a field the filing does not report keeps another filing's value; a rejected one is NULL
+                        boolean expected = value != null || statement.rejected().contains(field);
+                        if (expected && !IngestionRepository.sameAsStored(stored, value)) {
                             problems.add(statement.period().key() + " " + statement.table() + "." + field
                                     + ": stored " + stored + " but the filing says " + value);
                         }

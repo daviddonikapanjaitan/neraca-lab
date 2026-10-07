@@ -35,6 +35,8 @@ final class ToolExecutor {
         List<ToolResponse> responses = new ArrayList<>(calls.size());
         int i = 0;
         while (i < calls.size()) {
+            // no tool (in particular no write) starts after the job's time limit; thrown, not reported to the model
+            trace.deadline().check("the tool call " + calls.get(i).name());
             int j = i;
             while (j < calls.size() && IngestionTools.READ_ONLY.contains(calls.get(j).name())) {
                 j++;

@@ -10,11 +10,13 @@ import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.ingestion.agent.IngestionSession;
+import com.neracalab.backend.ingestion.agent.JobDeadline;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository.StoredFile;
 import com.neracalab.backend.ingestion.mapping.FilingInfo;
@@ -52,13 +54,20 @@ public class FinancialStatementQueue implements SmartLifecycle {
     private final IngestionService service;
     private final IngestionFileRepository files;
     private final IngestionJobRepository jobs;
+    private final Duration jobTimeout;
     private final LinkedBlockingQueue<Task> pending = new LinkedBlockingQueue<>();
     private volatile Thread worker;
 
-    public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs) {
+    /**
+     * @param jobTimeout longest a job may run, from the moment it starts running (time waiting in the queue does
+     *                   not count); a job still running then is stopped and FAILED
+     */
+    public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
+                                   @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout) {
         this.service = service;
         this.files = files;
         this.jobs = jobs;
+        this.jobTimeout = jobTimeout;
     }
 
     // ------------------------------------------------------------------ API
@@ -114,6 +123,7 @@ public class FinancialStatementQueue implements SmartLifecycle {
 
     private void process(Task task) {
         UUID id = task.jobId();
+        JobDeadline deadline = JobDeadline.after(jobTimeout);
         jobs.running(id, "Reading the workbook");
         byte[] content = files.content(task.fileId())
                 .orElseThrow(() -> new IllegalStateException("Stored file " + task.fileId() + " not found"));
@@ -125,10 +135,12 @@ public class FinancialStatementQueue implements SmartLifecycle {
             finish(id, IngestionJobStatus.FAILED, "Invalid workbook", e.getMessage(), null);
             return;
         }
+        session.deadline(deadline);
         FilingInfo info = session.info();
         String filing = info.ticker() + " " + info.current().key();
         String ticker = info.ticker() != null && info.ticker().length() <= 20 ? info.ticker() : null;
-        jobs.progress(id, "AI agent is storing " + filing + " (usually 1-4 minutes)", Exchange.IDX.code(), ticker);
+        jobs.progress(id, "AI agent is storing " + filing + " (usually 1-2 minutes, stopped after "
+                + minutes(jobTimeout) + ")", Exchange.IDX.code(), ticker);
 
         IngestionResponse response = service.run(session);
         if (Thread.currentThread().isInterrupted()) {
@@ -140,8 +152,15 @@ public class FinancialStatementQueue implements SmartLifecycle {
                     "Stored and verified " + filing + summary(response), null, response);
             case INCOMPLETE -> finish(id, IngestionJobStatus.INCOMPLETE,
                     "Stored " + filing + " with open items" + summary(response), openItems(response), response);
-            case FAILED -> finish(id, IngestionJobStatus.FAILED, "AI agent failed on " + filing, response.error(), response);
+            case FAILED -> finish(id, IngestionJobStatus.FAILED, deadline.passed()
+                    ? "Stopped after the " + minutes(jobTimeout) + " limit on " + filing + summary(response)
+                    : "AI agent failed on " + filing, response.error(), response);
         }
+    }
+
+    /** "5 minutes", "1 minute", "90 seconds", "1 second" */
+    static String minutes(Duration d) {
+        return JobDeadline.describe(d);
     }
 
     /** " (12 statement rows, 4 segments)" */

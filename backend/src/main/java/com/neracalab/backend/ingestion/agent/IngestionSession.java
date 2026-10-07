@@ -39,6 +39,7 @@ public final class IngestionSession {
     private final Map<StatementColumn, List<WriteResult>> savedStatements = new ConcurrentHashMap<>();
     private final Map<StatementColumn, List<String>> savedSegments = new ConcurrentHashMap<>();
     private volatile boolean sharesSaved;
+    private volatile JobDeadline deadline = JobDeadline.NONE;
     private volatile Instant lastWrite;
     private volatile Instant derivedRefreshedAt;
     private final List<String> notes = new CopyOnWriteArrayList<>();
@@ -63,6 +64,15 @@ public final class IngestionSession {
 
     public ShareCapital shareCapital() {
         return shareCapital;
+    }
+
+    /** The time limit of the job this session runs in ({@link JobDeadline#NONE} outside a job). */
+    public JobDeadline deadline() {
+        return deadline;
+    }
+
+    public void deadline(JobDeadline deadline) {
+        this.deadline = deadline;
     }
 
     /** Replaces the share counts, e.g. with checked counts from a website when the filing gives none. */

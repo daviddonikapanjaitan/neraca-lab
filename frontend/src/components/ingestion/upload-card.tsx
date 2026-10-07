@@ -109,7 +109,7 @@ export function UploadCard({ onSubmitted }: { onSubmitted: (job: IngestionJob) =
             and the data is extracted again.
           </li>
           <li>
-            Processing runs in the background and usually takes 1 to 4 minutes. Its progress shows in the table
+            Processing runs in the background and usually takes 1 to 2 minutes (stopped after 5). Its progress shows in the table
             below.
           </li>
         </ul>
