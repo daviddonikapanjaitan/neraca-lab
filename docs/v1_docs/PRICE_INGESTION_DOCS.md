@@ -164,7 +164,8 @@ independently from the raw Yahoo IDR closes and the raw ECB rates, 0 close diffe
 SMDR (also IDR on IDX, USD reports) is converted the same way: 5,403 days, none without a rate
 (2026-10-05: IDR 398 / 17,950 = USD 0.02217270). Its share counts come from public sources
 (`V1.0.12__data_SMDR_shares.sql`, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so it has
-market caps from 2021-01-04.
+market caps from 2021-01-04. BNGA's audited share counts come from its annual reports
+(`V1.0.13__data_BNGA_shares.sql`), so it has market caps from 2021-12-31.
 
 Market snapshots need share counts. INDY's come from its FY2023 filing (5,202,692,000, derived from
 the exact EPS denominator, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so its market

@@ -88,6 +88,7 @@ neraca_lab/
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
+│               ├── V1.0.13__data_BNGA_shares.sql  (BNGA audited share counts from its annual reports)
 │               └── V1.0.6__data_metrics_valuation.sql
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
@@ -100,7 +101,11 @@ neraca_lab/
 │                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
 │                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
 │                                INDY (2022 .. 2025 annual, 2026-II)
-│                                and SMDR (2022 .. 2025 annual, 2026-II, Infrastructure Industry taxonomy)
+│                                SMDR (2022 .. 2025 annual, 2026-II, Infrastructure Industry taxonomy)
+│                                BNGA (2022 .. 2025 annual, 2026-II) and BTPN (2022 .. 2025 annual), banks:
+│                                Financial and Sharia Industry taxonomy
+│                                and ASGR (2022 .. 2025 annual, 2026-II; the FY2023 workbook declares "In Million"
+│                                but carries full amounts)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -194,8 +199,17 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 
 Both IDX layouts are read: the current one (2023 onwards) and the pre-2023 one of FY2022 and earlier
 filings (date column headers, sheets `1410000 1 CurrentYear` / `2 PriorYear`, highly compressed
-styles). Two IDX taxonomies are supported: General Industry (`1xxxxxx` sheets) and Infrastructure
-Industry (`3xxxxxx` sheets, e.g. SMDR), which has the same statements under other codes. A period's revenue breakdown always comes from one filing: the period's own filing replaces
+styles). Three IDX taxonomies are supported: General Industry (`1xxxxxx` sheets), Infrastructure
+Industry (`3xxxxxx` sheets, e.g. SMDR), which has the same statements under other codes, and Financial
+and Sharia Industry (`4xxxxxx` sheets, banks, e.g. BNGA), mapped with bank definitions (revenue =
+interest + non-interest operating income; current items, short-term debt and EBITDA left NULL).
+When a filing gives no share counts (several share classes, treasury shares, imprecise EPS), the
+ingestion takes Yahoo Finance's published counts, but only those that reproduce the filing's own EPS;
+they never replace a stored count (`neracalab.ingestion.web-share-counts`, on by default).
+Workbooks are not trusted blindly: a declared rounding level contradicted by the amounts (ASGR FY2023:
+"In Million" over full amounts) is corrected when the filing's own EPS confirms it, and an amount a
+filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other gains (losses)") is
+counted once when only that makes profit before tax reconcile; both are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
 it, a later filing's comparative only fills a period without one (issuers re-cut segments between
 years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
 accepted as filed; a model call that times out or hits a provider error is retried
@@ -377,7 +391,10 @@ Java code: `ConfiguredChatModel` resolves `spring.ai.openai.chat.model` of `appl
 `EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
 derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
-`SmdrShareSeedTest` checks the SMDR share-count script (fills once, never replaces a stored count); `SameAsStoredTest` that filing values are compared at the stored column scale
+`FilingMapperFinancialTest` maps the five BNGA and four BTPN filings (Financial and Sharia Industry taxonomy, banks);
+`FilingMapperAsgrTest` the five ASGR filings (full amounts under an "In Million" label, an amount reported twice);
+`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
+`SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
@@ -431,6 +448,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
+| `V1.0.13__data_BNGA_shares.sql`       | BNGA audited year-end share counts 2021 .. 2025 (note 33 of the annual reports; two share classes and treasury shares) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).

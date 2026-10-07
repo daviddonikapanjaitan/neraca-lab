@@ -48,6 +48,7 @@ spring:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
         - classpath:db/V1.0.12__data_SMDR_shares.sql      # share counts not derivable from the filings
+        - classpath:db/V1.0.13__data_BNGA_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.6__data_metrics_valuation.sql
       continue-on-error: false
   jpa:
@@ -69,6 +70,7 @@ neracalab:
     temperature: 0.0
     model-retries: 2        # retries of a model call that failed transiently (timeout, network, 408/429/5xx)
     retry-backoff: 5s       # pause before the first retry, doubled for each further one
+    web-share-counts: ${INGESTION_WEB_SHARE_COUNTS:true}   # Yahoo Finance share counts when a filing gives none
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:

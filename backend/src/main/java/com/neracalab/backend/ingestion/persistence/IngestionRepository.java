@@ -39,7 +39,8 @@ public class IngestionRepository {
     public static final String EXCHANGE = Exchange.IDX.code();
     private static final String DERIVED_SCRIPT = "db/V1.0.6__data_metrics_valuation.sql";
     /** Share counts from outside the filings; they need the company, which an upload may just have created. */
-    private static final String SHARE_SCRIPT = "db/V1.0.12__data_SMDR_shares.sql";
+    private static final List<String> SHARE_SCRIPTS = List.of(
+            "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql");
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
@@ -307,13 +308,31 @@ public class IngestionRepository {
     /** Upserts a share snapshot; known values are never replaced by NULL. */
     @Transactional
     public void upsertShareSnapshot(long companyId, ShareAt share) {
+        upsertShareSnapshot(companyId, share, false);
+    }
+
+    /**
+     * Upserts a share snapshot.
+     *
+     * @param fillOnly true for counts from outside the filing (a website): they only fill empty values and never
+     *                 replace a count stored from a filing or a seed script
+     */
+    @Transactional
+    public void upsertShareSnapshot(long companyId, ShareAt share, boolean fillOnly) {
+        String merge = fillOnly
+                ? """
+                  basic_shares       = COALESCE(share_snapshot.basic_shares, EXCLUDED.basic_shares),
+                  shares_outstanding = COALESCE(share_snapshot.shares_outstanding, EXCLUDED.shares_outstanding),
+                  treasury_shares    = COALESCE(share_snapshot.treasury_shares, EXCLUDED.treasury_shares)"""
+                : """
+                  basic_shares       = COALESCE(EXCLUDED.basic_shares, share_snapshot.basic_shares),
+                  shares_outstanding = COALESCE(EXCLUDED.shares_outstanding, share_snapshot.shares_outstanding),
+                  treasury_shares    = COALESCE(EXCLUDED.treasury_shares, share_snapshot.treasury_shares)""";
         jdbc.sql("""
                         INSERT INTO share_snapshot (company_id, snapshot_date, basic_shares, shares_outstanding, treasury_shares)
                         VALUES (:c, :d, :basic, :outstanding, :treasury)
                         ON CONFLICT ON CONSTRAINT uq_share_snapshot DO UPDATE SET
-                            basic_shares       = COALESCE(EXCLUDED.basic_shares, share_snapshot.basic_shares),
-                            shares_outstanding = COALESCE(EXCLUDED.shares_outstanding, share_snapshot.shares_outstanding),
-                            treasury_shares    = COALESCE(EXCLUDED.treasury_shares, share_snapshot.treasury_shares)""")
+                        """ + merge)
                 .param("c", companyId).param("d", share.date())
                 .param("basic", share.basicShares(), java.sql.Types.NUMERIC)
                 .param("outstanding", share.sharesOutstanding(), java.sql.Types.NUMERIC)
@@ -325,8 +344,10 @@ public class IngestionRepository {
 
     /** Re-runs V1.0.6: market_snapshot, valuation_snapshot and financial_metric for all companies. */
     public void refreshDerivedData() {
-        new ResourceDatabasePopulator(new ClassPathResource(SHARE_SCRIPT), new ClassPathResource(DERIVED_SCRIPT))
-                .execute(dataSource);
+        ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
+        SHARE_SCRIPTS.forEach(s -> populator.addScript(new ClassPathResource(s)));
+        populator.addScript(new ClassPathResource(DERIVED_SCRIPT));
+        populator.execute(dataSource);
         // the script only inserts and updates: drop valuation metrics whose value became NULL (e.g. a
         // re-ingested period without EBITDA), as the price refresh does
         for (long companyId : jdbc.sql("SELECT company_id FROM company").query(Long.class).list()) {

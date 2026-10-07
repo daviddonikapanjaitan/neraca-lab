@@ -75,6 +75,7 @@ public class IngestionTools {
         }
         var shares = session.shareCapital();
         List<String> warnings = new ArrayList<>(info.warnings());
+        warnings.addAll(mapper.warnings());
         shares.checks().stream().filter(c -> c.severity() == Check.Severity.WARNING).map(Check::message).forEach(warnings::add);
         return new FilingOverview(info.fileName(), info.ticker(), info.legalName(), info.sector(), info.industry(),
                 info.currency(), info.rounding(), info.submission(), info.audited(), info.current().key(), columns,
@@ -407,19 +408,20 @@ public class IngestionTools {
 
     @Tool(description = """
             Saves share counts at every date disclosed in the statements of changes in equity (par value \
-            inferred from share capital and EPS, or an exact EPS denominator when share capital is in another \
-            currency). Requires the company.""")
+            inferred from share capital and EPS, an exact EPS denominator when share capital is in another \
+            currency, or - when the filing gives none - published counts checked against the filing's EPS, \
+            which only fill dates without a stored count). Requires the company.""")
     public ShareSaveResult saveShareSnapshots() {
         return locked(() -> {
             CompanyRow company = requireCompany();
             var shares = session.shareCapital();
             if (!shares.resolved()) {
-                throw new IllegalStateException("Share counts could not be derived (no par value fits and the EPS is "
-                        + "not precise enough); share counts are not saved");
+                throw new IllegalStateException("Share counts could not be derived (no par value fits, the EPS is "
+                        + "not precise enough and no published count fits the filing); share counts are not saved");
             }
             List<String> rows = new ArrayList<>();
             for (ShareAt s : shares.snapshots()) {
-                repository.upsertShareSnapshot(company.companyId(), s);
+                repository.upsertShareSnapshot(company.companyId(), s, shares.webSource() != null);
                 rows.add(s.date() + ": " + (s.sharesOutstanding() == null ? "n/a" : s.sharesOutstanding().toPlainString())
                         + " shares (" + s.source() + ")");
             }

@@ -322,6 +322,87 @@ public class YahooFundamentalsClient {
         return new AnnualFigures(List.copyOf(kept), values);
     }
 
+    // ------------------------------------------------------------------ share counts
+
+    /** Time series types of the share counts: outstanding (excl. treasury), issued, treasury. */
+    static final List<String> SHARE_TYPES = List.of(
+            "annualOrdinarySharesNumber", "annualShareIssued", "annualTreasurySharesNumber",
+            "quarterlyOrdinarySharesNumber", "quarterlyShareIssued", "quarterlyTreasurySharesNumber");
+
+    /**
+     * Share counts at one balance-sheet date as Yahoo reports them (split-adjusted to today).
+     *
+     * @param outstanding ordinary shares outstanding, excluding treasury shares
+     * @param issued      shares issued, including treasury shares ({@code null} when not reported)
+     * @param treasury    treasury shares ({@code null} when not reported)
+     */
+    public record ShareCount(LocalDate date, Long outstanding, Long issued, Long treasury) {
+    }
+
+    /**
+     * Year-end and quarter-end share counts of the last ten years, oldest first (no crumb needed).
+     * Empty when Yahoo has none.
+     *
+     * @throws RateLimitedException   HTTP 429
+     * @throws PriceProviderException any other failure
+     */
+    public List<ShareCount> shareCounts(Exchange exchange, String ticker) {
+        String symbol = symbol(exchange, ticker);
+        long now = Instant.now().getEpochSecond();
+        long tenYearsAgo = now - 10L * 366 * 24 * 3600;
+        URI uri = URI.create(baseUrl + "/ws/fundamentals-timeseries/v1/finance/timeseries/" + encode(symbol)
+                + "?type=" + String.join("%2C", SHARE_TYPES) + "&period1=" + tenYearsAgo + "&period2=" + now);
+        PacedHttpClient.Response response = http.get(uri);
+        if (response.status() == 429) {
+            throw new RateLimitedException("Yahoo Finance answered HTTP 429 for the share counts of " + symbol,
+                    response.retryAfter());
+        }
+        if (response.status() == 404) {
+            return List.of();
+        }
+        if (response.status() != 200) {
+            throw new PriceProviderException("Yahoo Finance answered HTTP " + response.status() + " for the share counts of " + symbol);
+        }
+        return shareCounts(parse(response.body(), symbol));
+    }
+
+    /**
+     * Parses a share-count time series response; annual and quarterly points of one date are merged, and
+     * a date whose annual and quarterly values disagree is dropped.
+     */
+    static List<ShareCount> shareCounts(JsonNode root) {
+        Map<LocalDate, Long[]> byDate = new java.util.TreeMap<>();   // {outstanding, issued, treasury}
+        java.util.Set<LocalDate> conflicts = new java.util.HashSet<>();
+        for (JsonNode series : root.path("timeseries").path("result")) {
+            String type = series.path("meta").path("type").path(0).asString(null);
+            if (type == null || !SHARE_TYPES.contains(type)) {
+                continue;
+            }
+            int slot = type.endsWith("OrdinarySharesNumber") ? 0 : type.endsWith("ShareIssued") ? 1 : 2;
+            for (JsonNode point : series.path(type)) {
+                String date = point.path("asOfDate").asString(null);
+                JsonNode raw = point.path("reportedValue").path("raw");
+                if (date == null || !raw.isNumber() || raw.asDouble() < 0 || raw.asDouble() != Math.rint(raw.asDouble())) {
+                    continue;
+                }
+                LocalDate day = LocalDate.parse(date);
+                Long[] values = byDate.computeIfAbsent(day, d -> new Long[3]);
+                if (values[slot] == null) {
+                    values[slot] = raw.asLong();
+                } else if (values[slot] != raw.asLong()) {
+                    conflicts.add(day);
+                }
+            }
+        }
+        List<ShareCount> counts = new ArrayList<>();
+        byDate.forEach((date, v) -> {
+            if (v[0] != null && !conflicts.contains(date)) {
+                counts.add(new ShareCount(date, v[0], v[1], v[2]));
+            }
+        });
+        return counts;
+    }
+
     // ------------------------------------------------------------------ crumb
 
     @FunctionalInterface

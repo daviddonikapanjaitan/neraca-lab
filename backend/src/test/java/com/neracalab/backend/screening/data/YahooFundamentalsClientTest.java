@@ -48,6 +48,34 @@ class YahooFundamentalsClientTest {
         assertThat(bbca.firstTradeDate()).isBefore(LocalDate.of(2010, 1, 1));
     }
 
+    /** BNGA.JK share counts (October 2026): annual and quarterly points merged per date. */
+    @Test
+    void shareCounts() throws IOException {
+        var counts = YahooFundamentalsClient.shareCounts(fixture("yahoo_timeseries_shares_BNGA.json"));
+
+        assertThat(counts).extracting(c -> c.date().toString()).containsExactly("2022-12-31", "2023-12-31",
+                "2024-12-31", "2025-03-31", "2025-06-30", "2025-12-31", "2026-03-31", "2026-06-30");
+        var fy2025 = counts.get(5);
+        assertThat(fy2025.outstanding()).isEqualTo(25_140_519_043L);
+        assertThat(fy2025.issued()).isEqualTo(25_142_205_843L);
+        assertThat(fy2025.treasury()).isEqualTo(1_686_800L);
+        assertThat(counts.getFirst().outstanding()).isEqualTo(24_933_123_961L);
+        // as published: outstanding = issued although 336,000 treasury shares are reported (inconsistent)
+        var h1 = counts.getLast();
+        assertThat(h1.outstanding()).isEqualTo(h1.issued()).isEqualTo(25_141_869_843L);
+        assertThat(h1.treasury()).isEqualTo(336_000L);
+    }
+
+    @Test
+    void shareCountsWithoutTreasuryShares() throws IOException {
+        var counts = YahooFundamentalsClient.shareCounts(fixture("yahoo_timeseries_shares_SMDR.json"));
+
+        assertThat(counts).isNotEmpty().allSatisfy(c -> {
+            assertThat(c.outstanding()).isEqualTo(16_375_600_000L);
+            assertThat(c.treasury()).isNull();
+        });
+    }
+
     @Test
     void symbolsOfTheExchange() {
         assertThat(YahooFundamentalsClient.symbol(Exchange.IDX, "HRTA")).isEqualTo("HRTA.JK");

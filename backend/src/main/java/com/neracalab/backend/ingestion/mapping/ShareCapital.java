@@ -17,6 +17,9 @@ import java.util.List;
  * @param snapshots       share counts at every disclosed date
  * @param weightedCurrent weighted shares of the current period ({@code null} if share capital changed)
  * @param weightedPrior   weighted shares of the prior period
+ * @param webSource       {@code null} when the counts come from the filing; otherwise the website they were
+ *                        fetched from (checked against the filing, see FilingMapper#withWebShareCounts),
+ *                        stored only where no count is stored yet
  */
 public record ShareCapital(
         BigDecimal parValue,
@@ -24,7 +27,8 @@ public record ShareCapital(
         List<ShareAt> snapshots,
         BigDecimal weightedCurrent,
         BigDecimal weightedPrior,
-        List<Check> checks) {
+        List<Check> checks,
+        String webSource) {
 
     /**
      * @param basicShares weighted shares of the period ending on {@code date}, if this filing reports it
