@@ -1,5 +1,6 @@
 // Permission helpers shared by server and client components. The backend enforces every
 // permission on its APIs; these only decide what the UI shows.
+import { INGESTION_HOME } from "@/lib/ingestion-sections"
 import type { Permission, User } from "@/lib/types"
 
 export function hasPermission(user: Pick<User, "permissions"> | null | undefined, permission: Permission): boolean {
@@ -10,7 +11,7 @@ export function hasPermission(user: Pick<User, "permissions"> | null | undefined
 export function homePath(user: Pick<User, "permissions">): string {
   if (hasPermission(user, "COMPANIES")) return "/companies"
   if (hasPermission(user, "SCREENING")) return "/screening"
-  if (hasPermission(user, "INGESTION")) return "/ingestion"
+  if (hasPermission(user, "INGESTION")) return INGESTION_HOME
   if (hasPermission(user, "ADMIN")) return "/admin/users"
   return "/profile"
 }

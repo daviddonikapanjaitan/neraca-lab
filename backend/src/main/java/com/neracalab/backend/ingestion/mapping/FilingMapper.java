@@ -147,6 +147,9 @@ public final class FilingMapper {
     private final StatementTable cashFlow;
     private final List<String> templateProblems = new ArrayList<>();
     private final List<String> warnings = new ArrayList<>();
+    /** Set by {@link #shareCapital()}: why the two columns' EPS contradict each other, {@code null} when they do not. */
+    private volatile String epsContradiction;
+    private volatile boolean epsChecked;
 
     public FilingMapper(IdxWorkbook workbook) {
         this.workbook = workbook;
@@ -541,6 +544,17 @@ public final class FilingMapper {
         BigDecimal dilutedEps = sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx));
         BigDecimal basicShares = shares == null ? null
                 : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
+        BigDecimal[] reconciled = reconcileEps(basicEps, dilutedEps, parent, basicShares, checks);
+        basicEps = reconciled[0];
+        dilutedEps = reconciled[1];
+        java.util.Set<String> rejected = java.util.Set.of();
+        if (epsContradiction() != null) {
+            // neither the EPS nor a share count of this filing can be trusted: cleared even where stored before
+            checks.add(Check.warning("eps_columns", epsContradiction() + "; the EPS and share count of this column are not stored"));
+            basicEps = null;
+            dilutedEps = null;
+            rejected = java.util.Set.of("basic_eps", "diluted_eps", "basic_shares");
+        }
 
         Map<String, BigDecimal> v = new LinkedHashMap<>();
         v.put("revenue", revenue);
@@ -580,7 +594,7 @@ public final class FilingMapper {
             checks.add(epsCheck(parent.divide(basicShares, MathContext.DECIMAL64), basicEps));
         }
         return Optional.of(new MappedStatement("income_statement", column, period(column), income.sheet(),
-                v, how, checks, unclassified));
+                v, how, checks, unclassified, rejected));
     }
 
     /**
@@ -644,6 +658,17 @@ public final class FilingMapper {
         BigDecimal dilutedEps = sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx));
         BigDecimal basicShares = shares == null ? null
                 : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
+        BigDecimal[] reconciled = reconcileEps(basicEps, dilutedEps, parent, basicShares, checks);
+        basicEps = reconciled[0];
+        dilutedEps = reconciled[1];
+        java.util.Set<String> rejected = java.util.Set.of();
+        if (epsContradiction() != null) {
+            // neither the EPS nor a share count of this filing can be trusted: cleared even where stored before
+            checks.add(Check.warning("eps_columns", epsContradiction() + "; the EPS and share count of this column are not stored"));
+            basicEps = null;
+            dilutedEps = null;
+            rejected = java.util.Set.of("basic_eps", "diluted_eps", "basic_shares");
+        }
 
         Map<String, BigDecimal> v = new LinkedHashMap<>();
         v.put("revenue", revenue);
@@ -690,7 +715,112 @@ public final class FilingMapper {
         if (basicEps != null && parent != null && basicShares != null && basicShares.signum() != 0) {
             checks.add(epsCheck(parent.divide(basicShares, MathContext.DECIMAL64), basicEps));
         }
-        return new MappedStatement("income_statement", column, period(column), income.sheet(), v, how, checks, unclassified);
+        return new MappedStatement("income_statement", column, period(column), income.sheet(), v, how, checks, unclassified,
+                rejected);
+    }
+
+    /** Why the two columns' EPS contradict each other ({@link #epsColumnsContradict}), {@code null} when they do not. */
+    String epsContradiction() {
+        if (!epsChecked) {
+            shareCapital();
+        }
+        return epsContradiction;
+    }
+
+    /**
+     * The EPS of a column fits a par value when profit attributable to the parent / EPS (within the EPS's rounding)
+     * lies in the share count range the share capital gives over the period: from 80% of the smaller count (treasury
+     * shares) to 105% of the larger one. Each column with that evidence must fit the same par value. NCKL's FY2024
+     * workbook files a current EPS of 10.11 (101.1, one more decimal place off): with share capital 6,309,860 million
+     * it fits only par 10 (631 billion shares), while the prior column's 92.39 fits only par 100 (share capital
+     * 5,510,100 .. 6,309,860 million = 55.1 .. 63.1 billion shares). Which column is wrong is not decidable from the
+     * workbook, so it gives no share counts and neither column's EPS is stored; the other filings of the company
+     * agree and supply them. {@code null} when the columns do not contradict (or cannot be checked).
+     */
+    private String epsColumnsContradict(BigDecimal[] currentStartEnd, BigDecimal[] priorStartEnd) {
+        List<BigDecimal> current = supportedPars(StatementColumn.CURRENT_PERIOD, currentStartEnd);
+        List<BigDecimal> prior = supportedPars(StatementColumn.PRIOR_PERIOD, priorStartEnd);
+        if (current == null || prior == null || current.isEmpty() || prior.isEmpty()
+                || current.stream().anyMatch(p -> prior.stream().anyMatch(q -> q.compareTo(p) == 0))) {
+            return null;
+        }
+        return "The two columns' EPS contradict each other: " + period(StatementColumn.CURRENT_PERIOD).key() + " basic EPS "
+                + eps(EPS_BASIC, 0).toPlainString() + " fits par value " + plain(current) + ", "
+                + period(StatementColumn.PRIOR_PERIOD).key() + " basic EPS " + eps(EPS_BASIC, 1).toPlainString()
+                + " fits par value " + plain(prior) + "; no share counts are derived from this filing";
+    }
+
+    private static String plain(List<BigDecimal> values) {
+        return values.stream().map(BigDecimal::toPlainString).toList().toString();
+    }
+
+    /** Standard par values the column's EPS fits, {@code null} without evidence (no EPS, profit or share capital). */
+    private List<BigDecimal> supportedPars(StatementColumn column, BigDecimal[] startEnd) {
+        int ctx = durationIndex(column);
+        if (income == null || ctx < 0 || startEnd == null || startEnd[0] == null || startEnd[1] == null) {
+            return null;
+        }
+        BigDecimal parent = amount(income.value(PROFIT_PARENT, ctx));
+        BigDecimal eps = eps(EPS_BASIC, ctx);
+        if (parent == null || eps == null || parent.signum() <= 0 || eps.signum() <= 0) {
+            return null;
+        }
+        BigDecimal halfUlp = BigDecimal.ONE.movePointLeft(Math.max(0, eps.stripTrailingZeros().scale())).divide(BigDecimal.valueOf(2));
+        BigDecimal low = parent.divide(eps.add(halfUlp), MathContext.DECIMAL64);
+        BigDecimal high = eps.subtract(halfUlp).signum() > 0 ? parent.divide(eps.subtract(halfUlp), MathContext.DECIMAL64) : null;
+        BigDecimal min = startEnd[0].min(startEnd[1]);
+        BigDecimal max = startEnd[0].max(startEnd[1]);
+        List<BigDecimal> fits = new ArrayList<>();
+        for (BigDecimal par : STANDARD_PAR_VALUES) {
+            BigDecimal from = min.divide(par, MathContext.DECIMAL64).multiply(new BigDecimal("0.80"));
+            BigDecimal to = max.divide(par, MathContext.DECIMAL64).multiply(new BigDecimal("1.05"));
+            if ((high == null || high.compareTo(from) >= 0) && low.compareTo(to) <= 0) {
+                fits.add(par);
+            }
+        }
+        return fits;
+    }
+
+    private static final BigDecimal EPS_MISMATCH = new BigDecimal("3");
+
+    /**
+     * Checks the filed EPS against the filing's own share count (weighted shares from the share capital, known when
+     * it did not change in the period). Within a factor of 3 the EPS is kept as filed (the usual check then reports
+     * small differences). A filed EPS that is off by a power of ten - NCKL's FY2024 workbook files 0.00001011,
+     * i.e. 10.11 after its rounding unit, for an EPS of 101.1 (6,379,504 million / 63.1 billion shares; its FY2025
+     * workbook's comparative says 101.1) - is corrected when profit / shares then confirms it within 2%. Any other
+     * large mismatch is not stored (NULL, so a later filing's comparative can fill it). Diluted EPS follows basic.
+     */
+    private static BigDecimal[] reconcileEps(BigDecimal basic, BigDecimal diluted, BigDecimal parent, BigDecimal shares,
+                                             List<Check> checks) {
+        if (basic == null || parent == null || shares == null || shares.signum() <= 0 || basic.signum() == 0
+                || parent.signum() == 0 || parent.signum() != basic.signum()) {
+            return new BigDecimal[] {basic, diluted};
+        }
+        BigDecimal perShare = parent.divide(shares, MathContext.DECIMAL64);
+        BigDecimal ratio = perShare.divide(basic, MathContext.DECIMAL64);    // how many times the filed EPS is too small
+        if (ratio.compareTo(EPS_MISMATCH) < 0 && ratio.compareTo(BigDecimal.ONE.divide(EPS_MISMATCH, MathContext.DECIMAL64)) > 0) {
+            return new BigDecimal[] {basic, diluted};
+        }
+        int k = (int) Math.round(Math.log10(ratio.doubleValue()));
+        BigDecimal factor = BigDecimal.ONE.scaleByPowerOfTen(k);
+        if (k != 0 && ratio.divide(factor, MathContext.DECIMAL64).subtract(BigDecimal.ONE).abs()
+                .compareTo(WEB_SHARES_EPS_TOLERANCE) <= 0) {
+            BigDecimal corrected = normalized(basic.multiply(factor));
+            checks.add(Check.warning("eps_scale", "Basic EPS " + basic.toPlainString() + " is " + factor.toPlainString()
+                    + " times off: profit attributable to the parent / " + shares.toPlainString() + " shares = "
+                    + perShare.setScale(4, RoundingMode.HALF_UP).toPlainString() + "; stored as " + corrected.toPlainString()));
+            return new BigDecimal[] {corrected, diluted == null ? null : normalized(diluted.multiply(factor))};
+        }
+        checks.add(Check.warning("eps", "Basic EPS " + basic.toPlainString() + " contradicts profit attributable to the parent / "
+                + shares.toPlainString() + " shares = " + perShare.setScale(4, RoundingMode.HALF_UP).toPlainString()
+                + "; EPS not stored"));
+        return new BigDecimal[] {null, null};
+    }
+
+    private static BigDecimal normalized(BigDecimal v) {
+        BigDecimal n = v.stripTrailingZeros();
+        return n.scale() < 0 ? n.setScale(0) : n;
     }
 
     /** Profit before tax -> total profit -> attribution, shared by both income statement templates. */
@@ -787,7 +917,8 @@ public final class FilingMapper {
         how.put("lease_liabilities", "current + long-term finance lease liabilities");
         how.put("marketable_securities", "short-term investments + current financial assets at fair value (NULL when none)");
         how.put("shares_outstanding", sharesHow(outstanding, shares));
-        return Optional.of(new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of()));
+        return Optional.of(new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of(),
+                rejectedShares(shares)));
     }
 
     private static String sharesHow(BigDecimal outstanding, ShareCapital shares) {
@@ -797,6 +928,12 @@ public final class FilingMapper {
         return shares.webSource() != null
                 ? "shares outstanding at period end from " + shares.webSource() + ", checked against the filing's EPS"
                 : shares.parValue() != null ? "common stock / par value, no treasury shares" : shares.basis();
+    }
+
+    /** A filing whose EPS columns contradict each other gives no share count: a count stored from it before is cleared. */
+    private java.util.Set<String> rejectedShares(ShareCapital shares) {
+        boolean fromWeb = shares != null && shares.webSource() != null;
+        return epsContradiction() != null && !fromWeb ? java.util.Set.of("shares_outstanding") : java.util.Set.of();
     }
 
     /** Shares outstanding at the column's balance-sheet date, from the statements of changes in equity. */
@@ -889,7 +1026,8 @@ public final class FilingMapper {
         how.put("lease_liabilities", "finance lease liabilities (NULL when not reported separately)");
         how.put("retained_earnings", "appropriated (general, legal and specific reserves) + unappropriated retained earnings");
         how.put("shares_outstanding", sharesHow(outstanding, shares));
-        return new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of());
+        return new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of(),
+                rejectedShares(shares));
     }
 
     /**
@@ -1444,14 +1582,23 @@ public final class FilingMapper {
             treasuryStartEnd.put(sheetName, te);
         }
         if (positions.isEmpty()) {
+            epsContradiction = null;
+            epsChecked = true;
             checks.add(Check.warning("share_capital", "No share capital in the statements of changes in equity"));
             return new ShareCapital(null, null, List.of(), null, null, checks, null);
         }
 
         BigDecimal[] currentYear = startEnd.get(IdxSheets.EQUITY);
         BigDecimal[] priorYear = startEnd.get(IdxSheets.EQUITY_PRIOR_YEAR);
-        BigDecimal par = inferParValue(StatementColumn.CURRENT_PERIOD, currentYear == null ? null : currentYear[1], checks);
-        if (par == null) {
+        String contradiction = epsColumnsContradict(currentYear, priorYear);
+        epsContradiction = contradiction;
+        epsChecked = true;
+        if (contradiction != null) {
+            checks.add(Check.warning("eps_columns", contradiction));
+        }
+        BigDecimal par = contradiction != null ? null
+                : inferParValue(StatementColumn.CURRENT_PERIOD, currentYear == null ? null : currentYear[1], checks);
+        if (par == null && contradiction == null) {
             par = inferParValue(StatementColumn.PRIOR_PERIOD, priorYear == null ? null : priorYear[1], checks);
         }
         EpsShares epsShares = null;
@@ -1459,7 +1606,7 @@ public final class FilingMapper {
         if (par != null) {
             basis = "par value " + par.toPlainString();
             checks.add(Check.ok("par_value", "Inferred par value " + par.toPlainString() + " per share"));
-        } else {
+        } else if (contradiction == null) {
             epsShares = sharesFromEps(StatementColumn.CURRENT_PERIOD, currentYear, treasuryStartEnd.get(IdxSheets.EQUITY));
             if (epsShares == null) {
                 epsShares = sharesFromEps(StatementColumn.PRIOR_PERIOD, priorYear, treasuryStartEnd.get(IdxSheets.EQUITY_PRIOR_YEAR));

@@ -107,6 +107,8 @@ neraca_lab/
 │                                ASGR, SIMP and CEKA (2022 .. 2025 annual, 2026-II; quirks: full amounts under "In Million",
 │                                EPS filed in millions, revenue not tagged, one amount reported twice, a product in two
 │                                revenue slots, a cash flow section without activity)
+│                                MYOR, NCKL, PTSN: workbooks directly in data/<TICKER>/ (NCKL FY2024: EPS one decimal
+│                                place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -154,7 +156,7 @@ role has one or more permissions, and the backend checks them on every API reque
 | Permission  | Opens                                                                    |
 |-------------|--------------------------------------------------------------------------|
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
-| `INGESTION` | Ingestion page, upload / price / job APIs (and the company list)         |
+| `INGESTION` | Ingestion pages, upload / price / job APIs (and the company list)        |
 | `COMPANIES` | Companies pages and company APIs                                         |
 | `SCREENING` | Screening page, screening runs, reports and PDF export                   |
 
@@ -213,7 +215,10 @@ filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other ga
 counted once when only that makes profit before tax reconcile; an EPS filed in the rounding unit (SIMP
 H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
-stored values). All of these are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
+stored values). A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
+contradict each other (NCKL FY2024) gives no share counts and its EPS is cleared, and an EPS off by a power of
+ten is corrected (INDF H1 2024: 0.000439 -> 439); a workbook re-run refreshes the periods it wrote. All of
+these are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
 it, a later filing's comparative only fills a period without one (issuers re-cut segments between
 years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
 accepted as filed; a model call that times out or hits a provider error is retried
@@ -365,7 +370,9 @@ npm run dev                   # http://localhost:3000
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/screening`                     | AI stock screening: exchange, market cap, top N, investor agents (multi-select); saved screenings |
 | `/screening/{id}`                | screening report: progress, executive summary, ranking with per-agent scores, stock details (news, reasoning, reflection), funnel, token usage, PDF download |
-| `/ingestion`                     | upload an IDX XBRL `.xlsx`, fetch prices (exchange / ticker dropdowns), update the screening data, live table of every job with details and file download |
+| `/ingestion/xbrl`                | Ingestion dropdown (like the Admin Center), IDX XBRL: upload an `.xlsx` financial statement (`/ingestion` opens this page) |
+| `/ingestion/prices`              | Price Ingestion: fetch daily prices (exchange / ticker dropdowns) |
+| `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
 | `/admin/users`, `/admin/roles`   | Admin Center (`ADMIN`): add, view, update and delete users and roles                                                                                               |
 | `/profile`                       | own profile: picture, address, phone, date of birth (username and email are read-only)                                                                             |
@@ -373,7 +380,8 @@ npm run dev                   # http://localhost:3000
 Pages fetch the backend in Server Components (`NERACA_API_URL`, server-side only), so the
 backend needs no CORS setup. The login stores the session token in an httpOnly cookie; the
 Next.js server sends it to the backend as a bearer token, and the sidebar shows only the pages the
-user's permissions allow. The ingestion page's uploads, price requests, job polling and file
+user's permissions allow. Every Ingestion page shows the live table of every job (details, file
+download). The ingestion pages' uploads, price requests, job polling and file
 downloads go through Next.js Route Handlers (`src/app/api/`), so the browser never calls the backend
 directly either. Details: [`docs/v1_docs/FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md).
 
@@ -402,7 +410,7 @@ derives INDY's share count from the FY2023 EPS and no count from the other INDY 
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
 `FilingMapperFinancialTest` maps the five BNGA and four BTPN filings (Financial and Sharia Industry taxonomy, banks);
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `FilingMapperCekaTest` the five CEKA filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);

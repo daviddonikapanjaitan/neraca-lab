@@ -300,12 +300,17 @@ public class IngestionTools {
                 repository.advanceFiscalYearEnd(company.companyId(),
                         info.current().isFullYear() ? info.current().end() : info.priorYearEnd().end());
             }
+            // a comparative period this very filing wrote (its source_filing) is refreshed by it, so re-running a
+            // filing after a mapper fix corrects its own data (INDF H1 2024: EPS 0.000439 -> 439); other filings
+            // only fill gaps
+            boolean own = !current && session.info().fileName().equals(repository.sourceFiling(periodId).orElse(null));
             List<WriteResult> writes = new ArrayList<>();
             for (MappedStatement s : statements) {
-                writes.add(repository.writeStatement(company.companyId(), periodId, s, current));
+                writes.add(repository.writeStatement(company.companyId(), periodId, s, current || own));
             }
             session.statementsSaved(column, writes);
-            return new SaveResult(column, period.key(), current ? "REPLACE (current period)" : "FILL GAPS (comparative)",
+            return new SaveResult(column, period.key(), current ? "REPLACE (current period)"
+                    : own ? "REFRESH (this filing wrote the period)" : "FILL GAPS (comparative)",
                     writes, "Saved. Remaining work is listed by verifyStoredData.");
         });
     }

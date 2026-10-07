@@ -153,6 +153,12 @@ public class IngestionRepository {
         return periodId(companyId, period).orElseThrow();
     }
 
+    /** The filing a period's data came from (its own filing, else the first filing that stated it). */
+    public Optional<String> sourceFiling(long periodId) {
+        return jdbc.sql("SELECT source_filing FROM reporting_period WHERE period_id = :p").param("p", periodId)
+                .query((rs, i) -> rs.getString(1)).optional();
+    }
+
     public Optional<Long> periodId(long companyId, PeriodRef period) {
         return jdbc.sql("""
                         SELECT period_id FROM reporting_period
@@ -200,7 +206,8 @@ public class IngestionRepository {
         String insertCols = String.join(", ", columns);
         String params = String.join(", ", columns.stream().map(c -> ":" + c).toList());
         String updates = String.join(",\n    ", columns.stream()
-                .map(c -> c + " = COALESCE(EXCLUDED." + c + ", " + table + "." + c + ")").toList());
+                .map(c -> statement.rejected().contains(c) ? c + " = EXCLUDED." + c
+                        : c + " = COALESCE(EXCLUDED." + c + ", " + table + "." + c + ")").toList());
         String constraint = "uq_" + table;
         var spec = jdbc.sql("INSERT INTO " + table + " (company_id, period_id, " + insertCols + ")\n"
                         + "VALUES (:company_id, :period_id, " + params + ")\n"

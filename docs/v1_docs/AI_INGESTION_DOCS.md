@@ -381,6 +381,22 @@ Rules:
   value; the period's own filing replaces stored values, but a field it does not report keeps the value
   another filing stored. Whatever the upload order, SIMP FY2023 ends with the revenue of the FY2024
   filing and every other figure of its own filing.
+- **EPS checked against the share count.** A filed EPS is checked against the filing's own share
+  count. (1) Across columns: each column's profit attributable to the parent / EPS must fit the share
+  capital range of its period (80% of the smaller .. 105% of the larger count) at the same par value.
+  NCKL's FY2024 workbook files its current EPS one more decimal place off (10.11 after its rounding unit,
+  for 101.1): it fits only par 10, the prior column's 92.39 only par 100. Before, par 10 was inferred and
+  631 billion shares (ten times too many) were stored. Now a workbook whose columns contradict each other
+  gives no share counts, and its EPS and share counts are *rejected*: stored as NULL even over a value
+  stored before (`MappedStatement.rejected`); the company's other filings agree and supply them (NCKL
+  FY2025's comparative fills FY2024 with EPS 101.1 and 63,098,600,000 shares). (2) Within a column, with
+  the share count known: an EPS off by exactly a power of ten is corrected when profit / shares confirms
+  it within 2% (INDF's H1 2025 workbook files the H1 2024 EPS in millions, 0.000439, stored as 439); any
+  other mismatch of 3x or more is not stored.
+- **A filing refreshes what it wrote.** A comparative column normally only fills gaps, but a period
+  whose data this very filing wrote (`reporting_period.source_filing`) is refreshed by it (save mode
+  "REFRESH"), so re-running a workbook after a mapper fix corrects its own data (INDF H1 2024: 0.000439
+  -> 439).
 - **A cash flow section without any activity.** CEKA's H1 2026 cash flow has no financing line and no
   financing total. A missing section total counts as 0 (warning) only when the section has no reported
   line and the other totals add up to the net change in cash exactly (228,589,953,937 - 9,003,638,218 =
@@ -426,6 +442,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `DeterministicFinisherTest` (Docker Postgres, rolled back) | a model failing every call: HRTA H1 2026 is still stored, refreshed and verified complete by the deterministic finish; display names from legal names; segments keep the filing's names and types and reuse stored English names |
 | `JobDeadlineTest` (unit) | the time limit inside the agent: a slow model call stops at it, no retry pause past it, no model call and no tool after it, the planner's fallback does not swallow it |
 | `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit |
+| `FilingMapperEpsTest` (unit) | NCKL FY2024: contradicting EPS columns give no share counts, EPS and share counts rejected (cleared), FY2025's comparative gives 101.1 at par 100; all MYOR, NCKL and PTSN filings map without errors |
 | `FilingMapperCekaTest` (unit) | all five CEKA filings without errors; "Produk Palm Kernel" domestic and export kept as two segments (FY2025 total = revenue 9,733,304,188,977); a repeated name blocks the breakdown; H1 2026 financing 0 without lines or total; H1 2025 interest also filed as "Other expenses" counted once |
 | `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
 | `IngestionAgentModelTest` (unit) | Spring AI fills a missing model with `gpt-5-mini`; the agent's options name the configured model and the model a response reports is recorded in `metrics.models` |

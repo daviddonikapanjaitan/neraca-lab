@@ -32,22 +32,93 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { hasPermission, homePath } from "@/lib/permissions"
 import type { Permission, User } from "@/lib/types"
 
-const navMarket: { title: string; url: string; icon: React.ReactNode; permission: Permission }[] = [
+interface NavPage {
+  title: string
+  url: string
+}
+
+interface NavItem {
+  title: string
+  /** the page itself, or the prefix of its sub-pages */
+  url: string
+  icon: React.ReactNode
+  permission: Permission
+  /** sub-pages: the entry is a dropdown like the Admin Center */
+  pages?: NavPage[]
+}
+
+const navMarket: NavItem[] = [
   { title: "Companies", url: "/companies", icon: <Building2Icon />, permission: "COMPANIES" },
   { title: "Screening", url: "/screening", icon: <ScanSearchIcon />, permission: "SCREENING" },
-  { title: "Ingestion", url: "/ingestion", icon: <DatabaseZapIcon />, permission: "INGESTION" },
+  {
+    title: "Ingestion",
+    url: "/ingestion",
+    icon: <DatabaseZapIcon />,
+    permission: "INGESTION",
+    pages: INGESTION_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
+  },
 ]
 
-const navAdmin = [
+const navAdmin: NavPage[] = [
   { title: "User Management", url: "/admin/users" },
   { title: "Role Management", url: "/admin/roles" },
 ]
 
 function isActive(pathname: string, url: string) {
   return pathname === url || pathname.startsWith(`${url}/`)
+}
+
+/**
+ * A sidebar entry with sub-pages (Admin Center, Ingestion): a dropdown, open while one of its pages is shown. In
+ * the collapsed sidebar there is no room for the sub-menu: the icon opens the first page.
+ */
+function NavDropdown({
+  title,
+  icon,
+  active,
+  pages,
+  pathname,
+  iconOnly,
+}: {
+  title: string
+  icon: React.ReactNode
+  active: boolean
+  pages: NavPage[]
+  pathname: string
+  iconOnly: boolean
+}) {
+  if (iconOnly) {
+    return (
+      <SidebarMenuButton isActive={active} tooltip={title} render={<Link href={pages[0].url} />}>
+        {icon}
+        <span>{title}</span>
+      </SidebarMenuButton>
+    )
+  }
+  return (
+    <Collapsible defaultOpen={active} className="group/collapsible">
+      <CollapsibleTrigger render={<SidebarMenuButton isActive={active} tooltip={title} />}>
+        {icon}
+        <span>{title}</span>
+        <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[open]/collapsible:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <SidebarMenuSub>
+          {pages.map((page) => (
+            <SidebarMenuSubItem key={page.url}>
+              <SidebarMenuSubButton isActive={isActive(pathname, page.url)} render={<Link href={page.url} />}>
+                <span>{page.title}</span>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
+      </CollapsibleContent>
+    </Collapsible>
+  )
 }
 
 /** Navigation filtered by the user's permissions, the Admin Center group and the user (profile, log out). */
@@ -97,14 +168,25 @@ export function AppSidebar({ user, ...props }: React.ComponentProps<typeof Sideb
             <SidebarMenu>
               {market.map((item) => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    isActive={isActive(pathname, item.url)}
-                    tooltip={item.title}
-                    render={<Link href={item.url} />}
-                  >
-                    {item.icon}
-                    <span>{item.title}</span>
-                  </SidebarMenuButton>
+                  {item.pages ? (
+                    <NavDropdown
+                      title={item.title}
+                      icon={item.icon}
+                      active={isActive(pathname, item.url)}
+                      pages={item.pages}
+                      pathname={pathname}
+                      iconOnly={iconOnly}
+                    />
+                  ) : (
+                    <SidebarMenuButton
+                      isActive={isActive(pathname, item.url)}
+                      tooltip={item.title}
+                      render={<Link href={item.url} />}
+                    >
+                      {item.icon}
+                      <span>{item.title}</span>
+                    </SidebarMenuButton>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
@@ -115,34 +197,14 @@ export function AppSidebar({ user, ...props }: React.ComponentProps<typeof Sideb
             <SidebarGroupLabel>Administration</SidebarGroupLabel>
             <SidebarMenu>
               <SidebarMenuItem>
-                {iconOnly ? (
-                  // collapsed sidebar: no room for the sub-menu, the icon opens the first page
-                  <SidebarMenuButton isActive={adminActive} tooltip="Admin Center" render={<Link href="/admin/users" />}>
-                    <ShieldCheckIcon />
-                    <span>Admin Center</span>
-                  </SidebarMenuButton>
-                ) : (
-                  <Collapsible defaultOpen={adminActive} className="group/collapsible">
-                    <CollapsibleTrigger
-                      render={<SidebarMenuButton isActive={adminActive} tooltip="Admin Center" />}
-                    >
-                      <ShieldCheckIcon />
-                      <span>Admin Center</span>
-                      <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[open]/collapsible:rotate-90" />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        {navAdmin.map((item) => (
-                          <SidebarMenuSubItem key={item.url}>
-                            <SidebarMenuSubButton isActive={isActive(pathname, item.url)} render={<Link href={item.url} />}>
-                              <span>{item.title}</span>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
-                  </Collapsible>
-                )}
+                <NavDropdown
+                  title="Admin Center"
+                  icon={<ShieldCheckIcon />}
+                  active={adminActive}
+                  pages={navAdmin}
+                  pathname={pathname}
+                  iconOnly={iconOnly}
+                />
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroup>
