@@ -1,0 +1,388 @@
+{
+ "timeseries": {
+  "result": [
+   {
+    "meta": {
+     "symbol": [
+      "BNGA.JK"
+     ],
+     "type": [
+      "annualOrdinarySharesNumber"
+     ]
+    },
+    "timestamp": [
+     1672444800,
+     1703980800,
+     1735603200,
+     1767139200
+    ],
+    "annualOrdinarySharesNumber": [
+     {
+      "dataId": 23393,
+      "asOfDate": "2022-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 24933123961.0,
+       "fmt": "24.93B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2023-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25024439161.0,
+       "fmt": "25.02B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2024-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25137965543.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25140519043.0,
+       "fmt": "25.14B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "BNGA.JK"
+     ],
+     "type": [
+      "quarterlyTreasurySharesNumber"
+     ]
+    },
+    "timestamp": [
+     1743379200,
+     1751241600,
+     1767139200,
+     1774915200,
+     1782777600
+    ],
+    "quarterlyTreasurySharesNumber": [
+     {
+      "dataId": 23395,
+      "asOfDate": "2025-03-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 4240300.0,
+       "fmt": "4.24M"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2025-06-30",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 1737900.0,
+       "fmt": "1.74M"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2025-12-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 1686800.0,
+       "fmt": "1.69M"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2026-03-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 162000.0,
+       "fmt": "162.00k"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2026-06-30",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 336000.0,
+       "fmt": "336.00k"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "BNGA.JK"
+     ],
+     "type": [
+      "annualTreasurySharesNumber"
+     ]
+    },
+    "timestamp": [
+     1672444800,
+     1703980800,
+     1735603200,
+     1767139200
+    ],
+    "annualTreasurySharesNumber": [
+     {
+      "dataId": 23395,
+      "asOfDate": "2022-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 198482882.0,
+       "fmt": "198.48M"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2023-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 107167682.0,
+       "fmt": "107.17M"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2024-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 4240300.0,
+       "fmt": "4.24M"
+      }
+     },
+     {
+      "dataId": 23395,
+      "asOfDate": "2025-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 1686800.0,
+       "fmt": "1.69M"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "BNGA.JK"
+     ],
+     "type": [
+      "quarterlyShareIssued"
+     ]
+    },
+    "timestamp": [
+     1743379200,
+     1751241600,
+     1767139200,
+     1774915200,
+     1782777600
+    ],
+    "quarterlyShareIssued": [
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-03-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142205843.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-06-30",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142205843.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-12-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142205843.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2026-03-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142205843.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2026-06-30",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25141869843.0,
+       "fmt": "25.14B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "BNGA.JK"
+     ],
+     "type": [
+      "annualShareIssued"
+     ]
+    },
+    "timestamp": [
+     1672444800,
+     1703980800,
+     1735603200,
+     1767139200
+    ],
+    "annualShareIssued": [
+     {
+      "dataId": 23532,
+      "asOfDate": "2022-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25131606843.0,
+       "fmt": "25.13B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2023-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25131606843.0,
+       "fmt": "25.13B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2024-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142205843.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-12-31",
+      "periodType": "12M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142205843.0,
+       "fmt": "25.14B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "BNGA.JK"
+     ],
+     "type": [
+      "quarterlyOrdinarySharesNumber"
+     ]
+    },
+    "timestamp": [
+     1743379200,
+     1751241600,
+     1767139200,
+     1774915200,
+     1782777600
+    ],
+    "quarterlyOrdinarySharesNumber": [
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-03-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25137965543.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-06-30",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25140467943.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-12-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25140519043.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2026-03-31",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25142043843.0,
+       "fmt": "25.14B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2026-06-30",
+      "periodType": "3M",
+      "currencyCode": "IDR",
+      "reportedValue": {
+       "raw": 25141869843.0,
+       "fmt": "25.14B"
+      }
+     }
+    ]
+   }
+  ],
+  "error": null
+ }
+}

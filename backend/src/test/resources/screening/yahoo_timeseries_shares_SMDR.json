@@ -1,0 +1,281 @@
+{
+ "timeseries": {
+  "result": [
+   {
+    "meta": {
+     "symbol": [
+      "SMDR.JK"
+     ],
+     "type": [
+      "quarterlyShareIssued"
+     ]
+    },
+    "timestamp": [
+     1751241600,
+     1759190400,
+     1767139200,
+     1774915200,
+     1782777600
+    ],
+    "quarterlyShareIssued": [
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-06-30",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-09-30",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-12-31",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2026-03-31",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2026-06-30",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "SMDR.JK"
+     ],
+     "type": [
+      "annualShareIssued"
+     ]
+    },
+    "timestamp": [
+     1672444800,
+     1703980800,
+     1735603200,
+     1767139200
+    ],
+    "annualShareIssued": [
+     {
+      "dataId": 23532,
+      "asOfDate": "2022-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2023-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2024-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23532,
+      "asOfDate": "2025-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "SMDR.JK"
+     ],
+     "type": [
+      "quarterlyTreasurySharesNumber"
+     ]
+    }
+   },
+   {
+    "meta": {
+     "symbol": [
+      "SMDR.JK"
+     ],
+     "type": [
+      "quarterlyOrdinarySharesNumber"
+     ]
+    },
+    "timestamp": [
+     1751241600,
+     1759190400,
+     1767139200,
+     1774915200,
+     1782777600
+    ],
+    "quarterlyOrdinarySharesNumber": [
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-06-30",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-09-30",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-12-31",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2026-03-31",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2026-06-30",
+      "periodType": "3M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "SMDR.JK"
+     ],
+     "type": [
+      "annualOrdinarySharesNumber"
+     ]
+    },
+    "timestamp": [
+     1672444800,
+     1703980800,
+     1735603200,
+     1767139200
+    ],
+    "annualOrdinarySharesNumber": [
+     {
+      "dataId": 23393,
+      "asOfDate": "2022-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2023-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2024-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     },
+     {
+      "dataId": 23393,
+      "asOfDate": "2025-12-31",
+      "periodType": "12M",
+      "currencyCode": "USD",
+      "reportedValue": {
+       "raw": 16375600000.0,
+       "fmt": "16.38B"
+      }
+     }
+    ]
+   },
+   {
+    "meta": {
+     "symbol": [
+      "SMDR.JK"
+     ],
+     "type": [
+      "annualTreasurySharesNumber"
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}

@@ -32,4 +32,24 @@ class IdxWorkbookReaderTest {
         assertThat(IdxWorkbookReader.canonicalName("3611000 2 PriorYear")).isEqualTo(IdxSheets.PPE_PRIOR_YEAR);
         assertThat(IdxWorkbookReader.canonicalName("3617000")).isEqualTo(IdxSheets.REVENUE_BY_TYPE);
     }
+
+    @Test
+    void financialNamesGetTheGeneralCodes() {
+        assertThat(IdxWorkbookReader.canonicalName("4220000")).isEqualTo(IdxSheets.BALANCE_SHEET_LIQUIDITY);
+        assertThat(IdxWorkbookReader.canonicalName("4322000")).isEqualTo(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX);
+        assertThat(IdxWorkbookReader.canonicalName("4312000")).isEqualTo(IdxSheets.INCOME_BY_NATURE);
+        assertThat(IdxWorkbookReader.canonicalName("4510000")).isEqualTo(IdxSheets.CASH_FLOW_DIRECT);
+        assertThat(IdxWorkbookReader.canonicalName("4410000 2 PriorYear")).isEqualTo(IdxSheets.EQUITY_PRIOR_YEAR);
+        assertThat(IdxWorkbookReader.canonicalName("4611000PY")).isEqualTo(IdxSheets.PPE_PRIOR_YEAR);
+        assertThat(IdxWorkbookReader.canonicalName("4611100a")).isEqualTo("4611100a");   // a note sheet, not used
+    }
+
+    @Test
+    void taxonomyFollowsTheFiledCode() {
+        assertThat(IdxTaxonomy.of("1210000")).isEqualTo(IdxTaxonomy.GENERAL);
+        assertThat(IdxTaxonomy.of("3410000PY")).isEqualTo(IdxTaxonomy.INFRASTRUCTURE);
+        assertThat(IdxTaxonomy.of("4220000")).isEqualTo(IdxTaxonomy.FINANCIAL);
+        assertThat(IdxTaxonomy.of("Context")).isNull();
+        assertThat(IdxTaxonomy.FINANCIAL.code(IdxSheets.BALANCE_SHEET_LIQUIDITY)).isEqualTo("4220000");
+    }
 }

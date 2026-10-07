@@ -18,6 +18,7 @@ import com.neracalab.backend.ingestion.mapping.MappedStatement.UnclassifiedLine;
 import com.neracalab.backend.ingestion.mapping.SegmentExtraction.SegmentLine;
 import com.neracalab.backend.ingestion.mapping.ShareCapital.ShareAt;
 import com.neracalab.backend.ingestion.xlsx.IdxSheets;
+import com.neracalab.backend.ingestion.xlsx.IdxTaxonomy;
 import com.neracalab.backend.ingestion.xlsx.IdxWorkbook;
 import com.neracalab.backend.ingestion.xlsx.RawSheet;
 
@@ -42,10 +43,14 @@ public final class FilingMapper {
     static final String EPS_BASIC_DISC = "Basic earnings (loss) per share from discontinued operations";
     static final String EPS_DILUTED = "Diluted earnings (loss) per share from continuing operations";
     static final String EPS_DILUTED_DISC = "Diluted earnings (loss) per share from discontinued operations";
+    /** Financial and Sharia Industry: operating profit, reported before non-operating items. */
+    static final String PROFIT_FROM_OPERATION = "Total profit from operation";
+    static final String CASH_BEGINNING = "Cash and cash equivalents cash flows, beginning of the period";
+    static final String CASH_END = "Cash and cash equivalents cash flows, end of the period";
 
     private static final List<String> STRUCTURAL_INCOME_LINES = List.of(GROSS_PROFIT, PROFIT_BEFORE_TAX, TAX,
             PROFIT_CONTINUING, PROFIT_DISCONTINUED, PROFIT, PROFIT_PARENT, PROFIT_NCI,
-            EPS_BASIC, EPS_BASIC_DISC, EPS_DILUTED, EPS_DILUTED_DISC);
+            EPS_BASIC, EPS_BASIC_DISC, EPS_DILUTED, EPS_DILUTED_DISC, PROFIT_FROM_OPERATION);
 
     // labels of the General and the Infrastructure Industry taxonomy (the latter: "Short-term non-bank loans",
     // "... property and equipment" instead of "... property, plant and equipment")
@@ -103,38 +108,167 @@ public final class FilingMapper {
     private static final List<BigDecimal> STANDARD_PAR_VALUES = List.of(1, 5, 10, 20, 25, 50, 100, 125, 200, 250,
             500, 1000).stream().map(BigDecimal::valueOf).toList();
 
+    // ---- Financial and Sharia Industry (banks): balance sheet groups as {header, parts...}
+    private static final List<List<String>> FIN_DEBT = List.of(
+            List.of("Borrowings", "Borrowings third parties", "Borrowings related parties",
+                    "Borrowings payables to clearing and settlement guarantee institution"),
+            List.of("Securities issued", "Bonds payable", "Sukuk", "Subordinated bonds", "Medium term notes",
+                    "Others securities issued"),
+            List.of("Subordinated loans", "Subordinated loans third parties", "Subordinated loans related parties"));
+    private static final List<String> FIN_MARKETABLE_SECURITIES = List.of("Marketable securities",
+            "Marketable securities third parties", "Marketable securities related parties");
+    private static final List<String> FIN_RETAINED_EARNINGS = List.of("Appropriated retained earnings",
+            "General and legal reserves", "Specific reserves", "Unappropriated retained earnings");
+    // cash flow lines of the bank template: acquisitions net of disposals, signed (negative = net acquisition)
+    private static final String FIN_INTANGIBLES_NET = "Proceeds from disposal (acquisition) of intangible assets other than goodwill";
+    private static final List<String> FIN_CAPEX = List.of(
+            "Proceeds from disposal (acquisition) of property and equipment", FIN_INTANGIBLES_NET);
+    private static final String FIN_SECURITIES_ISSUED_NET = "Increase (decrease) in securities issued";
+    private static final List<String> FIN_STOCK_ISSUANCE = List.of("Proceeds from issuance of new stocks",
+            "Proceeds from capital contributions", "Proceeds from employee stock options program");
+    private static final List<String> FIN_DEBT_PROCEEDS = List.of("Proceeds from borrowings", "Proceeds from subordinated loans",
+            "Proceeds from bonds issuance", "Subordinated bonds issued", "Proceeds from medium term notes",
+            "Issuance of mudharabah sukuk");
+    private static final List<String> FIN_DEBT_REPAYMENTS = List.of("Payments for borrowings", "Payments of subordinated loans",
+            "Payments of bonds payable", "Payments of subordinated bonds", "Payments of medium term notes");
+
     private final IdxWorkbook workbook;
     private final FilingInfo info;
     private final BigDecimal unit;
+    /** Rounding of the filed amounts in full units: the declared rounding (also when the amounts are written in full). */
+    private final BigDecimal precision;
+    private final IdxTaxonomy taxonomy;
+    /** Financial and Sharia Industry taxonomy (banks): own statements and line items. */
+    private final boolean financial;
     private final StatementTable balanceSheet;
     private final StatementTable income;
     private final StatementTable cashFlow;
     private final List<String> templateProblems = new ArrayList<>();
+    private final List<String> warnings = new ArrayList<>();
 
     public FilingMapper(IdxWorkbook workbook) {
         this.workbook = workbook;
         this.info = FilingInfo.from(workbook);
-        this.unit = info.unitMultiplier();
-        this.balanceSheet = table(IdxSheets.BALANCE_SHEET).filter(t -> t.hasData(0)).orElse(null);
-        this.income = table(IdxSheets.INCOME_BY_FUNCTION).filter(t -> t.hasData(0))
-                .or(() -> table(IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX).filter(t -> t.hasData(0))).orElse(null);
-        this.cashFlow = table(IdxSheets.CASH_FLOW_DIRECT).filter(t -> t.hasData(0))
-                .or(() -> table(IdxSheets.CASH_FLOW_INDIRECT).filter(t -> t.hasData(0))).orElse(null);
+        this.taxonomy = workbook.taxonomy();
+        this.financial = taxonomy == IdxTaxonomy.FINANCIAL;
+        if (financial) {
+            this.balanceSheet = data(IdxSheets.BALANCE_SHEET_LIQUIDITY).orElse(null);
+            this.income = data(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX).or(() -> data(IdxSheets.INCOME_BY_NATURE)).orElse(null);
+        } else {
+            this.balanceSheet = data(IdxSheets.BALANCE_SHEET).orElse(null);
+            this.income = data(IdxSheets.INCOME_BY_FUNCTION).or(() -> data(IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX)).orElse(null);
+        }
+        this.cashFlow = data(IdxSheets.CASH_FLOW_DIRECT).or(() -> data(IdxSheets.CASH_FLOW_INDIRECT)).orElse(null);
+        this.unit = effectiveUnit(info.unitMultiplier());
+        this.precision = info.unitMultiplier();
         if (balanceSheet == null) {
-            templateProblems.add(table(IdxSheets.BALANCE_SHEET_LIQUIDITY).filter(t -> t.hasData(0)).isPresent()
-                    ? "Balance sheet uses the order-of-liquidity template (1220000), which is not supported"
-                    : "No balance sheet data (1210000)");
+            String supported = financial ? IdxSheets.BALANCE_SHEET_LIQUIDITY : IdxSheets.BALANCE_SHEET;
+            String other = financial ? IdxSheets.BALANCE_SHEET : IdxSheets.BALANCE_SHEET_LIQUIDITY;
+            templateProblems.add(data(other).isPresent()
+                    ? "Balance sheet uses the " + (financial ? "current / non-current" : "order-of-liquidity") + " template ("
+                    + code(other) + "), which is not supported for the " + taxonomyName() + " taxonomy"
+                    : "No balance sheet data (" + code(supported) + ")");
         }
         if (income == null) {
-            boolean byNature = table(IdxSheets.INCOME_BY_NATURE).filter(t -> t.hasData(0)).isPresent()
-                    || table(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX).filter(t -> t.hasData(0)).isPresent();
-            templateProblems.add(byNature
-                    ? "Profit or loss uses the 'by nature' template (1312000/1322000), which is not supported"
-                    : "No profit or loss data (1311000 / 1321000)");
+            List<String> supported = financial
+                    ? List.of(IdxSheets.INCOME_BY_NATURE, IdxSheets.INCOME_BY_NATURE_BEFORE_TAX)
+                    : List.of(IdxSheets.INCOME_BY_FUNCTION, IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX);
+            List<String> other = financial
+                    ? List.of(IdxSheets.INCOME_BY_FUNCTION, IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX)
+                    : List.of(IdxSheets.INCOME_BY_NATURE, IdxSheets.INCOME_BY_NATURE_BEFORE_TAX);
+            templateProblems.add(other.stream().anyMatch(s -> data(s).isPresent())
+                    ? "Profit or loss uses the '" + (financial ? "by function" : "by nature") + "' template ("
+                    + code(other.get(0)) + " / " + code(other.get(1)) + "), which is not supported for the "
+                    + taxonomyName() + " taxonomy"
+                    : "No profit or loss data (" + code(supported.get(0)) + " / " + code(supported.get(1)) + ")");
         }
         if (cashFlow == null) {
-            templateProblems.add("No cash flow data (1510000 / 1520000)");
+            templateProblems.add("No cash flow data (" + code(IdxSheets.CASH_FLOW_DIRECT) + " / "
+                    + code(IdxSheets.CASH_FLOW_INDIRECT) + ")");
         }
+    }
+
+    public IdxTaxonomy taxonomy() {
+        return taxonomy;
+    }
+
+    /** Multiplier from the filed amounts to full currency units (the declared rounding unless contradicted). */
+    public BigDecimal unit() {
+        return unit;
+    }
+
+    /** Notes about the filing that do not block it, e.g. a corrected rounding level. */
+    public List<String> warnings() {
+        return warnings;
+    }
+
+    /** Most shares any listed company could have; an EPS-implied count above it means a wrong unit. */
+    private static final BigDecimal MAX_PLAUSIBLE_SHARES = new BigDecimal("1e13");
+
+    /**
+     * The rounding unit the amounts are actually in. Some workbooks declare a rounding level but carry full
+     * amounts (ASGR FY2023: "Jutaan / In Million", total assets 2,682,813,000,000 instead of 2,682,813); taken at
+     * its word, every amount would be stored a million times too large. The declared unit is replaced by 1 when
+     * every amount of the three statements (at least 10, EPS excluded) is a whole multiple of it, which a filing
+     * in that unit practically never is, and the filing's own EPS confirms it: profit attributable to the parent
+     * / basic EPS must give a plausible share count with the corrected unit and an impossible one with the
+     * declared unit. A unit that leaves the EPS-implied share count impossible is a template problem.
+     */
+    private BigDecimal effectiveUnit(BigDecimal declared) {
+        BigDecimal impliedFull = impliedSharesPerUnit();   // shares if the amounts were full units
+        if (declared.compareTo(BigDecimal.ONE) > 0 && allAmountsMultipleOf(declared)
+                && impliedFull != null && plausibleShares(impliedFull) && !plausibleShares(impliedFull.multiply(declared))) {
+            warnings.add("The workbook declares '" + info.rounding() + "' but its amounts are full amounts (every amount is a "
+                    + "multiple of " + declared.toPlainString() + " and the EPS implies " + impliedFull.setScale(0, RoundingMode.HALF_UP)
+                    .toPlainString() + " shares); amounts are read as full amounts");
+            return BigDecimal.ONE;
+        }
+        if (impliedFull != null && !plausibleShares(impliedFull.multiply(declared))) {
+            templateProblems.add("Amounts contradict the declared rounding '" + info.rounding() + "': profit / basic EPS implies "
+                    + impliedFull.multiply(declared).setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares");
+        }
+        return declared;
+    }
+
+    /** Profit attributable to the parent (as filed, unscaled) / basic EPS of the current period; null when not available. */
+    private BigDecimal impliedSharesPerUnit() {
+        if (income == null) {
+            return null;
+        }
+        BigDecimal parent = income.value(PROFIT_PARENT, 0);
+        BigDecimal eps = income.value(EPS_BASIC, 0);
+        if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
+            return null;
+        }
+        return parent.divide(eps, MathContext.DECIMAL64);
+    }
+
+    private static boolean plausibleShares(BigDecimal shares) {
+        return shares.compareTo(BigDecimal.ONE) >= 0 && shares.compareTo(MAX_PLAUSIBLE_SHARES) <= 0;
+    }
+
+    private boolean allAmountsMultipleOf(BigDecimal declared) {
+        int amounts = 0;
+        for (StatementTable t : java.util.Arrays.asList(balanceSheet, income, cashFlow)) {
+            if (t == null) {
+                continue;
+            }
+            for (StatementTable.Line line : t.lines()) {
+                if (line.label().toLowerCase(Locale.ROOT).contains("per share")) {
+                    continue;
+                }
+                for (BigDecimal v : line.values()) {
+                    if (v == null || v.signum() == 0) {
+                        continue;
+                    }
+                    if (v.remainder(declared).signum() != 0) {
+                        return false;
+                    }
+                    amounts++;
+                }
+            }
+        }
+        return amounts >= 10;
     }
 
     public FilingInfo info() {
@@ -195,8 +329,78 @@ public final class FilingMapper {
 
     // ------------------------------------------------------------------ income statement
 
+    /** Expense categories (reported positive, subtracted on the way to profit before tax). */
+    private static final List<IncomeLineCategory> EXPENSE_CATEGORIES = List.of(IncomeLineCategory.SELLING_EXPENSE,
+            IncomeLineCategory.GENERAL_ADMINISTRATIVE_EXPENSE, IncomeLineCategory.OTHER_OPERATING_EXPENSE,
+            IncomeLineCategory.FINANCE_COST, IncomeLineCategory.NON_OPERATING_EXPENSE, IncomeLineCategory.FINAL_TAX_EXPENSE);
+    /** Income categories outside revenue (reported positive, added). */
+    private static final List<IncomeLineCategory> INCOME_CATEGORIES = List.of(
+            IncomeLineCategory.OTHER_OPERATING_INCOME, IncomeLineCategory.FINANCE_INCOME);
+
+    /**
+     * The income statement of a column. When profit before tax does not reconcile because the filing reports one
+     * amount twice in the same column - as an expense or income line and again on a signed gains / losses line
+     * (ASGR H1 2025 in its H1 2026 filing: "Other expenses" 2,750 and "Other gains (losses)" -2,750, profit before
+     * tax 139,690 = the lines with the loss counted once) - the amount is counted once, on the signed line, and a
+     * warning says so. Only applied when it makes profit before tax reconcile exactly.
+     */
     public Optional<MappedStatement> incomeStatement(StatementColumn column, Map<String, IncomeLineCategory> overrides,
                                                      ShareCapital shares) {
+        Optional<MappedStatement> filed = incomeStatementAsFiled(column, overrides, shares);
+        if (filed.isEmpty() || filed.get().checks().stream().noneMatch(c -> c.isError() && c.rule().equals("profit_before_tax"))) {
+            return filed;
+        }
+        for (String[] pair : doubleReportedLines(durationIndex(column), overrides)) {
+            Map<String, IncomeLineCategory> once = new LinkedHashMap<>(overrides);
+            once.put(pair[0], IncomeLineCategory.IGNORE);
+            MappedStatement retry = incomeStatementAsFiled(column, once, shares).orElseThrow();
+            if (retry.checks().stream().noneMatch(Check::isError)) {
+                List<Check> checks = new ArrayList<>(retry.checks());
+                checks.add(Check.warning("double_reported", "'" + pair[0] + "' and '" + pair[1]
+                        + "' report the same amount in this column; counted once, as '" + pair[1] + "'"));
+                Map<String, String> how = new LinkedHashMap<>(retry.derivations());
+                how.put("double_reported", "'" + pair[0] + "' ignored: the same amount is reported on '" + pair[1]
+                        + "' (profit before tax only reconciles with it counted once)");
+                return Optional.of(new MappedStatement(retry.table(), retry.column(), retry.period(), retry.sourceSheet(),
+                        retry.values(), how, checks, retry.unclassified()));
+            }
+        }
+        return filed;
+    }
+
+    /**
+     * Pairs {unsigned line, signed line} of one column that carry the same contribution to profit before tax: an
+     * expense (or income) line and a signed gains / losses line of the opposite (same) sign and equal size.
+     */
+    private List<String[]> doubleReportedLines(int ctx, Map<String, IncomeLineCategory> overrides) {
+        Map<String, IncomeLineCategory> known = financial ? IncomeLineCategory.FINANCIAL_KNOWN : IncomeLineCategory.KNOWN;
+        Map<String, BigDecimal> unsigned = new LinkedHashMap<>();   // label -> contribution to profit before tax
+        Map<String, BigDecimal> signed = new LinkedHashMap<>();
+        for (StatementTable.Line line : income.lines()) {
+            BigDecimal raw = line.value(ctx);
+            IncomeLineCategory category = overrides.getOrDefault(line.label(), known.get(line.label()));
+            if (raw == null || raw.signum() == 0 || category == null || overrides.containsKey(line.label())) {
+                continue;   // a classification given by the agent is never second-guessed
+            }
+            if (EXPENSE_CATEGORIES.contains(category)) {
+                unsigned.putIfAbsent(line.label(), raw.negate());
+            } else if (INCOME_CATEGORIES.contains(category)) {
+                unsigned.putIfAbsent(line.label(), raw);
+            } else if (category == IncomeLineCategory.NON_OPERATING_GAIN_OR_LOSS) {
+                signed.putIfAbsent(line.label(), raw);
+            }
+        }
+        List<String[]> pairs = new ArrayList<>();
+        unsigned.forEach((u, contribution) -> signed.forEach((s, value) -> {
+            if (contribution.compareTo(value) == 0) {
+                pairs.add(new String[] {u, s});
+            }
+        }));
+        return pairs;
+    }
+
+    private Optional<MappedStatement> incomeStatementAsFiled(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                             ShareCapital shares) {
         int ctx = durationIndex(column);
         if (ctx < 0 || income == null || !income.hasData(ctx)) {
             return Optional.empty();
@@ -204,6 +408,7 @@ public final class FilingMapper {
         Map<IncomeLineCategory, BigDecimal> sums = new LinkedHashMap<>();
         Map<IncomeLineCategory, List<String>> sources = new LinkedHashMap<>();
         List<UnclassifiedLine> unclassified = new ArrayList<>();
+        Map<String, IncomeLineCategory> known = financial ? IncomeLineCategory.FINANCIAL_KNOWN : IncomeLineCategory.KNOWN;
         int profitIndex = income.indexOf(PROFIT);
         for (int i = 0; i < income.lines().size(); i++) {
             StatementTable.Line line = income.lines().get(i);
@@ -211,7 +416,7 @@ public final class FilingMapper {
             if (raw == null || STRUCTURAL_INCOME_LINES.contains(line.label())) {
                 continue;
             }
-            IncomeLineCategory category = overrides.getOrDefault(line.label(), IncomeLineCategory.KNOWN.get(line.label()));
+            IncomeLineCategory category = overrides.getOrDefault(line.label(), known.get(line.label()));
             if (category == null) {
                 if (profitIndex >= 0 && i > profitIndex) {
                     continue;   // other comprehensive income / comprehensive totals: not profit or loss
@@ -224,6 +429,9 @@ public final class FilingMapper {
                 sources.computeIfAbsent(category, k -> new ArrayList<>()).add(line.label());
             }
         }
+        if (financial) {
+            return Optional.of(financialIncomeStatement(column, ctx, sums, sources, unclassified, shares));
+        }
 
         BigDecimal revenue = sums.get(IncomeLineCategory.REVENUE);
         BigDecimal cost = sums.get(IncomeLineCategory.COST_OF_REVENUE);
@@ -234,7 +442,8 @@ public final class FilingMapper {
         BigDecimal otherExpense = nz(sums.get(IncomeLineCategory.OTHER_OPERATING_EXPENSE));
         BigDecimal financeIncome = nz(sums.get(IncomeLineCategory.FINANCE_INCOME));
         BigDecimal financeCost = nz(sums.get(IncomeLineCategory.FINANCE_COST));
-        BigDecimal nonOperating = nz(sums.get(IncomeLineCategory.NON_OPERATING_GAIN_OR_LOSS));
+        BigDecimal nonOperating = nz(sums.get(IncomeLineCategory.NON_OPERATING_GAIN_OR_LOSS))
+                .subtract(nz(sums.get(IncomeLineCategory.NON_OPERATING_EXPENSE)));
         BigDecimal finalTax = nz(sums.get(IncomeLineCategory.FINAL_TAX_EXPENSE));
         BigDecimal pretax = amount(income.value(PROFIT_BEFORE_TAX, ctx));
         BigDecimal tax = amount(income.value(TAX, ctx));
@@ -267,15 +476,7 @@ public final class FilingMapper {
                     "operating income + finance income - finance costs + non-operating items - final tax = profit before tax",
                     operatingIncome.add(financeIncome).subtract(financeCost).add(nonOperating).subtract(finalTax), pretax));
         }
-        if (pretax != null && net != null) {
-            checks.add(equal("net_income", "profit before tax + tax + discontinued operations = total profit",
-                    pretax.add(nz(tax)).add(nz(discontinued)), net));
-        }
-        if (parent != null && nci != null && net != null) {
-            checks.add(equal("attribution", "profit to parent + profit to NCI = total profit", parent.add(nci), net));
-        } else if (parent == null) {
-            checks.add(Check.warning("attribution", "Profit attributable to the parent is not reported"));
-        }
+        profitChecks(checks, pretax, tax, discontinued, net, parent, nci);
 
         BigDecimal ebit = pretax == null ? null : pretax.add(financeCost).subtract(financeIncome);
         BigDecimal depreciation = depreciation(column);
@@ -329,6 +530,130 @@ public final class FilingMapper {
                 v, how, checks, unclassified));
     }
 
+    /**
+     * Profit or loss of the Financial and Sharia Industry template (banks). A bank has no sales, cost of
+     * sales or financing costs in the industrial sense: revenue = interest and sharia income + fee,
+     * commission, trading and other operating income; cost of revenue = interest expense; gross profit =
+     * revenue less interest expense (net operating revenue). The reported "Total profit from operation"
+     * must be re-added from the classified lines. EBIT and EBITDA are left empty: interest is a bank's
+     * operating revenue and cost, so "earnings before interest" (and EV / EBITDA) has no meaning.
+     */
+    private MappedStatement financialIncomeStatement(StatementColumn column, int ctx, Map<IncomeLineCategory, BigDecimal> sums,
+                                                     Map<IncomeLineCategory, List<String>> sources,
+                                                     List<UnclassifiedLine> unclassified, ShareCapital shares) {
+        BigDecimal revenue = sums.get(IncomeLineCategory.REVENUE);
+        BigDecimal cost = sums.get(IncomeLineCategory.COST_OF_REVENUE);
+        BigDecimal selling = nz(sums.get(IncomeLineCategory.SELLING_EXPENSE));
+        BigDecimal ga = nz(sums.get(IncomeLineCategory.GENERAL_ADMINISTRATIVE_EXPENSE));
+        BigDecimal otherIncome = nz(sums.get(IncomeLineCategory.OTHER_OPERATING_INCOME));
+        BigDecimal otherExpense = nz(sums.get(IncomeLineCategory.OTHER_OPERATING_EXPENSE));
+        BigDecimal financeIncome = nz(sums.get(IncomeLineCategory.FINANCE_INCOME));
+        BigDecimal financeCost = nz(sums.get(IncomeLineCategory.FINANCE_COST));
+        BigDecimal nonOperating = nz(sums.get(IncomeLineCategory.NON_OPERATING_GAIN_OR_LOSS))
+                .subtract(nz(sums.get(IncomeLineCategory.NON_OPERATING_EXPENSE)));
+        BigDecimal finalTax = nz(sums.get(IncomeLineCategory.FINAL_TAX_EXPENSE));
+        BigDecimal operatingReported = amount(income.value(PROFIT_FROM_OPERATION, ctx));
+        BigDecimal pretax = amount(income.value(PROFIT_BEFORE_TAX, ctx));
+        BigDecimal tax = amount(income.value(TAX, ctx));
+        BigDecimal discontinued = amount(income.value(PROFIT_DISCONTINUED, ctx));
+        BigDecimal net = amount(income.value(PROFIT, ctx));
+        BigDecimal parent = amount(income.value(PROFIT_PARENT, ctx));
+        BigDecimal nci = amount(income.value(PROFIT_NCI, ctx));
+
+        List<Check> checks = new ArrayList<>();
+        if (revenue == null) {
+            checks.add(Check.error("revenue", "No interest income or other operating income reported"));
+        }
+        BigDecimal gross = revenue == null ? null : revenue.subtract(nz(cost));
+        BigDecimal operatingComputed = gross == null ? null
+                : gross.subtract(selling).subtract(ga).add(otherIncome).subtract(otherExpense);
+        if (operatingComputed != null && operatingReported != null) {
+            checks.add(equal("operating_income",
+                    "revenue - interest expense - operating expenses and impairment + recoveries = total profit from operation",
+                    operatingComputed, operatingReported));
+        } else if (operatingReported == null) {
+            checks.add(Check.warning("operating_income", "'" + PROFIT_FROM_OPERATION + "' is not reported; computed from the lines"));
+        }
+        BigDecimal operatingIncome = operatingReported != null ? operatingReported : operatingComputed;
+        if (pretax == null || net == null) {
+            checks.add(Check.error("profit", "Profit before tax or total profit is not reported"));
+        }
+        if (operatingIncome != null && pretax != null) {
+            checks.add(equal("profit_before_tax",
+                    "profit from operation + non-operating items + finance income - finance costs - final tax = profit before tax",
+                    operatingIncome.add(nonOperating).add(financeIncome).subtract(financeCost).subtract(finalTax), pretax));
+        }
+        profitChecks(checks, pretax, tax, discontinued, net, parent, nci);
+
+        BigDecimal depreciation = depreciation(column);
+        BigDecimal amortization = amortization(column);
+        BigDecimal basicEps = sumNullable(income.value(EPS_BASIC, ctx), income.value(EPS_BASIC_DISC, ctx));
+        BigDecimal dilutedEps = sumNullable(income.value(EPS_DILUTED, ctx), income.value(EPS_DILUTED_DISC, ctx));
+        BigDecimal basicShares = shares == null ? null
+                : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
+
+        Map<String, BigDecimal> v = new LinkedHashMap<>();
+        v.put("revenue", revenue);
+        v.put("cost_of_revenue", cost);
+        v.put("gross_profit", gross);
+        v.put("operating_expenses", selling.add(ga).add(otherExpense));
+        v.put("sga_expense", selling.add(ga));
+        v.put("rd_expense", null);
+        v.put("depreciation", depreciation);
+        v.put("amortization", amortization);
+        v.put("operating_income", operatingIncome);
+        v.put("ebit", null);
+        v.put("ebitda", null);
+        v.put("interest_income", amount(income.value("Interest income", ctx)));
+        v.put("interest_expense", amount(income.value("Interest expenses", ctx)));
+        v.put("pretax_income", pretax);
+        v.put("income_tax", tax == null ? null : tax.negate());
+        v.put("net_income", net);
+        v.put("net_income_to_parent", parent);
+        v.put("basic_eps", basicEps);
+        v.put("diluted_eps", dilutedEps);
+        v.put("basic_shares", basicShares);
+        v.put("diluted_shares", null);
+
+        Map<String, String> how = new LinkedHashMap<>();
+        how.put("revenue", "bank: interest and sharia income + fee, commission, trading, FX and other operating income "
+                + sources(sources, IncomeLineCategory.REVENUE));
+        how.put("cost_of_revenue", "bank: interest expense (and the syirkah fund holders' share) "
+                + sources(sources, IncomeLineCategory.COST_OF_REVENUE));
+        how.put("gross_profit", "bank: revenue - interest expense (net operating revenue)");
+        how.put("operating_expenses", "G&A + selling + impairment charges + other operating expenses " + sources(sources,
+                IncomeLineCategory.SELLING_EXPENSE, IncomeLineCategory.GENERAL_ADMINISTRATIVE_EXPENSE,
+                IncomeLineCategory.OTHER_OPERATING_EXPENSE));
+        how.put("operating_income", operatingReported != null ? "'" + PROFIT_FROM_OPERATION + "' as reported"
+                : "computed: gross profit - operating expenses + recoveries");
+        how.put("ebit", "not applicable to a bank (interest is operating revenue and cost)");
+        how.put("ebitda", "not applicable to a bank (interest is operating revenue and cost)");
+        how.put("depreciation", depreciation == null ? "not disclosed for this column"
+                : "PP&E (incl. right-of-use) + right-of-use additions to accumulated depreciation (roll-forward notes)");
+        how.put("amortization", amortization == null ? "not derivable for this column"
+                : "intangibles opening + net acquisitions - closing (the bank cash flow nets disposals)");
+        how.put("income_tax", "tax expense, sign flipped from 'Tax benefit (expenses)'");
+        how.put("basic_shares", basicShares == null ? "not derivable" : "common stock / par value (unchanged in the period)");
+        if (basicEps != null && parent != null && basicShares != null && basicShares.signum() != 0) {
+            checks.add(epsCheck(parent.divide(basicShares, MathContext.DECIMAL64), basicEps));
+        }
+        return new MappedStatement("income_statement", column, period(column), income.sheet(), v, how, checks, unclassified);
+    }
+
+    /** Profit before tax -> total profit -> attribution, shared by both income statement templates. */
+    private void profitChecks(List<Check> checks, BigDecimal pretax, BigDecimal tax, BigDecimal discontinued,
+                              BigDecimal net, BigDecimal parent, BigDecimal nci) {
+        if (pretax != null && net != null) {
+            checks.add(equal("net_income", "profit before tax + tax + discontinued operations = total profit",
+                    pretax.add(nz(tax)).add(nz(discontinued)), net));
+        }
+        if (parent != null && nci != null && net != null) {
+            checks.add(equal("attribution", "profit to parent + profit to NCI = total profit", parent.add(nci), net));
+        } else if (parent == null) {
+            checks.add(Check.warning("attribution", "Profit attributable to the parent is not reported"));
+        }
+    }
+
     /** Labels of income-statement lines with a value in the column that the mapper cannot classify. */
     public List<UnclassifiedLine> unclassifiedIncomeLines(StatementColumn column, Map<String, IncomeLineCategory> overrides) {
         return incomeStatement(column, overrides, null).map(MappedStatement::unclassified).orElse(List.of());
@@ -340,6 +665,9 @@ public final class FilingMapper {
         int ctx = instantIndex(column);
         if (ctx < 0 || balanceSheet == null || !balanceSheet.hasData(ctx)) {
             return Optional.empty();
+        }
+        if (financial) {
+            return Optional.of(financialBalanceSheet(column, ctx, shares));
         }
         StatementTable b = balanceSheet;
         List<Check> checks = new ArrayList<>();
@@ -395,10 +723,7 @@ public final class FilingMapper {
         v.put("retained_earnings", sum(b, List.of("Appropriated retained earnings", "Unappropriated retained earnings"), ctx));
         v.put("goodwill", sum(b, List.of("Goodwill"), ctx));
         v.put("intangible_assets", sum(b, List.of("Intangible assets other than goodwill"), ctx));
-        LocalDate date = period(column).end();
-        BigDecimal outstanding = shares == null ? null : shares.snapshots().stream()
-                .filter(s -> s.date().equals(date)).map(ShareAt::sharesOutstanding).filter(Objects::nonNull)
-                .findFirst().orElse(null);
+        BigDecimal outstanding = sharesOutstanding(column, shares);
         v.put("shares_outstanding", outstanding);
 
         how.put("accounts_receivable", "trade receivables (customer / pawn receivables excluded)");
@@ -408,8 +733,132 @@ public final class FilingMapper {
         how.put("long_term_debt", "long-term borrowings net of current maturities, excl. leases " + present(b, LONG_TERM_DEBT, ctx));
         how.put("lease_liabilities", "current + long-term finance lease liabilities");
         how.put("marketable_securities", "short-term investments + current financial assets at fair value (NULL when none)");
-        how.put("shares_outstanding", outstanding == null ? "not derivable" : "common stock / par value, no treasury shares");
+        how.put("shares_outstanding", sharesHow(outstanding, shares));
         return Optional.of(new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of()));
+    }
+
+    private static String sharesHow(BigDecimal outstanding, ShareCapital shares) {
+        if (outstanding == null) {
+            return "not derivable";
+        }
+        return shares.webSource() != null
+                ? "shares outstanding at period end from " + shares.webSource() + ", checked against the filing's EPS"
+                : shares.parValue() != null ? "common stock / par value, no treasury shares" : shares.basis();
+    }
+
+    /** Shares outstanding at the column's balance-sheet date, from the statements of changes in equity. */
+    private BigDecimal sharesOutstanding(StatementColumn column, ShareCapital shares) {
+        LocalDate date = period(column).end();
+        return shares == null ? null : shares.snapshots().stream()
+                .filter(s -> s.date().equals(date)).map(ShareAt::sharesOutstanding).filter(Objects::nonNull)
+                .findFirst().orElse(null);
+    }
+
+    /**
+     * Balance sheet of the Financial and Sharia Industry template (order of liquidity, banks). It has no
+     * current / non-current split, trade receivables, inventories or trade payables: those columns stay
+     * empty, so the ratios built on them (current ratio, working capital, NCAV, receivable days) are not
+     * computed for a bank. Customer deposits are not debt. Debt has no maturity split: all borrowings,
+     * securities issued and subordinated loans are long_term_debt and short_term_debt stays empty, which
+     * also leaves total debt, net debt and enterprise value empty (not meaningful for a bank).
+     */
+    private MappedStatement financialBalanceSheet(StatementColumn column, int ctx, ShareCapital shares) {
+        StatementTable b = balanceSheet;
+        List<Check> checks = new ArrayList<>();
+        BigDecimal totalAssets = req(b, "Total assets", ctx, checks);
+        BigDecimal liabilities = req(b, "Total liabilities", ctx, checks);
+        BigDecimal syirkah = sum(b, List.of("Total temporary syirkah funds"), ctx);
+        BigDecimal parentEquity = req(b, "Total equity attributable to equity owners of parent entity", ctx, checks);
+        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx);
+        BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
+        BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities, temporary syirkah funds and equity", ctx));
+        BigDecimal totalLiabilities = liabilities == null ? null : liabilities.add(syirkah);
+        if (totalLiabilities != null && totalEquity != null && totalAssets != null) {
+            checks.add(equal("balance", "total liabilities + temporary syirkah funds + total equity = total assets",
+                    totalLiabilities.add(totalEquity), totalAssets));
+        }
+        if (liabilitiesAndEquity != null && totalAssets != null) {
+            checks.add(equal("balance_total", "total liabilities, temporary syirkah funds and equity = total assets",
+                    liabilitiesAndEquity, totalAssets));
+        }
+        if (parentEquity != null && totalEquity != null) {
+            checks.add(equal("equity", "parent equity + non-controlling interests = total equity", parentEquity.add(nci), totalEquity));
+        }
+        if (!b.duplicates().isEmpty()) {
+            checks.add(Check.warning("duplicates", "Labels reported on more than one row: " + b.duplicates()));
+        }
+        BigDecimal cash = cashEquivalentsAt(ctx, checks);
+        BigDecimal securities = group(b, FIN_MARKETABLE_SECURITIES, ctx);
+        if (securities != null) {
+            securities = securities.subtract(sum(b, List.of("Allowance for impairment losses for marketable securities"), ctx));
+        }
+        BigDecimal debt = ZERO;
+        for (List<String> g : FIN_DEBT) {
+            debt = debt.add(nz(group(b, g, ctx)));
+        }
+
+        Map<String, BigDecimal> v = new LinkedHashMap<>();
+        v.put("cash_and_equivalents", cash);
+        v.put("marketable_securities", securities);
+        v.put("accounts_receivable", null);
+        v.put("inventory", null);
+        v.put("current_assets", null);
+        v.put("total_assets", totalAssets);
+        v.put("accounts_payable", sumOrNull(b, List.of("Accounts payable"), ctx));
+        v.put("deferred_revenue", sumOrNull(b, List.of("Contract liabilities", "Deferred income"), ctx));
+        v.put("current_liabilities", null);
+        v.put("total_liabilities", totalLiabilities);
+        v.put("short_term_debt", null);
+        v.put("long_term_debt", debt);
+        v.put("lease_liabilities", sumOrNull(b, List.of("Finance lease liabilities"), ctx));
+        v.put("shareholders_equity", parentEquity);
+        v.put("non_controlling_interest", nci);
+        v.put("total_equity", totalEquity);
+        v.put("retained_earnings", sum(b, FIN_RETAINED_EARNINGS, ctx));
+        v.put("goodwill", sum(b, List.of("Goodwill"), ctx));
+        v.put("intangible_assets", sum(b, List.of("Intangible assets other than goodwill"), ctx));
+        BigDecimal outstanding = sharesOutstanding(column, shares);
+        v.put("shares_outstanding", outstanding);
+
+        Map<String, String> how = new LinkedHashMap<>();
+        how.put("cash_and_equivalents", cash == null ? "not reported: the bank balance sheet has no cash-equivalents total"
+                : "cash and cash equivalents of the cash flow statement at this date (cash, current accounts with Bank "
+                + "Indonesia and other banks, short placements); the bank balance sheet shows only 'Cash'");
+        how.put("marketable_securities", "marketable securities less allowance for impairment (government bonds excluded)");
+        how.put("accounts_receivable", "not applicable to a bank (loans are earning assets, not trade receivables)");
+        how.put("inventory", "not applicable to a bank");
+        how.put("current_assets", "not reported: a bank balance sheet is presented by order of liquidity");
+        how.put("current_liabilities", "not reported: a bank balance sheet is presented by order of liquidity");
+        how.put("total_liabilities", "total liabilities + temporary syirkah funds (non-equity funds of sharia depositors)");
+        how.put("short_term_debt", "not reported: bank borrowings have no maturity split (all in long_term_debt)");
+        how.put("long_term_debt", "borrowings + securities issued (bonds, sukuk, MTN, subordinated bonds) + subordinated "
+                + "loans, all maturities; customer deposits, interbank deposits and repos excluded");
+        how.put("lease_liabilities", "finance lease liabilities (NULL when not reported separately)");
+        how.put("retained_earnings", "appropriated (general, legal and specific reserves) + unappropriated retained earnings");
+        how.put("shares_outstanding", sharesHow(outstanding, shares));
+        return new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of());
+    }
+
+    /**
+     * Cash and cash equivalents of the cash flow statement at a balance-sheet date: the end of the current
+     * period for context 0, its beginning (= the prior year end) for context 1.
+     */
+    private BigDecimal cashEquivalentsAt(int instantCtx, List<Check> checks) {
+        if (cashFlow == null) {
+            return null;
+        }
+        if (instantCtx == 0) {
+            return amount(cashFlow.value(CASH_END, 0));
+        }
+        BigDecimal opening = amount(cashFlow.value(CASH_BEGINNING, 0));
+        BigDecimal priorEnding = info.current().isFullYear() ? amount(cashFlow.value(CASH_END, 1)) : null;
+        if (opening != null && priorEnding != null) {
+            checks.add(opening.compareTo(priorEnding) == 0
+                    ? Check.ok("cash_opening", "opening cash = prior period ending cash")
+                    : Check.warning("cash_opening", "opening cash " + opening + " differs from the prior period's ending cash "
+                    + priorEnding + " (restated comparative)"));
+        }
+        return opening;
     }
 
     // ------------------------------------------------------------------ cash flow
@@ -425,8 +874,8 @@ public final class FilingMapper {
         BigDecimal investing = req(c, "Total net cash flows received from (used in) investing activities", ctx, checks);
         BigDecimal financing = req(c, "Total net cash flows received from (used in) financing activities", ctx, checks);
         BigDecimal change = req(c, "Total net increase (decrease) in cash and cash equivalents", ctx, checks);
-        BigDecimal beginning = amount(c.value("Cash and cash equivalents cash flows, beginning of the period", ctx));
-        BigDecimal ending = req(c, "Cash and cash equivalents cash flows, end of the period", ctx, checks);
+        BigDecimal beginning = amount(c.value(CASH_BEGINNING, ctx));
+        BigDecimal ending = req(c, CASH_END, ctx, checks);
         if (operating != null && investing != null && financing != null && change != null) {
             checks.add(equal("net_change", "operating + investing + financing = net change in cash",
                     operating.add(investing).add(financing), change));
@@ -445,6 +894,12 @@ public final class FilingMapper {
         if (financing != null) {
             checks.addAll(section(c, ctx, "Cash flows from financing activities",
                     "Total net cash flows received from (used in) financing activities", financing, "financing"));
+        }
+        if (financial) {
+            // no cash_vs_balance_sheet check: the bank balance sheet's cash is taken from this statement
+            Map<String, String> how = new LinkedHashMap<>();
+            return Optional.of(new MappedStatement("cash_flow_statement", column, period(column), c.sheet(),
+                    financialCashFlowValues(c, ctx, operating, investing, financing, change, ending, how), how, checks, List.of()));
         }
         if (column == StatementColumn.CURRENT_PERIOD && balanceSheet != null && ending != null) {
             BigDecimal bsCash = amount(balanceSheet.value("Cash and cash equivalents", 0));
@@ -481,6 +936,43 @@ public final class FilingMapper {
         return Optional.of(new MappedStatement("cash_flow_statement", column, period(column), c.sheet(), v, how, checks, List.of()));
     }
 
+    /**
+     * Cash flow values of the Financial and Sharia Industry template (banks). Its investing lines are net
+     * of disposals and signed ("Proceeds from disposal (acquisition) of property and equipment": negative =
+     * net acquisition), and the net change in securities issued is one signed line.
+     */
+    private Map<String, BigDecimal> financialCashFlowValues(StatementTable c, int ctx, BigDecimal operating,
+                                                            BigDecimal investing, BigDecimal financing, BigDecimal change,
+                                                            BigDecimal ending, Map<String, String> how) {
+        BigDecimal treasury = amount(c.value("Sales (purchase) of treasury stocks", ctx));
+        BigDecimal securitiesIssued = nz(amount(c.value(FIN_SECURITIES_ISSUED_NET, ctx)));
+        Map<String, BigDecimal> v = new LinkedHashMap<>();
+        v.put("operating_cash_flow", operating);
+        v.put("capital_expenditure", sum(c, FIN_CAPEX, ctx));
+        v.put("investing_cash_flow", investing);
+        v.put("financing_cash_flow", financing);
+        v.put("acquisitions", sum(c, ACQUISITIONS, ctx).negate());
+        v.put("share_buybacks", treasury == null || treasury.signum() > 0 ? ZERO : treasury);
+        v.put("stock_issuance", sum(c, FIN_STOCK_ISSUANCE, ctx));
+        v.put("dividends_paid", sum(c, DIVIDENDS_PAID, ctx).negate());
+        v.put("debt_issued", sum(c, FIN_DEBT_PROCEEDS, ctx).add(securitiesIssued.max(ZERO)));
+        v.put("debt_repaid", sum(c, FIN_DEBT_REPAYMENTS, ctx).negate().add(securitiesIssued.min(ZERO)));
+        v.put("lease_payments", null);
+        v.put("cash_change", change);
+        v.put("ending_cash", ending);
+        how.put("capital_expenditure", "bank: PP&E + intangibles acquisitions net of disposals, as filed (negative = outflow) "
+                + present(c, FIN_CAPEX, ctx));
+        how.put("debt_issued", "proceeds from borrowings, bonds, MTN, sukuk and subordinated loans + net increase in "
+                + "securities issued " + present(c, FIN_DEBT_PROCEEDS, ctx));
+        how.put("debt_repaid", "-(repayments of borrowings, bonds, MTN and subordinated loans) + net decrease in securities issued "
+                + present(c, FIN_DEBT_REPAYMENTS, ctx));
+        how.put("dividends_paid", "-(dividends paid) " + present(c, DIVIDENDS_PAID, ctx));
+        how.put("share_buybacks", "purchases of treasury stocks (net sales of treasury stocks count as 0)");
+        how.put("stock_issuance", "proceeds from new shares, capital contributions and employee stock options");
+        how.put("lease_payments", "not reported separately in the bank template");
+        return v;
+    }
+
     /** Signs every line of a cash flow section and checks it against the reported section total. */
     private List<Check> section(StatementTable c, int ctx, String headerLabel, String totalLabel, BigDecimal total, String name) {
         int from = c.indexOf(headerLabel);
@@ -512,17 +1004,21 @@ public final class FilingMapper {
     static BigDecimal signedFlow(String label, BigDecimal value) {
         String l = label.toLowerCase(Locale.ROOT);
         if (l.contains("(payments") || l.contains("(outflows)") || l.contains("(placement)") || l.contains("(paid)")
-                || l.contains("(purchases)") || l.contains("(increase)") || l.contains("(decrease)")) {
+                || l.contains("(purchases)") || l.contains("(purchase)") || l.contains("(acquisition)")
+                || l.contains("(increase)") || l.contains("(decrease)")) {
             return value;
         }
+        // bank template: "Subordinated bonds issuance costs", "Issuance cost of mudharabah sukuk"
         if (l.startsWith("payment") || l.startsWith("purchases") || l.startsWith("placement")
                 || l.startsWith("cash advances and loans made") || l.startsWith("dividends paid")
-                || l.startsWith("interests paid") || l.startsWith("income taxes paid")) {
+                || l.startsWith("interests paid") || l.startsWith("income taxes paid")
+                || l.contains("issuance cost")) {
             return value.negate();
         }
         if (l.startsWith("proceed") || l.startsWith("receipts") || l.startsWith("withdrawal of")
                 || l.startsWith("cash receipts") || l.startsWith("dividends received")
-                || l.startsWith("interests received") || l.startsWith("subordinated bonds issued")) {
+                || l.startsWith("interests received") || l.startsWith("subordinated bonds issued")
+                || l.startsWith("issuance of")) {
             return value;
         }
         return null;
@@ -602,18 +1098,31 @@ public final class FilingMapper {
         return null;
     }
 
-    /** Intangibles opening + purchases - closing; current column only (needs the opening balance). */
+    /**
+     * Intangibles opening + purchases - closing; current column only (needs the opening balance). The bank
+     * template reports acquisitions net of disposals in one signed line: a net disposal leaves the carrying
+     * amount of what was sold unknown, so no amortization is derived then.
+     */
     public BigDecimal amortization(StatementColumn column) {
         if (column != StatementColumn.CURRENT_PERIOD || balanceSheet == null || cashFlow == null) {
             return null;
         }
-        BigDecimal disposals = cashFlow.value("Proceeds from disposal of intangible assets", 0);
-        if (disposals != null && disposals.signum() != 0) {
-            return null;    // carrying amount of disposals unknown
+        BigDecimal purchases;
+        if (financial) {
+            BigDecimal net = amount(cashFlow.value(FIN_INTANGIBLES_NET, 0));
+            if (net != null && net.signum() > 0) {
+                return null;
+            }
+            purchases = net == null ? ZERO : net.negate();
+        } else {
+            BigDecimal disposals = cashFlow.value("Proceeds from disposal of intangible assets", 0);
+            if (disposals != null && disposals.signum() != 0) {
+                return null;    // carrying amount of disposals unknown
+            }
+            purchases = nz(amount(cashFlow.value("Payments for acquisition of intangible assets", 0)));
         }
         BigDecimal opening = nz(amount(balanceSheet.value("Intangible assets other than goodwill", 1)));
         BigDecimal closing = nz(amount(balanceSheet.value("Intangible assets other than goodwill", 0)));
-        BigDecimal purchases = nz(amount(cashFlow.value("Payments for acquisition of intangible assets", 0)));
         BigDecimal result = opening.add(purchases).subtract(closing);
         return result.signum() < 0 ? null : result;
     }
@@ -622,7 +1131,8 @@ public final class FilingMapper {
 
     public Optional<SegmentExtraction> segments(StatementColumn column, BigDecimal incomeRevenue) {
         int side = durationIndex(column);
-        if (side < 0) {
+        // the Financial and Sharia Industry taxonomy has no revenue-by-type / -by-source notes
+        if (side < 0 || financial) {
             return Optional.empty();
         }
         for (String sheetName : List.of(IdxSheets.REVENUE_BY_TYPE, IdxSheets.REVENUE_BY_SOURCE)) {
@@ -784,7 +1294,7 @@ public final class FilingMapper {
         }
         if (positions.isEmpty()) {
             checks.add(Check.warning("share_capital", "No share capital in the statements of changes in equity"));
-            return new ShareCapital(null, null, List.of(), null, null, checks);
+            return new ShareCapital(null, null, List.of(), null, null, checks, null);
         }
 
         BigDecimal[] currentYear = startEnd.get(IdxSheets.EQUITY);
@@ -844,7 +1354,101 @@ public final class FilingMapper {
                 byDate.put(p.date(), new ShareAt(p.date(), p.common(), shares, treasury ? null : ZERO, basic, p.source()));
             }
         }
-        return new ShareCapital(par, basis, List.copyOf(byDate.values()), weightedCurrent, weightedPrior, checks);
+        return new ShareCapital(par, basis, List.copyOf(byDate.values()), weightedCurrent, weightedPrior, checks, null);
+    }
+
+    /** Largest relative gap accepted between the filing's basic EPS and profit / a published period-end count. */
+    static final BigDecimal WEB_SHARES_EPS_TOLERANCE = new BigDecimal("0.02");
+
+    /**
+     * Share counts published on a website, for a filing whose statements give none ({@link ShareCapital#resolved()}
+     * false). Only dates of this filing's statements of changes in equity are used, and a count is accepted only
+     * when
+     * <ul>
+     *   <li>it is consistent in itself: outstanding + treasury = issued, when all three are published;</li>
+     *   <li>it reproduces the filing's own basic EPS of the period it opens or closes: profit attributable to the
+     *       parent / count is within half a unit of the EPS's last decimal plus 2% of it. EPS is per weighted
+     *       share, so a period-end count differs slightly (BNGA FY2022: 0.2%); a wrong company, unit or a stock
+     *       split not reflected in this filing is off by far more and is rejected.</li>
+     * </ul>
+     * The result keeps the filing's share capital; weighted shares stay unknown. Without an accepted count the
+     * filing's own (unresolved) share capital is returned with the reasons.
+     */
+    public ShareCapital withWebShareCounts(ShareCapital filing, List<WebShareCount> counts, String source) {
+        if (filing.resolved()) {
+            return filing;
+        }
+        Map<LocalDate, WebShareCount> byDate = new LinkedHashMap<>();
+        counts.forEach(c -> byDate.putIfAbsent(c.date(), c));
+        List<Check> checks = new ArrayList<>();
+        List<ShareAt> snapshots = new ArrayList<>();
+        List<String> accepted = new ArrayList<>();
+        for (ShareAt p : filing.snapshots()) {
+            WebShareCount c = byDate.get(p.date());
+            String rejection = c == null ? null : webShareCountProblem(c, p.date());
+            if (c == null || rejection != null) {
+                if (rejection != null) {
+                    checks.add(Check.warning("web_shares", source + " count at " + p.date() + " not used: " + rejection));
+                }
+                snapshots.add(p);
+                continue;
+            }
+            BigDecimal treasury = c.treasury() != null ? c.treasury()
+                    : c.issued() != null ? c.issued().subtract(c.outstanding()) : null;
+            snapshots.add(new ShareAt(p.date(), p.commonStock(), c.outstanding(), treasury, null,
+                    source + " count at " + p.date() + ", checked against the filing's EPS"));
+            accepted.add(p.date() + ": " + c.outstanding().toPlainString());
+        }
+        if (accepted.isEmpty()) {
+            List<Check> unresolved = new ArrayList<>(filing.checks());
+            unresolved.addAll(checks);
+            if (checks.isEmpty()) {
+                unresolved.add(Check.warning("web_shares", source + " has no share count at the dates of this filing"));
+            }
+            return new ShareCapital(null, null, filing.snapshots(), null, null, unresolved, null);
+        }
+        // the filing's warnings about missing counts no longer apply
+        filing.checks().stream()
+                .filter(c -> !(c.severity() == Check.Severity.WARNING && List.of("par_value", "treasury").contains(c.rule())))
+                .forEach(checks::add);
+        String basis = "shares outstanding from " + source + " (checked against the filing's EPS): " + String.join(", ", accepted);
+        checks.add(Check.ok("web_shares", basis));
+        return new ShareCapital(null, basis, List.copyOf(snapshots), null, null, checks, source);
+    }
+
+    /** Why a published count does not fit this filing, {@code null} when it does. */
+    private String webShareCountProblem(WebShareCount c, LocalDate date) {
+        if (c.outstanding() == null || c.outstanding().signum() <= 0) {
+            return "no positive shares-outstanding figure";
+        }
+        if (c.issued() != null && c.treasury() != null && c.outstanding().add(c.treasury()).compareTo(c.issued()) != 0) {
+            return "outstanding " + c.outstanding().toPlainString() + " + treasury " + c.treasury().toPlainString()
+                    + " != issued " + c.issued().toPlainString();
+        }
+        if (c.issued() != null && c.issued().compareTo(c.outstanding()) < 0) {
+            return "issued " + c.issued().toPlainString() + " < outstanding " + c.outstanding().toPlainString();
+        }
+        StatementColumn column = date.equals(info.current().end()) ? StatementColumn.CURRENT_PERIOD
+                : date.equals(info.prior().end()) ? StatementColumn.PRIOR_PERIOD
+                : date.equals(info.current().start().minusDays(1)) ? StatementColumn.CURRENT_PERIOD
+                : date.equals(info.prior().start().minusDays(1)) ? StatementColumn.PRIOR_PERIOD : null;
+        int ctx = column == null ? -1 : durationIndex(column);
+        if (income == null || ctx < 0) {
+            return "no profit or loss period of this filing opens or closes on that date";
+        }
+        BigDecimal parent = amount(income.value(PROFIT_PARENT, ctx));
+        BigDecimal eps = sumNullable(income.value(EPS_BASIC, ctx), income.value(EPS_BASIC_DISC, ctx));
+        if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
+            return "the " + period(column).key() + " profit attributable to the parent and basic EPS do not allow a check";
+        }
+        BigDecimal implied = parent.divide(c.outstanding(), MathContext.DECIMAL64);
+        BigDecimal halfUlp = BigDecimal.ONE.movePointLeft(Math.max(0, eps.stripTrailingZeros().scale())).divide(BigDecimal.valueOf(2));
+        BigDecimal tolerance = halfUlp.add(eps.abs().multiply(WEB_SHARES_EPS_TOLERANCE));
+        if (implied.subtract(eps).abs().compareTo(tolerance) > 0) {
+            return "profit attributable to the parent / count = " + implied.setScale(Math.max(0, eps.scale()) + 2, RoundingMode.HALF_UP)
+                    .toPlainString() + " but the " + period(column).key() + " basic EPS is " + eps.toPlainString();
+        }
+        return null;
     }
 
     /**
@@ -953,6 +1557,34 @@ public final class FilingMapper {
         return workbook.sheet(sheet).map(StatementTable::parse);
     }
 
+    /** The statement sheet when it has data for the current period. */
+    private Optional<StatementTable> data(String sheet) {
+        return table(sheet).filter(t -> t.hasData(0));
+    }
+
+    /** Sheet code as filed in this taxonomy, for messages ("1220000" -> "4220000"). */
+    private String code(String sheet) {
+        return taxonomy.code(sheet);
+    }
+
+    private String taxonomyName() {
+        return switch (taxonomy) {
+            case GENERAL -> "General Industry";
+            case INFRASTRUCTURE -> "Infrastructure Industry";
+            case FINANCIAL -> "Financial and Sharia Industry";
+        };
+    }
+
+    /**
+     * A balance sheet group given as {header, parts...}: the sum of the parts when any is reported, else
+     * the header line (filers report one or the other); {@code null} when neither is reported.
+     */
+    private BigDecimal group(StatementTable t, List<String> headerAndParts, int ctx) {
+        List<String> parts = headerAndParts.subList(1, headerAndParts.size());
+        BigDecimal p = sumOrNull(t, parts, ctx);
+        return p != null ? p : amount(t.value(headerAndParts.get(0), ctx));
+    }
+
     /** Reported value scaled to full currency units, normalised (12345.0 -> 12345, 0.50 -> 0.5). */
     private BigDecimal amount(BigDecimal raw) {
         if (raw == null) {
@@ -1004,7 +1636,7 @@ public final class FilingMapper {
         BigDecimal diff = computed.subtract(reported).abs();
         // full-amount filings must match exactly; filings in thousands / millions may be off by one
         // reported unit because every line is rounded separately
-        BigDecimal tolerance = unit.compareTo(BigDecimal.ONE) > 0 ? unit : ZERO;
+        BigDecimal tolerance = precision.compareTo(BigDecimal.ONE) > 0 ? precision : ZERO;
         return diff.compareTo(tolerance) <= 0
                 ? Check.ok(rule, description)
                 : Check.error(rule, description + ": computed " + computed.toPlainString()

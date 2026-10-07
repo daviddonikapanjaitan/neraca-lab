@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,11 +49,15 @@ public class IdxWorkbookReader {
 
     public IdxWorkbook read(InputStream in, String fileName) {
         Map<String, RawSheet> sheets = new LinkedHashMap<>();
+        Set<IdxTaxonomy> taxonomies = EnumSet.noneOf(IdxTaxonomy.class);
         try (Workbook wb = new XSSFWorkbook(in)) {
             for (Sheet sheet : wb) {
                 String name = canonicalName(sheet.getSheetName());
                 if (SHEETS.contains(name)) {
                     sheets.put(name, toRaw(sheet, name));
+                    if (!name.equals(GENERAL_INFO)) {
+                        taxonomies.add(IdxTaxonomy.of(filedName(sheet.getSheetName())));
+                    }
                 }
             }
         } catch (IOException | RuntimeException e) {
@@ -62,7 +67,10 @@ public class IdxWorkbookReader {
             throw new IdxWorkbookException("'" + fileName + "' is not an IDX XBRL financial statement workbook "
                     + "(sheet " + GENERAL_INFO + " 'General information' is missing).");
         }
-        return new IdxWorkbook(fileName, sheets);
+        if (taxonomies.size() > 1) {
+            throw new IdxWorkbookException("'" + fileName + "' mixes the statement sheets of several IDX taxonomies " + taxonomies);
+        }
+        return new IdxWorkbook(fileName, sheets, taxonomies.stream().findFirst().orElse(IdxTaxonomy.GENERAL));
     }
 
     /**
@@ -73,18 +81,28 @@ public class IdxWorkbookReader {
      *   <li>"Infrastructure Industry" taxonomy (e.g. SMDR): the same roles and line items under codes
      *       starting with 3 instead of 1 (3210000 balance sheet, 3311000 profit or loss, 3410000 equity,
      *       3510000 cash flow, 3611000 / 3612000 / 3617000 / 3618000 notes) -> 1210000, 1311000, ...</li>
+     *   <li>"Financial and Sharia Industry" taxonomy (banks, e.g. BNGA): the same roles under codes
+     *       starting with 4 (4220000 balance sheet by order of liquidity, 4312000 / 4322000 profit or loss
+     *       by nature, 4410000 equity, 4510000 / 4520000 cash flow, 4611000 / 4612000 notes) -> 1220000,
+     *       1312000, ...; its line items differ, see {@link IdxTaxonomy#FINANCIAL}.</li>
      * </ul>
      * Sheet 1000000 (general information) is shared by all taxonomies.
      */
     static String canonicalName(String sheetName) {
+        String name = filedName(sheetName);
+        if (name.matches("[34]\\d{6}(PY)?")) {
+            name = "1" + name.substring(1);
+        }
+        return name;
+    }
+
+    /** Sheet name in the current template, with the code as filed: "4410000 2 PriorYear" -> 4410000PY. */
+    private static String filedName(String sheetName) {
         String name = sheetName.trim();
         if (name.matches("\\d{7} \\d+ CurrentYear")) {
             name = name.substring(0, 7);
         } else if (name.matches("\\d{7} \\d+ PriorYear")) {
             name = name.substring(0, 7) + "PY";
-        }
-        if (name.matches("3\\d{6}(PY)?")) {
-            name = "1" + name.substring(1);
         }
         return name;
     }

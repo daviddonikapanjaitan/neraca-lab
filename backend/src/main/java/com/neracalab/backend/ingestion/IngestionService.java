@@ -33,11 +33,14 @@ public class IngestionService {
     private final IdxWorkbookReader reader;
     private final IngestionAgent agent;
     private final IngestionRepository repository;
+    private final WebShareCounts webShareCounts;
 
-    public IngestionService(IdxWorkbookReader reader, IngestionAgent agent, IngestionRepository repository) {
+    public IngestionService(IdxWorkbookReader reader, IngestionAgent agent, IngestionRepository repository,
+                            WebShareCounts webShareCounts) {
         this.reader = reader;
         this.agent = agent;
         this.repository = repository;
+        this.webShareCounts = webShareCounts;
     }
 
     /**
@@ -74,6 +77,7 @@ public class IngestionService {
         log.info("ingestion {} started: {} {} {}", session.id(), session.info().fileName(), mapper.info().ticker(),
                 mapper.info().current().key());
         try {
+            webShareCounts.complete(session);
             IngestionAgent.Outcome outcome = agent.run(session);
             Status status = outcome.verification().complete() ? Status.COMPLETED : Status.INCOMPLETE;
             log.info("ingestion {} finished: {}", session.id(), status);
@@ -89,7 +93,7 @@ public class IngestionService {
         FilingInfo info = session.info();
         var filing = new IngestionResponse.Filing(info.ticker(), info.legalName(), info.submission(),
                 info.current().periodType(), info.current().fiscalYear(), info.current().start().toString(),
-                info.current().end().toString(), info.audited(), info.currency(), info.unitMultiplier(),
+                info.current().end().toString(), info.audited(), info.currency(), session.mapper().unit(),
                 session.mapper().columns().stream().map(c -> c + " = " + session.mapper().period(c).key()).toList());
         var company = session.company().or(() -> repository.findCompany(info.ticker()))
                 .map(c -> new IngestionResponse.Company(c.companyId(), c.ticker(), c.companyName()))

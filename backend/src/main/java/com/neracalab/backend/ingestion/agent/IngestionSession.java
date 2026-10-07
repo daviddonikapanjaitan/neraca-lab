@@ -28,7 +28,7 @@ public final class IngestionSession {
 
     private final String id = UUID.randomUUID().toString();
     private final FilingMapper mapper;
-    private final ShareCapital shareCapital;
+    private volatile ShareCapital shareCapital;
     private final ReentrantLock writeLock = new ReentrantLock();
 
     private volatile CompanyRow company;
@@ -46,6 +46,7 @@ public final class IngestionSession {
     public IngestionSession(FilingMapper mapper) {
         this.mapper = mapper;
         this.shareCapital = mapper.shareCapital();
+        mapper.warnings().forEach(notes::add);
     }
 
     public String id() {
@@ -62,6 +63,11 @@ public final class IngestionSession {
 
     public ShareCapital shareCapital() {
         return shareCapital;
+    }
+
+    /** Replaces the share counts, e.g. with checked counts from a website when the filing gives none. */
+    public void shareCapital(ShareCapital shares) {
+        this.shareCapital = shares;
     }
 
     public ReentrantLock writeLock() {

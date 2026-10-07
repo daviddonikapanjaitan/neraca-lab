@@ -184,7 +184,45 @@ plant and equipment"), "Short-term non-bank loans" (short-term debt). "Current o
 is the General "Other current financial assets" (not a marketable security, as there). An unknown
 profit-or-loss line such as "Interconnection expenses" is classified by the agent
 (`classifyIncomeLines`, re-validated), like any unknown line. Sheet 1000000 is shared by all taxonomies.
-Other IDX taxonomies (financing, securities, insurance, banking, property) are not supported.
+
+**Financial and Sharia Industry taxonomy (banks).** Banks (e.g. BNGA, Bank CIMB Niaga, "G. Financials /
+G1. Banks") file with sheet codes starting with 4. `IdxWorkbookReader` maps them to the General codes
+too and records the taxonomy (`IdxWorkbook.taxonomy()`, `IdxTaxonomy.FINANCIAL`), but the statements
+and line items differ, so `FilingMapper` reads them with its own bank mapping:
+
+| Role | Financial | read as |
+|------|-----------|---------|
+| balance sheet by order of liquidity | `4220000` | `1220000` (the current / non-current `4210000` is rejected) |
+| profit or loss by nature (OCI before tax; net of tax) | `4322000`, `4312000` | `1322000`, `1312000` |
+| changes in equity | `4410000` (+`PY`) | `1410000` |
+| cash flow (direct; indirect) | `4510000`, `4520000` | `1510000`, `1520000` |
+| PP&E (incl. right-of-use) / right-of-use roll-forward | `4611000`, `4612000` | `1611000`, `1612000` |
+
+| Column | Bank value |
+|--------|------------|
+| `revenue` | interest and sharia income + fee and commission, trading, FX, investment, dividend and other operating income |
+| `cost_of_revenue` / `gross_profit` | interest expense (+ the syirkah fund holders' share) / revenue - interest expense |
+| `operating_expenses` | G&A + selling + impairment charges + other operating expenses (recoveries are other operating income) |
+| `operating_income` | "Total profit from operation" as filed, checked against the lines |
+| `ebit`, `ebitda` | NULL: interest is a bank's operating revenue and cost |
+| `cash_and_equivalents` | cash and cash equivalents of the cash flow statement at that date (the balance sheet shows only "Cash") |
+| `marketable_securities` | marketable securities less allowance (government bonds excluded) |
+| `total_liabilities` | total liabilities + temporary syirkah funds |
+| `long_term_debt` | borrowings + securities issued + subordinated loans, all maturities (deposits, interbank deposits and repos are not debt) |
+| `short_term_debt`, `current_assets`, `current_liabilities`, `accounts_receivable`, `inventory` | NULL: no maturity split / no current classification / no trade receivables or inventories |
+| `capital_expenditure` | PP&E + intangibles acquisitions net of disposals, as filed |
+| `debt_issued` / `debt_repaid` | borrowing, bond, MTN, sukuk and subordinated loan proceeds / repayments, plus the net change in securities issued |
+
+The NULLs are deliberate: total debt, net debt, enterprise value, current ratio, working capital and
+NCAV are not computed for a bank (they would mislead), while P/E, P/B and P/S are. The profit-or-loss
+checks re-add "Total profit from operation" and profit before tax from the classified lines
+(`IncomeLineCategory.FINANCIAL_KNOWN`; "Insurance commission income", a bank's bancassurance fees, is revenue
+(BTPN FY2023: 54,570 million); other insurance lines are left to `classifyIncomeLines`). There are
+no revenue-segment notes. Share counts are not guessed: BNGA has two share classes with different
+par values and treasury stock, and its 2-decimal EPS does not give an exact count, so no
+`share_snapshot` count is derived from the filings; the audited counts come from the annual reports
+instead (`V1.0.13__data_BNGA_shares.sql`, see section 4).
+Other IDX taxonomies (property, securities, insurance) are not supported.
 
 **Pre-2023 template.** Filings for FY2022 and earlier (e.g. `FinancialStatement-2022-Tahunan-INDF.xlsx`,
 `-2022-Tahunan-HRTA.xlsx`) use an older layout, read into the same structure:
@@ -241,6 +279,29 @@ Rules:
   earlier prices get no market cap. The script runs on start and after every upload (it needs the
   company) and only fills counts that are empty. SMDR on 2026-10-05: USD 0.0221727 x 16,375,600,000 =
   USD 363.1 million (Rp 398 x 16,375,600,000 = Rp 6.5 trillion), P/E 6.57.
+  BNGA (two share classes, class A Rp 5,000 and class B Rp 50, treasury shares for the MESOP / MRT
+  programmes, EPS with 2 decimals) gets no share counts from its filings either; the audited year-end
+  counts of note 33 of its 2023 and 2025 annual reports come from `V1.0.13__data_BNGA_shares.sql`:
+  outstanding 24,929,713,961 (2021), 24,933,123,961 (2022), 25,024,439,161 (2023), 25,137,965,543
+  (2024), 25,140,519,043 (2025), each + treasury shares = 25,131,606,843 issued (25,142,205,843 after
+  the 10,599,000-share issue of 2024-01-31), which matches the filed share capital exactly
+  (71,853,936 x 5,000 + 25,059,752,907 x 50 = Rp 1,612,257 million). Same rules as SMDR's script.
+  BNGA on 2026-10-06: Rp 1,700 x 25,140,519,043 = Rp 42.7 trillion, P/E 6.23, P/B 0.76.
+- **Share counts from the web** (`WebShareCounts`, before the agent runs): when the filing gives no share
+  count, the ingestion reads Yahoo Finance's published year-end and quarter-end shares outstanding,
+  issued and treasury shares (`/ws/fundamentals-timeseries`, `annual|quarterlyOrdinarySharesNumber`,
+  `...ShareIssued`, `...TreasurySharesNumber`; no crumb). `FilingMapper.withWebShareCounts` uses a count
+  only at a date of the filing's statements of changes in equity and only when (1) outstanding + treasury
+  = issued whenever all three are published and (2) profit attributable to the parent / count reproduces
+  the filing's own basic EPS of the period that date opens or closes, within half a unit of the EPS's last
+  decimal + 2% (period-end vs weighted shares; BNGA at most 0.4%). A wrong company, unit or a stock split
+  the filing does not reflect is far outside and rejected (SMDR's FY2022 filing: 0.013 vs 0.065). Accepted
+  counts are saved by `saveShareSnapshots` like filing counts but only fill dates without a stored count
+  (never replacing a filing or seed count); weighted shares stay unknown. Results on the real filings:
+  BNGA FY2022 .. FY2025 get exactly the audited counts above; BNGA H1 2026 rejects Yahoo's 2026-06-30
+  point (outstanding = issued although 336,000 treasury shares are published). A failed fetch (network,
+  HTTP 429) leaves the counts empty with a note; the ingestion itself continues. Switch off with
+  `neracalab.ingestion.web-share-counts: false`.
 - Stored values are compared with the filing at the column's scale (amounts 4 decimals, EPS and share
   counts 8), with the half-up rounding Postgres applies on insert: INDY's USD EPS 0.0868828938473089
   is stored and verified as 0.08688289.
@@ -263,8 +324,26 @@ Rules:
 - Restatements show up as comparative differences and are kept as filed in the period's own filing,
   e.g. INDF's FY2023 report moves Rp 36,509 million of FY2022 operating payments to investing;
   FY2022 keeps the FY2022 filing's figures.
+- **Declared rounding contradicted by the amounts.** ASGR's FY2023 workbook declares "Jutaan / In
+  Million" but carries full amounts (total assets 2,682,813,000,000, not 2,682,813); taken at its word,
+  every amount was stored a million times too large (and the derived metrics overflowed). The mapper
+  reads the amounts as full amounts (`FilingMapper.unit()` = 1, warning in the overview and the job
+  notes) when every amount of the three statements (at least 10, EPS excluded) is a whole multiple of
+  the declared unit and the filing's own EPS agrees: profit attributable to the parent / basic EPS gives a
+  plausible share count (ASGR: 1,348,780,500) with full amounts and an impossible one (> 10^13) with the
+  declared unit. The checks keep the declared rounding as their tolerance. A unit under which the EPS
+  implies an impossible share count is a template problem (rejected), never stored.
+- **One amount reported twice in a column.** ASGR's H1 2026 filing reports an H1 2025 loss both as
+  "Other expenses" 2,750 and as "Other gains (losses)" -2,750 (millions); profit before tax 139,690
+  counts it once. When profit before tax does not reconcile, an expense (income) line and a signed
+  gains / losses line with the same contribution are treated as one amount, counted once on the signed
+  line (the filing's current-column presentation), but only if profit before tax then reconciles
+  exactly; a `double_reported` warning and derivation record it. A line the agent classified is never
+  second-guessed.
 - Unsupported (rejected with 422): balance sheet by order of liquidity (`1220000`), profit or loss
-  by nature (`1312000` / `1322000`).
+  by nature (`1312000` / `1322000`) in the General and Infrastructure taxonomies; the current /
+  non-current balance sheet (`4210000`) and profit or loss by function (`4311000` / `4321000`) in the
+  Financial taxonomy.
 
 Revenue segments come only from the breakdown sheets `1617000` (by type) and `1618000` (by
 source). Some issuers leave both blank and disclose segments only in the PDF notes (e.g. INDF:
@@ -286,8 +365,13 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
 | `IngestionAgentModelTest` (unit) | Spring AI fills a missing model with `gpt-5-mini`; the agent's options name the configured model and the model a response reports is recorded in `metrics.models` |
 | `ConfiguredChatModel` (test helper) | the model the agent tests use, never written in Java: `spring.ai.openai.chat.model` from `application.yaml` (`${OPENAI_MODEL:<default>}`), with `OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default (the application's own precedence) |
+| `BngaShareSeedTest`              | the BNGA share-count script fills the five audited year-end counts (2021 .. 2025), outstanding + treasury = issued at every date, runs idempotently and never replaces a count already stored (rolled back) |
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
-| `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` -> `1xxxxxx` |
+| `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
+| `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook) |
+| `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
+| `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
+| `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
 | `BackendApplicationTests` (unit) | the application context starts (SQL init, Spring AI client, agent beans)                                                                                                                                                                             |
 | `FinancialStatementUploadTest`   | the asynchronous upload with a mocked agent: 202 job, background processing, stored once per checksum, wrong files rejected, file download; see [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)                                                     |
