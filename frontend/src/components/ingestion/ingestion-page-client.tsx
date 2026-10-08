@@ -6,9 +6,21 @@ import { useRouter } from "next/navigation"
 import { FundamentalsCard } from "@/components/ingestion/fundamentals-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
 import { PriceCard } from "@/components/ingestion/price-card"
+import { RagDocumentsCard } from "@/components/ingestion/rag-documents-card"
+import { RagNewsCard } from "@/components/ingestion/rag-news-card"
+import { RagPdfCard } from "@/components/ingestion/rag-pdf-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
+import { RAG_DOCUMENT_LIMIT } from "@/lib/ingestion"
 import { ingestionSection } from "@/lib/ingestion-sections"
-import type { CompanySummary, Exchange, FundamentalsStatus, IngestionJob, IngestionJobList } from "@/lib/types"
+import type {
+  CompanySummary,
+  Exchange,
+  FundamentalsStatus,
+  IngestionJob,
+  IngestionJobList,
+  RagDocument,
+  RagStatus,
+} from "@/lib/types"
 
 /** The data of one Ingestion page: each page shows its own card. */
 export type IngestionSectionData =
@@ -20,10 +32,27 @@ export type IngestionSectionData =
       provider: string
     }
   | { section: "screening-data"; fundamentals: FundamentalsStatus }
+  | {
+      section: "rag-pdf"
+      exchanges: Exchange[]
+      companiesByExchange: Record<string, CompanySummary[]>
+      rag: RagStatus
+      documents: RagDocument[]
+    }
+  | {
+      section: "rag-news"
+      exchanges: Exchange[]
+      companiesByExchange: Record<string, CompanySummary[]>
+      rag: RagStatus
+      documents: RagDocument[]
+      /** today in Jakarta (yyyy-mm-dd) */
+      today: string
+    }
 
 /**
- * One Ingestion page (IDX XBRL, Price Ingestion or Screening Data IDX): its card, then the jobs table, which every
- * page shows with all ingestion jobs (filterable by type and status).
+ * One Ingestion page (IDX XBRL, Price Ingestion, Screening Data IDX, PDF Documents (RAG) or News (RAG)): its card,
+ * the stored documents on the RAG pages, then the jobs table, which every page shows with all ingestion jobs
+ * (filterable by type and status).
  */
 export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { jobs: IngestionJobList }) {
   const router = useRouter()
@@ -35,7 +64,8 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
     setWatch((previous) => ({ id: job.id, seq: (previous?.seq ?? 0) + 1 }))
   }, [])
 
-  // a finished job can add a company or prices: re-render the server data (ticker list, latest price date)
+  // a finished job can add a company, prices or RAG documents: re-render the server data (ticker list, latest
+  // price date, stored documents)
   const jobFinished = useCallback(() => router.refresh(), [router])
 
   return (
@@ -58,7 +88,33 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
           />
         )}
         {data.section === "screening-data" && <FundamentalsCard status={data.fundamentals} onSubmitted={submitted} />}
+        {data.section === "rag-pdf" && (
+          <RagPdfCard
+            exchanges={data.exchanges}
+            companiesByExchange={data.companiesByExchange}
+            onSubmitted={submitted}
+          />
+        )}
+        {data.section === "rag-news" && (
+          <RagNewsCard
+            exchanges={data.exchanges}
+            companiesByExchange={data.companiesByExchange}
+            tavilyEnabled={data.rag.tavilyEnabled}
+            maxArticles={data.rag.newsMaxArticles}
+            today={data.today}
+            onSubmitted={submitted}
+          />
+        )}
       </div>
+
+      {(data.section === "rag-pdf" || data.section === "rag-news") && (
+        <RagDocumentsCard
+          source={data.section === "rag-pdf" ? "PDF" : "NEWS"}
+          documents={data.documents}
+          status={data.rag}
+          limit={RAG_DOCUMENT_LIMIT}
+        />
+      )}
 
       <JobsTable initial={jobs} watch={watch} onJobFinished={jobFinished} />
     </div>

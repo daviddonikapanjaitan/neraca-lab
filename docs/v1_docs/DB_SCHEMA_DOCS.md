@@ -1,6 +1,7 @@
 # Neraca Lab - Database Schema (v1)
 
-PostgreSQL 15+ (runs on `postgres:17-alpine` in Docker, database `neracalab`).
+PostgreSQL 15+ with the **pgvector** extension (runs on `postgres:17-alpine` + pgvector 0.8.7, built from
+`backend/postgres/Dockerfile`, in Docker, database `neracalab`).
 
 All tables and views live in the **`public`** schema. Objects are referenced without a schema
 prefix (`company`, `income_statement`, ...), so any table can reference any other with a plain
@@ -16,6 +17,7 @@ foreign key.
 | `V1.0.9__schema_ingestion_created_by.sql` | who started an ingestion job (`ingestion_job.created_by`), `app_migration` (section 4.8) |
 | `V1.0.10__schema_screening.sql`           | AI stock screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage (section 4.11) |
 | `V1.0.11__schema_fx.sql`                  | `fx_rate_daily`: ECB reference rates that convert listings quoted in another currency (section 4.10) |
+| `V1.0.14__schema_rag.sql`                 | RAG vector store: `vector` extension, `rag_document`, `rag_chunk`; job types `RAG_PDF`, `RAG_NEWS` (section 4.12) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -28,7 +30,7 @@ prices through the price ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DO
 data is read through the company APIs ([COMPANY_API_DOCS.md](COMPANY_API_DOCS.md)).
 
 The scripts are executed by Spring SQL init (`spring.sql.init.*`) on every application start,
-in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3, V1.0.7, V1.0.8 and V1.0.9, then data scripts
+in the order listed in `application.yaml` (schema scripts V1.0.1-V1.0.3, V1.0.7-V1.0.11 and V1.0.14, then data scripts
 V1.0.4-V1.0.6). No Flyway. Every statement is idempotent (`CREATE ... IF NOT EXISTS`,
 `ON CONFLICT` upserts). Hibernate does not alter the schema (`ddl-auto: none`).
 `V1.0.2` also drops the replaced v0 tables `revenue_segment` and `stock_price` if they exist.
@@ -63,6 +65,8 @@ erDiagram
     company ||--o{ market_snapshot     : "has"
     company ||--o{ valuation_snapshot  : "has"
     company ||--o{ financial_metric    : "has"
+    company ||--o{ rag_document        : "RAG documents"
+    rag_document ||--o{ rag_chunk      : "chunks + embeddings"
 
     reporting_period ||--o| income_statement    : "0..1 per period"
     reporting_period ||--o| balance_sheet       : "0..1 per period"
@@ -542,7 +546,7 @@ Metrics whose value cannot be calculated (missing input) are not stored.
 
 ### 4.8 `ingestion_file` and `ingestion_job` (`V1.0.7__schema_ingestion.sql`)
 
-Bookkeeping of the ingestions; no other table references them. Full description:
+Bookkeeping of the ingestions; only `rag_document.file_id` references `ingestion_file` (a RAG PDF). Full description:
 [INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md).
 
 | Table            | Column                         | Type         | Notes                                                                           |
@@ -552,13 +556,13 @@ Bookkeeping of the ingestions; no other table references them. Full description:
 |                  | `content_type`                 | VARCHAR(255) | as sent by the client                                                           |
 |                  | `size_bytes`                   | BIGINT       | `> 0` and `= octet_length(content)` (check)                                     |
 |                  | `checksum_sha256`              | CHAR(64)     | lower-case hex, **unique**: one row per content                                 |
-|                  | `content`                      | BYTEA        | the workbook bytes                                                              |
+|                  | `content`                      | BYTEA        | the file bytes (`.xlsx` workbook or RAG `.pdf`)                                 |
 | `ingestion_job`  | `job_id`                       | UUID PK      |                                                                                 |
-|                  | `job_type`                     | VARCHAR(30)  | `FINANCIAL_STATEMENT`, `PRICE`                                                  |
+|                  | `job_type`                     | VARCHAR(30)  | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS` |
 |                  | `status`                       | VARCHAR(30)  | `QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `INCOMPLETE`, `FAILED`  |
 |                  | `stage`                        | VARCHAR(500) | current step, or summary of a finished job                                      |
 |                  | `exchange`, `ticker`           | VARCHAR      | company of the job (upload: once the workbook is read)                          |
-|                  | `file_id`                      | BIGINT FK    | `ingestion_file`; required for `FINANCIAL_STATEMENT` (check)                    |
+|                  | `file_id`                      | BIGINT FK    | `ingestion_file`; required for `FINANCIAL_STATEMENT` and `RAG_PDF` (check, V1.0.14) |
 |                  | `file_name`, `file_reused`     |              | name of this upload; TRUE when the stored file was reused                       |
 |                  | `full_history`                 | BOOLEAN      | price jobs                                                                      |
 |                  | `attempts`, `message`, `result`|              | runs, failure / wait reason, JSONB result                                       |
@@ -625,6 +629,38 @@ Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)
 
 The script also widens `ck_role_permissions_permission` (`SCREENING`) and `ck_ingestion_job_type`
 (`FUNDAMENTALS`, `SCREENING`). Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
+
+### 4.12 RAG vector store (`V1.0.14__schema_rag.sql`)
+
+PDF documents and news articles of a company, split into chunks with their embeddings, for
+retrieval-augmented generation. Every row belongs to a company (`ON DELETE CASCADE`: deleting a
+company deletes its documents and chunks). Full description: [RAG_DOCS.md](RAG_DOCS.md).
+
+| Table          | Column                         | Type           | Notes                                                                 |
+|----------------|--------------------------------|----------------|-----------------------------------------------------------------------|
+| `rag_document` | `document_id`                  | BIGSERIAL PK   |                                                                       |
+|                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE`                                        |
+|                | `source_type`                  | VARCHAR(10)    | `PDF` or `NEWS` (check)                                               |
+|                | `source_key`                   | VARCHAR(1000)  | PDF: SHA-256 of the file; NEWS: the article URL; **unique** per company and type (`uq_rag_document_source`) |
+|                | `title`                        | VARCHAR(1000)  | file name without `.pdf`, or the article title                        |
+|                | `source_name`, `source_url`    | VARCHAR        | `PDF upload` / the news site; the article URL (required for `NEWS`, check) |
+|                | `file_id`, `file_name`         | BIGINT FK, VARCHAR(255) | `ingestion_file` of a PDF (required for `PDF`, check)        |
+|                | `published_at`                 | TIMESTAMPTZ    | news: publication time; PDF: NULL                                     |
+|                | `pages`, `characters`, `chunks`| INTEGER        | PDF pages; text length; number of chunks (non-negative, check)        |
+|                | `embedding_model`              | VARCHAR(100)   | e.g. `openai/text-embedding-3-small`                                  |
+|                | `job_id`                       | UUID           | the `ingestion_job` that last stored it                               |
+|                | `created_at`, `updated_at`     | TIMESTAMPTZ    |                                                                       |
+| `rag_chunk`    | `chunk_id`                     | BIGSERIAL PK   |                                                                       |
+|                | `document_id`                  | BIGINT FK      | `rag_document`, `ON DELETE CASCADE`                                   |
+|                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE` (repeated for filtered search)         |
+|                | `chunk_index`                  | INTEGER        | 0-based order; **unique** with `document_id` (`uq_rag_chunk`)         |
+|                | `page_from`, `page_to`         | INTEGER        | PDF pages of the chunk; NULL for news                                 |
+|                | `content`                      | TEXT           | the chunk text (not empty, check)                                     |
+|                | `embedding`                    | `vector(1536)` | pgvector; HNSW index with `vector_cosine_ops` (search by `<=>`)       |
+
+Indexes: `ix_rag_document_company` (`company_id, source_type, published_at DESC`),
+`ix_rag_chunk_company`, `ix_rag_chunk_embedding` (HNSW, `vector_cosine_ops`). Storing a document again (same
+file or URL for the same company) updates its row and replaces all its chunks in one transaction.
 
 ## 5. Views (`V1.0.3__views.sql`)
 

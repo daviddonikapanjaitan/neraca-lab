@@ -10,7 +10,8 @@ spring:
       max-file-size: 20MB
       max-request-size: 21MB
   ai:
-    # Only chat is used; OpenRouter speaks the OpenAI API but has no embeddings / images / audio.
+    # Spring AI is used for chat only (Spring AI's own embedding / image / audio models are off). The RAG
+    # embeddings call OpenRouter's OpenAI-compatible /embeddings directly (neracalab.rag below).
     model:
       embedding: none
       image: none
@@ -44,6 +45,7 @@ spring:
         - classpath:db/V1.0.9__schema_ingestion_created_by.sql
         - classpath:db/V1.0.10__schema_screening.sql
         - classpath:db/V1.0.11__schema_fx.sql
+        - classpath:db/V1.0.14__schema_rag.sql      # RAG vector store (needs pgvector)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -92,6 +94,17 @@ neracalab:
       cron: "0 30 17 * * MON-FRI"
       zone: Asia/Jakarta
       exchange: IDX
+
+  # RAG vector store (POST /api/v1/rag/pdf, POST /api/v1/rag/news); docs/v1_docs/RAG_DOCS.md
+  rag:
+    embedding-model: ${RAG_EMBEDDING_MODEL:openai/text-embedding-3-small}   # via spring.ai.openai.base-url / api-key
+    embedding-dimensions: 1536   # must match rag_chunk.embedding vector(1536)
+    embedding-batch: 64          # chunks per embedding request
+    chunk-chars: 1500            # target chunk length (characters)
+    chunk-overlap: 200           # characters a chunk repeats from the previous one
+    news-max-pages: 10           # tag pages per news site walked back to reach the range start
+    news-max-articles: 60        # articles read and stored per news job (newest first)
+    article-chars: 30000         # longest article text kept
 
   # AI stock screening (POST /api/v1/screenings); docs/v1_docs/SCREENING_DOCS.md
   screening:

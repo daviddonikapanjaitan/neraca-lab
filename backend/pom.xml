@@ -32,6 +32,7 @@
 		<poi.version>5.5.1</poi.version>
 		<jsoup.version>1.23.2</jsoup.version>
 		<openpdf.version>3.0.5</openpdf.version>
+		<pdfbox.version>3.0.8</pdfbox.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -85,6 +86,12 @@
 			<version>${openpdf.version}</version>
 		</dependency>
 
+		<!-- text of uploaded PDF documents for the RAG vector store -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>${pdfbox.version}</version>
+		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>

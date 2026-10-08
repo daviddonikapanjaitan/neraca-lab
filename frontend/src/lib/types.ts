@@ -258,7 +258,66 @@ export interface CompanyDetail {
 
 // Ingestion jobs (docs/v1_docs/INGESTION_JOBS_DOCS.md)
 
-export type IngestionJobType = "FINANCIAL_STATEMENT" | "PRICE" | "FUNDAMENTALS" | "SCREENING"
+export type IngestionJobType =
+  | "FINANCIAL_STATEMENT"
+  | "PRICE"
+  | "FUNDAMENTALS"
+  | "SCREENING"
+  | "RAG_PDF"
+  | "RAG_NEWS"
+
+export type RagSourceType = "PDF" | "NEWS"
+
+/** GET /api/v1/rag/status: settings of the RAG vector store and what it holds. */
+export interface RagStatus {
+  embeddingModel: string
+  embeddingDimensions: number
+  chunkChars: number
+  chunkOverlap: number
+  newsMaxArticles: number
+  newsMaxPages: number
+  maxRangeDays: number
+  tavilyEnabled: boolean
+  /** RAG jobs waiting in the queue */
+  pending: number
+  stored: { pdfDocuments: number; newsDocuments: number; chunks: number }
+}
+
+/** A chunk found by GET /api/v1/rag/search (cosine distance: 0 = same direction). */
+export interface RagHit {
+  chunkId: number
+  documentId: number
+  ticker: string
+  sourceType: RagSourceType
+  title: string
+  sourceUrl: string | null
+  fileName: string | null
+  publishedAt: string | null
+  pageFrom: number | null
+  pageTo: number | null
+  content: string
+  distance: number
+}
+
+/** A document of the RAG vector store (GET /api/v1/rag/documents): a PDF or a news article of a company. */
+export interface RagDocument {
+  documentId: number
+  exchange: string
+  ticker: string
+  companyName: string
+  sourceType: RagSourceType
+  title: string
+  /** "PDF upload", or the news site */
+  sourceName: string | null
+  sourceUrl: string | null
+  fileName: string | null
+  publishedAt: string | null
+  pages: number | null
+  characters: number
+  chunks: number
+  embeddingModel: string
+  updatedAt: string
+}
 
 export type IngestionJobStatus =
   | "QUEUED"

@@ -125,6 +125,11 @@ the same `OPENAI_API_KEY` (OpenRouter):
 | `SCREENING_BUDGET_USD`           | `0.45`  | cost cap of one screening run                                        |
 | `SCREENING_ETL_SCHEDULE_ENABLED` | `true`  | daily screening data ETL (Yahoo Finance) at 18:00 WIB, Monday-Friday |
 
+The RAG vector store ([RAG_DOCS.md](RAG_DOCS.md)) embeds with the same `OPENAI_API_KEY`; its news
+ingestion also uses `TAVILY_API_KEY` when set. `RAG_EMBEDDING_MODEL` (default
+`openai/text-embedding-3-small`, 1536 dimensions) can be set in `backend/.env` and passed on in
+`backend/docker-compose.yaml`; another model must also have 1536 dimensions.
+
 After changing backend code, rebuild with `docker compose up -d --build backend`; when the
 container keeps the old image (compose prints `Running` instead of `Recreated`), add
 `--force-recreate`.
@@ -133,7 +138,7 @@ container keeps the old image (compose prints `Running` instead of `Recreated`),
 
 | Service  | Container            | Image                            | Host port | Health check                                 |
 |----------|----------------------|----------------------------------|-----------|----------------------------------------------|
-| postgres | `neracalab-postgres` | `postgres:17-alpine`             | `5432`    | `pg_isready`                                 |
+| postgres | `neracalab-postgres` | built from `backend/postgres/Dockerfile` (`neracalab-postgres:17-pgvector`) | `5432` | `pg_isready` |
 | redis    | `neracalab-redis`    | `redis:7-alpine`                 | `6379`    | `redis-cli ping`                             |
 | backend  | `neracalab-backend`  | built from `backend/Dockerfile`  | `8080`    | `GET /api/v1/health` (120 s start period)    |
 | frontend | `neracalab-frontend` | built from `frontend/Dockerfile` | `3000`    | `GET /login`                                 |
@@ -143,6 +148,7 @@ start runs the SQL scripts and seeds HRTA), then the frontend.
 
 | Image    | Build                                                                                       | Runtime                                                       |
 |----------|---------------------------------------------------------------------------------------------|---------------------------------------------------------------|
+| postgres | `postgres:17-alpine` + pgvector 0.8.7 compiled from its release tag (portable: no `-march=native`, no LLVM bitcode; build tools removed) | `postgres:17-alpine` with the `vector` extension (RAG vector store) |
 | backend  | `maven:3.9-eclipse-temurin-21`: `mvn dependency:go-offline`, then `mvn package -DskipTests` | `eclipse-temurin:21-jre-alpine`, user `spring`, `java -jar`   |
 | frontend | `node:22-alpine`: `npm ci`, `next build` with `NEXT_OUTPUT=standalone`                      | `node:22-alpine`, user `nextjs`, `node server.js` (port 3000) |
 
@@ -155,7 +161,14 @@ All base images are published for amd64 and arm64 (Apple Silicon, ARM Linux), an
 ```text
 docker-compose.yaml              full stack: include backend/docker-compose.yaml + frontend service
 backend/docker-compose.yaml      postgres, redis, backend
+backend/postgres/Dockerfile      the postgres image: postgres:17-alpine + pgvector
 ```
+
+- The postgres image keeps the official base (`postgres:17-alpine`, same major version), so a
+  database volume created before pgvector was added is used as it is: the next start builds the
+  image, recreates the container on the same volume, and the backend's `V1.0.14__schema_rag.sql`
+  runs `CREATE EXTENSION IF NOT EXISTS vector`. Rebuild it alone with
+  `cd backend && docker compose up -d --build --no-deps postgres` (no jobs should be running).
 
 - Both files declare the compose project `name: backend`, so the full stack and
   `cd backend && docker compose up` manage the same containers and the same volumes
@@ -192,6 +205,7 @@ Port checks: bash uses a `/dev/tcp` connect (no extra tools), cmd uses `netstat 
 | `Docker Compose ... is too old`            | update Docker Desktop / the Compose plugin to 2.20 or newer                                                                                   |
 | `Permission denied` running a `.sh` script | `chmod +x scripts/*.sh`, or run it with `bash scripts/start-linux.sh`                                                                         |
 | a container is not healthy                 | the script prints its last log lines; full logs with the `logs` command                                                                       |
+| backend fails with `extension "vector" is not available` | the postgres container still runs the plain image: `docker compose up -d --build postgres`, then restart the backend |
 | start from scratch (wipes the database)    | stop, then `docker volume rm backend_postgres-data backend_redis-data`; the next start re-seeds HRTA                                          |
 
 ## 6. Verification (v1)

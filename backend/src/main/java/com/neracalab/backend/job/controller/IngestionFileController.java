@@ -19,8 +19,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * {@code GET /api/v1/ingestions/{id}/file}: downloads the workbook of an upload job, exactly as
- * stored in {@code ingestion_file}, under the name of that job's upload. 404 for an unknown job and
+ * {@code GET /api/v1/ingestions/{id}/file}: downloads the file of an upload job (workbook, or the PDF of a RAG
+ * job), exactly as stored in {@code ingestion_file}, under the name of that job's upload. 404 for an unknown job and
  * for a job without file (price ingestion).
  * <p>
  * A separate controller: {@link IngestionJobController} produces JSON only.
@@ -41,13 +41,18 @@ public class IngestionFileController {
     public ResponseEntity<byte[]> download(@PathVariable("id") UUID id) {
         UploadedFile file = repository.uploadedFile(id).orElseThrow(() -> new FileNotFoundException(id));
         return ResponseEntity.ok()
-                .contentType(XLSX)
+                .contentType(contentType(file.fileName()))
                 .contentLength(file.content().length)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build().toString())
                 .eTag("\"" + file.checksumSha256() + "\"")
                 .header("X-Checksum-SHA256", file.checksumSha256())
                 .body(file.content());
+    }
+
+    /** application/pdf for a .pdf (RAG upload), else the .xlsx workbook type. */
+    static MediaType contentType(String fileName) {
+        return fileName != null && fileName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf") ? MediaType.APPLICATION_PDF : XLSX;
     }
 
     @ExceptionHandler(FileNotFoundException.class)

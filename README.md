@@ -4,7 +4,7 @@ Application for analyzing financial statements using LLM, with an AI stock scree
 IDX stocks through the eyes of Warren Buffett, Charlie Munger, Peter Lynch, Philip Fisher,
 Keith Gill (Roaring Kitty) and a Risk agent.
 
-- Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 + Redis 7 + Spring AI 2.0 (OpenRouter)
+- Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 with pgvector + Redis 7 + Spring AI 2.0 (OpenRouter)
 - Frontend using: Next.js 16 (React 19, TypeScript) + shadcn/ui with the shadcn-fintech theme + Tailwind CSS 4
 
 Assistant developer: Claude Code (Opus 5.5 LLM Model)
@@ -51,6 +51,7 @@ start), then change its password in Admin Center > User Management.
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
 | [`SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md)       | AI stock screening: daily ETL, Stage 1, agents (tool calling, ReAct, Reflection, Reflexion), cost, report, PDF |
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
+| [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion, chunking, embeddings, search API |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 
 ## Project structure
@@ -62,6 +63,7 @@ neraca_lab/
 ├── backend/                     Spring Boot application
 │   ├── Dockerfile
 │   ├── docker-compose.yaml      postgres + redis + backend
+│   ├── postgres/Dockerfile      postgres:17-alpine + pgvector (RAG vector store)
 │   ├── .env.example             template for backend/.env (AI key; .env is git-ignored)
 │   └── src/main/
 │       ├── java/.../company/    company list / detail APIs, exchange and ticker codes
@@ -74,6 +76,8 @@ neraca_lab/
 │       ├── java/.../screening/  AI stock screening: data/ (Yahoo ETL), quant/ (Stage 1), news/
 │       │                        (crawlers, Tavily), agent/ (research, investor agents, reflection,
 │       │                        Reflexion, synthesis), report/ (PDF), queue, service, controller
+│       ├── java/.../rag/        RAG vector store: PDF text, chunker, embeddings, news collector,
+│       │                        pgvector repository, queue, controller
 │       └── resources/
 │           ├── application.yaml
 │           └── db/              SQL scripts (no Flyway)
@@ -85,6 +89,7 @@ neraca_lab/
 │               ├── V1.0.9__schema_ingestion_created_by.sql   (who started an ingestion job)
 │               ├── V1.0.10__schema_screening.sql  (AI screening: universe, snapshots, news, runs, usage)
 │               ├── V1.0.11__schema_fx.sql         (fx_rate_daily: ECB rates for listings quoted in another currency)
+│               ├── V1.0.14__schema_rag.sql        (RAG vector store: rag_document, rag_chunk; needs pgvector)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -96,7 +101,7 @@ neraca_lab/
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
 ├── data/<TICKER>/               source data per company
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
-│   ├── pdf/                     the same filings as PDF
+│   ├── pdf/                     the same filings as PDF (upload them on Ingestion > PDF Documents (RAG))
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
 │                                HRTA: xlsx, pdf and prices, loaded as seed data on every start;
 │                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
@@ -113,7 +118,7 @@ neraca_lab/
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
-                                 SCREENING_DOCS.md
+                                 SCREENING_DOCS.md, RAG_DOCS.md
                                  (see Documentation)
 ```
 
@@ -156,7 +161,7 @@ role has one or more permissions, and the backend checks them on every API reque
 | Permission  | Opens                                                                    |
 |-------------|--------------------------------------------------------------------------|
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
-| `INGESTION` | Ingestion pages, upload / price / job APIs (and the company list)        |
+| `INGESTION` | Ingestion pages, upload / price / RAG / job APIs (and the company list)  |
 | `COMPANIES` | Companies pages and company APIs                                         |
 | `SCREENING` | Screening page, screening runs, reports and PDF export                   |
 
@@ -320,6 +325,29 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 ingestion and a re-adjusted history switch to it automatically. Details, job fields and known
 limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md).
 
+## RAG vector store (PDF documents and news)
+
+Two Ingestion pages fill a pgvector store that the AI features can search by meaning; every
+document is linked to its company (`rag_document.company_id` -> `company`):
+
+- **PDF Documents (RAG)**: upload a `.pdf` with a text layer (e.g. `data/HRTA/pdf`) for a stored
+  company (picked automatically from a file name ending with the ticker). Its text is read page by
+  page (PDFBox), split into ~1,500-character chunks, embedded and stored.
+- **News (RAG)**: choose an IDX company and a date range (this month, last 7 / 30 days, previous
+  month or custom, Jakarta time, up to 366 days). Articles from EmitenNews, Investor.id, IDX Channel,
+  Pasardana and Tavily published in the range are read and stored; articles already stored are skipped.
+
+```bash
+curl -H "$AUTH" -F file=@data/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
+curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=gold%20sales%202025"   # closest chunks
+```
+
+Embeddings: `openai/text-embedding-3-small` (1536 dimensions) through OpenRouter with the same
+`OPENAI_API_KEY`. The postgres container is built from `backend/postgres/Dockerfile`
+(`postgres:17-alpine` + pgvector 0.8.7), so the existing data volume keeps working. Details:
+[`docs/v1_docs/RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md).
+
 ## AI stock screening
 
 **Screening** in the sidebar (permission `SCREENING`): choose the exchange (IDX), the market cap
@@ -373,6 +401,8 @@ npm run dev                   # http://localhost:3000
 | `/ingestion/xbrl`                | Ingestion dropdown (like the Admin Center), IDX XBRL: upload an `.xlsx` financial statement (`/ingestion` opens this page) |
 | `/ingestion/prices`              | Price Ingestion: fetch daily prices (exchange / ticker dropdowns) |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
+| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company into the pgvector store; stored documents and a search test |
+| `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles and a search test |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
 | `/admin/users`, `/admin/roles`   | Admin Center (`ADMIN`): add, view, update and delete users and roles                                                                                               |
 | `/profile`                       | own profile: picture, address, phone, date of birth (username and email are read-only)                                                                             |
@@ -391,7 +421,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 183 tests
+(cd backend && ./mvnw test)                      # 296 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -437,6 +467,10 @@ Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), 
 `ScreeningAgentsTest` (scripted model: options, cost metering and budget, ReAct with a tool call,
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
 (pipeline mocked: validation, job, report, PDF); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
+RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
+(date range and paging on saved pages, Tavily results filtered to articles), `NewsUrlsTest`, `RagNewsFallbackTest`, `RagRepositoryTest` (pgvector store and cosine search, rolled back)
+and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
+permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
 
 The tests start the application, whose startup marks ingestion jobs left active as `FAILED`. Do not
 run them against the database of a backend that is processing jobs; point them at a separate
@@ -465,6 +499,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.9__schema_ingestion_created_by.sql` | `ingestion_job.created_by`: the user who started each ingestion; `app_migration` |
 | `V1.0.10__schema_screening.sql`       | AI screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage |
 | `V1.0.11__schema_fx.sql`              | `fx_rate_daily`: ECB reference rates for listings quoted in another currency (INDY, SMDR) |
+| `V1.0.14__schema_rag.sql`             | RAG vector store (pgvector): `rag_document`, `rag_chunk` (`vector(1536)`, HNSW); job types `RAG_PDF`, `RAG_NEWS` |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
@@ -490,8 +525,9 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `market_snapshot`     | daily market cap and enterprise value (derived)                            |
 | `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA, EV/OP .. |
 | `financial_metric`    | every calculated metric in long format (margins, returns, leverage, EV/OP) |
-| `ingestion_file`      | uploaded `.xlsx` workbooks (`BYTEA`), one row per SHA-256 checksum         |
-| `ingestion_job`       | progress of every background job: uploads, prices, screening ETL, screenings (status, stage, result JSONB, started by which user) |
+| `ingestion_file`      | uploaded `.xlsx` workbooks and RAG `.pdf` files (`BYTEA`), one row per SHA-256 checksum |
+| `ingestion_job`       | progress of every background job: uploads, prices, screening ETL, screenings, RAG PDF / news (status, stage, result JSONB, started by which user) |
+| `rag_document`, `rag_chunk` | RAG vector store: PDFs and news articles of a company, text chunks with their embeddings |
 | `users`               | accounts: unique username / email, BCrypt password, profile, avatar        |
 | `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |

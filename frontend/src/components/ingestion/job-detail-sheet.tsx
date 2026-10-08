@@ -67,6 +67,49 @@ interface PriceResult {
   } | null
 }
 
+/** Fields of the RAG PDF result (RagIngestionService.PdfResult). */
+interface RagPdfResult {
+  documentId?: number
+  fileName?: string
+  pages?: number
+  pagesWithText?: number
+  characters?: number
+  chunks?: number
+  embeddingModel?: string
+}
+
+/** Fields of the RAG news result (RagIngestionService.NewsResult). */
+interface RagNewsResult {
+  from?: string
+  to?: string
+  sources?: {
+    source?: string
+    pages?: number
+    found?: number
+    inRange?: number
+    /** search results left out: quote / profile / listing pages, not articles */
+    notArticles?: number
+    error?: string | null
+  }[]
+  headlinesInRange?: number
+  stored?: number
+  alreadyStored?: number
+  outOfRange?: number
+  failed?: number
+  truncated?: boolean
+  articles?: { url?: string; source?: string; title?: string; publishedAt?: string | null; outcome?: string }[]
+  embeddingModel?: string
+}
+
+/** NewsSource enum -> site name */
+const NEWS_SOURCE: Record<string, string> = {
+  TAVILY: "Tavily search",
+  EMITENNEWS: "EmitenNews",
+  INVESTOR_ID: "Investor.id",
+  IDXCHANNEL: "IDX Channel",
+  PASARDANA: "Pasardana",
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[8.5rem_1fr] gap-2 text-sm">
@@ -171,6 +214,62 @@ function PriceSummary({ result }: { result: PriceResult }) {
           valuation snapshots · {count(result.valuation.valuationMetrics)} metrics
         </Field>
       )}
+    </dl>
+  )
+}
+
+function RagPdfSummary({ result }: { result: RagPdfResult }) {
+  return (
+    <dl className="flex flex-col gap-2">
+      <Field label="Pages">
+        {count(result.pages)} ({count(result.pagesWithText)} with text)
+      </Field>
+      <Field label="Text">{count(result.characters)} characters</Field>
+      <Field label="Chunks">{count(result.chunks)} stored in the vector store</Field>
+      <Field label="Embedding">
+        <span className="font-mono text-xs">{result.embeddingModel ?? EMPTY}</span>
+      </Field>
+    </dl>
+  )
+}
+
+function RagNewsSummary({ result }: { result: RagNewsResult }) {
+  const failed = (result.articles ?? []).filter((a) => a.outcome?.startsWith("FAILED") || a.outcome === "NO_TEXT")
+  return (
+    <dl className="flex flex-col gap-2">
+      <Field label="Range">
+        {formatDate(result.from)} to {formatDate(result.to)}
+      </Field>
+      <Field label="Articles">
+        {count(result.headlinesInRange)} found · {count(result.stored)} stored · {count(result.alreadyStored)} already
+        stored
+        {(result.outOfRange ?? 0) > 0 && <> · {count(result.outOfRange)} outside the range</>}
+        {(result.failed ?? 0) > 0 && <> · {count(result.failed)} failed</>}
+      </Field>
+      {result.truncated && (
+        <Field label="Limit">Only the newest articles were read; narrow the range or run it again.</Field>
+      )}
+      <Field label="Sources">
+        <ul className="flex flex-col gap-0.5">
+          {(result.sources ?? []).map((s) => (
+            <li key={s.source} className={s.error ? "text-destructive" : undefined}>
+              {NEWS_SOURCE[s.source ?? ""] ?? s.source}:{" "}
+              {s.error
+                ? s.error
+                : `${count(s.inRange)} in range of ${count(s.found)} (${count(s.pages)} ${s.pages === 1 ? "page" : "pages"})` +
+                  ((s.notArticles ?? 0) > 0 ? ` · ${count(s.notArticles)} not articles, skipped` : "")}
+            </li>
+          ))}
+        </ul>
+      </Field>
+      {failed.length > 0 && (
+        <Field label="Not stored">
+          <List items={failed.map((a) => `${a.title ?? a.url}: ${a.outcome}`)} tone="destructive" />
+        </Field>
+      )}
+      <Field label="Embedding">
+        <span className="font-mono text-xs">{result.embeddingModel ?? EMPTY}</span>
+      </Field>
     </dl>
   )
 }
@@ -300,6 +399,8 @@ export function JobDetailSheet({
                   <h3 className="text-sm font-semibold">Result</h3>
                   {shown.type === "FINANCIAL_STATEMENT" && <FilingSummary result={shown.result as FilingResult} />}
                   {shown.type === "PRICE" && <PriceSummary result={shown.result as PriceResult} />}
+                  {shown.type === "RAG_PDF" && <RagPdfSummary result={shown.result as RagPdfResult} />}
+                  {shown.type === "RAG_NEWS" && <RagNewsSummary result={shown.result as RagNewsResult} />}
                   <details className="rounded-lg border">
                     <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
                       {shown.type === "FINANCIAL_STATEMENT"

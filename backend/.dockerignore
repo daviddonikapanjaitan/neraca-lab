@@ -10,3 +10,4 @@ HELP.md
 Dockerfile
 docker-compose.yaml
 .env
+postgres/

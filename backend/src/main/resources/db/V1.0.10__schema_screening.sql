@@ -28,10 +28,12 @@ ALTER TABLE role_permissions
     ADD  CONSTRAINT ck_role_permissions_permission
         CHECK (permission IN ('ADMIN', 'INGESTION', 'COMPANIES', 'SCREENING'));
 
+-- This script runs on every start, before the later schema scripts: the list must also hold the job
+-- types added later (RAG_PDF, RAG_NEWS by V1.0.14), or the stored jobs of those types violate it.
 ALTER TABLE ingestion_job
     DROP CONSTRAINT IF EXISTS ck_ingestion_job_type,
     ADD  CONSTRAINT ck_ingestion_job_type
-        CHECK (job_type IN ('FINANCIAL_STATEMENT', 'PRICE', 'FUNDAMENTALS', 'SCREENING'));
+        CHECK (job_type IN ('FINANCIAL_STATEMENT', 'PRICE', 'FUNDAMENTALS', 'SCREENING', 'RAG_PDF', 'RAG_NEWS'));
 
 COMMENT ON COLUMN ingestion_job.job_type IS
     'FINANCIAL_STATEMENT = IDX .xlsx upload stored by the AI agent, PRICE = daily price ingestion, FUNDAMENTALS = screening data ETL (Yahoo Finance), SCREENING = AI stock screening run.';

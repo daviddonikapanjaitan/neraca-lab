@@ -10,5 +10,9 @@ public enum IngestionJobType {
     /** screening data ETL: market data and fundamentals of every listing of an exchange (Yahoo Finance) */
     FUNDAMENTALS,
     /** AI stock screening run: quantitative pre-screen, investor agents, synthesis, report */
-    SCREENING
+    SCREENING,
+    /** PDF document of a company into the RAG vector store (text chunks with embeddings) */
+    RAG_PDF,
+    /** news of a company within a date range into the RAG vector store */
+    RAG_NEWS
 }

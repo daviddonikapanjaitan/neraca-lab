@@ -7,7 +7,12 @@ name: backend
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # postgres:17-alpine + the pgvector extension (RAG vector store, V1.0.14__schema_rag.sql);
+    # same PostgreSQL major version, so the existing data volume is used as it is
+    build:
+      context: postgres
+      dockerfile: Dockerfile
+    image: neracalab-postgres:17-pgvector
     container_name: neracalab-postgres
     restart: unless-stopped
     environment:
@@ -72,6 +77,8 @@ services:
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       SCREENING_BUDGET_USD: ${SCREENING_BUDGET_USD:-0.45}
       SCREENING_ETL_SCHEDULE_ENABLED: ${SCREENING_ETL_SCHEDULE_ENABLED:-true}
+      # RAG vector store: embedding model (OpenRouter, same OPENAI_API_KEY; must have 1536 dimensions)
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-openai/text-embedding-3-small}
       # login: session length, initial password of the root user "admin" (first start only)
       AUTH_SESSION_TTL: ${AUTH_SESSION_TTL:-12h}
       AUTH_ROOT_PASSWORD: ${AUTH_ROOT_PASSWORD:-admin}
