@@ -15,5 +15,5 @@ async function section(): Promise<IngestionSectionData> {
 }
 
 export default function Page() {
-  return <IngestionPage section={section} />
+  return <IngestionPage name="screening-data" section={section} />
 }

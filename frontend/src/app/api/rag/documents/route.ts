@@ -1,8 +1,11 @@
 import { forward } from "@/lib/api"
 
-const PARAMS = ["exchange", "ticker", "source", "limit"]
+const PARAMS = ["exchange", "ticker", "tickerPrefix", "source", "limit", "offset"]
 
-/** GET /api/rag/documents[?exchange&ticker&source&limit] -> backend GET /api/v1/rag/documents (stored documents). */
+/**
+ * GET /api/rag/documents[?exchange&ticker&tickerPrefix&source&limit&offset] -> backend GET /api/v1/rag/documents
+ * (one page of the stored documents).
+ */
 export async function GET(request: Request) {
   const input = new URL(request.url).searchParams
   const query = new URLSearchParams()

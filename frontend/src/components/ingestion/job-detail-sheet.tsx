@@ -87,8 +87,6 @@ interface RagNewsResult {
     pages?: number
     found?: number
     inRange?: number
-    /** search results left out: quote / profile / listing pages, not articles */
-    notArticles?: number
     error?: string | null
   }[]
   headlinesInRange?: number
@@ -101,7 +99,7 @@ interface RagNewsResult {
   embeddingModel?: string
 }
 
-/** NewsSource enum -> site name */
+/** NewsSource enum -> site name (Tavily only in jobs from before it was dropped) */
 const NEWS_SOURCE: Record<string, string> = {
   TAVILY: "Tavily search",
   EMITENNEWS: "EmitenNews",
@@ -256,8 +254,7 @@ function RagNewsSummary({ result }: { result: RagNewsResult }) {
               {NEWS_SOURCE[s.source ?? ""] ?? s.source}:{" "}
               {s.error
                 ? s.error
-                : `${count(s.inRange)} in range of ${count(s.found)} (${count(s.pages)} ${s.pages === 1 ? "page" : "pages"})` +
-                  ((s.notArticles ?? 0) > 0 ? ` · ${count(s.notArticles)} not articles, skipped` : "")}
+                : `${count(s.inRange)} in range of ${count(s.found)} (${count(s.pages)} ${s.pages === 1 ? "page" : "pages"})`}
             </li>
           ))}
         </ul>

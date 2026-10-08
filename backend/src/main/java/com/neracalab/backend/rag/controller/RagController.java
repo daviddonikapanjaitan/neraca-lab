@@ -39,10 +39,9 @@ import com.neracalab.backend.rag.RagQueue.Submission;
 import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.rag.RagRepository.Company;
 import com.neracalab.backend.rag.RagRepository.Counts;
-import com.neracalab.backend.rag.RagRepository.DocumentRow;
+import com.neracalab.backend.rag.RagRepository.DocumentPage;
 import com.neracalab.backend.rag.RagRepository.Hit;
 import com.neracalab.backend.rag.RagRepository.SourceType;
-import com.neracalab.backend.screening.news.TavilyClient;
 
 /**
  * RAG vector store of the companies (pgvector): PDF documents and news articles, chunked, embedded and linked to
@@ -54,7 +53,8 @@ import com.neracalab.backend.screening.news.TavilyClient;
  *   <li>{@code POST /api/v1/rag/news?exchange=IDX&ticker=HRTA&from=2026-10-01&to=2026-10-08} - queue the news of a
  *       date range (inclusive, Jakarta time, at most 366 days, not in the future); 202 / 200 as above</li>
  *   <li>{@code GET /api/v1/rag/status} - settings (embedding model, chunking, news limits) and what is stored</li>
- *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&source=PDF|NEWS&limit]} - stored documents</li>
+ *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF|NEWS&limit&offset]} - one page
+ *       of the stored documents, with the number matching the filters</li>
  *   <li>{@code GET /api/v1/rag/search?q=...[&exchange&ticker&source&limit]} - the closest chunks (cosine)</li>
  * </ul>
  */
@@ -67,35 +67,28 @@ public class RagController {
     static final int MAX_RANGE_DAYS = 366;
     static final int MAX_QUERY_CHARS = 2000;
 
-    /**
-     * @param pending        RAG jobs waiting in the queue (excluding the running one)
-     * @param tavilyEnabled  the news ingestion also searches Tavily by date range
-     */
+    /** @param pending RAG jobs waiting in the queue (excluding the running one) */
     public record Status(String embeddingModel, int embeddingDimensions, int chunkChars, int chunkOverlap,
-                         int newsMaxArticles, int newsMaxPages, int maxRangeDays, boolean tavilyEnabled, int pending,
-                         Counts stored) {
+                         int newsMaxArticles, int newsMaxPages, int maxRangeDays, int pending, Counts stored) {
     }
 
     private final RagQueue queue;
     private final RagRepository repository;
     private final EmbeddingClient embeddings;
     private final RagProperties properties;
-    private final TavilyClient tavily;
 
-    public RagController(RagQueue queue, RagRepository repository, EmbeddingClient embeddings, RagProperties properties,
-                         TavilyClient tavily) {
+    public RagController(RagQueue queue, RagRepository repository, EmbeddingClient embeddings, RagProperties properties) {
         this.queue = queue;
         this.repository = repository;
         this.embeddings = embeddings;
         this.properties = properties;
-        this.tavily = tavily;
     }
 
     @GetMapping("/status")
     public Status status() {
         return new Status(embeddings.model(), properties.embeddingDimensions(), properties.chunkChars(),
                 properties.chunkOverlap(), properties.newsMaxArticles(), properties.newsMaxPages(), MAX_RANGE_DAYS,
-                tavily.enabled(), queue.pendingCount(), repository.counts());
+                queue.pendingCount(), repository.counts());
     }
 
     @PostMapping(path = "/pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -140,13 +133,20 @@ public class RagController {
     }
 
     @GetMapping("/documents")
-    public List<DocumentRow> documents(@RequestParam(name = "exchange", required = false) String exchange,
-                                       @RequestParam(name = "ticker", required = false) String ticker,
-                                       @RequestParam(name = "source", required = false) String source,
-                                       @RequestParam(name = "limit", defaultValue = "100") int limit) {
+    public DocumentPage documents(@RequestParam(name = "exchange", required = false) String exchange,
+                                  @RequestParam(name = "ticker", required = false) String ticker,
+                                  @RequestParam(name = "tickerPrefix", required = false) String tickerPrefix,
+                                  @RequestParam(name = "source", required = false) String source,
+                                  @RequestParam(name = "limit", defaultValue = "100") int limit,
+                                  @RequestParam(name = "offset", defaultValue = "0") int offset) {
+        if (offset < 0) {
+            throw new InvalidRequestException("offset must be 0 or more");
+        }
         String ex = exchange == null || exchange.isBlank() ? null : Exchange.of(exchange).code();
         String t = ticker == null || ticker.isBlank() ? null : Tickers.normalize(ticker);
-        return repository.documents(ex, t, sourceType(source), Math.clamp(limit, 1, 500));
+        // the beginning of a ticker: the same characters as a ticker (no LIKE wildcards)
+        String prefix = tickerPrefix == null || tickerPrefix.isBlank() ? null : Tickers.normalize(tickerPrefix);
+        return repository.documents(ex, t, prefix, sourceType(source), Math.clamp(limit, 1, 500), offset);
     }
 
     @GetMapping("/search")

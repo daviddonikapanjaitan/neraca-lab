@@ -27,8 +27,9 @@ import org.springframework.web.bind.annotation.RestController;
  * Progress of every ingestion process (financial statement uploads and price ingestions), from
  * {@code ingestion_job}.
  * <ul>
- *   <li>{@code GET /api/v1/ingestions[?type=PRICE][&status=QUEUED,RUNNING][&limit=50]} - jobs, most
- *       recent first (without results), plus the number of jobs per status</li>
+ *   <li>{@code GET /api/v1/ingestions[?type=PRICE][&status=QUEUED,RUNNING][&limit=50][&offset=0]} - jobs, most
+ *       recent first (without results), one page of {@code limit} jobs from {@code offset}, plus the number of jobs
+ *       per status and the number matching the filter ({@code total})</li>
  *   <li>{@code GET /api/v1/ingestions/{id}} - one job with its result</li>
  * </ul>
  * {@code type} and {@code status} are case-insensitive; {@code status} takes a comma-separated list.
@@ -43,10 +44,11 @@ public class IngestionJobController {
     /**
      * @param counts jobs per status (all jobs, not only the listed ones; of {@code type} when given)
      * @param active jobs QUEUED, RUNNING or WAITING_RATE_LIMIT (from {@code counts})
-     * @param jobs   most recent first, at most {@code limit}, without results
+     * @param total  jobs matching {@code type} and {@code status} (every page together)
+     * @param jobs   most recent first, at most {@code limit} from {@code offset}, without results
      */
-    public record IngestionJobList(Map<IngestionJobStatus, Long> counts, long active, int limit,
-                                   List<IngestionJob> jobs) {
+    public record IngestionJobList(Map<IngestionJobStatus, Long> counts, long active, long total, int limit,
+                                   int offset, List<IngestionJob> jobs) {
     }
 
     private final IngestionJobRepository repository;
@@ -58,9 +60,13 @@ public class IngestionJobController {
     @GetMapping
     public IngestionJobList list(@RequestParam(name = "type", required = false) String type,
                                  @RequestParam(name = "status", required = false) String status,
-                                 @RequestParam(name = "limit", defaultValue = "50") int limit) {
+                                 @RequestParam(name = "limit", defaultValue = "50") int limit,
+                                 @RequestParam(name = "offset", defaultValue = "0") int offset) {
         if (limit < 1 || limit > MAX_LIMIT) {
             throw new InvalidParameterException("limit must be between 1 and " + MAX_LIMIT);
+        }
+        if (offset < 0) {
+            throw new InvalidParameterException("offset must be 0 or more");
         }
         IngestionJobType jobType = type == null || type.isBlank() ? null : parse(IngestionJobType.class, "type", type);
         List<IngestionJobStatus> statuses = new ArrayList<>();
@@ -73,7 +79,10 @@ public class IngestionJobController {
         }
         Map<IngestionJobStatus, Long> counts = repository.countByStatus(jobType);
         long active = counts.entrySet().stream().filter(e -> e.getKey().active()).mapToLong(Map.Entry::getValue).sum();
-        return new IngestionJobList(counts, active, limit, repository.list(jobType, statuses, limit));
+        long total = counts.entrySet().stream().filter(e -> statuses.isEmpty() || statuses.contains(e.getKey()))
+                .mapToLong(Map.Entry::getValue).sum();
+        return new IngestionJobList(counts, active, total, limit, offset,
+                repository.list(jobType, statuses, limit, offset));
     }
 
     @GetMapping("/{id}")
@@ -103,7 +112,7 @@ public class IngestionJobController {
         return problem;
     }
 
-    /** An unknown type / status or a limit out of range. */
+    /** An unknown type / status, a limit out of range or a negative offset. */
     static class InvalidParameterException extends RuntimeException {
 
         InvalidParameterException(String message) {

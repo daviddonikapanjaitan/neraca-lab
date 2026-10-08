@@ -10,7 +10,6 @@ import { RagDocumentsCard } from "@/components/ingestion/rag-documents-card"
 import { RagNewsCard } from "@/components/ingestion/rag-news-card"
 import { RagPdfCard } from "@/components/ingestion/rag-pdf-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
-import { RAG_DOCUMENT_LIMIT } from "@/lib/ingestion"
 import { ingestionSection } from "@/lib/ingestion-sections"
 import type {
   CompanySummary,
@@ -18,7 +17,7 @@ import type {
   FundamentalsStatus,
   IngestionJob,
   IngestionJobList,
-  RagDocument,
+  RagDocumentPage,
   RagStatus,
 } from "@/lib/types"
 
@@ -37,22 +36,22 @@ export type IngestionSectionData =
       exchanges: Exchange[]
       companiesByExchange: Record<string, CompanySummary[]>
       rag: RagStatus
-      documents: RagDocument[]
+      documents: RagDocumentPage
     }
   | {
       section: "rag-news"
       exchanges: Exchange[]
       companiesByExchange: Record<string, CompanySummary[]>
       rag: RagStatus
-      documents: RagDocument[]
+      documents: RagDocumentPage
       /** today in Jakarta (yyyy-mm-dd) */
       today: string
     }
 
 /**
  * One Ingestion page (IDX XBRL, Price Ingestion, Screening Data IDX, PDF Documents (RAG) or News (RAG)): its card,
- * the stored documents on the RAG pages, then the jobs table, which every page shows with all ingestion jobs
- * (filterable by type and status).
+ * the stored documents on the RAG pages, then the jobs table, which opens on the page's own job type (tabs for
+ * the other types and all jobs, a status filter, page by page).
  */
 export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { jobs: IngestionJobList }) {
   const router = useRouter()
@@ -99,7 +98,6 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
           <RagNewsCard
             exchanges={data.exchanges}
             companiesByExchange={data.companiesByExchange}
-            tavilyEnabled={data.rag.tavilyEnabled}
             maxArticles={data.rag.newsMaxArticles}
             today={data.today}
             onSubmitted={submitted}
@@ -110,13 +108,12 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
       {(data.section === "rag-pdf" || data.section === "rag-news") && (
         <RagDocumentsCard
           source={data.section === "rag-pdf" ? "PDF" : "NEWS"}
-          documents={data.documents}
+          initial={data.documents}
           status={data.rag}
-          limit={RAG_DOCUMENT_LIMIT}
         />
       )}
 
-      <JobsTable initial={jobs} watch={watch} onJobFinished={jobFinished} />
+      <JobsTable initial={jobs} defaultType={info.jobType} watch={watch} onJobFinished={jobFinished} />
     </div>
   )
 }

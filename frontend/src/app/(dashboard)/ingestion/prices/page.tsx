@@ -22,5 +22,5 @@ async function section(): Promise<IngestionSectionData> {
 }
 
 export default function Page() {
-  return <IngestionPage section={section} />
+  return <IngestionPage name="prices" section={section} />
 }

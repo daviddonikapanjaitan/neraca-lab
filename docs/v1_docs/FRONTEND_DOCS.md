@@ -39,11 +39,11 @@ browser ──> Next.js server (Server Components, Route Handlers /api/...) ─�
 | `GET /api/v1/exchanges`                     | exchange filter (page 1) |
 | `GET /api/v1/companies?exchange={code}`     | company list (page 1)    |
 | `GET /api/v1/companies/{exchange}/{ticker}` | company detail (page 2)  |
-| `GET /api/v1/ingestions?limit=100`          | every Ingestion page (page 3): jobs table |
+| `GET /api/v1/ingestions?type=&limit=10&offset=` | every Ingestion page (page 3): jobs table, one page at a time |
 | `GET /api/v1/auth/me`                       | every page: the logged-in user (layout, permission checks) |
 | `GET /api/v1/admin/users`, `/admin/roles`, `/admin/permissions` | Admin Center pages |
 | `GET /api/v1/prices/ingestions`             | Price Ingestion page: configured price provider |
-| `GET /api/v1/rag/status`, `GET /api/v1/rag/documents?source=PDF\|NEWS&limit=100` | RAG pages: embedding model, news limits, stored documents |
+| `GET /api/v1/rag/status`, `GET /api/v1/rag/documents?source=PDF\|NEWS&limit=10&offset=&tickerPrefix=` | RAG pages: embedding model, news limits, stored documents one page at a time |
 
 The Ingestion pages also call the backend from the browser through Next.js Route Handlers in
 `src/app/api/` (same server-side `NERACA_API_URL`; `forward()` in `src/lib/api.ts` passes status and
@@ -140,9 +140,12 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload, then the stored PDF documents ([RAG_DOCS.md](RAG_DOCS.md)) |
 | News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |
 
-Every page shows its card, then the summary tiles and the jobs table with **all** ingestion jobs (tabs
-filter by type, starting on "All"). Server side: `components/ingestion/ingestion-page.tsx` (permission
-check, the page's data plus the jobs list, error state); client side: `ingestion-page-client.tsx`.
+Every page shows its card, then the summary tiles and the jobs table. The table opens on the page's
+own job type (IDX XBRL: Financial statements, Price Ingestion: Prices, Screening Data IDX: Screening
+data, PDF Documents (RAG): PDF (RAG), News (RAG): News (RAG); `jobType` in `lib/ingestion-sections.ts`);
+the tabs show the other types or "All". Server side: `components/ingestion/ingestion-page.tsx`
+(permission check, the page's data plus the first page of its jobs, error state); client side:
+`ingestion-page-client.tsx`.
 
 | Element                    | Content                                                                                                                         |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
@@ -150,9 +153,9 @@ check, the page's data plus the jobs list, error state); client side: `ingestion
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
 | PDF document upload        | exchange and company dropdowns (`company-picker.tsx`; a file name ending with a stored ticker selects it), `.pdf` drop zone, client-side check of extension and size, result notice |
 | News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |
-| Stored documents (RAG)     | badge with stored documents and chunks, ticker filter, search box (5 closest chunks with distance, pages or date, link to the article), table: company, document / article (link), pages or published date, chunks, stored |
+| Stored documents (RAG)     | badge with stored documents and chunks, ticker filter (tickers starting with it, applied once typing pauses), search box (5 closest chunks with distance, pages or date, link to the article), table: company, document / article (link), pages or published date, chunks, stored; pages as in the jobs table (10 rows, or 5 / 20 / 50; first / previous / next / last); reloaded when a job finishes |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
-| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG), scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
+| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG), scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
 | Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency, or RAG pages / chunks / model, or news range, per-source counts and articles not stored), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
@@ -173,8 +176,9 @@ and the research agent's ReAct steps, headlines, metrics, every agent's reasonin
 scorecard), the rest of the shortlist, the Stage 1 funnel, notes and Reflexion lessons, token usage,
 and **Download PDF**. Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
 
-The Ingestion page "Screening Data IDX" has the "Screening data" card (runs the ETL); every Ingestion page
-lists ETL runs and screenings in its jobs table (tabs "Screening data", "Screenings").
+The Ingestion page "Screening Data IDX" has the "Screening data" card (runs the ETL); its jobs table opens
+on the ETL runs (tab "Screening data"), and every Ingestion page lists them and the screenings under the
+tabs "Screening data" and "Screenings".
 
 ### 3.4 Login - `/login`
 

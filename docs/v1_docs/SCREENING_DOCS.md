@@ -39,8 +39,8 @@ Administrator role has it; give it to other roles in Role Management).
    the shortlist, the Stage 1 funnel, notes and lessons, token usage per stage and model.
 4. **Download PDF**. Saved screenings stay listed on the Screening page.
 
-The **Ingestion** page has a "Screening data" card to run the ETL by hand, and its jobs table lists
-the ETL runs (`FUNDAMENTALS`) and the screenings (`SCREENING`) with the other jobs.
+The **Ingestion** page has a "Screening data" card to run the ETL by hand, and its jobs table opens
+on the ETL runs (`FUNDAMENTALS`); the screenings (`SCREENING`) and the other jobs are under the other tabs.
 
 ## 2. API
 

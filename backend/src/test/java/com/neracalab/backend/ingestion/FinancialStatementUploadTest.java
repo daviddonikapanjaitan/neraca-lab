@@ -32,6 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.test.web.servlet.ResultMatcher;
 
+import com.jayway.jsonpath.JsonPath;
 import com.neracalab.backend.auth.Permission;
 import com.neracalab.backend.auth.TestAccounts;
 import com.neracalab.backend.auth.TestLogins;
@@ -175,6 +176,8 @@ class FinancialStatementUploadTest {
                 .andExpect(jsonPath("$.counts.QUEUED").isNumber())
                 .andExpect(jsonPath("$.active").isNumber())
                 .andExpect(jsonPath("$.limit").value(50))
+                .andExpect(jsonPath("$.offset").value(0))
+                .andExpect(jsonPath("$.total").isNumber())
                 .andExpect(jsonPath("$.jobs[?(@.type != 'FINANCIAL_STATEMENT')]").isEmpty())
                 .andExpect(jsonPath("$.jobs[?(@.status == 'QUEUED')]").isEmpty())
                 .andExpect(jsonPath("$.jobs[?(@.id == '" + job.id() + "')]").exists())
@@ -182,6 +185,26 @@ class FinancialStatementUploadTest {
         mvc.perform(get("/api/v1/ingestions").param("limit", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.jobs.length()").value(1));
+
+        // pages: the second job of the first two is the first of the page from offset 1; total = every status
+        String firstTwo = mvc.perform(get("/api/v1/ingestions").param("limit", "2"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        List<String> ids = JsonPath.read(firstTwo, "$.jobs[*].id");
+        List<Number> counts = JsonPath.read(firstTwo, "$.counts.*");
+        assertThat(ids).hasSize(2);
+        assertThat(((Number) JsonPath.read(firstTwo, "$.total")).longValue())
+                .isEqualTo(counts.stream().mapToLong(Number::longValue).sum());
+        mvc.perform(get("/api/v1/ingestions").param("limit", "1").param("offset", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.offset").value(1))
+                .andExpect(jsonPath("$.jobs.length()").value(1))
+                .andExpect(jsonPath("$.jobs[0].id").value(ids.get(1)));
+        mvc.perform(get("/api/v1/ingestions").param("offset", "1000000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jobs").isEmpty());
+        mvc.perform(get("/api/v1/ingestions").param("offset", "-1"))
+                .andExpect(status().isBadRequest());
 
         mvc.perform(get("/api/v1/ingestions").param("status", "DONE"))
                 .andExpect(status().isBadRequest())

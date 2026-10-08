@@ -15,13 +15,9 @@ import java.util.Objects;
 
 import org.junit.jupiter.api.Test;
 
-import com.neracalab.backend.screening.TestScreeningProperties;
 import com.neracalab.backend.screening.news.Headline;
 import com.neracalab.backend.screening.news.NewsParsers;
 import com.neracalab.backend.screening.news.NewsSource;
-import com.neracalab.backend.screening.news.TavilyClient;
-
-import tools.jackson.databind.json.JsonMapper;
 
 /** Date range and paging of the news collector, on the saved BBCA tag pages (no network). */
 class NewsCollectorTest {
@@ -39,11 +35,7 @@ class NewsCollectorTest {
         final List<String> requested = new ArrayList<>();
 
         Stub(Map<String, String> pages) {
-            this(pages, new TavilyClient(TestScreeningProperties.create(), JsonMapper.builder().build()));
-        }
-
-        Stub(Map<String, String> pages, TavilyClient tavily) {
-            super(null, tavily, EmbeddingClientTest.properties());
+            super(null, EmbeddingClientTest.properties());
             this.pages = pages;
         }
 
@@ -112,61 +104,16 @@ class NewsCollectorTest {
                 .doesNotContain("https://investor.id/tag/bbca/1");
     }
 
-    /** Tavily answering with the kind of results it gave for ASGR: articles, quote / profile pages, social posts. */
-    private static final class StubTavily extends TavilyClient {
-
-        List<String> excluded;
-
-        StubTavily() {
-            super(TestScreeningProperties.create(0.45, "tvly-test"), JsonMapper.builder().build());
-        }
-
-        @Override
-        public List<Result> search(String query, LocalDate from, LocalDate to, int maxResults, List<String> excludeDomains) {
-            excluded = excludeDomains;
-            Instant day = Instant.parse("2026-04-20T03:00:00Z");
-            return List.of(
-                    new Result(new Headline("https://investasi.kontan.co.id/news/astra-graphia-asgr-tebar-dividen-di-atas-laba",
-                            NewsSource.TAVILY, "Astra Graphia (ASGR) Tebar Dividen", null, day), "Isi artikel kontan."),
-                    new Result(new Headline("https://finance.yahoo.com/quote/ASGR.JK", NewsSource.TAVILY, "ASGR.JK",
-                            null, day), "Quote page"),
-                    new Result(new Headline("https://ajaib.co.id/saham/aset/ASGR", NewsSource.TAVILY, "ASGR", null, day), null),
-                    new Result(new Headline("https://www.instagram.com/reel/DXN_X0jSGAS", NewsSource.TAVILY, "reel", null,
-                            day), null));
-        }
-    }
-
     @Test
-    void keepsOnlyArticlesOfTheSearchWithTheirText() {
-        StubTavily tavily = new StubTavily();
-        Stub stub = new Stub(Map.of(), tavily);
+    void readsOnlyTheNewsSites() {
+        Stub stub = new Stub(Map.of());
         NewsCollector.Collected collected = stub.collect("ASGR", "PT Astra Graphia Tbk", LocalDate.of(2026, 1, 1),
                 LocalDate.of(2026, 10, 8), s -> { });
-        assertThat(tavily.excluded).contains("instagram.com", "facebook.com");
-        assertThat(collected.headlines()).extracting(Headline::url)
-                .containsExactly("https://investasi.kontan.co.id/news/astra-graphia-asgr-tebar-dividen-di-atas-laba");
-        assertThat(collected.searchText())
-                .containsOnlyKeys("https://investasi.kontan.co.id/news/astra-graphia-asgr-tebar-dividen-di-atas-laba");
-        assertThat(collected.sources()).filteredOn(s -> s.source() == NewsSource.TAVILY).singleElement()
-                .satisfies(s -> {
-                    assertThat(s.found()).isEqualTo(4);
-                    assertThat(s.inRange()).isEqualTo(1);
-                    assertThat(s.notArticles()).isEqualTo(3);
-                });
-    }
-
-    @Test
-    void readsTheRawContentOfTavilyResults() {
-        JsonMapper json = JsonMapper.builder().build();
-        List<TavilyClient.Result> results = TavilyClient.withRawContent(json.readTree("""
-                {"results":[
-                  {"url":"https://a.example/news/a-b-c-d","title":"A","content":"lead","published_date":"Mon, 20 Apr 2026 10:51:12 GMT",
-                   "raw_content":"  full text  "},
-                  {"url":"https://b.example/news/e-f-g-h","title":"B","content":"","raw_content":null}]}"""));
-        assertThat(results).hasSize(2);
-        assertThat(results.get(0).rawContent()).isEqualTo("full text");
-        assertThat(results.get(0).headline().publishedAt()).isEqualTo(Instant.parse("2026-04-20T10:51:12Z"));
-        assertThat(results.get(1).rawContent()).isNull();
+        assertThat(collected.sources()).extracting(NewsCollector.SourceResult::source).containsExactly(
+                NewsSource.EMITENNEWS, NewsSource.INVESTOR_ID, NewsSource.IDXCHANNEL, NewsSource.PASARDANA);
+        assertThat(collected.headlines()).isEmpty();
+        assertThat(stub.requested).allSatisfy(url -> assertThat(url).startsWith("https://")
+                .containsAnyOf("emitennews.com", "investor.id", "idxchannel.com", "pasardana.id"));
     }
 
     @Test

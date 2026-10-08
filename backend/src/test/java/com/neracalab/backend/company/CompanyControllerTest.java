@@ -169,7 +169,8 @@ class CompanyControllerTest {
         assertThat(detail.valuations()).allSatisfy(v -> assertThat(v.period()).isNotBlank());
         assertThat(detail.corporateActions()).hasSize((int) detail.coverage().corporateActions());
 
-        assertThat(detail.coverage().firstPriceDate()).isEqualTo(LocalDate.of(2024, 1, 2));
+        // 2024-01-02 or earlier: a full-history price ingestion reaches back further (2017-06-22)
+        assertThat(detail.coverage().firstPriceDate()).isBeforeOrEqualTo(LocalDate.of(2024, 1, 2));
         assertThat(detail.coverage().priceDays()).isGreaterThanOrEqualTo(649);
         assertThat(detail.latestPrice().tradingDate()).isEqualTo(detail.coverage().latestPriceDate());
         assertThat(detail.latestMarketSnapshot().marketCap()).isPositive();

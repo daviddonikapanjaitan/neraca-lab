@@ -13,9 +13,10 @@ import type {
   Exchange,
   FundamentalsStatus,
   IngestionJobList,
+  IngestionJobType,
   PermissionInfo,
   PriceQueue,
-  RagDocument,
+  RagDocumentPage,
   RagStatus,
   RagSourceType,
   Role,
@@ -124,9 +125,9 @@ export const getCompanyDetail = cache((exchange: string, ticker: string) =>
   )
 )
 
-/** GET /api/v1/ingestions?limit= (most recent jobs, without results) */
-export const getIngestions = cache((limit: number) =>
-  get<IngestionJobList>(`/api/v1/ingestions?limit=${limit}`)
+/** GET /api/v1/ingestions?type=&limit= (first page of the most recent jobs, without results) */
+export const getIngestions = cache((type: IngestionJobType, limit: number) =>
+  get<IngestionJobList>(`/api/v1/ingestions?type=${encodeURIComponent(type)}&limit=${limit}`)
 )
 
 /** GET /api/v1/prices/ingestions (the configured price provider and the queue length) */
@@ -142,7 +143,7 @@ export const getRagStatus = cache(() => get<RagStatus>("/api/v1/rag/status"))
 
 /** GET /api/v1/rag/documents?source=&limit= (most recently stored first) */
 export const getRagDocuments = cache((source: RagSourceType, limit: number) =>
-  get<RagDocument[]>(`/api/v1/rag/documents?source=${source}&limit=${limit}`)
+  get<RagDocumentPage>(`/api/v1/rag/documents?source=${source}&limit=${limit}`)
 )
 
 /** GET /api/v1/screenings/options */

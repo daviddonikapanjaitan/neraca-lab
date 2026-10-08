@@ -39,6 +39,15 @@ public class RagRepository {
                               Integer pages, int characters, int chunks, String embeddingModel, Instant updatedAt) {
     }
 
+    /**
+     * One page of stored documents.
+     *
+     * @param total     documents matching the filters (every page together)
+     * @param documents most recently stored first, at most {@code limit} from {@code offset}
+     */
+    public record DocumentPage(long total, int limit, int offset, List<DocumentRow> documents) {
+    }
+
     /** Documents and chunks stored per source type. */
     public record Counts(long pdfDocuments, long newsDocuments, long chunks) {
     }
@@ -124,26 +133,50 @@ public class RagRepository {
     }
 
     /** Stored documents, most recently updated first; exchange / ticker / type narrow the list when given. */
-    public List<DocumentRow> documents(String exchange, String ticker, SourceType type, int limit) {
-        return jdbc.sql("""
+    /** Filters of {@link #documents}: rows match those given ({@code null} = any). */
+    private static final String DOCUMENT_FILTER = """
+            FROM rag_document d JOIN company c ON c.company_id = d.company_id
+            WHERE (CAST(:exchange AS varchar) IS NULL OR c.exchange = :exchange)
+              AND (CAST(:ticker AS varchar) IS NULL OR c.ticker = :ticker)
+              AND (CAST(:prefix AS varchar) IS NULL OR c.ticker LIKE :prefix || '%')
+              AND (CAST(:type AS varchar) IS NULL OR d.source_type = :type)
+            """;
+
+    /**
+     * One page of stored documents, most recently stored first: {@code limit} documents after skipping
+     * {@code offset}, of the exchange, the ticker, the tickers starting with {@code tickerPrefix} (a normalized
+     * ticker or its beginning: letters, digits, '.' and '-', no LIKE wildcards) and the source type given
+     * ({@code null} = any).
+     */
+    @Transactional(readOnly = true)
+    public DocumentPage documents(String exchange, String ticker, String tickerPrefix, SourceType type, int limit,
+                                  int offset) {
+        long total = documentQuery("SELECT count(*) " + DOCUMENT_FILTER, exchange, ticker, tickerPrefix, type)
+                .query(Long.class).single();
+        List<DocumentRow> rows = documentQuery("""
                         SELECT d.document_id, c.exchange, c.ticker, c.company_name, d.source_type, d.title, d.source_name,
                                d.source_url, d.file_name, d.published_at, d.pages, d.characters, d.chunks,
                                d.embedding_model, d.updated_at
-                        FROM rag_document d JOIN company c ON c.company_id = d.company_id
-                        WHERE (CAST(:exchange AS varchar) IS NULL OR c.exchange = :exchange)
-                          AND (CAST(:ticker AS varchar) IS NULL OR c.ticker = :ticker)
-                          AND (CAST(:type AS varchar) IS NULL OR d.source_type = :type)
+                        """ + DOCUMENT_FILTER + """
                         ORDER BY d.updated_at DESC, d.document_id DESC
-                        LIMIT :limit""")
-                .param("exchange", exchange, Types.VARCHAR)
-                .param("ticker", ticker, Types.VARCHAR)
-                .param("type", type == null ? null : type.name(), Types.VARCHAR)
+                        LIMIT :limit OFFSET :offset""", exchange, ticker, tickerPrefix, type)
                 .param("limit", limit)
+                .param("offset", offset)
                 .query((rs, i) -> new DocumentRow(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
                         SourceType.valueOf(rs.getString(5)), rs.getString(6), rs.getString(7), rs.getString(8),
                         rs.getString(9), instant(rs.getTimestamp(10)), (Integer) rs.getObject(11), rs.getInt(12),
                         rs.getInt(13), rs.getString(14), instant(rs.getTimestamp(15))))
                 .list();
+        return new DocumentPage(total, limit, offset, rows);
+    }
+
+    private JdbcClient.StatementSpec documentQuery(String sql, String exchange, String ticker, String tickerPrefix,
+                                                   SourceType type) {
+        return jdbc.sql(sql)
+                .param("exchange", exchange, Types.VARCHAR)
+                .param("ticker", ticker, Types.VARCHAR)
+                .param("prefix", tickerPrefix, Types.VARCHAR)
+                .param("type", type == null ? null : type.name(), Types.VARCHAR);
     }
 
     /**
