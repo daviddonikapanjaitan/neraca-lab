@@ -19,6 +19,7 @@ foreign key.
 | `V1.0.11__schema_fx.sql`                  | `fx_rate_daily`: ECB reference rates that convert listings quoted in another currency (section 4.10) |
 | `V1.0.14__schema_rag.sql`                 | RAG vector store: `vector` extension, `rag_document`, `rag_chunk`; job types `RAG_PDF`, `RAG_NEWS` (section 4.12) |
 | `V1.0.15__schema_analysis.sql`            | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id` (section 4.13) |
+| `V1.0.16__schema_syirkah.sql`             | `balance_sheet.temporary_syirkah_funds`: banks' sharia depositor funds, neither liabilities nor equity (section 3) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -298,7 +299,8 @@ Statement of financial position at `reporting_period.period_end`. All amounts `N
 | `accounts_payable`         |                   |                                                                                                 |
 | `deferred_revenue`         |                   | Contract liabilities / advances received from customers                                         |
 | `current_liabilities`      |                   |                                                                                                 |
-| `total_liabilities`        |                   |                                                                                                 |
+| `total_liabilities`        |                   | "Total liabilities" as filed (banks: without temporary syirkah funds)                           |
+| `temporary_syirkah_funds`  |                   | Banks with a sharia unit: temporary syirkah funds (neither liabilities nor equity under PSAK); total assets = total_liabilities + this + total_equity; NULL otherwise (`V1.0.16`) |
 | `short_term_debt`          |                   | Interest-bearing debt due within 12 months (incl. current maturities), excl. leases             |
 | `long_term_debt`           |                   | Interest-bearing debt due after 12 months (bank loans, bonds, financing payables), excl. leases |
 | `lease_liabilities`        |                   | Current + non-current lease liabilities                                                         |

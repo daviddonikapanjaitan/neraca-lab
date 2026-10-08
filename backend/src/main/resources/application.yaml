@@ -47,6 +47,7 @@ spring:
         - classpath:db/V1.0.11__schema_fx.sql
         - classpath:db/V1.0.14__schema_rag.sql      # RAG vector store (needs pgvector)
         - classpath:db/V1.0.15__schema_analysis.sql # AI analysis of one stock
+        - classpath:db/V1.0.16__schema_syirkah.sql  # banks: temporary syirkah funds beside liabilities
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql

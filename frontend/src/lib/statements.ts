@@ -51,6 +51,7 @@ export const BALANCE_SHEET: LineItem<BalanceSheet>[] = [
   { key: "longTermDebt", label: "Long-term debt" },
   { key: "leaseLiabilities", label: "Lease liabilities" },
   { key: "totalLiabilities", label: "Total liabilities", total: true },
+  { key: "temporarySyirkahFunds", label: "Temporary syirkah funds" },
   { key: "retainedEarnings", label: "Retained earnings" },
   { key: "shareholdersEquity", label: "Equity attributable to the parent" },
   { key: "nonControllingInterest", label: "Non-controlling interest" },

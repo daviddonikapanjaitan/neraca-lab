@@ -149,6 +149,19 @@ public final class IngestionSession {
         return extracted.stream().anyMatch(c -> income(c).map(s -> !s.unclassified().isEmpty()).orElse(false));
     }
 
+    /**
+     * Whether a classification of the agent may be revised: an extracted column whose income statement still fails
+     * a check after the agent classified some of its lines (BMRI FY2025: the tool was withdrawn after the first
+     * classification, and the agent could not correct it).
+     */
+    public boolean hasRevisableClassifications() {
+        return extracted.stream().anyMatch(this::isRevisable);
+    }
+
+    public boolean isRevisable(StatementColumn column) {
+        return !classifications(column).isEmpty() && income(column).map(MappedStatement::hasErrors).orElse(false);
+    }
+
     // ---- writes
     public void statementsSaved(StatementColumn column, List<WriteResult> results) {
         savedStatements.put(column, results);

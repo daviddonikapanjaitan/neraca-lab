@@ -205,6 +205,7 @@ public final class FactSheet {
         put(m, "totalAssets", amount(s.totalAssets()));
         put(m, "currentLiabilities", amount(s.currentLiabilities()));
         put(m, "totalLiabilities", amount(s.totalLiabilities()));
+        put(m, "temporarySyirkahFunds", amount(s.temporarySyirkahFunds()));   // banks with a sharia unit
         put(m, "shortTermDebt", amount(s.shortTermDebt()));
         put(m, "longTermDebt", amount(s.longTermDebt()));
         put(m, "totalEquity", amount(s.totalEquity()));

@@ -95,6 +95,7 @@ neraca_lab/
 │               ├── V1.0.11__schema_fx.sql         (fx_rate_daily: ECB rates for listings quoted in another currency)
 │               ├── V1.0.14__schema_rag.sql        (RAG vector store: rag_document, rag_chunk; needs pgvector)
 │               ├── V1.0.15__schema_analysis.sql   (AI analysis of one stock: analysis_run, analysis_agent_score)
+│               ├── V1.0.16__schema_syirkah.sql    (banks: balance_sheet.temporary_syirkah_funds)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -112,12 +113,13 @@ neraca_lab/
 │                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
 │                                INDY (2022 .. 2025 annual, 2026-II)
 │                                SMDR (2022 .. 2025 annual, 2026-II, Infrastructure Industry taxonomy)
-│                                BNGA (2022 .. 2025 annual, 2026-II) and BTPN (2022 .. 2025 annual), banks:
+│                                BNGA, BMRI (2022 .. 2025 annual, 2026-II) and BTPN (2022 .. 2025 annual), banks:
 │                                Financial and Sharia Industry taxonomy
 │                                ASGR, SIMP and CEKA (2022 .. 2025 annual, 2026-II; quirks: full amounts under "In Million",
 │                                EPS filed in millions, revenue not tagged, one amount reported twice, a product in two
 │                                revenue slots, a cash flow section without activity)
 │                                MYOR, PTSN (2022 .. 2025 annual, 2026-II) and NCKL (2023 .. 2025 annual, 2026-II)
+│                                CMRY, CPIN (2022 .. 2025 annual, 2026-II)
 │                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
@@ -222,10 +224,14 @@ they never replace a stored count (`neracalab.ingestion.web-share-counts`, on by
 Workbooks are not trusted blindly: a declared rounding level contradicted by the amounts (ASGR FY2023:
 "In Million" over full amounts) is corrected when the filing's own EPS confirms it, and an amount a
 filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other gains (losses)") is
-counted once when only that makes profit before tax reconcile; an EPS filed in the rounding unit (SIMP
+counted once when only that makes profit before tax reconcile; a bank's insurance claims shown for
+information beside premiums already net of them (BMRI's FY2024 comparative) are not deducted again when
+only that makes profit from operation reconcile; an EPS filed in the rounding unit (SIMP
 H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
-stored values). A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
+stored values; an EPS and its share count always come from one filing, and a share split a comparative
+restates - BMRI 2:1 in 2023 - adjusts the per-share figures of that and earlier periods). A bank's temporary
+syirkah funds are stored beside its liabilities (`temporary_syirkah_funds`), not in them. A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
 contradict each other (NCKL FY2024) gives no share counts and its EPS is cleared, and an EPS off by a power of
 ten is corrected (INDF H1 2024: 0.000439 -> 439); a workbook re-run refreshes the periods it wrote. All of
 these are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
@@ -460,7 +466,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 315 tests
+(cd backend && ./mvnw test)                      # 325 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -477,9 +483,11 @@ Java code: `ConfiguredChatModel` resolves `spring.ai.openai.chat.model` of `appl
 `EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
 derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
-`FilingMapperFinancialTest` maps the five BNGA and four BTPN filings (Financial and Sharia Industry taxonomy, banks);
+`FilingMapperFinancialTest` maps the five BNGA, five BMRI and four BTPN filings (Financial and Sharia Industry taxonomy,
+banks; BMRI's insurance claims shown for information); `ReclassificationTest` that the agent can revise its own
+classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
@@ -547,6 +555,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.11__schema_fx.sql`              | `fx_rate_daily`: ECB reference rates for listings quoted in another currency (INDY, SMDR) |
 | `V1.0.14__schema_rag.sql`             | RAG vector store (pgvector): `rag_document`, `rag_chunk` (`vector(1536)`, HNSW); job types `RAG_PDF`, `RAG_NEWS` |
 | `V1.0.15__schema_analysis.sql`        | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id`; job type `ANALYSIS` |
+| `V1.0.16__schema_syirkah.sql`         | banks: `balance_sheet.temporary_syirkah_funds` (sharia depositors; neither liabilities nor equity) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |

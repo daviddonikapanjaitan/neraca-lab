@@ -43,7 +43,8 @@ final class Prompts {
             - Parallel: put independent calls in the same turn as several tool calls, e.g. extract all \
               columns at once, or extractRevenueSegments for both duration columns together.
             - Conditional: call registerCompany only if findCompany returned found=false. Call \
-              classifyIncomeLines only if an extraction lists unclassifiedLines. PRIOR_YEAR_END exists \
+              classifyIncomeLines only if an extraction lists unclassifiedLines, or to revise your own \
+              classification while that column still fails a check. PRIOR_YEAR_END exists \
               only when the overview lists it. Skip segments for a column whose extraction says it has none. \
               Some tools only appear once their precondition is met.
             - Never invent, copy or compute amounts: all numbers stay on the server. You only choose \

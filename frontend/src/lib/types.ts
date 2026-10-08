@@ -108,6 +108,8 @@ export interface BalanceSheet {
   deferredRevenue: Amount
   currentLiabilities: Amount
   totalLiabilities: Amount
+  /** banks with a sharia unit: neither liabilities nor equity (assets = liabilities + these + equity) */
+  temporarySyirkahFunds: Amount
   shortTermDebt: Amount
   longTermDebt: Amount
   leaseLiabilities: Amount

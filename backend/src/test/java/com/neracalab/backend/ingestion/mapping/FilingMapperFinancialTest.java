@@ -222,6 +222,89 @@ class FilingMapperFinancialTest {
         }
     }
 
+    /** BMRI (a bank with an insurance subsidiary): every filing maps; insurance premiums are revenue. */
+    @ParameterizedTest
+    @ValueSource(strings = {"2022-Tahunan", "2023-Tahunan", "2024-Tahunan", "2025-Tahunan", "2026-II"})
+    void everyBmriFilingMapsWithoutErrors(String filing) throws Exception {
+        FilingMapper mapper = bmri(filing);
+        IngestionSession session = new IngestionSession(mapper);
+
+        assertThat(mapper.templateProblems()).isEmpty();
+        assertThat(mapper.taxonomy()).isEqualTo(IdxTaxonomy.FINANCIAL);
+        for (StatementColumn column : mapper.columns()) {
+            for (MappedStatement s : session.statements(column)) {
+                assertThat(s.unclassified()).as(filing + " " + column + " " + s.table()).isEmpty();
+                assertThat(s.checks().stream().filter(Check::isError).toList()).as(filing + " " + column + " " + s.table()).isEmpty();
+            }
+        }
+    }
+
+    /**
+     * BMRI FY2025, FY2024 comparative: "Claim expenses" 10,574,450 is shown beside premiums of 2,520,813 that are already
+     * net of it; "Total profit from operation" 76,059,595 does not deduct it. Deducted, the job was INCOMPLETE.
+     */
+    @Test
+    void anInsuranceClaimLineShownForInformationIsNotDeductedTwice() throws Exception {
+        FilingMapper mapper = bmri("2025-Tahunan");
+        MappedStatement prior = mapper.incomeStatement(StatementColumn.PRIOR_PERIOD, Map.of(), mapper.shareCapital()).orElseThrow();
+
+        assertThat(prior.checks().stream().filter(Check::isError).toList()).isEmpty();
+        assertThat(prior.checks()).anySatisfy(c -> {
+            assertThat(c.rule()).isEqualTo("memo_line");
+            assertThat(c.message()).startsWith("'Claim expenses' 10574450000000 is not deducted");
+        });
+        Map<String, BigDecimal> v = prior.values();
+        // 151,236,027 interest + 2,520,813 premiums + 150,297 + 23,447,520 fees + 4,483,298 trading + 4,929,641 other
+        assertThat(v.get("revenue")).isEqualByComparingTo(m(186767596));
+        assertThat(v.get("cost_of_revenue")).isEqualByComparingTo(m(49479107));     // interest only, no claims
+        assertThat(v.get("operating_income")).isEqualByComparingTo(m(76059595));
+        assertThat(v.get("net_income_to_parent")).isEqualByComparingTo(m(55782742));
+
+        // FY2025 itself has no claim line: premiums (net insurance result 550,415) are revenue, nothing is ignored
+        MappedStatement current = mapper.incomeStatement(StatementColumn.CURRENT_PERIOD, Map.of(), mapper.shareCapital())
+                .orElseThrow();
+        assertThat(current.checks()).noneMatch(c -> c.isError() || c.rule().equals("memo_line"));
+        assertThat(current.values().get("operating_income")).isEqualByComparingTo(m(76310739));
+
+        // a classification given by the agent is never second-guessed: the check then fails and says why
+        MappedStatement agent = mapper.incomeStatement(StatementColumn.PRIOR_PERIOD,
+                Map.of("Claim expenses", IncomeLineCategory.COST_OF_REVENUE), mapper.shareCapital()).orElseThrow();
+        assertThat(agent.checks()).anyMatch(c -> c.isError() && c.rule().equals("operating_income"));
+    }
+
+    /**
+     * BMRI FY2025 (Bank Syariah Indonesia, a subsidiary): temporary syirkah funds 289,620,824 million are neither
+     * liabilities nor equity; total liabilities stays the filing's 2,212,925,204 (it was stored with the funds added).
+     */
+    @Test
+    void temporarySyirkahFundsAreNotLiabilities() throws Exception {
+        FilingMapper mapper = bmri("2025-Tahunan");
+        MappedStatement b = mapper.balanceSheet(StatementColumn.CURRENT_PERIOD, mapper.shareCapital()).orElseThrow();
+
+        assertThat(b.checks().stream().filter(Check::isError).toList()).isEmpty();
+        Map<String, BigDecimal> v = b.values();
+        assertThat(v.get("total_liabilities")).isEqualByComparingTo(m(2212925204L));
+        assertThat(v.get("temporary_syirkah_funds")).isEqualByComparingTo(m(289620824));
+        assertThat(v.get("total_equity")).isEqualByComparingTo(m(327401998));
+        assertThat(v.get("total_liabilities").add(v.get("temporary_syirkah_funds")).add(v.get("total_equity")))
+                .isEqualByComparingTo(v.get("total_assets"));
+
+        // BNGA (sharia unit): liabilities + syirkah funds + equity = assets as well
+        Map<String, BigDecimal> bnga = mapper("2025-Tahunan").balanceSheet(StatementColumn.CURRENT_PERIOD, null)
+                .orElseThrow().values();
+        BigDecimal syirkah = bnga.get("temporary_syirkah_funds") == null ? BigDecimal.ZERO : bnga.get("temporary_syirkah_funds");
+        assertThat(bnga.get("total_liabilities").add(syirkah).add(bnga.get("total_equity")))
+                .isEqualByComparingTo(bnga.get("total_assets"));
+    }
+
+    private static FilingMapper bmri(String filing) throws Exception {
+        Path file = Path.of("..", "data", "BMRI", "xlsx", "FinancialStatement-" + filing + "-BMRI.xlsx");
+        assumeTrue(Files.exists(file), "BMRI source data not available: " + file);
+        try (InputStream in = Files.newInputStream(file)) {
+            return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));
+        }
+    }
+
     private static BigDecimal m(long millions) {
         return BigDecimal.valueOf(millions).multiply(MILLION);
     }

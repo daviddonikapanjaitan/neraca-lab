@@ -56,12 +56,18 @@ public class IngestionRepository {
                              String industry, String currency, LocalDate fiscalYearEnd) {
     }
 
-    /** Outcome of writing one row. */
     /**
-     * INSERTED / UPDATED: written by the period's own filing; FILLED_GAPS: a comparative filled fields the stored
-     * row had empty (e.g. revenue a filing did not tag); KEPT_EXISTING: a comparative changed nothing.
+     * Outcome of writing one row. INSERTED / UPDATED: written by the period's own filing; FILLED_GAPS: a comparative
+     * filled fields the stored row had empty (e.g. revenue a filing did not tag); SPLIT_ADJUSTED: a comparative
+     * restated the per-share figures for a share split (see {@link #adjustForShareSplit}); KEPT_EXISTING: a
+     * comparative changed nothing.
      */
-    public enum WriteOutcome { INSERTED, UPDATED, FILLED_GAPS, KEPT_EXISTING }
+    public enum WriteOutcome { INSERTED, UPDATED, FILLED_GAPS, SPLIT_ADJUSTED, KEPT_EXISTING }
+
+    /** Per-share fields of the income statement: an EPS and its share count always come from the same filing. */
+    static final List<String> PER_SHARE = List.of("basic_eps", "diluted_eps", "basic_shares", "diluted_shares");
+    /** Largest split (or reverse split) ratio recognised. */
+    private static final int MAX_SPLIT = 100;
 
     public record WriteResult(String table, String period, WriteOutcome outcome, List<String> differences) {
     }
@@ -182,11 +188,21 @@ public class IngestionRepository {
         Map<String, BigDecimal> values = statement.values();
         Optional<Map<String, Object>> existing = readStatement(table, periodId);
         if (existing.isPresent() && !overwrite) {
+            List<String> split = table.equals("income_statement")
+                    ? adjustForShareSplit(companyId, periodId, existing.get(), values) : List.of();
+            Map<String, Object> stored = split.isEmpty() ? existing.get() : readStatement(table, periodId).orElseThrow();
+            // an EPS and its share count come from one filing: a comparative fills a share count only where the
+            // stored EPS is its own (BMRI FY2022: a post-split count beside the pre-split EPS gave EPS x shares =
+            // twice the profit)
+            boolean perShareConsistent = split.isEmpty() && samePerShareBasis(stored, values);
             List<String> gaps = values.keySet().stream()
-                    .filter(c -> values.get(c) != null && existing.get().get(c) == null).toList();
+                    .filter(c -> values.get(c) != null && stored.get(c) == null)
+                    .filter(c -> !PER_SHARE.contains(c) || perShareConsistent).toList();
             if (gaps.isEmpty()) {
-                return new WriteResult(table, statement.period().key(), WriteOutcome.KEPT_EXISTING,
-                        differences(existing.get(), values));
+                List<String> notes = new ArrayList<>(split);
+                notes.addAll(differences(stored, values));
+                return new WriteResult(table, statement.period().key(),
+                        split.isEmpty() ? WriteOutcome.KEPT_EXISTING : WriteOutcome.SPLIT_ADJUSTED, notes);
             }
             var fill = jdbc.sql("UPDATE " + table + " SET "
                             + String.join(", ", gaps.stream().map(c -> c + " = COALESCE(" + c + ", :" + c + ")").toList())
@@ -196,11 +212,13 @@ public class IngestionRepository {
                 fill = fill.param(c, values.get(c), java.sql.Types.NUMERIC);
             }
             fill.update();
-            List<String> notes = new ArrayList<>(gaps.stream().map(c -> c + ": filled " + values.get(c).toPlainString()).toList());
-            differences(existing.get(), values).stream()
+            List<String> notes = new ArrayList<>(split);
+            gaps.stream().map(c -> c + ": filled " + values.get(c).toPlainString()).forEach(notes::add);
+            differences(stored, values).stream()
                     .filter(d -> gaps.stream().noneMatch(g -> d.startsWith(g + ":")))
                     .forEach(notes::add);
-            return new WriteResult(table, statement.period().key(), WriteOutcome.FILLED_GAPS, notes);
+            return new WriteResult(table, statement.period().key(),
+                    split.isEmpty() ? WriteOutcome.FILLED_GAPS : WriteOutcome.SPLIT_ADJUSTED, notes);
         }
         List<String> columns = new ArrayList<>(values.keySet());
         String insertCols = String.join(", ", columns);
@@ -220,6 +238,126 @@ public class IngestionRepository {
         List<String> diffs = existing.map(e -> differences(e, values)).orElse(List.of());
         return new WriteResult(table, statement.period().key(),
                 existing.isPresent() ? WriteOutcome.UPDATED : WriteOutcome.INSERTED, diffs);
+    }
+
+    /**
+     * Whether a comparative's share counts may fill the stored row: the stored row has no EPS, the comparative has
+     * none, or both state the same EPS (within half a cent).
+     */
+    static boolean samePerShareBasis(Map<String, Object> stored, Map<String, BigDecimal> values) {
+        BigDecimal storedEps = decimal(stored.get("basic_eps"));
+        BigDecimal eps = values.get("basic_eps");
+        return storedEps == null || eps == null || storedEps.subtract(eps).abs().compareTo(new BigDecimal("0.005")) <= 0;
+    }
+
+    /**
+     * A share split restated in a later filing's comparative (BMRI split 2:1 in 2023; its FY2023 filing states FY2022's
+     * EPS as 441.26, its FY2022 filing as 882.52). Recognised when the profit attributable to the parent is unchanged
+     * (within 0.5%) and the stored EPS is a whole multiple (or fraction) k = 2..100 of the comparative's (within 1%).
+     * Share counts, market data and prices are split-adjusted, so the per-share figures are too:
+     * <ul>
+     *   <li>the period: EPS and share counts from the comparative (a missing one: the stored one / k, x k)</li>
+     *   <li>every earlier period of the company whose EPS is on the old basis - its profit / EPS gives the same share
+     *       count (within 10%) as the period's old figures (BMRI FY2021: 601.06 -> 300.53). The same test keeps a
+     *       period from being adjusted twice when filings are uploaded again.</li>
+     * </ul>
+     *
+     * @return notes of the adjustment (empty: no split)
+     */
+    List<String> adjustForShareSplit(long companyId, long periodId, Map<String, Object> stored, Map<String, BigDecimal> values) {
+        BigDecimal storedEps = decimal(stored.get("basic_eps"));
+        BigDecimal eps = values.get("basic_eps");
+        BigDecimal storedProfit = decimal(stored.get("net_income_to_parent"));
+        BigDecimal profit = values.get("net_income_to_parent");
+        if (storedEps == null || eps == null || storedProfit == null || profit == null || storedEps.signum() == 0
+                || eps.signum() == 0 || storedEps.signum() != eps.signum() || storedProfit.signum() == 0
+                || profit.subtract(storedProfit).abs().compareTo(storedProfit.abs().multiply(new BigDecimal("0.005"))) > 0) {
+            return List.of();
+        }
+        BigDecimal factor = splitFactor(storedEps, eps);
+        if (factor == null) {
+            return List.of();
+        }
+        BigDecimal oldBasis = storedProfit.divide(storedEps, 0, RoundingMode.HALF_UP);   // implied share count before
+        List<String> notes = new ArrayList<>();
+        String ratio = factor.compareTo(BigDecimal.ONE) > 0 ? factor.toPlainString() + ":1"
+                : "1:" + BigDecimal.ONE.divide(factor, 0, RoundingMode.HALF_UP).toPlainString();
+        BigDecimal diluted = values.get("diluted_eps") != null ? values.get("diluted_eps")
+                : scaled(decimal(stored.get("diluted_eps")), factor, false);
+        BigDecimal shares = values.get("basic_shares") != null ? values.get("basic_shares")
+                : scaled(decimal(stored.get("basic_shares")), factor, true);
+        BigDecimal dilutedShares = values.get("diluted_shares") != null ? values.get("diluted_shares")
+                : scaled(decimal(stored.get("diluted_shares")), factor, true);
+        updatePerShare(periodId, eps, diluted, shares, dilutedShares);
+        notes.add("share split " + ratio + " restated by this comparative: basic_eps " + plain(storedEps) + " -> "
+                + plain(eps) + " (per-share figures replaced)");
+
+        List<Map<String, Object>> earlier = jdbc.sql("""
+                        SELECT i.period_id, rp.fiscal_year, rp.period_type, i.basic_eps, i.diluted_eps, i.basic_shares,
+                               i.diluted_shares, i.net_income_to_parent
+                        FROM income_statement i JOIN reporting_period rp ON rp.period_id = i.period_id
+                        WHERE i.company_id = :c AND i.period_id <> :p
+                          AND rp.period_end < (SELECT period_end FROM reporting_period WHERE period_id = :p)
+                          AND i.basic_eps IS NOT NULL AND i.basic_eps <> 0 AND i.net_income_to_parent IS NOT NULL
+                        ORDER BY rp.period_end""")
+                .param("c", companyId).param("p", periodId).query().listOfRows();
+        for (Map<String, Object> row : earlier) {
+            BigDecimal rowEps = decimal(row.get("basic_eps"));
+            BigDecimal implied = decimal(row.get("net_income_to_parent")).divide(rowEps, 0, RoundingMode.HALF_UP);
+            if (implied.signum() <= 0 || implied.subtract(oldBasis).abs()
+                    .compareTo(oldBasis.abs().multiply(new BigDecimal("0.10"))) > 0) {
+                continue;   // not on the old basis (already adjusted, or another share count)
+            }
+            BigDecimal adjusted = scaled(rowEps, factor, false);
+            updatePerShare(((Number) row.get("period_id")).longValue(), adjusted,
+                    scaled(decimal(row.get("diluted_eps")), factor, false),
+                    scaled(decimal(row.get("basic_shares")), factor, true),
+                    scaled(decimal(row.get("diluted_shares")), factor, true));
+            notes.add("share split " + ratio + ": " + row.get("fiscal_year") + " " + row.get("period_type") + " basic_eps "
+                    + plain(rowEps) + " -> " + plain(adjusted));
+        }
+        return notes;
+    }
+
+    private void updatePerShare(long periodId, BigDecimal eps, BigDecimal diluted, BigDecimal shares, BigDecimal dilutedShares) {
+        jdbc.sql("""
+                        UPDATE income_statement SET basic_eps = :eps, diluted_eps = :diluted,
+                               basic_shares = :shares, diluted_shares = :dilutedShares
+                        WHERE period_id = :p""")
+                .param("eps", eps, java.sql.Types.NUMERIC)
+                .param("diluted", diluted, java.sql.Types.NUMERIC)
+                .param("shares", shares, java.sql.Types.NUMERIC)
+                .param("dilutedShares", dilutedShares, java.sql.Types.NUMERIC)
+                .param("p", periodId).update();
+    }
+
+    /** stored / restated EPS when it is k or 1/k for a whole k = 2..100 (within 1%); else null. */
+    static BigDecimal splitFactor(BigDecimal storedEps, BigDecimal eps) {
+        double ratio = storedEps.doubleValue() / eps.doubleValue();
+        boolean reverse = ratio < 1;
+        double r = reverse ? 1 / ratio : ratio;
+        long k = Math.round(r);
+        if (k < 2 || k > MAX_SPLIT || Math.abs(r - k) > 0.01 * k) {
+            return null;
+        }
+        return reverse ? BigDecimal.ONE.divide(BigDecimal.valueOf(k), 12, RoundingMode.HALF_UP) : BigDecimal.valueOf(k);
+    }
+
+    /** A per-share value after a split with {@code factor} (EPS / factor; share count x factor); null stays null. */
+    private static BigDecimal scaled(BigDecimal value, BigDecimal factor, boolean shareCount) {
+        if (value == null) {
+            return null;
+        }
+        return shareCount ? value.multiply(factor).setScale(0, RoundingMode.HALF_UP)
+                : value.divide(factor, 2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal decimal(Object value) {
+        return value == null ? null : new BigDecimal(value.toString());
+    }
+
+    private static String plain(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 
     public Optional<Map<String, Object>> readStatement(String table, long periodId) {
@@ -399,7 +537,8 @@ public class IngestionRepository {
                                i.period_id IS NOT NULL, b.period_id IS NOT NULL, cf.period_id IS NOT NULL,
                                (SELECT count(*) FROM segment_financial sf WHERE sf.period_id = rp.period_id),
                                (SELECT sum(revenue) FROM segment_financial sf WHERE sf.period_id = rp.period_id),
-                               i.revenue, b.total_assets, b.total_liabilities + b.total_equity,
+                               i.revenue, b.total_assets,
+                               b.total_liabilities + COALESCE(b.temporary_syirkah_funds, 0) + b.total_equity,
                                b.cash_and_equivalents, cf.ending_cash
                         FROM reporting_period rp
                         LEFT JOIN income_statement i     ON i.period_id  = rp.period_id
