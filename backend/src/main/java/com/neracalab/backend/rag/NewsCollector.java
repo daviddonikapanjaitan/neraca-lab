@@ -21,21 +21,16 @@ import com.neracalab.backend.screening.news.NewsHttpClient.NewsFetchException;
 import com.neracalab.backend.screening.news.NewsParsers;
 import com.neracalab.backend.screening.news.NewsService;
 import com.neracalab.backend.screening.news.NewsSource;
-import com.neracalab.backend.screening.news.TavilyClient;
-import com.neracalab.backend.screening.news.TavilyClient.TavilyException;
 
 /**
  * News headlines of a company within a date range, from the sites the screening crawls (same parsers and polite
- * HTTP client) and the Tavily search:
+ * HTTP client):
  * <ul>
  *   <li>EmitenNews {@code /tag/<ticker>}, then older pages {@code /tag/<ticker>/<9 n>}, and Investor.id
  *       {@code /tag/<ticker>}, then {@code /tag/<ticker>/<n>}: walked back until a page ends before the range start
  *       (at most {@code news-max-pages} pages per site);</li>
  *   <li>IDX Channel {@code /tag/<ticker>}: the latest articles only (older pages are loaded by script);</li>
- *   <li>Pasardana: the latest listings, kept when they name the ticker or the company;</li>
- *   <li>Tavily: a news search with the range's start and end date (when configured), without social media;
- *       only results that look like articles are kept ({@link NewsUrls}: no quote / profile / listing pages), with
- *       the page text Tavily read, used when the site refuses our own request.</li>
+ *   <li>Pasardana: the latest listings, kept when they name the ticker or the company.</li>
  * </ul>
  * Headlines are kept when published within the range (Jakarta time); an undated one is kept for now - its date is
  * taken from the article when it is read.
@@ -49,29 +44,18 @@ public class NewsCollector {
     private static final List<String> PASARDANA_LISTINGS = List.of("https://pasardana.id/",
             "https://pasardana.id/news", "https://pasardana.id/market-analysis");
 
-    /**
-     * What a source contributed.
-     *
-     * @param notArticles results left out because they are no news article (quote / profile / listing pages)
-     */
-    public record SourceResult(NewsSource source, int pages, int found, int inRange, int notArticles, String error) {
-
-        public SourceResult(NewsSource source, int pages, int found, int inRange, String error) {
-            this(source, pages, found, inRange, 0, error);
-        }
+    /** What a source contributed. */
+    public record SourceResult(NewsSource source, int pages, int found, int inRange, String error) {
     }
 
-    /** @param searchText page text of search results by URL (Tavily), used when the page itself cannot be read */
-    public record Collected(List<Headline> headlines, List<SourceResult> sources, Map<String, String> searchText) {
+    public record Collected(List<Headline> headlines, List<SourceResult> sources) {
     }
 
     private final NewsHttpClient http;
-    private final TavilyClient tavily;
     private final RagProperties properties;
 
-    public NewsCollector(NewsHttpClient http, TavilyClient tavily, RagProperties properties) {
+    public NewsCollector(NewsHttpClient http, RagProperties properties) {
         this.http = http;
-        this.tavily = tavily;
         this.properties = properties;
     }
 
@@ -105,11 +89,6 @@ public class NewsCollector {
         progress.accept("Reading Pasardana");
         single(NewsSource.PASARDANA, () -> pasardana().stream().filter(h -> NewsService.mentions(h, ticker, companyName)).toList(),
                 from, to, all, results);
-        Map<String, String> searchText = new LinkedHashMap<>();
-        if (tavily.enabled()) {
-            progress.accept("Searching the news (Tavily)");
-            tavily(ticker, companyName, from, to, all, results, searchText);
-        }
 
         Map<String, Headline> byUrl = new LinkedHashMap<>();
         for (Headline h : all) {
@@ -117,7 +96,7 @@ public class NewsCollector {
         }
         List<Headline> headlines = new ArrayList<>(byUrl.values());
         headlines.sort(Comparator.comparing(Headline::publishedAt, Comparator.nullsLast(Comparator.reverseOrder())));
-        return new Collected(List.copyOf(headlines), List.copyOf(results), Map.copyOf(searchText));
+        return new Collected(List.copyOf(headlines), List.copyOf(results));
     }
 
     /** Pages of a tag listing, newest first, until a page reaches back before the range start (or is empty). */
@@ -160,33 +139,8 @@ public class NewsCollector {
             List<Headline> kept = found.stream().filter(h -> inRange(h.publishedAt(), from, to)).toList();
             into.addAll(kept);
             results.add(new SourceResult(source, 1, found.size(), kept.size(), null));
-        } catch (NewsFetchException | TavilyException e) {
+        } catch (NewsFetchException e) {
             results.add(new SourceResult(source, 0, 0, 0, e.getMessage()));
-        }
-    }
-
-    private void tavily(String ticker, String companyName, LocalDate from, LocalDate to, List<Headline> into,
-                        List<SourceResult> results, Map<String, String> searchText) {
-        try {
-            List<TavilyClient.Result> found = tavily.search(ticker + " " + NewsService.shortName(companyName) + " saham",
-                    from, to, 20, NewsUrls.SOCIAL_DOMAINS);
-            int notArticles = 0;
-            int kept = 0;
-            for (TavilyClient.Result r : found) {
-                Headline h = r.headline();
-                if (!NewsUrls.isArticle(h.url(), ticker)) {
-                    notArticles++;
-                } else if (inRange(h.publishedAt(), from, to)) {
-                    into.add(h);
-                    kept++;
-                    if (r.rawContent() != null) {
-                        searchText.put(h.url(), r.rawContent());
-                    }
-                }
-            }
-            results.add(new SourceResult(NewsSource.TAVILY, 1, found.size(), kept, notArticles, null));
-        } catch (TavilyException e) {
-            results.add(new SourceResult(NewsSource.TAVILY, 0, 0, 0, e.getMessage()));
         }
     }
 

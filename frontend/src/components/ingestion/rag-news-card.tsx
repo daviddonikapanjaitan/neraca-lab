@@ -28,15 +28,12 @@ type Notice = { tone: "success" | "error"; text: string }
 export function RagNewsCard({
   exchanges,
   companiesByExchange,
-  tavilyEnabled,
   maxArticles,
   today,
   onSubmitted,
 }: {
   exchanges: Exchange[]
   companiesByExchange: Record<string, CompanySummary[]>
-  /** the Tavily news search is configured (searches by date range besides the news sites) */
-  tavilyEnabled: boolean
   /** articles read per job (neracalab.rag.news-max-articles) */
   maxArticles: number
   /** today in Jakarta (yyyy-mm-dd), from the server so both renders agree */
@@ -104,9 +101,8 @@ export function RagNewsCard({
       <CardContent className="flex flex-col gap-3">
         <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
           <li>
-            Sources: EmitenNews, Investor.id, IDX Channel and Pasardana
-            {tavilyEnabled ? ", plus the Tavily news search" : ""}. IDX Channel and Pasardana list only their latest
-            articles, so older ranges come mostly from EmitenNews and Investor.id.
+            Sources: EmitenNews, Investor.id, IDX Channel and Pasardana. IDX Channel and Pasardana list only their
+            latest articles, so older ranges come mostly from EmitenNews and Investor.id.
           </li>
           <li>
             Dates are in Jakarta time and include both ends. At most 366 days per job and up to {maxArticles}{" "}

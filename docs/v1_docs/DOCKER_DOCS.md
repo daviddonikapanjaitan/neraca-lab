@@ -126,7 +126,7 @@ the same `OPENAI_API_KEY` (OpenRouter):
 | `SCREENING_ETL_SCHEDULE_ENABLED` | `true`  | daily screening data ETL (Yahoo Finance) at 18:00 WIB, Monday-Friday |
 
 The RAG vector store ([RAG_DOCS.md](RAG_DOCS.md)) embeds with the same `OPENAI_API_KEY`; its news
-ingestion also uses `TAVILY_API_KEY` when set. `RAG_EMBEDDING_MODEL` (default
+ingestion reads the news sites only (no Tavily). `RAG_EMBEDDING_MODEL` (default
 `openai/text-embedding-3-small`, 1536 dimensions) can be set in `backend/.env` and passed on in
 `backend/docker-compose.yaml`; another model must also have 1536 dimensions.
 

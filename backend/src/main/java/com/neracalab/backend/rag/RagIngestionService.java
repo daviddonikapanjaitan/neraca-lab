@@ -118,24 +118,8 @@ public class RagIngestionService {
                 continue;
             }
             progress.accept("Article " + (i + 1) + " of " + todo.size() + ": " + abbreviate(h.title(), 120));
-            String fallback = usable(collected.searchText().get(h.url()));
             try {
-                ArticleText article;
-                boolean fromSearch = false;
-                try {
-                    article = read(h.url());
-                    if ((article.body() == null || article.body().isBlank()) && fallback != null) {
-                        article = searchArticle(h, fallback);
-                        fromSearch = true;
-                    }
-                } catch (NewsHttpClient.NewsFetchException e) {
-                    if (fallback == null) {
-                        throw e;
-                    }
-                    // the site refuses our request (HTTP 403, ...): the text the search engine read
-                    article = searchArticle(h, fallback);
-                    fromSearch = true;
-                }
+                ArticleText article = read(h.url());
                 Instant published = h.publishedAt() != null ? h.publishedAt() : article.publishedAt();
                 if (published == null || !NewsCollector.inRange(published, from, to)) {
                     outOfRange++;
@@ -155,8 +139,7 @@ public class RagIngestionService {
                 repository.store(new NewDocument(company.companyId(), SourceType.NEWS, h.url(), title, h.source().label(),
                         h.url(), null, null, published, null, text.length(), embeddings.model(), jobId), chunks, vectors);
                 stored++;
-                articles.add(new ArticleResult(h.url(), h.source().label(), title, published,
-                        fromSearch ? "STORED_FROM_SEARCH_TEXT" : "STORED", chunks.size()));
+                articles.add(new ArticleResult(h.url(), h.source().label(), title, published, "STORED", chunks.size()));
             } catch (EmbeddingClient.EmbeddingException e) {
                 throw e;     // the store cannot be filled at all: fail the job
             } catch (RuntimeException e) {
@@ -168,25 +151,6 @@ public class RagIngestionService {
         }
         return new NewsResult(from, to, collected.sources(), headlines.size(), stored, already, outOfRange, failed, truncated,
                 articles, embeddings.model());
-    }
-
-    /** Shortest search-engine page text used in place of an article. */
-    static final int MIN_SEARCH_TEXT = 300;
-
-    /** The search text, cleaned and cut to the article limit; null when too short to be an article. */
-    private String usable(String text) {
-        if (text == null) {
-            return null;
-        }
-        String t = text.replace((char) 0xA0, ' ').replaceAll("[ \\t]+", " ").replaceAll("\\s*\\n\\s*\\n\\s*", "\n\n").trim();
-        if (t.length() < MIN_SEARCH_TEXT) {
-            return null;
-        }
-        return t.length() <= properties.articleChars() ? t : t.substring(0, properties.articleChars());
-    }
-
-    private static ArticleText searchArticle(Headline h, String text) {
-        return new ArticleText(h.title(), h.description(), h.publishedAt(), text);
     }
 
     private ArticleText read(String url) {

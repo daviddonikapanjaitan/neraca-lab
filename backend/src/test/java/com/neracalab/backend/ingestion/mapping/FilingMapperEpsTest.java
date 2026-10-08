@@ -76,11 +76,7 @@ class FilingMapperEpsTest {
     }
 
     private static FilingMapper mapper(String ticker, String filing) throws Exception {
-        String name = "FinancialStatement-" + filing + "-" + ticker + ".xlsx";
-        Path file = Path.of("..", "data", ticker, name);
-        if (!Files.exists(file)) {
-            file = Path.of("..", "data", ticker, "xlsx", name);
-        }
+        Path file = Path.of("..", "data", ticker, "xlsx", "FinancialStatement-" + filing + "-" + ticker + ".xlsx");
         assumeTrue(Files.exists(file), ticker + " source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));

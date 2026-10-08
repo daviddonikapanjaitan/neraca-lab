@@ -112,8 +112,8 @@ neraca_lab/
 │                                ASGR, SIMP and CEKA (2022 .. 2025 annual, 2026-II; quirks: full amounts under "In Million",
 │                                EPS filed in millions, revenue not tagged, one amount reported twice, a product in two
 │                                revenue slots, a cash flow section without activity)
-│                                MYOR, NCKL, PTSN: workbooks directly in data/<TICKER>/ (NCKL FY2024: EPS one decimal
-│                                place off, see AI_INGESTION_DOCS)
+│                                MYOR, PTSN (2022 .. 2025 annual, 2026-II) and NCKL (2023 .. 2025 annual, 2026-II)
+│                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -334,8 +334,8 @@ document is linked to its company (`rag_document.company_id` -> `company`):
   company (picked automatically from a file name ending with the ticker). Its text is read page by
   page (PDFBox), split into ~1,500-character chunks, embedded and stored.
 - **News (RAG)**: choose an IDX company and a date range (this month, last 7 / 30 days, previous
-  month or custom, Jakarta time, up to 366 days). Articles from EmitenNews, Investor.id, IDX Channel,
-  Pasardana and Tavily published in the range are read and stored; articles already stored are skipped.
+  month or custom, Jakarta time, up to 366 days). Articles from EmitenNews, Investor.id, IDX Channel
+  and Pasardana published in the range are read and stored; articles already stored are skipped.
 
 ```bash
 curl -H "$AUTH" -F file=@data/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
@@ -401,8 +401,9 @@ npm run dev                   # http://localhost:3000
 | `/ingestion/xbrl`                | Ingestion dropdown (like the Admin Center), IDX XBRL: upload an `.xlsx` financial statement (`/ingestion` opens this page) |
 | `/ingestion/prices`              | Price Ingestion: fetch daily prices (exchange / ticker dropdowns) |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
-| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company into the pgvector store; stored documents and a search test |
-| `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles and a search test |
+| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company into the pgvector store; stored documents (10 per page: 5 / 10 / 20 / 50) and a search test |
+| `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles (10 per page: 5 / 10 / 20 / 50) and a search test |
+|                                  | Every Ingestion page ends with the jobs table: it opens on the page's own job type (tabs for the others and "All"), 10 jobs per page (5 / 10 / 20 / 50) |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
 | `/admin/users`, `/admin/roles`   | Admin Center (`ADMIN`): add, view, update and delete users and roles                                                                                               |
 | `/profile`                       | own profile: picture, address, phone, date of birth (username and email are read-only)                                                                             |
@@ -421,7 +422,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 296 tests
+(cd backend && ./mvnw test)                      # 292 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -459,7 +460,7 @@ the permission of every API; `AdminUserControllerTest`, `AdminRoleControllerTest
 `ProfileControllerTest` the user, role and profile rules (see `docs/v1_docs/AUTH_DOCS.md`).
 `FinancialStatementUploadTest` (AI agent mocked) checks the asynchronous upload: immediate 202, the
 background job and its recorded stages, one stored file per checksum reused on re-upload, wrong
-files rejected without storing, the job list filters and the file download (identical bytes, the
+files rejected without storing, the job list filters and pages (`limit` / `offset`, `total`) and the file download (identical bytes, the
 name of each upload). `PriceIngestionControllerTest` also checks that price jobs are recorded in
 `ingestion_job`. The tests delete the job rows they create.
 Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), `YahooFundamentalsClientTest`
@@ -468,7 +469,7 @@ Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), 
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
 (pipeline mocked: validation, job, report, PDF); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
 RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
-(date range and paging on saved pages, Tavily results filtered to articles), `NewsUrlsTest`, `RagNewsFallbackTest`, `RagRepositoryTest` (pgvector store and cosine search, rolled back)
+(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `RagRepositoryTest` (pgvector store and cosine search, rolled back)
 and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
 permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
 

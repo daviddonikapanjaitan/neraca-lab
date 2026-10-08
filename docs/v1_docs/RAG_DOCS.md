@@ -25,7 +25,7 @@ PDF  upload -> check (.pdf, %PDF header, text layer, company exists) -> ingestio
 
 News request (company, from, to) -> RAG_NEWS job
             -> headlines in the range: EmitenNews, Investor.id (older pages walked back),
-               IDX Channel, Pasardana (latest only), Tavily (date-range search, when configured)
+               IDX Channel, Pasardana (latest only)
             -> skip URLs already stored for the company -> read each article (title, lead, body)
             -> chunks -> embeddings -> rag_document (source_key = URL) + rag_chunk
 ```
@@ -72,15 +72,10 @@ News request (company, from, to) -> RAG_NEWS job
   | Investor.id  | `/tag/<ticker>`, then `/tag/<ticker>/2`, `/3`, ...                  |
   | IDX Channel  | `/tag/<ticker>` only (older articles are loaded by script)          |
   | Pasardana    | the latest listings, kept when they name the ticker or the company  |
-  | Tavily       | a news search with the range's start and end date (`TAVILY_API_KEY`), social media excluded, with the page text Tavily read |
 
-  Even with `topic: news`, Tavily also returns stock quote and company profile pages (Yahoo Finance,
-  ajaib, cermati, idx.co.id), topic / tag listings and social media posts; they carry a date (the
-  crawl date) but no article. `NewsUrls` keeps only article URLs: social media (also sent as
-  `exclude_domains`), listing / quote / profile paths (`/quote/`, `/saham/`, `/topic/`, `/tag/`,
-  `/perusahaan-tercatat/`, ...; unless the URL has an article slug of four or more words) and pages
-  named after the ticker (`.../ASGR`, `.../ASGR.JK`) are skipped and counted as `notArticles` of the
-  source.
+  No web search (Tavily) is used: it returned stock quote / company profile pages and social media
+  posts rather than articles, and sites that refuse automated requests (HTTP 403), so only these
+  four news sites are read.
 
   EmitenNews and Investor.id are walked back page by page until a page reaches before the range
   start, a page is empty, or `news-max-pages` (10) pages were read. Older ranges therefore come
@@ -88,9 +83,8 @@ News request (company, from, to) -> RAG_NEWS job
 - Headlines are de-duplicated by URL, sorted newest first; at most `news-max-articles` (60) are read
   per job. A headline without a date is kept until its article is read, then dated from the article
   (and dropped when it falls outside the range).
-- A site that refuses our request (e.g. HTTP 403) or yields no article text: when Tavily read the
-  page (at least 300 characters), that text is stored instead (`STORED_FROM_SEARCH_TEXT`); otherwise
-  the article is `FAILED` / `NO_TEXT` and the job `INCOMPLETE`.
+- An article whose site refuses our request (e.g. HTTP 403) is `FAILED`, one without article text
+  `NO_TEXT`; the job is then `INCOMPLETE`.
 - An article already stored for the company is skipped (`ALREADY_STORED`), so running a range again
   only adds new articles. The text embedded is title + lead + body (up to 30,000 characters).
 - The sites are read through the screening's polite HTTP client (one request at a time per site,
@@ -108,8 +102,8 @@ All endpoints need a session with the `INGESTION` permission.
 |--------|------|--------|
 | `POST` | `/api/v1/rag/pdf` (multipart `file`, `exchange` = IDX, `ticker`) | 202 new job, 200 job already active; 400 not a `.pdf` / no `%PDF` header, 422 no text layer / protected / unreadable, 404 unknown company, 413 too large |
 | `POST` | `/api/v1/rag/news?exchange=IDX&ticker=HRTA&from=2026-10-01&to=2026-10-08` | 202 / 200 as above; 400 start after end, end in the future, range over 366 days, bad date; 404 unknown company |
-| `GET`  | `/api/v1/rag/status` | embedding model and dimensions, chunk size, news limits, Tavily on/off, queue length, stored documents and chunks |
-| `GET`  | `/api/v1/rag/documents[?exchange&ticker&source=PDF\|NEWS&limit=100]` | stored documents, most recently stored first (limit 1-500) |
+| `GET`  | `/api/v1/rag/status` | embedding model and dimensions, chunk size, news limits, queue length, stored documents and chunks |
+| `GET`  | `/api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF\|NEWS&limit=100&offset=0]` | one page of the stored documents, most recently stored first: `{ total, limit, offset, documents }` (`total` = documents matching the filters; limit 1-500, offset 0 or more; `ticker` one company, `tickerPrefix` the tickers starting with it) |
 | `GET`  | `/api/v1/rag/search?q=...[&exchange=IDX&ticker&source&limit=8]` | closest chunks: ticker, document, pages, published date, content, `distance` (0 = same direction; limit 1-50, query up to 2,000 characters) |
 
 Follow a job with `GET /api/v1/ingestions/{id}`; its `result` is the `PdfResult` (pages, pages with
@@ -164,9 +158,8 @@ thread, `SerialJobWorker`), `RagIngestionService`, `PdfText`, `TextChunker`, `Em
 | `TextChunkerTest` | cleaning, size limit, overlap, page ranges, long lines, every word kept |
 | `EmbeddingClientTest` | response parsing (order, count, dimensions, errors), missing key, vector text form |
 | `PdfTextTest` | the HRTA FY2025 PDF page by page and its chunks; non-PDF and text-less PDF rejected |
-| `NewsCollectorTest` | Jakarta-time range, walking older pages until the range start, Investor.id page numbers, Tavily results filtered to articles with their page text (saved pages / stub, no network) |
-| `NewsUrlsTest` | the ASGR search results: articles kept; quote, profile, topic and social media pages dropped |
-| `RagNewsFallbackTest` | an article whose site answers 403 is stored from the search text; without usable text it fails |
+| `NewsCollectorTest` | Jakarta-time range, walking older pages until the range start, Investor.id page numbers, only the four news sites read (saved pages, no network) |
+| `RagNewsIngestionTest` | an article read from its site is stored; one whose site answers 403 fails without stopping the job |
 | `RagRepositoryTest` | store, cosine search with filters, replace on re-ingest, news keyed by URL, cascade (real database, rolled back) |
 | `RagControllerTest` | a PDF through the worker into the store and back by search (stub embeddings, cleaned up), validation errors, status, permission |
 | `IngestionJobTypeConstraintTest` | `V1.0.10` and `V1.0.14` re-create `ck_ingestion_job_type` on every start; both must list every job type (a narrower list stops the application once a RAG job is stored) |

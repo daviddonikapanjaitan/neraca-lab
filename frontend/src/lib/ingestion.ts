@@ -6,11 +6,9 @@ import type { IngestionJobCreator, IngestionJobStatus, IngestionJobType } from "
 /** Backend upload limit (spring.servlet.multipart.max-file-size: 20MB). */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
-/** Jobs shown on the ingestion page (most recent first). */
-export const JOB_LIMIT = 100
-
-/** Stored documents loaded on a RAG page (most recently stored first). */
-export const RAG_DOCUMENT_LIMIT = 100
+/** Rows per page of the jobs table and the stored documents (RAG), and the default. */
+export const TABLE_PAGE_SIZES = [5, 10, 20, 50] as const
+export const DEFAULT_TABLE_PAGE_SIZE = 10
 
 export const ACTIVE_STATUSES: IngestionJobStatus[] = ["QUEUED", "RUNNING", "WAITING_RATE_LIMIT"]
 

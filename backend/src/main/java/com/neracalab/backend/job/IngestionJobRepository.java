@@ -216,8 +216,11 @@ public class IngestionJobRepository {
                 .optional();
     }
 
-    /** Jobs, most recent first, without their results; {@code type} / {@code statuses} null or empty = all. */
-    public List<IngestionJob> list(IngestionJobType type, List<IngestionJobStatus> statuses, int limit) {
+    /**
+     * One page of jobs, most recent first, without their results: {@code limit} jobs after skipping {@code offset};
+     * {@code type} / {@code statuses} null or empty = all.
+     */
+    public List<IngestionJob> list(IngestionJobType type, List<IngestionJobStatus> statuses, int limit, int offset) {
         List<String> where = new ArrayList<>();
         if (type != null) {
             where.add("j.job_type = :type");
@@ -227,8 +230,8 @@ public class IngestionJobRepository {
         }
         String sql = SELECT.formatted("")
                 + (where.isEmpty() ? "" : " WHERE " + String.join(" AND ", where))
-                + " ORDER BY j.requested_at DESC, j.job_id LIMIT :limit";
-        JdbcClient.StatementSpec spec = jdbc.sql(sql).param("limit", limit);
+                + " ORDER BY j.requested_at DESC, j.job_id LIMIT :limit OFFSET :offset";
+        JdbcClient.StatementSpec spec = jdbc.sql(sql).param("limit", limit).param("offset", offset);
         if (type != null) {
             spec = spec.param("type", type.name());
         }

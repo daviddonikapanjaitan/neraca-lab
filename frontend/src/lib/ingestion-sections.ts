@@ -1,5 +1,7 @@
 // The Ingestion pages, shared by the sidebar dropdown, the breadcrumb and the pages themselves.
 
+import type { IngestionJobType } from "@/lib/types"
+
 export type IngestionSection = "xbrl" | "prices" | "screening-data" | "rag-pdf" | "rag-news"
 
 export interface IngestionSectionInfo {
@@ -10,6 +12,8 @@ export interface IngestionSectionInfo {
   heading: string
   description: string
   href: string
+  /** job type the page's jobs table opens on */
+  jobType: IngestionJobType
 }
 
 export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
@@ -20,6 +24,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     description:
       "Upload IDX XBRL financial statements (.xlsx); the AI agent stores and verifies every statement.",
     href: "/ingestion/xbrl",
+    jobType: "FINANCIAL_STATEMENT",
   },
   {
     section: "prices",
@@ -27,6 +32,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     heading: "Price Ingestion",
     description: "Fetch daily prices of a listed company; market and valuation data are recalculated afterwards.",
     href: "/ingestion/prices",
+    jobType: "PRICE",
   },
   {
     section: "screening-data",
@@ -34,6 +40,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     heading: "Screening Data IDX",
     description: "Refresh the market data of every IDX listing that the AI screening starts from.",
     href: "/ingestion/screening-data",
+    jobType: "FUNDAMENTALS",
   },
   {
     section: "rag-pdf",
@@ -42,6 +49,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     description:
       "Upload PDF documents of a company (financial statements, annual reports); their text is chunked, embedded and stored in the pgvector store for RAG.",
     href: "/ingestion/rag-pdf",
+    jobType: "RAG_PDF",
   },
   {
     section: "rag-news",
@@ -50,6 +58,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     description:
       "Collect the news of a listed IDX company for a date range; every article is chunked, embedded and stored in the pgvector store for RAG.",
     href: "/ingestion/rag-news",
+    jobType: "RAG_NEWS",
   },
 ]
 

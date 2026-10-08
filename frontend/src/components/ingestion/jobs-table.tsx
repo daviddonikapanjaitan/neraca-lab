@@ -22,6 +22,7 @@ import { DownloadFileButton } from "@/components/ingestion/download-file-button"
 import { JobDetailSheet } from "@/components/ingestion/job-detail-sheet"
 import { JobStatusBadge } from "@/components/ingestion/job-status-badge"
 import { StatTile } from "@/components/stat-tile"
+import { pageCount, TablePagination } from "@/components/table-pagination"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -43,7 +44,14 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { EMPTY, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
-import { creatorLabel, formatDuration, isActive, JOB_LIMIT, TYPE_LABEL } from "@/lib/ingestion"
+import {
+  creatorLabel,
+  DEFAULT_TABLE_PAGE_SIZE,
+  formatDuration,
+  isActive,
+  TABLE_PAGE_SIZES,
+  TYPE_LABEL,
+} from "@/lib/ingestion"
 import type { IngestionJob, IngestionJobList, IngestionJobType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -80,8 +88,9 @@ const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: string }[
   { value: "failed", label: "Failed", statuses: "FAILED" },
 ]
 
-function query(type: TypeFilter, status: StatusFilter): string {
-  const params = new URLSearchParams({ limit: String(JOB_LIMIT) })
+/** Query of one page of jobs (pages are 1-based). */
+function query(type: TypeFilter, status: StatusFilter, page: number, pageSize: number): string {
+  const params = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) })
   if (type !== "ALL") params.set("type", type)
   const statuses = STATUS_FILTERS.find((s) => s.value === status)?.statuses
   if (statuses) params.set("status", statuses)
@@ -97,30 +106,44 @@ function duration(job: IngestionJob, now: number | null): string {
 }
 
 /**
- * Every ingestion job (most recent first), refreshed every 2 seconds while a job is in progress
- * and every 10 seconds otherwise. {@code watch} is the job just submitted on this page; when it, or
- * any job seen in progress here, finishes, {@code onJobFinished} lets the page reload its data
- * (new company, latest price date).
+ * The ingestion jobs (most recent first), page by page ({@code DEFAULT_TABLE_PAGE_SIZE} rows, or 5 / 20 / 50),
+ * opening on the page's own job type ({@code defaultType}; the tabs show the other types or all). Refreshed every
+ * 2 seconds while a job is in progress and every 10 seconds otherwise. {@code watch} is the job just submitted on
+ * this page (the table goes back to its first page, where the job is); when it, or any job seen in progress
+ * here, finishes, {@code onJobFinished} lets the page reload its data (new company, latest price date).
  */
 export function JobsTable({
   initial,
+  defaultType,
   watch,
   onJobFinished,
 }: {
+  /** first page of the {@code defaultType} jobs, {@code DEFAULT_TABLE_PAGE_SIZE} rows */
   initial: IngestionJobList
+  defaultType: IngestionJobType
   watch: { id: string; seq: number } | null
   onJobFinished: () => void
 }) {
   const [list, setList] = useState(initial)
-  const [type, setType] = useState<TypeFilter>("ALL")
+  const [type, setType] = useState<TypeFilter>(defaultType)
   const [status, setStatus] = useState<StatusFilter>("all")
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_TABLE_PAGE_SIZE)
   const [error, setError] = useState<string | null>(null)
-  /** filter query of the jobs shown; differs from the selected filters while they load */
-  const [loadedQuery, setLoadedQuery] = useState(() => query("ALL", "all"))
+  /** query of the jobs shown; differs from the selected filters and page while they load */
+  const [loadedQuery, setLoadedQuery] = useState(() => query(defaultType, "all", 1, DEFAULT_TABLE_PAGE_SIZE))
   const [selected, setSelected] = useState<string | null>(null)
   const [now, setNow] = useState<number | null>(null)
+  /** a newly submitted job is on the first page */
+  const [shownWatch, setShownWatch] = useState(watch)
+  if (watch !== shownWatch) {
+    setShownWatch(watch)
+    setPage(1)
+  }
   /** jobs seen in progress (or submitted) on this page, to notice when they finish */
   const watched = useRef(new Set(initial.jobs.filter((j) => isActive(j.status)).map((j) => j.id)))
+  /** active jobs of the type last loaded: fewer means one finished, also when it is on another page */
+  const lastActive = useRef<{ type: TypeFilter; active: number }>({ type: defaultType, active: initial.active })
   const finishedCallback = useRef(onJobFinished)
 
   useEffect(() => {
@@ -137,16 +160,23 @@ export function JobsTable({
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
 
-    const current = query(type, status)
+    const current = query(type, status, page, pageSize)
 
     async function load() {
       try {
         const { body } = await requestJson<IngestionJobList>(`/api/ingestions?${current}`)
         if (cancelled) return
+        const last = pageCount(body.total, pageSize)
+        if (page > last) {
+          // the page no longer exists (fewer jobs than when it was chosen): show the last one
+          setPage(last)
+          return
+        }
         setList(body)
         setLoadedQuery(current)
         setError(null)
-        let finished = false
+        let finished = lastActive.current.type === type && body.active < lastActive.current.active
+        lastActive.current = { type, active: body.active }
         for (const job of body.jobs) {
           if (isActive(job.status)) {
             watched.current.add(job.id)
@@ -168,11 +198,30 @@ export function JobsTable({
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [type, status, watch])
+  }, [type, status, page, pageSize, watch])
 
   const statusItems = STATUS_FILTERS.map((s) => ({ value: s.value, label: s.label }))
-  const filtered = type !== "ALL" || status !== "all"
-  const loading = loadedQuery !== query(type, status)
+  const loading = loadedQuery !== query(type, status, page, pageSize)
+
+  function changeType(value: TypeFilter) {
+    setType(value)
+    setPage(1)
+  }
+
+  function changeStatus(value: StatusFilter) {
+    setStatus(value)
+    setPage(1)
+  }
+
+  function changePageSize(value: number) {
+    setPageSize(value)
+    setPage(1)
+  }
+
+  function showAll() {
+    changeType("ALL")
+    setStatus("all")
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -201,8 +250,8 @@ export function JobsTable({
             {loading && <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />}
           </CardTitle>
           <CardDescription>
-            Every ingestion job with its progress, most recent first (up to {JOB_LIMIT}). Updates
-            automatically. Select a job for details.
+            Ingestion jobs with their progress, most recent first, page by page; the tabs show the other
+            job types. Updates automatically. Select a job for details.
           </CardDescription>
           <CardAction className="hidden sm:block">
             <Badge variant="outline" className="tabular-nums">
@@ -212,7 +261,7 @@ export function JobsTable({
         </CardHeader>
         <CardContent className={cn("flex flex-col gap-3 px-0 transition-opacity", loading && "opacity-60")}>
           <div className="flex flex-wrap items-center gap-2 px-4">
-            <Tabs value={type} onValueChange={(v) => setType(v as TypeFilter)} className="max-w-full overflow-x-auto">
+            <Tabs value={type} onValueChange={(v) => changeType(v as TypeFilter)} className="max-w-full overflow-x-auto">
               <TabsList>
                 {TYPE_TABS.map((t) => (
                   <TabsTrigger key={t.value} value={t.value} className="px-2.5">
@@ -221,7 +270,7 @@ export function JobsTable({
                 ))}
               </TabsList>
             </Tabs>
-            <Select items={statusItems} value={status} onValueChange={(v) => v && setStatus(v as StatusFilter)}>
+            <Select items={statusItems} value={status} onValueChange={(v) => v && changeStatus(v as StatusFilter)}>
               <SelectTrigger aria-label="Status" className="min-w-[170px]">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
@@ -243,21 +292,22 @@ export function JobsTable({
           )}
 
           {list.jobs.length === 0 ? (
-            filtered ? (
-              <EmptyState
-                variant="filter"
-                actionLabel="Show all jobs"
-                onAction={() => {
-                  setType("ALL")
-                  setStatus("all")
-                }}
-              />
-            ) : (
+            type === "ALL" && status === "all" ? (
               <EmptyState
                 variant="generic"
                 title="No ingestion jobs yet"
                 description="Start an ingestion above. The jobs will show here."
               />
+            ) : type === defaultType && status === "all" ? (
+              <EmptyState
+                variant="generic"
+                title={`${TYPE_LABEL[defaultType]}: no jobs yet`}
+                description="Start one above; it will show here. The other ingestion jobs are under All."
+                actionLabel="Show all jobs"
+                onAction={showAll}
+              />
+            ) : (
+              <EmptyState variant="filter" actionLabel="Show all jobs" onAction={showAll} />
             )
           ) : (
             <div className="overflow-x-auto">
@@ -369,6 +419,21 @@ export function JobsTable({
                   })}
                 </TableBody>
               </Table>
+            </div>
+          )}
+
+          {list.total > 0 && (
+            <div className="px-4">
+              <TablePagination
+                page={page}
+                pageSize={pageSize}
+                pageSizes={TABLE_PAGE_SIZES}
+                total={list.total}
+                noun="jobs"
+                disabled={loading}
+                onPageChange={setPage}
+                onPageSizeChange={changePageSize}
+              />
             </div>
           )}
         </CardContent>

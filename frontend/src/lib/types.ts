@@ -277,7 +277,6 @@ export interface RagStatus {
   newsMaxArticles: number
   newsMaxPages: number
   maxRangeDays: number
-  tavilyEnabled: boolean
   /** RAG jobs waiting in the queue */
   pending: number
   stored: { pdfDocuments: number; newsDocuments: number; chunks: number }
@@ -317,6 +316,16 @@ export interface RagDocument {
   chunks: number
   embeddingModel: string
   updatedAt: string
+}
+
+/** GET /api/v1/rag/documents: one page of stored documents. */
+export interface RagDocumentPage {
+  /** documents matching the filters (every page together) */
+  total: number
+  limit: number
+  offset: number
+  /** most recently stored first */
+  documents: RagDocument[]
 }
 
 export type IngestionJobStatus =
@@ -371,8 +380,11 @@ export interface IngestionJobCreator {
 export interface IngestionJobList {
   counts: Record<IngestionJobStatus, number>
   active: number
+  /** jobs matching the type and status filter (every page together) */
+  total: number
   limit: number
-  /** most recent first, without results */
+  offset: number
+  /** most recent first, one page (limit jobs from offset), without results */
   jobs: IngestionJob[]
 }
 

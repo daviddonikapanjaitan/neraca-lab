@@ -73,6 +73,7 @@ steps, tool calls, rounds, saved rows, verification, metrics).
 
 ```bash
 curl -H "$AUTH" "http://localhost:8080/api/v1/ingestions?limit=20"                       # all types
+curl -H "$AUTH" "http://localhost:8080/api/v1/ingestions?type=PRICE&limit=10&offset=10"   # second page of 10
 curl -H "$AUTH" "http://localhost:8080/api/v1/ingestions?type=PRICE&status=QUEUED,RUNNING" # filtered
 curl -H "$AUTH"  http://localhost:8080/api/v1/ingestions/{id}                            # one job, with result
 curl -H "$AUTH" -OJ http://localhost:8080/api/v1/ingestions/{id}/file                    # download the uploaded file
@@ -80,17 +81,21 @@ curl -H "$AUTH" -OJ http://localhost:8080/api/v1/ingestions/{id}/file           
 
 | Parameter | Default | Values                                                                                       |
 |-----------|---------|----------------------------------------------------------------------------------------------|
-| `type`    | all     | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING` (case-insensitive)               |
+| `type`    | all     | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS` (case-insensitive) |
 | `status`  | all     | comma-separated: `QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `INCOMPLETE`, `FAILED` |
-| `limit`   | 50      | 1-500                                                                                        |
+| `limit`   | 50      | 1-500: jobs per page                                                                         |
+| `offset`  | 0       | jobs skipped (most recent first): page `n` (1-based) of `limit` jobs is `offset = (n - 1) * limit` |
 
-Unknown values and a limit out of range: 400 (`title: "Invalid parameter"`); unknown id: 404.
+Unknown values, a limit out of range and a negative offset: 400 (`title: "Invalid parameter"`); an
+offset past the last job gives an empty `jobs`; unknown id: 404.
 
 ```json
 {
   "counts": { "QUEUED": 0, "RUNNING": 1, "WAITING_RATE_LIMIT": 0, "SUCCEEDED": 12, "INCOMPLETE": 0, "FAILED": 1 },
   "active": 1,
+  "total": 14,
   "limit": 50,
+  "offset": 0,
   "jobs": [
     {
       "id": "701b5b9b-8d18-41f0-9250-6ed0cae50c30", "type": "FINANCIAL_STATEMENT", "status": "RUNNING",
@@ -110,6 +115,8 @@ Unknown values and a limit out of range: 400 (`title: "Invalid parameter"`); unk
 |---------------|-----------------------------------------------------------------------------------------------|
 | `counts`      | jobs per status (all jobs of `type`, not only the listed ones)                                |
 | `active`      | QUEUED + RUNNING + WAITING_RATE_LIMIT                                                         |
+| `total`       | jobs matching `type` and `status` (every page together; the sum of the matching `counts`)    |
+| `limit`, `offset` | the page asked for; `jobs` holds at most `limit` jobs from `offset`                       |
 | `stage`       | current step of an active job, or a one-line summary of a finished one                        |
 | `ticker`      | for an upload: known once the workbook has been read                                          |
 | `file`        | uploads only; `reused` = the content was already stored (same checksum)                       |

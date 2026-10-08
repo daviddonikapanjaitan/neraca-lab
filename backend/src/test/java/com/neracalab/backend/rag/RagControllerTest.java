@@ -156,7 +156,11 @@ class RagControllerTest {
 
             mvc.perform(get("/api/v1/rag/documents").param("ticker", "HRTA").param("source", "pdf"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$[?(@.fileName == 'Laporan-HRTA.pdf')].chunks").value(1));
+                    .andExpect(jsonPath("$.documents[?(@.fileName == 'Laporan-HRTA.pdf')].chunks").value(1));
+            mvc.perform(get("/api/v1/rag/documents").param("tickerPrefix", "hr").param("source", "PDF"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.documents[?(@.fileName == 'Laporan-HRTA.pdf')]").exists())
+                    .andExpect(jsonPath("$.documents[?(@.ticker =~ /^(?!HR).*/)]").isEmpty());
             mvc.perform(get("/api/v1/rag/search").param("q", marker + " apa saja").param("ticker", "HRTA").param("limit", "3"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$[0].ticker").value("HRTA"))
@@ -236,9 +240,16 @@ class RagControllerTest {
         mvc.perform(get("/api/v1/rag/documents").param("source", "VIDEO"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Unknown source 'VIDEO'; use PDF or NEWS"));
-        mvc.perform(get("/api/v1/rag/documents").param("limit", "5"))
+        mvc.perform(get("/api/v1/rag/documents").param("limit", "5").param("offset", "5"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$").isArray());
+                .andExpect(jsonPath("$.total").isNumber())
+                .andExpect(jsonPath("$.limit").value(5))
+                .andExpect(jsonPath("$.offset").value(5))
+                .andExpect(jsonPath("$.documents").isArray());
+        mvc.perform(get("/api/v1/rag/documents").param("offset", "-1"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/rag/documents").param("tickerPrefix", "H%"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -249,7 +260,7 @@ class RagControllerTest {
                 .andExpect(jsonPath("$.embeddingDimensions").value(1536))
                 .andExpect(jsonPath("$.maxRangeDays").value(366))
                 .andExpect(jsonPath("$.newsMaxArticles").value(60))
-                .andExpect(jsonPath("$.tavilyEnabled").isBoolean())
+                .andExpect(jsonPath("$.tavilyEnabled").doesNotExist())
                 .andExpect(jsonPath("$.stored.chunks").isNumber());
     }
 

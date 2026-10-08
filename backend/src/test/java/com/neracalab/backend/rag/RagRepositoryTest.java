@@ -84,7 +84,7 @@ class RagRepositoryTest {
         assertThat(again).isEqualTo(id);
         assertThat(jdbc.sql("SELECT count(*) FROM rag_chunk WHERE document_id = :d").param("d", id).query(Long.class).single())
                 .isEqualTo(1);
-        DocumentRow row = repository.documents("IDX", "HRTA", SourceType.PDF, 500).stream()
+        DocumentRow row = repository.documents("IDX", "HRTA", null, SourceType.PDF, 500, 0).documents().stream()
                 .filter(d -> d.documentId() == id).findFirst().orElseThrow();
         assertThat(row.chunks()).isEqualTo(1);
         assertThat(row.fileName()).isEqualTo("test.pdf");
@@ -99,8 +99,18 @@ class RagRepositoryTest {
         repository.store(new NewDocument(hrta.companyId(), SourceType.NEWS, url, "Berita", "EmitenNews", url, null, null,
                 published, null, 10, "test-model", null), chunks("berita emas"), List.of(axis(7)));
         assertThat(repository.hasDocument(hrta.companyId(), SourceType.NEWS, url)).isTrue();
-        DocumentRow row = repository.documents(null, "HRTA", SourceType.NEWS, 500).stream()
+        DocumentRow row = repository.documents(null, "HRTA", null, SourceType.NEWS, 500, 0).documents().stream()
                 .filter(d -> url.equals(d.sourceUrl())).findFirst().orElseThrow();
+
+        // pages: the tickers starting with "HR", one document per page; past the last page, none
+        RagRepository.DocumentPage first = repository.documents(null, null, "HR", SourceType.NEWS, 1, 0);
+        assertThat(first.total()).isPositive();
+        assertThat(first.documents()).singleElement().satisfies(d -> assertThat(d.ticker()).startsWith("HR"));
+        assertThat(first.documents().getFirst().documentId()).isEqualTo(row.documentId());   // stored last
+        RagRepository.DocumentPage past = repository.documents(null, null, "HR", SourceType.NEWS, 1, (int) first.total());
+        assertThat(past.total()).isEqualTo(first.total());
+        assertThat(past.documents()).isEmpty();
+        assertThat(repository.documents(null, null, "HRTAX", SourceType.NEWS, 10, 0).total()).isZero();
         assertThat(row.publishedAt()).isEqualTo(published);
         assertThat(row.sourceName()).isEqualTo("EmitenNews");
 
