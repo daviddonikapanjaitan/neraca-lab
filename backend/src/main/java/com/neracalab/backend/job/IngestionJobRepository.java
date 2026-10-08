@@ -120,12 +120,20 @@ public class IngestionJobRepository {
 
     /** A queued financial statement upload. */
     public void insertUpload(NewUpload upload) {
+        insertFileJob(upload, IngestionJobType.FINANCIAL_STATEMENT, null, null);
+    }
+
+    /** A queued job of an uploaded file (financial statement workbook, RAG PDF), with its company when known. */
+    public void insertFileJob(NewUpload upload, IngestionJobType type, String exchange, String ticker) {
         jdbc.sql("""
-                        INSERT INTO ingestion_job (job_id, job_type, status, stage, file_id, file_name, file_reused,
-                                                   created_by, created_by_username)
-                        VALUES (:id, :type, :status, :stage, :fileId, :fileName, :reused, :createdBy, :createdByUsername)""")
+                        INSERT INTO ingestion_job (job_id, job_type, status, stage, exchange, ticker, file_id, file_name,
+                                                   file_reused, created_by, created_by_username)
+                        VALUES (:id, :type, :status, :stage, :exchange, :ticker, :fileId, :fileName, :reused,
+                                :createdBy, :createdByUsername)""")
                 .param("id", upload.id())
-                .param("type", IngestionJobType.FINANCIAL_STATEMENT.name())
+                .param("type", type.name())
+                .param("exchange", exchange, Types.VARCHAR)
+                .param("ticker", ticker, Types.VARCHAR)
                 .param("status", IngestionJobStatus.QUEUED.name())
                 .param("stage", truncate(upload.stage()), Types.VARCHAR)
                 .param("fileId", upload.fileId())
@@ -290,6 +298,35 @@ public class IngestionJobRepository {
                         ORDER BY requested_at LIMIT 1""")
                 .param("type", type.name())
                 .param("exchange", exchange)
+                .query((rs, i) -> rs.getObject("job_id", UUID.class))
+                .optional();
+    }
+
+    /** The oldest active job of a type for a company, if any. */
+    public Optional<UUID> activeJobOf(IngestionJobType type, String exchange, String ticker) {
+        return jdbc.sql("""
+                        SELECT job_id FROM ingestion_job
+                        WHERE job_type = :type AND exchange = :exchange AND ticker = :ticker
+                          AND status IN ('QUEUED', 'RUNNING', 'WAITING_RATE_LIMIT')
+                        ORDER BY requested_at LIMIT 1""")
+                .param("type", type.name())
+                .param("exchange", exchange)
+                .param("ticker", ticker)
+                .query((rs, i) -> rs.getObject("job_id", UUID.class))
+                .optional();
+    }
+
+    /** The oldest active job of a type for a stored file and company, if any. */
+    public Optional<UUID> activeFileJobOf(IngestionJobType type, long fileId, String exchange, String ticker) {
+        return jdbc.sql("""
+                        SELECT job_id FROM ingestion_job
+                        WHERE job_type = :type AND file_id = :fileId AND exchange = :exchange AND ticker = :ticker
+                          AND status IN ('QUEUED', 'RUNNING', 'WAITING_RATE_LIMIT')
+                        ORDER BY requested_at LIMIT 1""")
+                .param("type", type.name())
+                .param("fileId", fileId)
+                .param("exchange", exchange)
+                .param("ticker", ticker)
                 .query((rs, i) -> rs.getObject("job_id", UUID.class))
                 .optional();
     }

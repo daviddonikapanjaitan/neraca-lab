@@ -15,6 +15,9 @@ import type {
   IngestionJobList,
   PermissionInfo,
   PriceQueue,
+  RagDocument,
+  RagStatus,
+  RagSourceType,
   Role,
   ScreeningOptions,
   ScreeningReport,
@@ -132,6 +135,14 @@ export const getPriceQueue = cache(() => get<PriceQueue>("/api/v1/prices/ingesti
 /** GET /api/v1/fundamentals/status?exchange= (screening data stored, active ETL run) */
 export const getFundamentalsStatus = cache((exchange: string) =>
   get<FundamentalsStatus>(`/api/v1/fundamentals/status?exchange=${encodeURIComponent(exchange)}`)
+)
+
+/** GET /api/v1/rag/status (embedding model, news limits, stored counts) */
+export const getRagStatus = cache(() => get<RagStatus>("/api/v1/rag/status"))
+
+/** GET /api/v1/rag/documents?source=&limit= (most recently stored first) */
+export const getRagDocuments = cache((source: RagSourceType, limit: number) =>
+  get<RagDocument[]>(`/api/v1/rag/documents?source=${source}&limit=${limit}`)
 )
 
 /** GET /api/v1/screenings/options */

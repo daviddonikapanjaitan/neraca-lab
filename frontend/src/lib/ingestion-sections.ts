@@ -1,6 +1,6 @@
 // The Ingestion pages, shared by the sidebar dropdown, the breadcrumb and the pages themselves.
 
-export type IngestionSection = "xbrl" | "prices" | "screening-data"
+export type IngestionSection = "xbrl" | "prices" | "screening-data" | "rag-pdf" | "rag-news"
 
 export interface IngestionSectionInfo {
   section: IngestionSection
@@ -34,6 +34,22 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     heading: "Screening Data IDX",
     description: "Refresh the market data of every IDX listing that the AI screening starts from.",
     href: "/ingestion/screening-data",
+  },
+  {
+    section: "rag-pdf",
+    title: "PDF Documents (RAG)",
+    heading: "PDF Documents (RAG)",
+    description:
+      "Upload PDF documents of a company (financial statements, annual reports); their text is chunked, embedded and stored in the pgvector store for RAG.",
+    href: "/ingestion/rag-pdf",
+  },
+  {
+    section: "rag-news",
+    title: "News (RAG)",
+    heading: "News (RAG)",
+    description:
+      "Collect the news of a listed IDX company for a date range; every article is chunked, embedded and stored in the pgvector store for RAG.",
+    href: "/ingestion/rag-news",
   },
 ]
 

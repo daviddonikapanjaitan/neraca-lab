@@ -43,6 +43,7 @@ browser ──> Next.js server (Server Components, Route Handlers /api/...) ─�
 | `GET /api/v1/auth/me`                       | every page: the logged-in user (layout, permission checks) |
 | `GET /api/v1/admin/users`, `/admin/roles`, `/admin/permissions` | Admin Center pages |
 | `GET /api/v1/prices/ingestions`             | Price Ingestion page: configured price provider |
+| `GET /api/v1/rag/status`, `GET /api/v1/rag/documents?source=PDF\|NEWS&limit=100` | RAG pages: embedding model, news limits, stored documents |
 
 The Ingestion pages also call the backend from the browser through Next.js Route Handlers in
 `src/app/api/` (same server-side `NERACA_API_URL`; `forward()` in `src/lib/api.ts` passes status and
@@ -59,6 +60,9 @@ ProblemDetail through; unreachable backend = 503):
 | `/api/profile`, `/api/profile/avatar`       | `/api/v1/profile`, `/api/v1/profile/avatar`              |
 | `/api/screenings`, `/api/screenings/{id}`, `/api/screenings/{id}/pdf` | `/api/v1/screenings[...]` (list / start, report, PDF download) |
 | `/api/fundamentals/ingestions`              | `POST /api/v1/fundamentals/ingestions?exchange=&full=` (screening data ETL) |
+| `POST /api/rag/pdf` (multipart: file, exchange, ticker) | `POST /api/v1/rag/pdf` |
+| `POST /api/rag/news` (JSON `{exchange, ticker, from, to}`) | `POST /api/v1/rag/news?exchange=&ticker=&from=&to=` |
+| `GET /api/rag/documents`, `GET /api/rag/search?q=&ticker=&source=&limit=` | `GET /api/v1/rag/documents`, `/api/v1/rag/search` (search test on the RAG pages) |
 | `GET /api/ingestions/{id}/file`             | `GET /api/v1/ingestions/{id}/file` (download, streamed with name / type / size / checksum headers by `forwardFile()`) |
 
 ### Login and permissions
@@ -121,9 +125,9 @@ Statement tables:
 
 Unknown company: not-found page. Invalid ticker or unsupported exchange: the backend's 400 message.
 
-### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data` (`INGESTION`)
+### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news` (`INGESTION`)
 
-Sidebar entry below Screening, a dropdown like the Admin Center with three pages (`/ingestion` opens the
+Sidebar entry below Screening, a dropdown like the Admin Center with five pages (`/ingestion` opens the
 first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and breadcrumbs come from
 `src/lib/ingestion-sections.ts`. Everything runs in the background
 ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)).
@@ -133,6 +137,8 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | IDX XBRL (`/ingestion/xbrl`) | Financial statement upload                                                            |
 | Price Ingestion (`/ingestion/prices`) | Price ingestion (exchanges, stored companies and the price provider are loaded for this page only) |
 | Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
+| PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload, then the stored PDF documents ([RAG_DOCS.md](RAG_DOCS.md)) |
+| News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |
 
 Every page shows its card, then the summary tiles and the jobs table with **all** ingestion jobs (tabs
 filter by type, starting on "All"). Server side: `components/ingestion/ingestion-page.tsx` (permission
@@ -142,15 +148,18 @@ check, the page's data plus the jobs list, error state); client side: `ingestion
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
 | Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 20 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
+| PDF document upload        | exchange and company dropdowns (`company-picker.tsx`; a file name ending with a stored ticker selects it), `.pdf` drop zone, client-side check of extension and size, result notice |
+| News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |
+| Stored documents (RAG)     | badge with stored documents and chunks, ticker filter, search box (5 closest chunks with distance, pages or date, link to the article), table: company, document / article (link), pages or published date, chunks, stored |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
-| Jobs table                 | type tabs (all / financial statements / prices), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
-| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency), raw JSON |
+| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG), scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; refreshed every 2 s while a job is active, every 10 s otherwise |
+| Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency, or RAG pages / chunks / model, or news range, per-source counts and articles not stored), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
 upload, so a failure (e.g. backend unreachable) shows a message instead of a broken download.
 
 When a job seen in progress finishes, the page re-renders its server data (`router.refresh()`), so
-a new company appears in the ticker list and the latest price date is current.
+a new company appears in the ticker list, the latest price date is current and new RAG documents are listed.
 
 ### 3.3a Screening - `/screening`, `/screening/{id}` (`SCREENING`)
 
@@ -219,7 +228,7 @@ frontend/
     │   │   ├── error.tsx                  error boundary for unexpected errors
     │   │   ├── companies/page.tsx         page 1 (+ loading.tsx)
     │   │   ├── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
-    │   │   ├── ingestion/xbrl, prices, screening-data/page.tsx   page 3 (+ loading.tsx; ingestion/page.tsx redirects)
+    │   │   ├── ingestion/xbrl, prices, screening-data, rag-pdf, rag-news/page.tsx   page 3 (+ loading.tsx; ingestion/page.tsx redirects)
     │   │   ├── admin/users/page.tsx, admin/roles/page.tsx   Admin Center (admin/page.tsx redirects)
     │   │   └── profile/page.tsx           own profile
     │   ├── login/page.tsx                 login (outside the dashboard layout)
@@ -228,7 +237,7 @@ frontend/
     │   ├── ui/                            shadcn-fintech ui components
     │   ├── companies/                     company list client component
     │   ├── company/                       detail view, header, overview, statement tables, panels
-    │   ├── ingestion/                     page (server) and page client, upload / price / screening data cards, jobs table, job detail sheet, download button
+    │   ├── ingestion/                     page (server) and page client, upload / price / screening data / RAG PDF / RAG news cards, company picker, RAG documents card, jobs table, job detail sheet, download button
     │   ├── admin/                         users / roles pages, user and role sheets, delete confirmation
     │   ├── auth/, profile/                login form, profile page
     │   └── app-sidebar, dynamic-breadcrumb, empty-state, stat-tile, api-error-state, ...

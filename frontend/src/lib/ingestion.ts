@@ -9,6 +9,9 @@ export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 /** Jobs shown on the ingestion page (most recent first). */
 export const JOB_LIMIT = 100
 
+/** Stored documents loaded on a RAG page (most recently stored first). */
+export const RAG_DOCUMENT_LIMIT = 100
+
 export const ACTIVE_STATUSES: IngestionJobStatus[] = ["QUEUED", "RUNNING", "WAITING_RATE_LIMIT"]
 
 export function isActive(status: IngestionJobStatus): boolean {
@@ -29,6 +32,8 @@ export const TYPE_LABEL: Record<IngestionJobType, string> = {
   PRICE: "Daily prices",
   FUNDAMENTALS: "Screening data",
   SCREENING: "AI screening",
+  RAG_PDF: "PDF document (RAG)",
+  RAG_NEWS: "News (RAG)",
 }
 
 /** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */

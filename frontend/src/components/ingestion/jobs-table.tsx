@@ -8,9 +8,11 @@ import {
   CircleXIcon,
   DatabaseZapIcon,
   FileSpreadsheetIcon,
+  FileTextIcon,
   HourglassIcon,
   LineChartIcon,
   LoaderIcon,
+  NewspaperIcon,
   ScanSearchIcon,
   TriangleAlertIcon,
 } from "lucide-react"
@@ -50,6 +52,8 @@ const TYPE_ICON: Record<IngestionJobType, typeof FileSpreadsheetIcon> = {
   PRICE: LineChartIcon,
   FUNDAMENTALS: DatabaseZapIcon,
   SCREENING: ScanSearchIcon,
+  RAG_PDF: FileTextIcon,
+  RAG_NEWS: NewspaperIcon,
 }
 
 /** Refresh interval while a job is active, and otherwise. */
@@ -65,6 +69,8 @@ const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: "PRICE", label: "Prices" },
   { value: "FUNDAMENTALS", label: "Screening data" },
   { value: "SCREENING", label: "Screenings" },
+  { value: "RAG_PDF", label: "PDF (RAG)" },
+  { value: "RAG_NEWS", label: "News (RAG)" },
 ]
 
 const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: string }[] = [
@@ -195,7 +201,7 @@ export function JobsTable({
             {loading && <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />}
           </CardTitle>
           <CardDescription>
-            Every upload and price ingestion with its progress, most recent first (up to {JOB_LIMIT}). Updates
+            Every ingestion job with its progress, most recent first (up to {JOB_LIMIT}). Updates
             automatically. Select a job for details.
           </CardDescription>
           <CardAction className="hidden sm:block">
@@ -206,7 +212,7 @@ export function JobsTable({
         </CardHeader>
         <CardContent className={cn("flex flex-col gap-3 px-0 transition-opacity", loading && "opacity-60")}>
           <div className="flex flex-wrap items-center gap-2 px-4">
-            <Tabs value={type} onValueChange={(v) => setType(v as TypeFilter)}>
+            <Tabs value={type} onValueChange={(v) => setType(v as TypeFilter)} className="max-w-full overflow-x-auto">
               <TabsList>
                 {TYPE_TABS.map((t) => (
                   <TabsTrigger key={t.value} value={t.value} className="px-2.5">
@@ -250,7 +256,7 @@ export function JobsTable({
               <EmptyState
                 variant="generic"
                 title="No ingestion jobs yet"
-                description="Upload a financial statement or fetch prices above. The jobs will show here."
+                description="Start an ingestion above. The jobs will show here."
               />
             )
           ) : (

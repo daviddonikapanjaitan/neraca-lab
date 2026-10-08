@@ -151,7 +151,7 @@ public class NewsService {
     }
 
     /** A headline is about a listing when it names the ticker (as a word) or the company's short name. */
-    static boolean mentions(Headline h, String ticker, String companyName) {
+    public static boolean mentions(Headline h, String ticker, String companyName) {
         String text = h.title() + " " + h.url().replace('-', ' ');
         if (Pattern.compile("\\b" + Pattern.quote(ticker) + "\\b").matcher(h.title()).find()
                 || Pattern.compile("\\b" + Pattern.quote(ticker.toLowerCase(Locale.ROOT)) + "\\b").matcher(h.url().replace('-', ' ')).find()) {
@@ -162,7 +162,7 @@ public class NewsService {
     }
 
     /** "PT Bank Central Asia Tbk." -> "Bank Central Asia" */
-    static String shortName(String companyName) {
+    public static String shortName(String companyName) {
         if (companyName == null) {
             return "";
         }

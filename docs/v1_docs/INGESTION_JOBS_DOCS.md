@@ -8,9 +8,11 @@ Every ingestion runs asynchronously in the background and records its progress i
 | Daily prices (Yahoo Finance)    | `POST /api/v1/prices/ingestions?exchange=&ticker=` | `PriceIngestionQueue`: one thread ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)) |
 | Screening data ETL (Yahoo Finance) | `POST /api/v1/fundamentals/ingestions?exchange=` | `FundamentalsQueue`: one thread ([SCREENING_DOCS.md](SCREENING_DOCS.md)) |
 | AI stock screening              | `POST /api/v1/screenings`                      | `ScreeningQueue`: one thread ([SCREENING_DOCS.md](SCREENING_DOCS.md)) |
+| RAG PDF document (`.pdf`)       | `POST /api/v1/rag/pdf`                         | `RagQueue`: one thread for both RAG types ([RAG_DOCS.md](RAG_DOCS.md)) |
+| RAG news of a date range        | `POST /api/v1/rag/news?exchange=&ticker=&from=&to=` | `RagQueue` ([RAG_DOCS.md](RAG_DOCS.md))                |
 
-Both write `ingestion_job` (one row per process); `GET /api/v1/ingestions` lists them. The
-frontend Ingestion pages (`/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, [FRONTEND_DOCS.md](FRONTEND_DOCS.md)) uses these APIs. Every API here
+All of them write `ingestion_job` (one row per process; `job_type` `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`); `GET /api/v1/ingestions` lists them. The
+frontend Ingestion pages (`/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news`, [FRONTEND_DOCS.md](FRONTEND_DOCS.md)) use these APIs. Every API here
 needs the `INGESTION` permission. Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
 ([AUTH_DOCS.md](AUTH_DOCS.md), section 3).
 
@@ -20,9 +22,9 @@ Code: `backend/src/main/java/com/neracalab/backend/`
 |-----------------------------------------|--------------------------------------------------------------------------------------|
 | `job/IngestionJobRepository`            | `ingestion_job` reads / writes; results stored as JSONB                              |
 | `job/controller/IngestionJobController` | `GET /api/v1/ingestions`, `GET /api/v1/ingestions/{id}`                              |
-| `job/controller/IngestionFileController`| `GET /api/v1/ingestions/{id}/file`: download of the uploaded workbook                |
+| `job/controller/IngestionFileController`| `GET /api/v1/ingestions/{id}/file`: download of the uploaded workbook or RAG PDF (`application/pdf`) |
 | `job/IngestionJobRecovery`              | at startup: fails jobs left active by the previous run                               |
-| `ingestion/file/IngestionFileRepository`| `ingestion_file`: workbook bytes, SHA-256 checksum, store-once                       |
+| `ingestion/file/IngestionFileRepository`| `ingestion_file`: workbook / PDF bytes, SHA-256 checksum, store-once                 |
 | `ingestion/FinancialStatementQueue`     | stores the upload, records the job, runs the AI agent in a background thread          |
 | `price/PriceIngestionTracker`           | records every state change of a price job in `ingestion_job`                          |
 
@@ -170,7 +172,7 @@ the first one is still running.
 `checksum_sha256` (unique, lower-case hex), `content` (`BYTEA`), `created_at`.
 
 `ingestion_job`: `job_id` (UUID), `job_type`, `status`, `stage`, `exchange`, `ticker`, `file_id`
-(FK `ingestion_file`, required for uploads), `file_name` (this upload), `file_reused`,
+(FK `ingestion_file`, required for `FINANCIAL_STATEMENT` and `RAG_PDF`), `file_name` (this upload), `file_reused`,
 `full_history`, `attempts`, `message`, `result` (`JSONB`), `requested_at`, `started_at`,
 `finished_at`, `resume_at`, `updated_at`, `created_by` (FK `users`, `ON DELETE SET NULL`),
 `created_by_username`. Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md), section 4.8.
