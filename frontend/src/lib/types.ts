@@ -265,6 +265,7 @@ export type IngestionJobType =
   | "SCREENING"
   | "RAG_PDF"
   | "RAG_NEWS"
+  | "ANALYSIS"
 
 export type RagSourceType = "PDF" | "NEWS"
 
@@ -535,8 +536,11 @@ export interface AgentScore {
   strengths: string[] | null
   concerns: string[] | null
   reflection: AgentReflection | null
-  /** ASSESSED, REVISED (reviewed by the reflection critic) or QUANT_ONLY (no model answer) */
-  status: "ASSESSED" | "REVISED" | "QUANT_ONLY"
+  /**
+   * ASSESSED, REVISED (reviewed by the reflection critic), QUANT_ONLY (no model answer) or NO_SCORE (an analysis
+   * without model answer and without market data)
+   */
+  status: "ASSESSED" | "REVISED" | "QUANT_ONLY" | "NO_SCORE"
 }
 
 export interface NewsBriefView {
@@ -608,6 +612,163 @@ export interface ScreeningReport {
     budget?: { budgetUsd: number; spentUsd: number }
   } | null
   candidates: ScreeningCandidate[]
+  usage: ScreeningUsage[]
+}
+
+// AI analysis of one stock (docs/v1_docs/ANALYSIS_DOCS.md)
+
+export type Verdict = "STRONG_FIT" | "FIT" | "NEUTRAL" | "WEAK" | "REJECT"
+
+export type Conviction = "HIGH" | "MEDIUM" | "LOW"
+
+/** A company that can be analysed, with what the database holds for it. */
+export interface AnalysisCompanyOption {
+  exchange: string
+  ticker: string
+  companyName: string
+  sector: string | null
+  /** stored reporting periods */
+  periods: number
+  latestPeriod: string | null
+  pdfDocuments: number
+  newsDocuments: number
+  /** latest Yahoo Finance snapshot (null: not in the screening data) */
+  marketDataDate: string | null
+  latestPriceDate: string | null
+}
+
+/** GET /api/v1/analyses/options */
+export interface AnalysisOptions {
+  companies: AnalysisCompanyOption[]
+  agents: ScreeningOption[]
+  budgetUsd: number
+  researchModel: string
+  agentModel: string
+  synthesisModel: string
+}
+
+/** One analysis as listed (and the head of the report). */
+export interface AnalysisRun {
+  id: string
+  status: IngestionJobStatus
+  stage: string | null
+  message: string | null
+  exchange: string
+  ticker: string
+  companyName: string | null
+  agents: InvestorAgentCode[]
+  /** after the synthesis adjustment; null until finished */
+  overallScore: number | null
+  verdict: Verdict | null
+  conviction: Conviction | null
+  marketDataDate: string | null
+  budgetUsd: number
+  costUsd: number
+  promptTokens: number
+  completionTokens: number
+  reasoningTokens: number
+  cachedTokens: number
+  modelCalls: number
+  requestedAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  createdBy: IngestionJobCreator | null
+}
+
+/** GET /api/v1/analyses: one page, most recent first */
+export interface AnalysisPage {
+  total: number
+  limit: number
+  offset: number
+  analyses: AnalysisRun[]
+}
+
+export interface ResearchBriefView {
+  business: string | null
+  moat: string | null
+  management: string | null
+  growth: string | null
+  risks: string[]
+  catalysts: string[]
+  newsSentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | "MIXED" | "NONE"
+  newsSummary: string | null
+  /** facts with the ref of the excerpt they come from (F1 = filing, N1 = news) */
+  evidence: { ref: string; fact: string }[]
+}
+
+/** An excerpt the research agent retrieved from the vector store. */
+export interface RetrievedExcerpt {
+  ref: string
+  source: RagSourceType
+  title: string | null
+  /** pages of a PDF, date of a news article */
+  where: string | null
+  url: string | null
+  distance: number
+  query: string
+}
+
+export interface AnalysisResearch {
+  brief: ResearchBriefView | null
+  trace: { iteration: number; thought: string | null; tools: string[] }[]
+  retrieved: RetrievedExcerpt[]
+  modelUsed: boolean
+  /** evidence dropped because it cited an excerpt that was never retrieved */
+  droppedRefs: number
+  note: string | null
+}
+
+/** One period of the fact sheet: amounts scaled as amountUnit says, ratios as fractions. */
+export interface FactSheetPeriod {
+  period: string
+  periodEnd: string
+  audited?: boolean
+  income?: Record<string, number>
+  balance?: Record<string, number>
+  cashFlow?: Record<string, number>
+  metrics?: Record<string, number>
+}
+
+/** What the agents saw. */
+export interface AnalysisContext {
+  factSheet: {
+    company: { ticker: string; name: string; sector?: string; industry?: string; reportingCurrency: string }
+    amountUnit: string
+    periods: FactSheetPeriod[]
+    latestValuation?: Record<string, number | string>
+    latestPrice?: { date: string; close?: number; historyFrom?: string }
+  } | null
+  marketData: { source: string; date: string | null; metrics: Record<string, unknown> } | null
+  documents: { pdfDocuments: number; newsArticles: number; pdfTitles: string[]; latestNews: string[] } | null
+  periods: string[]
+  quantitativeScorecards: boolean
+}
+
+export interface AnalysisSynthesisView {
+  executiveSummary: string | null
+  conviction: Conviction | null
+  thesis: string | null
+  bullCase: string[]
+  bearCase: string[]
+  keyRisks: string[]
+  monitor: string[]
+  dataGaps: string[]
+  adjustmentReason: string | null
+  model: string | null
+  fallback: string | null
+}
+
+/** GET /api/v1/analyses/{id} */
+export interface AnalysisReport {
+  run: AnalysisRun
+  /** the overall of the quantitative scorecards alone (null without market data) */
+  quantOverall: number | null
+  synthesisAdjustment: number | null
+  context: AnalysisContext | null
+  research: AnalysisResearch | null
+  synthesis: AnalysisSynthesisView | null
+  notes: ScreeningReport["notes"]
+  agents: AgentScore[]
   usage: ScreeningUsage[]
 }
 

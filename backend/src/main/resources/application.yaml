@@ -46,6 +46,7 @@ spring:
         - classpath:db/V1.0.10__schema_screening.sql
         - classpath:db/V1.0.11__schema_fx.sql
         - classpath:db/V1.0.14__schema_rag.sql      # RAG vector store (needs pgvector)
+        - classpath:db/V1.0.15__schema_analysis.sql # AI analysis of one stock
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -105,6 +106,22 @@ neracalab:
     news-max-pages: 10           # tag pages per news site walked back to reach the range start
     news-max-articles: 60        # articles read and stored per news job (newest first)
     article-chars: 30000         # longest article text kept
+    news-retries: 3              # more attempts at a news page after a network error, timeout, 429 / 5xx (404 for an article)
+    news-retry-backoff: 2s       # pause before the first retry, doubled for each further one (2 s, 4 s, 8 s)
+
+  # AI analysis of one stock (POST /api/v1/analyses); docs/v1_docs/ANALYSIS_DOCS.md. Models, prices, score blending:
+  # neracalab.screening
+  analysis:
+    budget-usd: ${ANALYSIS_BUDGET_USD:0.20}   # hard cost cap of one analysis (all model and embedding calls)
+    synthesis-reserve-usd: 0.10               # kept free for the synthesis (Opus, about $0.09 at most) while the others run
+    research-iterations: 4                    # model turns of the research agent (ReAct guard)
+    max-searches: 6                           # document / news searches of the research agent
+    max-statement-lookups: 3                  # full-statement lookups of the research agent
+    search-results: 4                         # chunks returned per search
+    excerpt-chars: 800                        # longest excerpt returned per chunk
+    annual-periods: 4                         # fiscal years in the fact sheet (plus the latest interim period)
+    embedding-price-per-million: 0.02         # USD per million tokens of the embedding model (estimated cost)
+    agent-max-tokens: 1000                    # output limit of an investor agent answer (screening: 450; the dossier is richer)
 
   # AI stock screening (POST /api/v1/screenings); docs/v1_docs/SCREENING_DOCS.md
   screening:
@@ -131,10 +148,13 @@ neracalab:
       synthesis-model: ${SCREENING_SYNTHESIS_MODEL:anthropic/claude-opus-5.5}
       synthesis-effort: low
       provider-sort: price                          # OpenRouter: cheapest provider for the DeepSeek calls
+      provider-ignore: ${SCREENING_PROVIDER_IGNORE:OpenInference}   # never these providers (OpenInference's fp4 DeepSeek loops)
       concurrency: 8
       research-iterations: 3
       agent-max-tokens: 450
       synthesis-max-tokens: 12000
+      model-retries: 2                              # retries of a model call that failed transiently (stream reset, 408/429/5xx)
+      retry-backoff: 2s                             # pause before the first retry, doubled for each further one
     news:
       tavily-api-key: ${TAVILY_API_KEY:}
       tavily-max-results: 5

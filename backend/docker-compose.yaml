@@ -77,6 +77,8 @@ services:
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       SCREENING_BUDGET_USD: ${SCREENING_BUDGET_USD:-0.45}
       SCREENING_ETL_SCHEDULE_ENABLED: ${SCREENING_ETL_SCHEDULE_ENABLED:-true}
+      # AI analysis of one stock (Screening > Analysis): cost cap per analysis
+      ANALYSIS_BUDGET_USD: ${ANALYSIS_BUDGET_USD:-0.20}
       # RAG vector store: embedding model (OpenRouter, same OPENAI_API_KEY; must have 1536 dimensions)
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-openai/text-embedding-3-small}
       # login: session length, initial password of the root user "admin" (first start only)

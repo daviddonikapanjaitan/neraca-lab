@@ -13,6 +13,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
+import { ANALYSIS_HREF } from "@/lib/screening-sections"
 
 interface Crumb {
   label: string
@@ -29,7 +30,9 @@ const ADMIN_PAGES: Record<string, string> = {
  * /companies/IDX/HRTA       -> Companies / IDX / HRTA
  * /admin/users              -> Admin Center / User Management
  * /ingestion/prices         -> Ingestion / Price Ingestion
- * /screening/<id>           -> Screening / Report
+ * /screening                -> Screening / Screening Stocks
+ * /screening/<id>           -> Screening / Screening Stocks / Report
+ * /screening/analysis/<id>  -> Screening / Analysis / Report
  * The exchange crumb opens the company list filtered by that exchange.
  */
 function crumbs(pathname: string): Crumb[] {
@@ -47,9 +50,16 @@ function crumbs(pathname: string): Crumb[] {
       : [{ label: "Ingestion", href: INGESTION_HOME }]
   }
   if (segments[0] === "screening") {
-    return segments.length > 1
-      ? [{ label: "Screening", href: "/screening" }, { label: "Report", href: pathname }]
-      : [{ label: "Screening", href: "/screening" }]
+    const section =
+      segments[1] === "analysis"
+        ? { label: "Analysis", href: ANALYSIS_HREF }
+        : { label: "Screening Stocks", href: "/screening" }
+    const report = segments[1] === "analysis" ? segments.length > 2 : segments.length > 1
+    return [
+      { label: "Screening", href: "/screening" },
+      section,
+      ...(report ? [{ label: "Report", href: pathname }] : []),
+    ]
   }
   if (segments[0] !== "companies") {
     return segments.map((s, i) => ({

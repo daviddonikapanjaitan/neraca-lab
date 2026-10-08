@@ -158,9 +158,12 @@ public class RagIngestionService {
         if (!"https".equals(uri.getScheme()) && !"http".equals(uri.getScheme())) {
             throw new IllegalArgumentException("Not a web URL");
         }
-        NewsHttpClient.Page page = http.get(uri);
+        // a passing failure (timeout, 429, 5xx, a 404 for a listed article) is retried
+        NewsHttpClient.Page page = NewsRetry.get(http, uri, properties.newsRetries(), properties.newsRetryBackoff(), true);
         if (page.status() != 200 || page.body() == null) {
-            throw new NewsHttpClient.NewsFetchException(uri.getHost() + " answered HTTP " + page.status(), null);
+            throw new NewsHttpClient.NewsFetchException(uri.getHost() + " answered HTTP " + page.status()
+                    + (NewsRetry.passing(page.status(), true) ? " (" + (properties.newsRetries() + 1) + " attempts)" : ""),
+                    null);
         }
         return NewsParsers.article(page.body(), url, properties.articleChars());
     }

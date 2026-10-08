@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,7 +27,10 @@ import com.neracalab.backend.screening.news.Headline;
 import com.neracalab.backend.screening.news.NewsHttpClient;
 import com.neracalab.backend.screening.news.NewsSource;
 
-/** News articles of a range: read from their site and stored; a site refusing our request fails that article only. */
+/**
+ * News articles of a range: read from their site and stored; a passing failure is retried, a site refusing our
+ * request fails that article only.
+ */
 class RagNewsIngestionTest {
 
     private static final String URL = "https://www.emitennews.com/news/asgr-jadwal-dividen-rp297-per-helai-yield-1338-persen";
@@ -35,6 +39,10 @@ class RagNewsIngestionTest {
     private static final LocalDate TO = LocalDate.of(2026, 10, 8);
     private static final Headline HEADLINE = new Headline(URL, NewsSource.EMITENNEWS, "ASGR Jadwal Dividen", "lead",
             Instant.parse("2026-04-20T03:00:00Z"));
+
+    private static final String ARTICLE_HTML = "<html><head><title>ASGR Jadwal Dividen</title></head><body><article>"
+            + "<p>Astra Graphia membagikan dividen tunai Rp297 per helai kepada pemegang saham.</p>".repeat(10)
+            + "</article></body></html>";
 
     private RagRepository repository;
     private NewsHttpClient http;
@@ -56,16 +64,35 @@ class RagNewsIngestionTest {
 
     @Test
     void storesTheArticleReadFromItsSite() {
-        String body = "<html><head><title>ASGR Jadwal Dividen</title></head><body><article>"
-                + "<p>Astra Graphia membagikan dividen tunai Rp297 per helai kepada pemegang saham.</p>".repeat(10)
-                + "</article></body></html>";
-        when(http.get(URI.create(URL))).thenReturn(new NewsHttpClient.Page(200, body));
+        when(http.get(URI.create(URL))).thenReturn(new NewsHttpClient.Page(200, ARTICLE_HTML));
         RagIngestionService.NewsResult result = service.ingestNews(UUID.randomUUID(), ASGR, FROM, TO, s -> { });
 
         assertThat(result.stored()).isEqualTo(1);
         assertThat(result.failed()).isZero();
         assertThat(result.articles()).singleElement().satisfies(a -> assertThat(a.outcome()).isEqualTo("STORED"));
         verify(repository).store(any(NewDocument.class), anyList(), anyList());
+    }
+
+    @Test
+    void retriesAnArticleTheSiteMomentarilyCannotFind() {
+        // IDX Channel answered 404 for an article of its own BNGA tag page, and served it a moment later
+        when(http.get(URI.create(URL))).thenReturn(new NewsHttpClient.Page(404, "Not Found"),
+                new NewsHttpClient.Page(200, ARTICLE_HTML));
+        RagIngestionService.NewsResult result = service.ingestNews(UUID.randomUUID(), ASGR, FROM, TO, s -> { });
+
+        assertThat(result.stored()).isEqualTo(1);
+        assertThat(result.failed()).isZero();
+        verify(http, times(2)).get(URI.create(URL));
+    }
+
+    @Test
+    void failsTheArticleWhenItStaysMissing() {
+        when(http.get(URI.create(URL))).thenReturn(new NewsHttpClient.Page(404, "Not Found"));
+        RagIngestionService.NewsResult result = service.ingestNews(UUID.randomUUID(), ASGR, FROM, TO, s -> { });
+
+        assertThat(result.failed()).isEqualTo(1);
+        assertThat(result.articles().getFirst().outcome()).isEqualTo("FAILED: www.emitennews.com answered HTTP 404 (4 attempts)");
+        verify(http, times(4)).get(URI.create(URL));
     }
 
     @Test
@@ -78,5 +105,6 @@ class RagNewsIngestionTest {
         assertThat(result.articles().getFirst().outcome()).startsWith("FAILED: ").contains("HTTP 403");
         verify(repository, never()).store(any(), anyList(), anyList());
         verify(repository).hasDocument(anyLong(), eq(RagRepository.SourceType.NEWS), eq(URL));
+        verify(http, times(1)).get(URI.create(URL));     // a refusal stays: not asked again
     }
 }

@@ -15,12 +15,13 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ---------------------------------------------------------------------
--- ingestion_job: the two RAG ingestion job types
+-- ingestion_job: the two RAG ingestion job types (and ANALYSIS of V1.0.15, which runs after this script)
 -- ---------------------------------------------------------------------
 ALTER TABLE ingestion_job
     DROP CONSTRAINT IF EXISTS ck_ingestion_job_type,
     ADD  CONSTRAINT ck_ingestion_job_type
-        CHECK (job_type IN ('FINANCIAL_STATEMENT', 'PRICE', 'FUNDAMENTALS', 'SCREENING', 'RAG_PDF', 'RAG_NEWS'));
+        CHECK (job_type IN ('FINANCIAL_STATEMENT', 'PRICE', 'FUNDAMENTALS', 'SCREENING', 'RAG_PDF', 'RAG_NEWS',
+                             'ANALYSIS'));
 
 ALTER TABLE ingestion_job
     DROP CONSTRAINT IF EXISTS ck_ingestion_job_file,
@@ -28,7 +29,7 @@ ALTER TABLE ingestion_job
         CHECK (job_type NOT IN ('FINANCIAL_STATEMENT', 'RAG_PDF') OR file_id IS NOT NULL);
 
 COMMENT ON COLUMN ingestion_job.job_type IS
-    'FINANCIAL_STATEMENT = IDX .xlsx upload stored by the AI agent, PRICE = daily price ingestion, FUNDAMENTALS = screening data ETL, SCREENING = AI stock screening, RAG_PDF = PDF document into the RAG vector store, RAG_NEWS = news of a company into the RAG vector store.';
+    'FINANCIAL_STATEMENT = IDX .xlsx upload stored by the AI agent, PRICE = daily price ingestion, FUNDAMENTALS = screening data ETL, SCREENING = AI stock screening, RAG_PDF = PDF document into the RAG vector store, RAG_NEWS = news of a company into the RAG vector store, ANALYSIS = AI analysis of one stock.';
 
 COMMENT ON TABLE ingestion_file IS 'Uploaded files, one row per distinct content: financial statement workbooks (.xlsx) and RAG PDF documents (.pdf).';
 

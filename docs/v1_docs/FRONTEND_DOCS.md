@@ -44,6 +44,7 @@ browser ──> Next.js server (Server Components, Route Handlers /api/...) ─�
 | `GET /api/v1/admin/users`, `/admin/roles`, `/admin/permissions` | Admin Center pages |
 | `GET /api/v1/prices/ingestions`             | Price Ingestion page: configured price provider |
 | `GET /api/v1/rag/status`, `GET /api/v1/rag/documents?source=PDF\|NEWS&limit=10&offset=&tickerPrefix=` | RAG pages: embedding model, news limits, stored documents one page at a time |
+| `GET /api/v1/analyses/options`, `GET /api/v1/analyses?limit=10&offset=0`, `GET /api/v1/analyses/{id}` | Analysis pages: companies with their stored data, saved analyses, report |
 
 The Ingestion pages also call the backend from the browser through Next.js Route Handlers in
 `src/app/api/` (same server-side `NERACA_API_URL`; `forward()` in `src/lib/api.ts` passes status and
@@ -59,6 +60,7 @@ ProblemDetail through; unreachable backend = 503):
 | `/api/admin/users[/{id}[/avatar]]`, `/api/admin/roles[/{id}]`, `/api/admin/permissions` | `/api/v1/admin/...` (method and body passed on by `forwardRequest()`) |
 | `/api/profile`, `/api/profile/avatar`       | `/api/v1/profile`, `/api/v1/profile/avatar`              |
 | `/api/screenings`, `/api/screenings/{id}`, `/api/screenings/{id}/pdf` | `/api/v1/screenings[...]` (list / start, report, PDF download) |
+| `/api/analyses`, `/api/analyses/{id}`, `/api/analyses/{id}/pdf` | `/api/v1/analyses[...]` (page of analyses / start, report, PDF download) |
 | `/api/fundamentals/ingestions`              | `POST /api/v1/fundamentals/ingestions?exchange=&full=` (screening data ETL) |
 | `POST /api/rag/pdf` (multipart: file, exchange, ticker) | `POST /api/v1/rag/pdf` |
 | `POST /api/rag/news` (JSON `{exchange, ticker, from, to}`) | `POST /api/v1/rag/news?exchange=&ticker=&from=&to=` |
@@ -155,7 +157,7 @@ the tabs show the other types or "All". Server side: `components/ingestion/inges
 | News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |
 | Stored documents (RAG)     | badge with stored documents and chunks, ticker filter (tickers starting with it, applied once typing pauses), search box (5 closest chunks with distance, pages or date, link to the article), table: company, document / article (link), pages or published date, chunks, stored; pages as in the jobs table (10 rows, or 5 / 20 / 50; first / previous / next / last); reloaded when a job finishes |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
-| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG), scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
+| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG) / analyses, scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
 | Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency, or RAG pages / chunks / model, or news range, per-source counts and articles not stored), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that
@@ -166,7 +168,13 @@ a new company appears in the ticker list, the latest price date is current and n
 
 ### 3.3a Screening - `/screening`, `/screening/{id}` (`SCREENING`)
 
-Below Companies in the sidebar. The form chooses the stock exchange (IDX), the market cap (large,
+Below Companies in the sidebar, a dropdown like Ingestion and the Admin Center with two pages
+(`lib/screening-sections.ts`): **Screening Stocks** (`/screening`, this section) and **Analysis**
+(`/screening/analysis`, section 3.3b). The sidebar highlights the sub-page with the longest matching
+URL, so `/screening/analysis/{id}` is Analysis, not Screening Stocks; the breadcrumb reads
+"Screening / Screening Stocks" or "Screening / Analysis" (and "/ Report" on a report).
+
+The Screening Stocks form chooses the stock exchange (IDX), the market cap (large,
 mid, small), the top N (1-50) and the investor agents (multi-select checkboxes: Buffett, Munger,
 Lynch, Fisher, Keith Gill, Risk); **Start screening** queues the run and opens its report. The
 saved screenings are listed below (refreshed every 3 s while one runs). The report page polls while
@@ -179,6 +187,30 @@ and **Download PDF**. Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
 The Ingestion page "Screening Data IDX" has the "Screening data" card (runs the ETL); its jobs table opens
 on the ETL runs (tab "Screening data"), and every Ingestion page lists them and the screenings under the
 tabs "Screening data" and "Screenings".
+
+### 3.3b Analysis - `/screening/analysis`, `/screening/analysis/{id}` (`SCREENING`)
+
+An in-depth AI analysis of one stock ([ANALYSIS_DOCS.md](ANALYSIS_DOCS.md)). The form
+(`components/analysis/analysis-form.tsx`) chooses the stock (ticker dropdown over the companies table)
+and shows what the database holds for it: reporting periods (latest), Yahoo Finance market data (date),
+PDF documents and news articles, each missing one with the Ingestion page that adds it; then the
+investor agents (all six checked by default). **Start analysis** queues it and opens its report (a
+stock already being analysed opens that analysis). The saved analyses are listed below
+(`analyses-table.tsx`: stock, status and stage, overall score and verdict, conviction, cost and tokens,
+requested; 10 per page, 5 / 10 / 20 / 50, refreshed every 3 s while one runs).
+
+The report (`analysis-report.tsx`) polls every 3 s while the analysis runs, then shows: status and
+stage, tiles (overall score with verdict and quantitative overall, AI cost against the budget, tokens,
+duration), the executive summary (conviction, thesis, bull and bear case, key risks, what to monitor,
+data gaps, the synthesis adjustment and its reason), every investor agent (`components/screening/
+agent-card.tsx`, shared with the screening), the research brief (business, moat, management, growth,
+catalysts and risks, news, evidence with refs; the excerpts read with their pages or dates and the
+ReAct steps in collapsible lists), key figures of the stored periods (`lib/analysis.ts`; rows without any
+value are hidden, e.g. gross margin of a bank) with the latest valuation, the data the agents used,
+notes and Reflexion lessons, token usage (`components/screening/usage-table.tsx`, shared) and
+**Download PDF** (`download-pdf-button.tsx`, shared).
+
+The Ingestion jobs table lists analyses under the tab "Analyses"; their job detail links to the report.
 
 ### 3.4 Login - `/login`
 
@@ -233,6 +265,8 @@ frontend/
     │   │   ├── companies/page.tsx         page 1 (+ loading.tsx)
     │   │   ├── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
     │   │   ├── ingestion/xbrl, prices, screening-data, rag-pdf, rag-news/page.tsx   page 3 (+ loading.tsx; ingestion/page.tsx redirects)
+    │   │   ├── screening/page.tsx, screening/[id]/page.tsx   Screening Stocks and its reports
+    │   │   ├── screening/analysis/page.tsx, screening/analysis/[id]/page.tsx   Analysis and its reports
     │   │   ├── admin/users/page.tsx, admin/roles/page.tsx   Admin Center (admin/page.tsx redirects)
     │   │   └── profile/page.tsx           own profile
     │   ├── login/page.tsx                 login (outside the dashboard layout)
@@ -242,6 +276,8 @@ frontend/
     │   ├── companies/                     company list client component
     │   ├── company/                       detail view, header, overview, statement tables, panels
     │   ├── ingestion/                     page (server) and page client, upload / price / screening data / RAG PDF / RAG news cards, company picker, RAG documents card, jobs table, job detail sheet, download button
+    │   ├── screening/                     screening form, runs table, report, ranking, candidate sheet, agent card, usage table, PDF button
+    │   ├── analysis/                      analysis form, analyses table, analysis report
     │   ├── admin/                         users / roles pages, user and role sheets, delete confirmation
     │   ├── auth/, profile/                login form, profile page
     │   └── app-sidebar, dynamic-breadcrumb, empty-state, stat-tile, api-error-state, ...

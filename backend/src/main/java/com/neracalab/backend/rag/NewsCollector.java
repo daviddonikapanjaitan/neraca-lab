@@ -160,9 +160,10 @@ public class NewsCollector {
         return all;
     }
 
-    /** A page's HTML; "" for HTTP 404 (no such tag page). */
+    /** A page's HTML; "" for HTTP 404 (no such tag page). A passing failure (timeout, 429, 5xx) is retried. */
     String page(String url) {
-        NewsHttpClient.Page page = http.get(URI.create(url));
+        NewsHttpClient.Page page = NewsRetry.get(http, URI.create(url), properties.newsRetries(),
+                properties.newsRetryBackoff(), false);
         if (page.status() == 404) {
             return "";
         }

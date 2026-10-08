@@ -61,8 +61,14 @@ class ScreeningAgentsTest {
     /** Answers the queued replies in order and records every prompt. */
     static final class ScriptedModel implements ChatModel {
         final Deque<AssistantMessage> replies = new ArrayDeque<>();
+        final Deque<RuntimeException> failures = new ArrayDeque<>();
         final List<Prompt> prompts = new ArrayList<>();
         Double cost = 0.0005;
+
+        ScriptedModel fail(RuntimeException e) {
+            failures.add(e);
+            return this;
+        }
 
         ScriptedModel reply(String text) {
             replies.add(new AssistantMessage(text));
@@ -79,6 +85,10 @@ class ScreeningAgentsTest {
         @Override
         public synchronized ChatResponse call(Prompt prompt) {
             prompts.add(prompt);
+            RuntimeException failure = failures.poll();
+            if (failure != null) {
+                throw failure;
+            }
             AssistantMessage message = replies.poll();
             if (message == null) {
                 throw new IllegalStateException("no scripted reply left");
@@ -113,7 +123,7 @@ class ScreeningAgentsTest {
         assertThat(options.getModel()).isEqualTo("deepseek/deepseek-v4-flash-0731");
         assertThat(options.getMaxTokens()).isEqualTo(300);
         assertThat(options.getExtraBody()).containsEntry("reasoning", Map.of("enabled", false))
-                .containsEntry("provider", Map.of("sort", "price"))
+                .containsEntry("provider", Map.of("sort", "price", "ignore", List.of("OpenInference")))
                 .containsEntry("response_format", Map.of("type", "json_object"));
         assertThat(usages).singleElement().satisfies(u -> {
             assertThat(u.costUsd()).isEqualTo(0.0005);
@@ -122,6 +132,62 @@ class ScreeningAgentsTest {
             assertThat(u.agent()).isEqualTo("BUFFETT");
         });
         assertThat(meter.spentUsd()).isEqualTo(0.0005);
+    }
+
+    @Test
+    void aStreamResetIsRetriedAndEveryAttemptRecorded() {
+        // HRTA, 2026-10-08: OpenRouter reset responses still streaming after 60 s; the agent lost its answer
+        ScriptedModel model = new ScriptedModel()
+                .fail(new IllegalStateException("call failed", new java.io.IOException("stream was reset: CANCEL")))
+                .reply("{\"ok\":true}");
+        List<UsageMeter.Usage> usages = new ArrayList<>();
+        LlmGateway.Reply reply = new LlmGateway(model, properties).worker(meter(1, usages),
+                new LlmGateway.Purpose("AGENT", "MUNGER", "HRTA"), "deepseek/deepseek-v4-flash-0731",
+                List.of(new org.springframework.ai.chat.messages.UserMessage("x")), List.of(), 300);
+
+        assertThat(reply.text()).isEqualTo("{\"ok\":true}");
+        assertThat(model.prompts).hasSize(2);
+        assertThat(usages).hasSize(2);
+        assertThat(usages.get(0).error()).isEqualTo("stream was reset: CANCEL");
+        assertThat(usages.get(1).error()).isNull();
+    }
+
+    @Test
+    void transientFailuresStopAfterTheRetriesAndOtherFailuresAreNotRetried() {
+        ScriptedModel resets = new ScriptedModel();
+        for (int i = 0; i < 3; i++) {
+            resets.fail(new IllegalStateException("x", new java.io.IOException("stream was reset: CANCEL")));
+        }
+        LlmGateway gateway = new LlmGateway(resets, properties);
+        List<org.springframework.ai.chat.messages.Message> x = List.of(new org.springframework.ai.chat.messages.UserMessage("x"));
+        assertThatThrownBy(() -> gateway.worker(meter(1, new ArrayList<>()), new LlmGateway.Purpose("AGENT", "GILL", "HRTA"),
+                "deepseek/deepseek-v4-flash-0731", x, List.of(), 300))
+                .isInstanceOf(LlmGateway.LlmException.class).hasMessageContaining("(3 attempts)");
+        assertThat(resets.prompts).hasSize(3);           // the first call and model-retries (2) more
+
+        ScriptedModel refused = new ScriptedModel().fail(new IllegalArgumentException("invalid model id"));
+        assertThatThrownBy(() -> new LlmGateway(refused, properties).worker(meter(1, new ArrayList<>()),
+                new LlmGateway.Purpose("AGENT", "GILL", "HRTA"), "deepseek/deepseek-v4-flash-0731", x, List.of(), 300))
+                .isInstanceOf(LlmGateway.LlmException.class).hasMessageNotContaining("attempts");
+        assertThat(refused.prompts).hasSize(1);
+    }
+
+    @Test
+    void anAnswerWithoutStrengthsAndConcernsIsAskedAgain() {
+        // HRTA, 2026-10-08: a degraded provider wrote other keys (e.g. "valuation") and no strengths or concerns
+        ScriptedModel model = new ScriptedModel()
+                .reply("{\"score\":22,\"verdict\":\"REJECT\",\"thesis\":\"Thin margins\",\"valuation\":{\"pe\":7.2}}")
+                .reply("{\"score\":35,\"verdict\":\"WEAK\",\"thesis\":\"Thin margins\",\"strengths\":[\"High ROE\"],"
+                        + "\"concerns\":[\"Gross margin 3.8%\"],\"metricsUsed\":[\"roe\"]}");
+        InvestorPanel panel = new InvestorPanel(new LlmGateway(model, properties), properties, mapper);
+        StockProfile p = profile(0.15, 0.5, 1.0);
+        InvestorPanel.Outcome o = panel.assess(meter(1, new ArrayList<>()), "HRTA", "STOCK DATA {}", InvestorAgent.MUNGER,
+                QuantScorer.score(InvestorAgent.MUNGER, p), p, List.of());
+
+        assertThat(o.original().score()).isEqualTo(35.0);
+        assertThat(o.original().strengths()).containsExactly("High ROE");
+        List<Message> retry = model.prompts.get(1).getInstructions();
+        assertThat(retry.getLast().getText()).startsWith("Your answer was not usable: the reply has no strengths and no concerns");
     }
 
     @Test
@@ -219,7 +285,7 @@ class ScreeningAgentsTest {
 
     @Test
     void invalidJsonIsRetriedOnceWithFeedback() {
-        ScriptedModel model = new ScriptedModel().reply("I think it is good").reply("{\"score\":61,\"verdict\":\"NEUTRAL\",\"thesis\":\"ok\"}");
+        ScriptedModel model = new ScriptedModel().reply("I think it is good").reply("{\"score\":61,\"verdict\":\"NEUTRAL\",\"thesis\":\"ok\",\"strengths\":[\"brand\"]}");
         InvestorPanel panel = new InvestorPanel(new LlmGateway(model, properties), properties, mapper);
         StockProfile p = profile(0.15, 0.5, 1.0);
         InvestorPanel.Outcome o = panel.assess(meter(1, new ArrayList<>()), "OK", "STOCK DATA {}", InvestorAgent.MUNGER,
@@ -227,7 +293,8 @@ class ScreeningAgentsTest {
         assertThat(o.original().score()).isEqualTo(61.0);
         assertThat(model.prompts).hasSize(2);
         List<Message> retry = model.prompts.get(1).getInstructions();
-        assertThat(retry.get(retry.size() - 1).getText()).startsWith("Your answer was not usable");
+        assertThat(retry.get(retry.size() - 1).getText()).startsWith("Your answer was not usable: the reply contains no JSON object");
+        assertThat(retry).noneMatch(m -> m instanceof AssistantMessage);     // the unusable reply is not sent back
         assertThat(model.prompts.get(0).getInstructions().get(2).getText()).contains("lesson one").contains("PERSONA: Charlie Munger");
     }
 
@@ -295,6 +362,11 @@ class ScreeningAgentsTest {
         assertThat(s.stocks().get(0).conviction()).isEqualTo("HIGH");
         assertThat(s.stocks().get(1).conviction()).isEqualTo("MEDIUM");   // filled in from the score
         assertThat(s.stocks().get(1).adjustment()).isZero();
+
+        // a stock without a conviction gets one from its score (no exception)
+        Synthesis missing = SynthesisAgent.normalize(new Synthesis("S", List.of(), List.of(
+                new SynthesisAgent.StockView("AAAA", null, null, null, null)), null, null), rows, "m");
+        assertThat(missing.stocks().get(0).conviction()).isEqualTo("HIGH");
     }
 
     @Test

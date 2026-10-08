@@ -14,5 +14,7 @@ public enum IngestionJobType {
     /** PDF document of a company into the RAG vector store (text chunks with embeddings) */
     RAG_PDF,
     /** news of a company within a date range into the RAG vector store */
-    RAG_NEWS
+    RAG_NEWS,
+    /** AI analysis of one stock: research agent over its stored documents, investor agents, synthesis, report */
+    ANALYSIS
 }

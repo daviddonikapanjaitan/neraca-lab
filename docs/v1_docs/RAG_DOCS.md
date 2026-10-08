@@ -83,8 +83,14 @@ News request (company, from, to) -> RAG_NEWS job
 - Headlines are de-duplicated by URL, sorted newest first; at most `news-max-articles` (60) are read
   per job. A headline without a date is kept until its article is read, then dated from the article
   (and dropped when it falls outside the range).
-- An article whose site refuses our request (e.g. HTTP 403) is `FAILED`, one without article text
-  `NO_TEXT`; the job is then `INCOMPLETE`.
+- Passing failures are retried (`NewsRetry`): a network error or timeout, HTTP 408, 425, 429, 500,
+  502, 503 or 504, and for an article also 404, up to `news-retries` (3) more times after 2 s, 4 s
+  and 8 s (`news-retry-backoff`). The BNGA job of 2026-10-08 lost two articles to a single IDX
+  Channel 404 and a single EmitenNews connect timeout; both pages answered normally a moment later.
+  A tag page answering 404 does not exist and is not asked again.
+- An article whose site still fails after the retries (`FAILED: ... answered HTTP 404 (4 attempts)`)
+  or refuses our request (HTTP 403, not retried) is `FAILED`, one without article text `NO_TEXT`;
+  the job is then `INCOMPLETE`. Running the same range again reads only the articles not stored.
 - An article already stored for the company is skipped (`ALREADY_STORED`), so running a range again
   only adds new articles. The text embedded is title + lead + body (up to 30,000 characters).
 - The sites are read through the screening's polite HTTP client (one request at a time per site,
@@ -144,6 +150,8 @@ Column-level reference: `DB_SCHEMA_DOCS.md`.
 | `news-max-pages`       | 10                               | tag pages per site walked back |
 | `news-max-articles`    | 60                               | articles read per news job |
 | `article-chars`        | 30000                            | longest article text kept |
+| `news-retries`         | 3                                | more attempts at a news page after a passing failure |
+| `news-retry-backoff`   | 2s                               | pause before the first retry, doubled for each further one |
 
 Changing the embedding model makes old and new vectors incomparable: ingest the documents again.
 
@@ -159,7 +167,8 @@ thread, `SerialJobWorker`), `RagIngestionService`, `PdfText`, `TextChunker`, `Em
 | `EmbeddingClientTest` | response parsing (order, count, dimensions, errors), missing key, vector text form |
 | `PdfTextTest` | the HRTA FY2025 PDF page by page and its chunks; non-PDF and text-less PDF rejected |
 | `NewsCollectorTest` | Jakarta-time range, walking older pages until the range start, Investor.id page numbers, only the four news sites read (saved pages, no network) |
-| `RagNewsIngestionTest` | an article read from its site is stored; one whose site answers 403 fails without stopping the job |
+| `RagNewsIngestionTest` | an article read from its site is stored; a momentary 404 is retried and stored; a lasting 404 fails after 4 attempts, a 403 at once, without stopping the job |
+| `NewsRetryTest` | which failures are retried (timeout, 404 of an article, 5xx) and which not (403, 404 of a tag page), the attempt limit, the growing pause, interruption |
 | `RagRepositoryTest` | store, cosine search with filters, replace on re-ingest, news keyed by URL, cascade (real database, rolled back) |
 | `RagControllerTest` | a PDF through the worker into the store and back by search (stub embeddings, cleaned up), validation errors, status, permission |
 | `IngestionJobTypeConstraintTest` | `V1.0.10` and `V1.0.14` re-create `ck_ingestion_job_type` on every start; both must list every job type (a narrower list stops the application once a RAG job is stored) |

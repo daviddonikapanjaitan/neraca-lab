@@ -10,6 +10,8 @@ import com.neracalab.backend.screening.quant.StockProfile;
 /**
  * Reflection, step 1: checks an investor agent's assessment against the data, without a model.
  * Each issue has a code (aggregated into Reflexion lessons) and a message (sent to the critic).
+ * Without a quantitative score or metrics (a single-stock analysis without market data) the checks that need
+ * them are skipped.
  * <ul>
  *   <li>DIVERGENCE: the score is far from the quantitative scorecard</li>
  *   <li>VERDICT: the verdict does not match the score band</li>
@@ -31,13 +33,22 @@ public final class ReflectionValidator {
 
     public static List<Issue> validate(InvestorAgent agent, Assessment a, double quantScore, StockProfile p,
                                        Set<String> metricKeys) {
+        return validate(agent, a, Double.valueOf(quantScore), p, metricKeys);
+    }
+
+    /**
+     * @param quantScore the quantitative score (null: none, no divergence check)
+     * @param p          the stock's metrics (null: none, no philosophy rules)
+     */
+    public static List<Issue> validate(InvestorAgent agent, Assessment a, Double quantScore, StockProfile p,
+                                       Set<String> metricKeys) {
         List<Issue> issues = new ArrayList<>();
         if (a.score() == null) {
             issues.add(new Issue("EMPTY", "No score was given"));
             return issues;
         }
         double s = a.score();
-        if (Math.abs(s - quantScore) > MAX_DIVERGENCE) {
+        if (quantScore != null && Math.abs(s - quantScore) > MAX_DIVERGENCE) {
             issues.add(new Issue("DIVERGENCE", "Score " + fmt(s) + " is " + fmt(Math.abs(s - quantScore))
                     + " points from the quantitative score " + fmt(quantScore) + "; justify it from the data or move closer"));
         }
@@ -46,7 +57,7 @@ public final class ReflectionValidator {
             issues.add(new Issue("VERDICT", "Verdict " + a.verdict() + " does not match score " + fmt(s) + " (bands: "
                     + ScreeningPrompts.VERDICTS + ")"));
         }
-        String rule = rule(agent, s, p);
+        String rule = p == null ? null : rule(agent, s, p);
         if (rule != null) {
             issues.add(new Issue("RULE", rule));
         }

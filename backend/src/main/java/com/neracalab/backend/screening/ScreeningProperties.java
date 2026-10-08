@@ -86,10 +86,17 @@ public record ScreeningProperties(
      * @param synthesisEffort reasoning effort of the synthesis model (low keeps it cheap)
      * @param providerSort   OpenRouter provider routing of the agent / research calls ({@code price}: the
      *                       cheapest provider; empty: OpenRouter's default)
+     * @param providerIgnore OpenRouter providers never used for the agent / research calls. Default
+     *                       {@code OpenInference}: the cheapest DeepSeek endpoint (fp4), whose answers to the analysis
+     *                       dossier ran in loops to the output limit for over 60 s, ignored the persona and the
+     *                       requested JSON keys (2026-10-08, HRTA), while every other endpoint answered in 3-6 s
      * @param concurrency    model calls in flight at once
      * @param researchIterations most model turns of the research agent per stock (ReAct loop guard)
      * @param agentMaxTokens output limit of one investor assessment
      * @param synthesisMaxTokens output limit of the synthesis (thinking included)
+     * @param modelRetries   more attempts at a model call that failed transiently (stream reset, timeout, network
+     *                       error, HTTP 408 / 429 / 5xx); OpenRouter resets a response still streaming after 60 s
+     * @param retryBackoff   pause before the first retry, doubled for each further one
      * @param prices         USD per million tokens per model, used only when OpenRouter reports no cost
      *                       for a call (default: the OpenRouter list prices of the default models)
      */
@@ -98,10 +105,13 @@ public record ScreeningProperties(
                       @DefaultValue("anthropic/claude-opus-5.5") String synthesisModel,
                       @DefaultValue("low") String synthesisEffort,
                       @DefaultValue("price") String providerSort,
+                      @DefaultValue("OpenInference") List<String> providerIgnore,
                       @DefaultValue("8") int concurrency,
                       @DefaultValue("3") int researchIterations,
                       @DefaultValue("450") int agentMaxTokens,
                       @DefaultValue("12000") int synthesisMaxTokens,
+                      @DefaultValue("2") int modelRetries,
+                      @DefaultValue("2s") Duration retryBackoff,
                       List<ModelPrice> prices) {
 
         public Llm {
@@ -112,6 +122,11 @@ public record ScreeningProperties(
             if (concurrency < 1 || researchIterations < 1) {
                 throw new IllegalArgumentException("neracalab.screening.llm: concurrency and research-iterations must be >= 1");
             }
+            if (modelRetries < 0 || retryBackoff == null || retryBackoff.isNegative()) {
+                throw new IllegalArgumentException("neracalab.screening.llm: model-retries and retry-backoff must be >= 0");
+            }
+            providerIgnore = providerIgnore == null ? List.of()
+                    : providerIgnore.stream().filter(p -> p != null && !p.isBlank()).map(String::trim).toList();
         }
 
         /** Price of a model; an unknown model is priced like Opus (conservative). */

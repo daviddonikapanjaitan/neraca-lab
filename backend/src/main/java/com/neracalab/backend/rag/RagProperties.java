@@ -1,5 +1,7 @@
 package com.neracalab.backend.rag;
 
+import java.time.Duration;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -14,6 +16,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param newsMaxPages        tag pages per news site walked back to reach the start of the date range
  * @param newsMaxArticles     articles read and stored per news ingestion
  * @param articleChars        longest article text kept
+ * @param newsRetries         more attempts at a news page after a passing failure (network error, timeout, 429,
+ *                            5xx; 404 for an article), see {@link NewsRetry}
+ * @param newsRetryBackoff    pause before the first retry, doubled for each further one
  */
 @ConfigurationProperties("neracalab.rag")
 public record RagProperties(
@@ -24,7 +29,9 @@ public record RagProperties(
         @DefaultValue("200") int chunkOverlap,
         @DefaultValue("10") int newsMaxPages,
         @DefaultValue("60") int newsMaxArticles,
-        @DefaultValue("30000") int articleChars) {
+        @DefaultValue("30000") int articleChars,
+        @DefaultValue("3") int newsRetries,
+        @DefaultValue("2s") Duration newsRetryBackoff) {
 
     /** The dimensions of {@code rag_chunk.embedding}. */
     public static final int STORE_DIMENSIONS = 1536;

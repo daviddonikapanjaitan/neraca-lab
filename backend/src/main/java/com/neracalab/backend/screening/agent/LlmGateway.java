@@ -20,6 +20,8 @@ import org.springframework.stereotype.Component;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.ScreeningProperties.ModelPrice;
 import com.openai.core.JsonValue;
+import com.openai.errors.OpenAIIoException;
+import com.openai.errors.OpenAIServiceException;
 import com.openai.models.completions.CompletionUsage;
 
 /**
@@ -27,12 +29,13 @@ import com.openai.models.completions.CompletionUsage;
  * per-model options and records tokens and cost in the run's {@link UsageMeter}:
  * <ul>
  *   <li>DeepSeek (research, investor agents, critic): reasoning switched off (its reasoning tokens
- *       are billed as output), OpenRouter routed to the cheapest provider, low temperature, JSON
- *       replies where no tools are offered</li>
+ *       are billed as output), OpenRouter routed to the cheapest provider except the ignored ones
+ *       ({@code provider-ignore}), low temperature, JSON replies where no tools are offered</li>
  *   <li>Opus (synthesis): reasoning effort {@code low}, no sampling parameters (Opus 5.5 takes none)</li>
  * </ul>
  * The cost is the one OpenRouter reports ({@code usage.cost}); without it, it is estimated from
- * {@code neracalab.screening.llm.prices}.
+ * {@code neracalab.screening.llm.prices}. A call that fails transiently (stream reset, timeout, network error,
+ * HTTP 408 / 429 / 5xx) is retried {@code model-retries} times; every attempt is recorded.
  */
 @Component
 public class LlmGateway {
@@ -76,8 +79,9 @@ public class LlmGateway {
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("reasoning", Map.of("enabled", false));
         extra.put("usage", Map.of("include", true));
-        if (properties.providerSort() != null && !properties.providerSort().isBlank()) {
-            extra.put("provider", Map.of("sort", properties.providerSort()));
+        Map<String, Object> provider = provider(properties);
+        if (!provider.isEmpty()) {
+            extra.put("provider", provider);
         }
         if (tools.isEmpty()) {
             extra.put("response_format", Map.of("type", "json_object"));
@@ -107,19 +111,67 @@ public class LlmGateway {
         return call(meter, purpose, model, messages, options);
     }
 
-    private Reply call(UsageMeter meter, Purpose purpose, String model, List<Message> messages, OpenAiChatOptions options) {
-        long start = System.nanoTime();
-        ChatResponse response;
-        try {
-            response = chatModel.call(new Prompt(messages, options));
-        } catch (RuntimeException e) {
-            long ms = (System.nanoTime() - start) / 1_000_000;
-            String message = rootMessage(e);
-            meter.record(new UsageMeter.Usage(purpose.stage(), purpose.agent(), purpose.ticker(), model, 0, 0, 0, 0,
-                    0, false, ms, message.length() > 500 ? message.substring(0, 500) : message));
-            throw new LlmException("Model call failed (" + model + "): " + message, e);
+    /** OpenRouter provider routing of the worker calls: sort and ignored providers (empty: OpenRouter's default). */
+    static Map<String, Object> provider(ScreeningProperties.Llm properties) {
+        Map<String, Object> provider = new LinkedHashMap<>();
+        if (properties.providerSort() != null && !properties.providerSort().isBlank()) {
+            provider.put("sort", properties.providerSort());
         }
-        long ms = (System.nanoTime() - start) / 1_000_000;
+        if (!properties.providerIgnore().isEmpty()) {
+            provider.put("ignore", properties.providerIgnore());
+        }
+        return provider;
+    }
+
+    private Reply call(UsageMeter meter, Purpose purpose, String model, List<Message> messages, OpenAiChatOptions options) {
+        for (int attempt = 0; ; attempt++) {
+            long start = System.nanoTime();
+            ChatResponse response;
+            try {
+                response = chatModel.call(new Prompt(messages, options));
+            } catch (RuntimeException e) {
+                long ms = (System.nanoTime() - start) / 1_000_000;
+                String message = rootMessage(e);
+                meter.record(new UsageMeter.Usage(purpose.stage(), purpose.agent(), purpose.ticker(), model, 0, 0, 0, 0,
+                        0, false, ms, message.length() > 500 ? message.substring(0, 500) : message));
+                if (attempt >= properties.modelRetries() || !isTransient(e)) {
+                    throw new LlmException("Model call failed (" + model + "): " + message
+                            + (attempt > 0 ? " (" + (attempt + 1) + " attempts)" : ""), e);
+                }
+                long pause = properties.retryBackoff().toMillis() << attempt;
+                log.warn("{} {} {}: model call failed transiently ({}), retry {} of {} in {} ms", purpose.stage(),
+                        purpose.agent(), purpose.ticker(), message, attempt + 1, properties.modelRetries(), pause);
+                try {
+                    Thread.sleep(pause);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new LlmException("Model call failed (" + model + "): " + message, e);
+                }
+                continue;
+            }
+            long ms = (System.nanoTime() - start) / 1_000_000;
+            return reply(meter, purpose, model, response, ms);
+        }
+    }
+
+    /**
+     * Whether a failed call is worth repeating: an I/O error anywhere in the cause chain (stream reset, timeout,
+     * dropped connection) or HTTP 408 / 429 / 5xx. A bad request or an authentication error is not.
+     */
+    static boolean isTransient(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.io.IOException || t instanceof OpenAIIoException) {
+                return true;
+            }
+            if (t instanceof OpenAIServiceException service) {
+                int status = service.statusCode();
+                return status == 408 || status == 429 || status >= 500;
+            }
+        }
+        return false;
+    }
+
+    private Reply reply(UsageMeter meter, Purpose purpose, String model, ChatResponse response, long ms) {
         UsageMeter.Usage usage = usage(purpose, model, response, ms);
         meter.record(usage);
         if (response.getResult() == null || response.getResult().getOutput() == null) {
@@ -174,7 +226,8 @@ public class LlmGateway {
         }
     }
 
-    static String rootMessage(Throwable e) {
+    /** The message of the innermost cause (what the provider or tool actually said). */
+    public static String rootMessage(Throwable e) {
         Throwable t = e;
         while (t.getCause() != null && t.getCause() != t) {
             t = t.getCause();

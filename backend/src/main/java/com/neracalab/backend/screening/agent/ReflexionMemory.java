@@ -50,6 +50,14 @@ public class ReflexionMemory {
      * @param issues per agent, every issue found in the run
      */
     public List<Learned> learn(UUID runId, Map<InvestorAgent, List<Issue>> issues) {
+        return learn(runId, issues, MIN_OCCURRENCES);
+    }
+
+    /**
+     * Derives lessons from the issues found in a run; a kind of issue becomes a lesson once an agent repeated it
+     * {@code minOccurrences} times (a single-stock analysis gives each agent one answer: 1).
+     */
+    public List<Learned> learn(UUID runId, Map<InvestorAgent, List<Issue>> issues, int minOccurrences) {
         List<Learned> learned = new ArrayList<>();
         for (Map.Entry<InvestorAgent, List<Issue>> e : issues.entrySet()) {
             Map<String, Integer> counts = new LinkedHashMap<>();
@@ -57,7 +65,7 @@ public class ReflexionMemory {
                 counts.merge(issue.code(), 1, Integer::sum);
             }
             for (Map.Entry<String, Integer> c : counts.entrySet()) {
-                if (c.getValue() < MIN_OCCURRENCES) {
+                if (c.getValue() < minOccurrences) {
                     continue;
                 }
                 String lesson = lesson(e.getKey(), c.getKey());

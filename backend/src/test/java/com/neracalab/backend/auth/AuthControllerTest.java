@@ -138,7 +138,7 @@ class AuthControllerTest {
         for (String path : new String[] {"/api/v1/auth/me", "/api/v1/exchanges", "/api/v1/companies",
                 "/api/v1/companies/IDX/HRTA", "/api/v1/ingestions", "/api/v1/prices/ingestions",
                 "/api/v1/admin/users", "/api/v1/admin/roles", "/api/v1/admin/permissions", "/api/v1/profile",
-                "/api/v1/profile/avatar"}) {
+                "/api/v1/profile/avatar", "/api/v1/analyses", "/api/v1/analyses/options"}) {
             mvc.perform(get(path))
                     .andExpect(status().isUnauthorized())
                     .andExpect(header().string("WWW-Authenticate", "Bearer"))
