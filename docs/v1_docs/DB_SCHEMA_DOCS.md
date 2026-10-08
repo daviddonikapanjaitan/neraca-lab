@@ -18,6 +18,8 @@ foreign key.
 | `V1.0.10__schema_screening.sql`           | AI stock screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage (section 4.11) |
 | `V1.0.11__schema_fx.sql`                  | `fx_rate_daily`: ECB reference rates that convert listings quoted in another currency (section 4.10) |
 | `V1.0.14__schema_rag.sql`                 | RAG vector store: `vector` extension, `rag_document`, `rag_chunk`; job types `RAG_PDF`, `RAG_NEWS` (section 4.12) |
+| `V1.0.15__schema_analysis.sql`            | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id` (section 4.13) |
+| `V1.0.16__schema_syirkah.sql`             | `balance_sheet.temporary_syirkah_funds`: banks' sharia depositor funds, neither liabilities nor equity (section 3) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -297,7 +299,8 @@ Statement of financial position at `reporting_period.period_end`. All amounts `N
 | `accounts_payable`         |                   |                                                                                                 |
 | `deferred_revenue`         |                   | Contract liabilities / advances received from customers                                         |
 | `current_liabilities`      |                   |                                                                                                 |
-| `total_liabilities`        |                   |                                                                                                 |
+| `total_liabilities`        |                   | "Total liabilities" as filed (banks: without temporary syirkah funds)                           |
+| `temporary_syirkah_funds`  |                   | Banks with a sharia unit: temporary syirkah funds (neither liabilities nor equity under PSAK); total assets = total_liabilities + this + total_equity; NULL otherwise (`V1.0.16`) |
 | `short_term_debt`          |                   | Interest-bearing debt due within 12 months (incl. current maturities), excl. leases             |
 | `long_term_debt`           |                   | Interest-bearing debt due after 12 months (bank loans, bonds, financing payables), excl. leases |
 | `lease_liabilities`        |                   | Current + non-current lease liabilities                                                         |
@@ -558,7 +561,7 @@ Bookkeeping of the ingestions; only `rag_document.file_id` references `ingestion
 |                  | `checksum_sha256`              | CHAR(64)     | lower-case hex, **unique**: one row per content                                 |
 |                  | `content`                      | BYTEA        | the file bytes (`.xlsx` workbook or RAG `.pdf`)                                 |
 | `ingestion_job`  | `job_id`                       | UUID PK      |                                                                                 |
-|                  | `job_type`                     | VARCHAR(30)  | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS` |
+|                  | `job_type`                     | VARCHAR(30)  | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`, `ANALYSIS` |
 |                  | `status`                       | VARCHAR(30)  | `QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `INCOMPLETE`, `FAILED`  |
 |                  | `stage`                        | VARCHAR(500) | current step, or summary of a finished job                                      |
 |                  | `exchange`, `ticker`           | VARCHAR      | company of the job (upload: once the workbook is read)                          |
@@ -625,7 +628,7 @@ Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)
 | `screening_candidate`   | Stage 1 shortlist of a run: metrics, quantitative score, news, overall score, rank, selected, thesis |
 | `screening_agent_score` | per candidate and agent: quantitative / AI / final score, verdict, reasoning, reflection         |
 | `screening_lesson`      | Reflexion memory: lessons per agent with their occurrence count                                  |
-| `llm_usage`             | every model call of a run: tokens, cost, duration, error                                         |
+| `llm_usage`             | every model call of a run (`run_id`) or an analysis (`analysis_id`, section 4.13): tokens, cost, duration, error |
 
 The script also widens `ck_role_permissions_permission` (`SCREENING`) and `ck_ingestion_job_type`
 (`FUNDAMENTALS`, `SCREENING`). Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
@@ -661,6 +664,34 @@ company deletes its documents and chunks). Full description: [RAG_DOCS.md](RAG_D
 Indexes: `ix_rag_document_company` (`company_id, source_type, published_at DESC`),
 `ix_rag_chunk_company`, `ix_rag_chunk_embedding` (HNSW, `vector_cosine_ops`). Storing a document again (same
 file or URL for the same company) updates its row and replaces all its chunks in one transaction.
+
+### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)
+
+One analysis of one company (Screening > Analysis). Full description: [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md).
+
+| Table                  | Column                         | Type          | Notes                                                                  |
+|------------------------|--------------------------------|---------------|------------------------------------------------------------------------|
+| `analysis_run`         | `analysis_id`                  | UUID PK FK    | = `ingestion_job.job_id` (job type `ANALYSIS`), `ON DELETE CASCADE`     |
+|                        | `company_id`                   | BIGINT FK     | `company`, `ON DELETE CASCADE`                                          |
+|                        | `exchange`, `ticker`, `company_name` | VARCHAR | the company when the analysis was requested                           |
+|                        | `agents`                       | JSONB         | the investor agents, e.g. `["BUFFETT", ..., "RISK"]`                    |
+|                        | `budget_usd`                   | NUMERIC(12,6) | cost cap (`neracalab.analysis.budget-usd`)                              |
+|                        | `market_data_date`             | DATE          | the Yahoo Finance snapshot used (NULL: none)                            |
+|                        | `quant_overall`, `overall_score`, `synthesis_adjustment` | NUMERIC(7,3) | overall of the scorecards alone; overall after the synthesis adjustment (at most +-5) |
+|                        | `verdict`, `conviction`        | VARCHAR       | band of the overall score (`STRONG_FIT` .. `REJECT`); `HIGH`, `MEDIUM`, `LOW` (checks) |
+|                        | `context`, `research`, `synthesis`, `notes` | JSONB | what the agents saw (fact sheet, market data, documents); research brief, ReAct steps and retrieved excerpts; synthesis; messages, lessons, budget |
+|                        | `cost_usd`, `*_tokens`, `model_calls` | NUMERIC / BIGINT / INTEGER | totals of the analysis                              |
+| `analysis_agent_score` | `score_id`                     | BIGSERIAL PK  |                                                                        |
+|                        | `analysis_id`                  | UUID FK       | `analysis_run`, `ON DELETE CASCADE`; **unique** with `agent`            |
+|                        | `agent`                        | VARCHAR(20)   | `BUFFETT`, `MUNGER`, `LYNCH`, `FISHER`, `GILL`, `RISK` (check)          |
+|                        | `quant_score`, `quant_detail`  | NUMERIC, JSONB | quantitative score and scorecard (NULL without market data)           |
+|                        | `llm_score`, `final_score`     | NUMERIC       | AI score; blend with the quantitative score (AI alone without it)       |
+|                        | `verdict`, `thesis`, `strengths`, `concerns`, `reflection` | | the agent's view and its Reflection review               |
+|                        | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `QUANT_ONLY`, `NO_SCORE` (check)                  |
+| `llm_usage`            | `analysis_id`                  | UUID FK       | the analysis of a model call (`run_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_analysis` |
+
+Index `ix_analysis_run_company`. Lessons learned by the analyses go to `screening_lesson` (Reflexion memory
+shared with the screening).
 
 ## 5. Views (`V1.0.3__views.sql`)
 

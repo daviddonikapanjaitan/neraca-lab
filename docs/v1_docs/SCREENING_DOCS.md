@@ -27,8 +27,10 @@ is saved in the database, shown on the Screening page and downloadable as PDF.
 
 ## 1. Using it
 
-Frontend: **Screening** in the sidebar (below Companies), permission `SCREENING` (the built-in
-Administrator role has it; give it to other roles in Role Management).
+Frontend: **Screening > Screening Stocks** in the sidebar (below Companies; the Screening entry is a
+dropdown with Screening Stocks and Analysis), permission `SCREENING` (the built-in Administrator role
+has it; give it to other roles in Role Management). The in-depth analysis of one stock (Screening >
+Analysis) reuses the investor agents, Reflection and Reflexion of this page: [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md).
 
 1. Choose the stock exchange (IDX), the market cap (large, mid, small), how many stocks to keep
    (top N, 1-50, default 25) and the investor agents (multi-select, at least one).
@@ -129,7 +131,7 @@ agents; with the Risk agent: `0.8 x investors + 0.2 x Risk` (`risk-weight`). The
 | Tool calling    | `ResearchTools` (`readArticle`, `searchNews`) and the crawlers/Tavily client that gather the headlines |
 | ReAct           | `ResearchAgent`: "Thought:" -> tool calls -> observations, at most 3 turns, then a forced answer; tools are withdrawn when their limit is used (conditional tool calling) |
 | Reflection      | `ReflectionValidator` (divergence from the scorecard > 35 points, verdict outside its band, broken philosophy rules such as Buffett 70+ with ROE < 10%, unknown metrics) + the critic in `InvestorPanel.reflect`, which sees its answer and the issues and keeps or revises it |
-| Reflexion       | `ReflexionMemory`: issue kinds an agent repeated (2+ times in a run) become lessons in `screening_lesson`; the 3 most frequent are added to the agent's prompt in later runs. Within a run, an unusable (non-JSON) answer is retried once with the error as feedback |
+| Reflexion       | `ReflexionMemory`: issue kinds an agent repeated (2+ times in a run) become lessons in `screening_lesson`; the 3 most frequent are added to the agent's prompt in later runs. Within a run, an unusable answer (no JSON, no score, or neither strengths nor concerns) is retried once with the problem as feedback (cut off at the output limit, or the parse error), without sending the unusable reply back |
 | Independent agents | `InvestorPanel.assess`: one call per agent and stock, personas in `ScreeningPrompts`               |
 | Synthesis       | `SynthesisAgent` (Opus 5.5): summary, notes, conviction, thesis, adjustment of -5..+5 per candidate (top N and 5 alternates); deterministic fallback |
 
@@ -158,7 +160,7 @@ score (`QUANT_ONLY`), a flagged answer is not reviewed, the synthesis falls back
 |--------------------------------|----------------------------------------------------------------------------------|
 | Stage 1 in Java                | the AI sees only the shortlist (e.g. 75 of 840 stocks)                           |
 | DeepSeek reasoning off         | `reasoning: {enabled: false}` (its reasoning tokens would be billed as output)  |
-| OpenRouter `provider.sort: price` | cheapest provider of the model                                                |
+| OpenRouter `provider.sort: price` | cheapest provider of the model, except `provider-ignore` (OpenInference)      |
 | Short JSON answers             | `agent-max-tokens` 450; thesis <= 40 words                                       |
 | Shared prompt prefix           | system prompt + stock data identical for the six agents of a stock (cacheable)  |
 | Reflection only when flagged   | the critic runs on flagged answers only                                          |
@@ -166,7 +168,9 @@ score (`QUANT_ONLY`), a flagged answer is not reviewed, the synthesis falls back
 | Opus once                      | one synthesis call, reasoning effort `low`, compact table input                 |
 
 Usage: every call is a row of `llm_usage` (stage, agent, ticker, model, prompt / completion /
-reasoning / cached tokens, cost, duration, error); totals are on `screening_run`. The cost is
+reasoning / cached tokens, cost, duration, error); totals are on `screening_run`. A call that fails
+transiently (stream reset, timeout, network error, HTTP 408 / 429 / 5xx) is retried `llm.model-retries`
+times after 2 s, 4 s; each attempt is a row. The cost is
 OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 `llm.prices` (marked `*`).
 
@@ -184,6 +188,8 @@ OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 | `llm.research-model`, `llm.agent-model` | `deepseek/deepseek-v4-flash-0731` | OpenRouter ids                       |
 | `llm.synthesis-model` (`SCREENING_SYNTHESIS_MODEL`) | `anthropic/claude-opus-5.5` | synthesis                      |
 | `llm.synthesis-effort`, `llm.provider-sort`, `llm.concurrency` | low, price, 8 | model options, parallel calls     |
+| `llm.provider-ignore` (`SCREENING_PROVIDER_IGNORE`) | OpenInference | OpenRouter providers never used for the DeepSeek calls (comma-separated) |
+| `llm.model-retries`, `llm.retry-backoff` | 2, 2s                     | retries of a transiently failed model call    |
 | `news.tavily-api-key` (`TAVILY_API_KEY`) | empty                     | Tavily search (empty: no Tavily)              |
 | `news.cache-ttl`, `news.max-age`  | 12h, 120d                        | news cache and age                            |
 | `etl.fundamentals-max-age`        | 7d                               | fundamentals refresh                          |
@@ -194,7 +200,8 @@ OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 `stock_listing`, `fundamental_snapshot` (daily snapshot, `annual` JSONB), `news_article`,
 `news_article_ticker`, `news_source_fetch`, `news_brief`, `screening_run` (`run_id` = the
 `ingestion_job` id, cascade delete), `screening_candidate`, `screening_agent_score`,
-`screening_lesson`, `llm_usage`. The script also extends the CHECK constraints for the `SCREENING`
+`screening_lesson`, `llm_usage` (also the rows of the analyses, `llm_usage.analysis_id` of
+`V1.0.15__schema_analysis.sql`). The script also extends the CHECK constraints for the `SCREENING`
 permission and the `FUNDAMENTALS` / `SCREENING` job types. Details in the column comments.
 
 ## 9. Tests
@@ -204,7 +211,7 @@ permission and the `FUNDAMENTALS` / `SCREENING` job types. Details in the column
 | `NewsParsersTest`             | excerpts of the four sites' pages (headline lists, `src/test/resources/screening`) give the right headlines and dates (Jakarta time); a synthetic article page gives title, date and text; relevance matching |
 | `YahooFundamentalsClientTest` | screener, quoteSummary and time series responses are read correctly (banks too)     |
 | `QuantScreeningTest`          | metrics, scorecards, renormalization, overall blending, the funnel in order, shortlist = 3 x top N |
-| `ScreeningAgentsTest`         | model options (reasoning off, Opus effort low), cost metering and budget, ReAct with a tool call, Reflection critic, JSON retry, synthesis rules and fallback (scripted model) |
+| `ScreeningAgentsTest`         | model options (reasoning off, Opus effort low), cost metering and budget, ReAct with a tool call, Reflection critic, JSON retry (cut off at the limit, no strengths and concerns), provider routing without OpenInference, transient-failure retries and their limit, synthesis rules and fallback (scripted model) |
 | `FundamentalRepositoryTest`   | daily snapshots, fundamentals carried forward, stale detection (Docker Postgres)    |
 | `ScreeningControllerTest`     | options, validation, a run end to end with the pipeline mocked, report JSON and PDF, 409 for an active run |
 | `AccessControlTest`           | the screening APIs need SCREENING                                                   |

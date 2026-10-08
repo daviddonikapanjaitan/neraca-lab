@@ -22,10 +22,20 @@ function fileNameOf(header: string | null, fallback: string): string {
 }
 
 /**
- * Downloads the PDF of a finished screening (GET /api/screenings/{id}/pdf). Fetched first, so a
+ * Downloads the PDF of a finished screening or analysis (e.g. GET /api/screenings/{id}/pdf). Fetched first, so a
  * failure shows a message instead of a broken download.
  */
-export function DownloadPdfButton({ runId, disabled = false }: { runId: string; disabled?: boolean }) {
+export function DownloadPdfButton({
+  href,
+  fileName,
+  disabled = false,
+}: {
+  /** the route handler serving the PDF */
+  href: string
+  /** download name when the response has no Content-Disposition */
+  fileName: string
+  disabled?: boolean
+}) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -36,12 +46,12 @@ export function DownloadPdfButton({ runId, disabled = false }: { runId: string; 
     try {
       let response: Response
       try {
-        response = await fetch(`/api/screenings/${encodeURIComponent(runId)}/pdf`, { cache: "no-store" })
+        response = await fetch(href, { cache: "no-store" })
       } catch {
         throw new Error("Cannot reach the Neraca Lab server. Check your connection and try again.")
       }
       if (!response.ok) throw await problemOf(response)
-      const name = fileNameOf(response.headers.get("Content-Disposition"), `screening-${runId}.pdf`)
+      const name = fileNameOf(response.headers.get("Content-Disposition"), fileName)
       const url = URL.createObjectURL(await response.blob())
       try {
         const link = document.createElement("a")

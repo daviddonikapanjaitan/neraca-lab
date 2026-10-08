@@ -384,6 +384,13 @@ public final class FilingMapper {
     public Optional<MappedStatement> incomeStatement(StatementColumn column, Map<String, IncomeLineCategory> overrides,
                                                      ShareCapital shares) {
         Optional<MappedStatement> filed = incomeStatementAsFiled(column, overrides, shares);
+        if (filed.isPresent() && financial
+                && filed.get().checks().stream().anyMatch(c -> c.isError() && c.rule().equals("operating_income"))) {
+            Optional<MappedStatement> memo = withoutMemoInsuranceLine(column, overrides, shares);
+            if (memo.isPresent()) {
+                return memo;
+            }
+        }
         if (filed.isEmpty() || filed.get().checks().stream().noneMatch(c -> c.isError() && c.rule().equals("profit_before_tax"))) {
             return filed;
         }
@@ -403,6 +410,50 @@ public final class FilingMapper {
             }
         }
         return filed;
+    }
+
+    /** Insurance expense lines of the bank template (a bank's insurance subsidiary). */
+    static final List<String> INSURANCE_EXPENSE_LINES = List.of("Claim expenses", "Reinsurance claims",
+            "Retrocession claims", "Increase (decrease) in estimated claims liability",
+            "Increase (decrease) in liability for future policy benefit",
+            "Increase (decrease) in provision for losses arising from liability adequacy test",
+            "Increase (decrease) in insurance liabilities ceded to reinsurers",
+            "Increase (decrease) in liabilities to policyholder in unit-linked contracts", "Insurance commission expenses",
+            "Ujrah paid", "Acquisition costs of insurance contracts", "Other insurance expenses");
+
+    /**
+     * The bank income statement of a column with an insurance expense line that the filing shows for information
+     * only: its "Total profit from operation" does not deduct it because the premium line is already net of it
+     * (BMRI's FY2024 comparative in its FY2025 filing: "Claim expenses" 10,574,450 million beside premiums of
+     * 2,520,813 net of claims; profit from operation 76,059,595 reconciles exactly without the claims). The line
+     * is ignored and a warning says so - only when the statement then passes every check. A classification given
+     * by the agent is never second-guessed.
+     */
+    private Optional<MappedStatement> withoutMemoInsuranceLine(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                               ShareCapital shares) {
+        int ctx = durationIndex(column);
+        for (String label : INSURANCE_EXPENSE_LINES) {
+            BigDecimal raw = income.value(label, ctx);
+            if (raw == null || raw.signum() == 0 || overrides.containsKey(label)
+                    || IncomeLineCategory.FINANCIAL_KNOWN.get(label) == null) {
+                continue;
+            }
+            Map<String, IncomeLineCategory> without = new LinkedHashMap<>(overrides);
+            without.put(label, IncomeLineCategory.IGNORE);
+            MappedStatement retry = incomeStatementAsFiled(column, without, shares).orElseThrow();
+            if (retry.checks().stream().noneMatch(Check::isError)) {
+                List<Check> checks = new ArrayList<>(retry.checks());
+                checks.add(Check.warning("memo_line", "'" + label + "' " + amount(raw).stripTrailingZeros().toPlainString()
+                        + " is not deducted in the filing's '" + PROFIT_FROM_OPERATION + "' of this column (shown for "
+                        + "information; the premiums are net of it); ignored"));
+                Map<String, String> how = new LinkedHashMap<>(retry.derivations());
+                how.put("memo_line", "'" + label + "' ignored: '" + PROFIT_FROM_OPERATION
+                        + "' only reconciles without it (insurance premiums reported net of it)");
+                return Optional.of(new MappedStatement(retry.table(), retry.column(), retry.period(), retry.sourceSheet(),
+                        retry.values(), how, checks, retry.unclassified()));
+            }
+        }
+        return Optional.empty();
     }
 
     /**
@@ -962,10 +1013,10 @@ public final class FilingMapper {
         BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx);
         BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
         BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities, temporary syirkah funds and equity", ctx));
-        BigDecimal totalLiabilities = liabilities == null ? null : liabilities.add(syirkah);
-        if (totalLiabilities != null && totalEquity != null && totalAssets != null) {
+        BigDecimal syirkahReported = sumOrNull(b, List.of("Total temporary syirkah funds"), ctx);
+        if (liabilities != null && totalEquity != null && totalAssets != null) {
             checks.add(equal("balance", "total liabilities + temporary syirkah funds + total equity = total assets",
-                    totalLiabilities.add(totalEquity), totalAssets));
+                    liabilities.add(syirkah).add(totalEquity), totalAssets));
         }
         if (liabilitiesAndEquity != null && totalAssets != null) {
             checks.add(equal("balance_total", "total liabilities, temporary syirkah funds and equity = total assets",
@@ -997,7 +1048,8 @@ public final class FilingMapper {
         v.put("accounts_payable", sumOrNull(b, List.of("Accounts payable"), ctx));
         v.put("deferred_revenue", sumOrNull(b, List.of("Contract liabilities", "Deferred income"), ctx));
         v.put("current_liabilities", null);
-        v.put("total_liabilities", totalLiabilities);
+        v.put("total_liabilities", liabilities);
+        v.put("temporary_syirkah_funds", syirkahReported);
         v.put("short_term_debt", null);
         v.put("long_term_debt", debt);
         v.put("lease_liabilities", sumOrNull(b, List.of("Finance lease liabilities"), ctx));
@@ -1019,7 +1071,10 @@ public final class FilingMapper {
         how.put("inventory", "not applicable to a bank");
         how.put("current_assets", "not reported: a bank balance sheet is presented by order of liquidity");
         how.put("current_liabilities", "not reported: a bank balance sheet is presented by order of liquidity");
-        how.put("total_liabilities", "total liabilities + temporary syirkah funds (non-equity funds of sharia depositors)");
+        how.put("total_liabilities", "'Total liabilities' as filed; temporary syirkah funds (sharia depositors' funds, "
+                + "neither liabilities nor equity under PSAK) are stored separately");
+        how.put("temporary_syirkah_funds", syirkahReported == null ? "not reported (no sharia unit)"
+                : "'Total temporary syirkah funds'; total assets = liabilities + these funds + equity");
         how.put("short_term_debt", "not reported: bank borrowings have no maturity split (all in long_term_debt)");
         how.put("long_term_debt", "borrowings + securities issued (bonds, sukuk, MTN, subordinated bonds) + subordinated "
                 + "loans, all maturities; customer deposits, interbank deposits and repos excluded");

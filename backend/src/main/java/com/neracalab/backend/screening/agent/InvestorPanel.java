@@ -71,14 +71,31 @@ public class InvestorPanel {
         this.json = new JsonReplies(mapper);
     }
 
-    /** First answer of an agent (with one JSON retry). */
+    /** First answer of an agent in a screening (with one JSON retry). */
     public Outcome assess(UsageMeter meter, String ticker, String dossier, InvestorAgent agent, AgentScore quant,
                           StockProfile profile, List<String> lessons) {
-        List<Message> messages = baseMessages(dossier, agent, quant, lessons);
+        return assess(meter, ticker, ScreeningPrompts.ANALYST, dossier, agent, quant, profile, lessons,
+                metricKeys(profile), properties.agentMaxTokens());
+    }
+
+    /**
+     * First answer of an agent (with one JSON retry).
+     *
+     * @param system     the shared system prompt (screening or single-stock analysis)
+     * @param quant      the agent's quantitative scorecard (null: none, the agent judges from the data alone)
+     * @param profile    the stock's metrics for the validator's philosophy rules (null: none)
+     * @param metricKeys the keys an answer may cite in {@code metricsUsed}
+     * @param maxTokens  output limit of one answer
+     */
+    public Outcome assess(UsageMeter meter, String ticker, String system, String dossier, InvestorAgent agent,
+                          AgentScore quant, StockProfile profile, List<String> lessons, Set<String> metricKeys,
+                          int maxTokens) {
+        List<Message> messages = baseMessages(system, dossier, agent, quant, lessons);
         Purpose purpose = new Purpose(STAGE_AGENT, agent.name(), ticker);
         try {
-            Assessment a = ask(meter, purpose, messages);
-            List<Issue> issues = ReflectionValidator.validate(agent, a, quant.score(), profile, metricKeys(profile));
+            Assessment a = ask(meter, purpose, messages, maxTokens);
+            List<Issue> issues = ReflectionValidator.validate(agent, a, quant == null ? null : quant.score(), profile,
+                    metricKeys);
             return new Outcome(agent, a, null, issues, null);
         } catch (LlmException | InvalidReplyException e) {
             log.info("{} on {}: no usable answer ({})", agent, ticker, e.getMessage());
@@ -86,13 +103,25 @@ public class InvestorPanel {
         }
     }
 
-    /** Reflection, step 2: the critic reviews a flagged answer. A failed review keeps the original. */
+    /** Reflection, step 2 in a screening: the critic reviews a flagged answer. A failed review keeps the original. */
     public Outcome reflect(UsageMeter meter, String ticker, String dossier, AgentScore quant, StockProfile profile,
                            List<String> lessons, Outcome outcome) {
+        return reflect(meter, ticker, ScreeningPrompts.ANALYST, dossier, quant, lessons, outcome,
+                properties.agentMaxTokens());
+    }
+
+    /**
+     * Reflection, step 2: the critic sees the same prompt, its answer and the validator's issues, and keeps or
+     * revises the answer. A failed review keeps the original.
+     *
+     * @param maxTokens output limit of the review
+     */
+    public Outcome reflect(UsageMeter meter, String ticker, String system, String dossier, AgentScore quant,
+                           List<String> lessons, Outcome outcome, int maxTokens) {
         if (outcome.original() == null || outcome.issues().isEmpty()) {
             return outcome;
         }
-        List<Message> messages = baseMessages(dossier, outcome.agent(), quant, lessons);
+        List<Message> messages = baseMessages(system, dossier, outcome.agent(), quant, lessons);
         messages.add(new AssistantMessage(json.write(outcome.original())));
         StringBuilder review = new StringBuilder("REFLECTION REVIEW. A validator checked your answer against the data:\n");
         for (Issue issue : outcome.issues()) {
@@ -104,7 +133,8 @@ public class InvestorPanel {
                 changed and why, or why you kept it".""");
         messages.add(new UserMessage(review.toString()));
         try {
-            Assessment revised = ask(meter, new Purpose(STAGE_REFLECTION, outcome.agent().name(), ticker), messages);
+            Assessment revised = ask(meter, new Purpose(STAGE_REFLECTION, outcome.agent().name(), ticker), messages,
+                    maxTokens);
             return new Outcome(outcome.agent(), outcome.original(), revised, outcome.issues(), null);
         } catch (LlmException | InvalidReplyException e) {
             log.info("reflection of {} on {} failed ({}), original kept", outcome.agent(), ticker, e.getMessage());
@@ -112,33 +142,53 @@ public class InvestorPanel {
         }
     }
 
-    private Assessment ask(UsageMeter meter, Purpose purpose, List<Message> messages) {
-        LlmGateway.Reply reply = llm.worker(meter, purpose, properties.agentModel(), messages, List.of(),
-                properties.agentMaxTokens());
+    /**
+     * One answer, retried once when unusable (Reflexion within the run). The unusable reply is not sent back: a
+     * model shown a reply cut off at the output limit continues it instead of starting again, and the fragment has
+     * no score. The feedback names the problem (cut off at the limit, or the parse error).
+     */
+    private Assessment ask(UsageMeter meter, Purpose purpose, List<Message> messages, int maxTokens) {
+        LlmGateway.Reply reply = llm.worker(meter, purpose, properties.agentModel(), messages, List.of(), maxTokens);
         try {
             return scored(reply.text());
         } catch (InvalidReplyException e) {
             List<Message> retry = new ArrayList<>(messages);
-            retry.add(reply.message());
-            retry.add(new UserMessage("Your answer was not usable: " + e.getMessage()
-                    + ". Reply again with the JSON object only."));
-            LlmGateway.Reply second = llm.worker(meter, purpose, properties.agentModel(), retry, List.of(),
-                    properties.agentMaxTokens());
+            retry.add(new UserMessage("Your answer was not usable: " + problem(reply, e, maxTokens)
+                    + ". Reply again with the complete JSON object only, starting with {, and keep to the word "
+                    + "limits (thesis at most 40 words, at most 3 strengths and 3 concerns)."));
+            LlmGateway.Reply second = llm.worker(meter, purpose, properties.agentModel(), retry, List.of(), maxTokens);
             return scored(second.text());
         }
     }
 
+    /** What was wrong with a reply: cut off at the output limit, or the parse error. */
+    static String problem(LlmGateway.Reply reply, InvalidReplyException e, int maxTokens) {
+        if (reply.usage() != null && reply.usage().completionTokens() >= maxTokens) {
+            return "it was cut off at the output limit of " + maxTokens + " tokens before the JSON object was complete";
+        }
+        return e.getMessage();
+    }
+
+    /**
+     * A usable answer: a score and at least one strength or concern. An answer with neither came from a model that
+     * ignored the requested shape (HRTA, 2026-10-08: a degraded provider wrote other keys and ran to the output
+     * limit); it is asked again instead of being shown without its reasons.
+     */
     private Assessment scored(String text) {
         Assessment a = json.parse(text, Assessment.class).normalized();
         if (a.score() == null) {
             throw new InvalidReplyException("the reply has no score");
         }
+        if (a.strengths().isEmpty() && a.concerns().isEmpty()) {
+            throw new InvalidReplyException("the reply has no strengths and no concerns (use exactly the requested keys)");
+        }
         return a;
     }
 
-    private List<Message> baseMessages(String dossier, InvestorAgent agent, AgentScore quant, List<String> lessons) {
+    private List<Message> baseMessages(String system, String dossier, InvestorAgent agent, AgentScore quant,
+                                       List<String> lessons) {
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(ScreeningPrompts.ANALYST));
+        messages.add(new SystemMessage(system));
         messages.add(new UserMessage(dossier));
         messages.add(new UserMessage(personaBlock(agent, quant, lessons)));
         return messages;
@@ -147,9 +197,13 @@ public class InvestorPanel {
     static String personaBlock(InvestorAgent agent, AgentScore quant, List<String> lessons) {
         StringBuilder b = new StringBuilder();
         b.append("PERSONA: ").append(ScreeningPrompts.persona(agent)).append('\n');
-        b.append("Quantitative scorecard (your prior): ").append(Math.round(quant.score())).append("/100, data coverage ")
-                .append(Math.round(quant.coverage() * 100)).append("%.\n");
-        for (Part part : quant.parts()) {
+        if (quant == null) {
+            b.append("Quantitative scorecard: not available (no market data for this stock); judge from the company data.\n");
+        } else {
+            b.append("Quantitative scorecard (your prior): ").append(Math.round(quant.score())).append("/100, data coverage ")
+                    .append(Math.round(quant.coverage() * 100)).append("%.\n");
+        }
+        for (Part part : quant == null ? List.<Part>of() : quant.parts()) {
             b.append("- ").append(part.label()).append(" [").append(part.key()).append("]: ");
             if (part.value() == null) {
                 b.append("unknown");

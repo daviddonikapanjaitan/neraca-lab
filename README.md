@@ -2,7 +2,8 @@
 
 Application for analyzing financial statements using LLM, with an AI stock screener that ranks
 IDX stocks through the eyes of Warren Buffett, Charlie Munger, Peter Lynch, Philip Fisher,
-Keith Gill (Roaring Kitty) and a Risk agent.
+Keith Gill (Roaring Kitty) and a Risk agent, and an in-depth AI analysis of one stock from its
+stored filings, documents and news.
 
 - Backend using: Spring Boot 4 (Java 21) + PostgreSQL 17 with pgvector + Redis 7 + Spring AI 2.0 (OpenRouter)
 - Frontend using: Next.js 16 (React 19, TypeScript) + shadcn/ui with the shadcn-fintech theme + Tailwind CSS 4
@@ -25,7 +26,7 @@ Stopping removes the containers but keeps the database data; it does nothing (an
 Docker) when nothing is running. The start scripts also take `restart`, `status`,
 `logs [frontend|backend|postgres|redis]` and `help`.
 The first start downloads images and builds both apps (several minutes); later starts take seconds.
-The AI upload and the AI screening need `backend/.env` with `OPENAI_API_KEY` (OpenRouter; copy
+The AI upload, the AI screening and the AI analysis need `backend/.env` with `OPENAI_API_KEY` (OpenRouter; copy
 `backend/.env.example`), the screening's news search also `TAVILY_API_KEY`; the rest works without them. Options, ports and troubleshooting:
 [`docs/v1_docs/DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md).
 
@@ -50,6 +51,7 @@ start), then change its password in Admin Center > User Management.
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
 | [`SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md)       | AI stock screening: daily ETL, Stage 1, agents (tool calling, ReAct, Reflection, Reflexion), cost, report, PDF |
+| [`ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md)         | AI analysis of one stock: company data, research agent over its documents (RAG), agents, cost, report, PDF |
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
 | [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion, chunking, embeddings, search API |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
@@ -78,6 +80,8 @@ neraca_lab/
 │       │                        Reflexion, synthesis), report/ (PDF), queue, service, controller
 │       ├── java/.../rag/        RAG vector store: PDF text, chunker, embeddings, news collector,
 │       │                        pgvector repository, queue, controller
+│       ├── java/.../analysis/   AI analysis of one stock: fact sheet, research agent and its tools
+│       │                        (RAG search, statements), synthesis, report/ (PDF), queue, service, controller
 │       └── resources/
 │           ├── application.yaml
 │           └── db/              SQL scripts (no Flyway)
@@ -90,6 +94,8 @@ neraca_lab/
 │               ├── V1.0.10__schema_screening.sql  (AI screening: universe, snapshots, news, runs, usage)
 │               ├── V1.0.11__schema_fx.sql         (fx_rate_daily: ECB rates for listings quoted in another currency)
 │               ├── V1.0.14__schema_rag.sql        (RAG vector store: rag_document, rag_chunk; needs pgvector)
+│               ├── V1.0.15__schema_analysis.sql   (AI analysis of one stock: analysis_run, analysis_agent_score)
+│               ├── V1.0.16__schema_syirkah.sql    (banks: balance_sheet.temporary_syirkah_funds)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -107,18 +113,19 @@ neraca_lab/
 │                                HRTA 2022 .. 2024 annual, INDF (2022 .. 2026-II), GGRM (2022, 2024, 2025, 2026-II)
 │                                INDY (2022 .. 2025 annual, 2026-II)
 │                                SMDR (2022 .. 2025 annual, 2026-II, Infrastructure Industry taxonomy)
-│                                BNGA (2022 .. 2025 annual, 2026-II) and BTPN (2022 .. 2025 annual), banks:
+│                                BNGA, BMRI (2022 .. 2025 annual, 2026-II) and BTPN (2022 .. 2025 annual), banks:
 │                                Financial and Sharia Industry taxonomy
 │                                ASGR, SIMP and CEKA (2022 .. 2025 annual, 2026-II; quirks: full amounts under "In Million",
 │                                EPS filed in millions, revenue not tagged, one amount reported twice, a product in two
 │                                revenue slots, a cash flow section without activity)
 │                                MYOR, PTSN (2022 .. 2025 annual, 2026-II) and NCKL (2023 .. 2025 annual, 2026-II)
+│                                CMRY, CPIN (2022 .. 2025 annual, 2026-II)
 │                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
-                                 SCREENING_DOCS.md, RAG_DOCS.md
+                                 SCREENING_DOCS.md, ANALYSIS_DOCS.md, RAG_DOCS.md
                                  (see Documentation)
 ```
 
@@ -163,7 +170,7 @@ role has one or more permissions, and the backend checks them on every API reque
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
 | `INGESTION` | Ingestion pages, upload / price / RAG / job APIs (and the company list)  |
 | `COMPANIES` | Companies pages and company APIs                                         |
-| `SCREENING` | Screening page, screening runs, reports and PDF export                   |
+| `SCREENING` | Screening pages (Screening Stocks, Analysis): runs, analyses, reports, PDF export |
 
 The root user `admin` (initial password `admin`, dummy profile data) has the built-in
 Administrator role with every permission; it cannot be deleted, deactivated or lose that role.
@@ -217,10 +224,14 @@ they never replace a stored count (`neracalab.ingestion.web-share-counts`, on by
 Workbooks are not trusted blindly: a declared rounding level contradicted by the amounts (ASGR FY2023:
 "In Million" over full amounts) is corrected when the filing's own EPS confirms it, and an amount a
 filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other gains (losses)") is
-counted once when only that makes profit before tax reconcile; an EPS filed in the rounding unit (SIMP
+counted once when only that makes profit before tax reconcile; a bank's insurance claims shown for
+information beside premiums already net of them (BMRI's FY2024 comparative) are not deducted again when
+only that makes profit from operation reconcile; an EPS filed in the rounding unit (SIMP
 H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
-stored values). A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
+stored values; an EPS and its share count always come from one filing, and a share split a comparative
+restates - BMRI 2:1 in 2023 - adjusts the per-share figures of that and earlier periods). A bank's temporary
+syirkah funds are stored beside its liabilities (`temporary_syirkah_funds`), not in them. A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
 contradict each other (NCKL FY2024) gives no share counts and its EPS is cleared, and an EPS off by a power of
 ten is corrected (INDF H1 2024: 0.000439 -> 439); a workbook re-run refreshes the periods it wrote. All of
 these are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
@@ -379,6 +390,37 @@ average of the investor agents, blended 20% with the Risk agent (safety). Cost i
 analysed) cost $0.12. The daily ETL runs Monday-Friday 18:00 WIB and before each screening; the
 Ingestion page can start it by hand. Details: [`docs/v1_docs/SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md).
 
+## AI analysis of one stock
+
+**Screening > Analysis** in the sidebar (the Screening entry is a dropdown with Screening Stocks and
+Analysis; permission `SCREENING`): choose a stock of the companies table and the investor agents.
+The form shows what the database holds for it (statements, market data, PDF documents, news). The
+analysis is a background job; its report and cost are saved and can be downloaded as PDF.
+
+```text
+[Company data, no AI] stored statements, metrics, prices, valuations -> fact sheet;
+                      Yahoo Finance metrics -> quantitative scorecard per agent
+[Research, DeepSeek]  ReAct + tool calling over the company's own documents: semantic search in
+                      its PDF chunks and news (pgvector), full statements of a period -> brief with refs
+[Agents, DeepSeek]    six independent investor agents on one shared dossier -> Reflection
+                      (validator + critic) -> Reflexion (lessons across runs)
+[Synthesis, Opus 5.5] summary, conviction, thesis, bull / bear case, risks, +-5 point adjustment
+[Report]              database -> Screening > Analysis -> PDF; every call's tokens and cost recorded
+```
+
+```bash
+curl -H "$AUTH" -H "Content-Type: application/json" http://localhost:8080/api/v1/analyses -d '{"ticker":"HRTA"}'
+curl -H "$AUTH" http://localhost:8080/api/v1/analyses/{id}           # report (progress while running)
+curl -H "$AUTH" -OJ http://localhost:8080/api/v1/analyses/{id}/pdf   # PDF
+```
+
+Cost is capped at **$0.20 per analysis** (`ANALYSIS_BUDGET_USD`); without stored documents the
+research agent is skipped (no call). The DeepSeek calls of the screening and the analysis go to the
+cheapest OpenRouter provider except `neracalab.screening.llm.provider-ignore` (`SCREENING_PROVIDER_IGNORE`,
+default `OpenInference`, whose fp4 endpoint looped past OpenRouter's 60 s limit and ignored the answer
+format); a call that fails transiently (stream reset, timeout, 408 / 429 / 5xx) is retried twice, and
+an agent answer without strengths and concerns is asked again. Details: [`docs/v1_docs/ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md).
+
 ## Frontend
 
 Next.js web app in `frontend/` with the
@@ -396,8 +438,10 @@ npm run dev                   # http://localhost:3000
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
-| `/screening`                     | AI stock screening: exchange, market cap, top N, investor agents (multi-select); saved screenings |
+| `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
 | `/screening/{id}`                | screening report: progress, executive summary, ranking with per-agent scores, stock details (news, reasoning, reflection), funnel, token usage, PDF download |
+| `/screening/analysis`            | Analysis: one stock of the companies table (with its stored data) and the investor agents; saved analyses (10 per page: 5 / 10 / 20 / 50) |
+| `/screening/analysis/{id}`       | analysis report: progress, overall score and cost, executive summary (bull / bear case, risks), every agent's view, research brief with its excerpts and ReAct steps, key figures, data used, notes, token usage, PDF download |
 | `/ingestion/xbrl`                | Ingestion dropdown (like the Admin Center), IDX XBRL: upload an `.xlsx` financial statement (`/ingestion` opens this page) |
 | `/ingestion/prices`              | Price Ingestion: fetch daily prices (exchange / ticker dropdowns) |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
@@ -422,7 +466,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 292 tests
+(cd backend && ./mvnw test)                      # 325 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -439,9 +483,11 @@ Java code: `ConfiguredChatModel` resolves `spring.ai.openai.chat.model` of `appl
 `EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
 derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
-`FilingMapperFinancialTest` maps the five BNGA and four BTPN filings (Financial and Sharia Industry taxonomy, banks);
+`FilingMapperFinancialTest` maps the five BNGA, five BMRI and four BTPN filings (Financial and Sharia Industry taxonomy,
+banks; BMRI's insurance claims shown for information); `ReclassificationTest` that the agent can revise its own
+classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
@@ -469,9 +515,16 @@ Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), 
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
 (pipeline mocked: validation, job, report, PDF); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
 RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
-(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `RagRepositoryTest` (pgvector store and cosine search, rolled back)
+(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, rolled back)
 and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
 permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
+Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
+search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet) and
+`AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
+by role: report, usage per stage, paging, PDF, validation); see `docs/v1_docs/ANALYSIS_DOCS.md`, section 8.
+`ScreeningAgentsTest` also covers the shared gateway: OpenInference ignored in the provider routing, a stream
+reset retried (every attempt recorded), the retry limit, no retry of a refused request, and an answer without
+strengths and concerns asked again.
 
 The tests start the application, whose startup marks ingestion jobs left active as `FAILED`. Do not
 run them against the database of a backend that is processing jobs; point them at a separate
@@ -501,6 +554,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.10__schema_screening.sql`       | AI screening: universe, daily snapshot, news cache, runs, candidates, agent scores, lessons, LLM usage |
 | `V1.0.11__schema_fx.sql`              | `fx_rate_daily`: ECB reference rates for listings quoted in another currency (INDY, SMDR) |
 | `V1.0.14__schema_rag.sql`             | RAG vector store (pgvector): `rag_document`, `rag_chunk` (`vector(1536)`, HNSW); job types `RAG_PDF`, `RAG_NEWS` |
+| `V1.0.15__schema_analysis.sql`        | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id`; job type `ANALYSIS` |
+| `V1.0.16__schema_syirkah.sql`         | banks: `balance_sheet.temporary_syirkah_funds` (sharia depositors; neither liabilities nor equity) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
@@ -527,7 +582,7 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA, EV/OP .. |
 | `financial_metric`    | every calculated metric in long format (margins, returns, leverage, EV/OP) |
 | `ingestion_file`      | uploaded `.xlsx` workbooks and RAG `.pdf` files (`BYTEA`), one row per SHA-256 checksum |
-| `ingestion_job`       | progress of every background job: uploads, prices, screening ETL, screenings, RAG PDF / news (status, stage, result JSONB, started by which user) |
+| `ingestion_job`       | progress of every background job: uploads, prices, screening ETL, screenings, RAG PDF / news, analyses (status, stage, result JSONB, started by which user) |
 | `rag_document`, `rag_chunk` | RAG vector store: PDFs and news articles of a company, text chunks with their embeddings |
 | `users`               | accounts: unique username / email, BCrypt password, profile, avatar        |
 | `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
@@ -535,7 +590,8 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
 | `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the screening research agent |
 | `screening_run`, `screening_candidate`, `screening_agent_score` | screening reports: parameters, shortlist, scores and reasoning |
-| `screening_lesson`, `llm_usage` | Reflexion memory; tokens and cost of every model call |
+| `analysis_run`, `analysis_agent_score` | analysis reports of one stock: what the agents saw, research brief, synthesis, scores and reasoning |
+| `screening_lesson`, `llm_usage` | Reflexion memory (screening and analysis); tokens and cost of every model call |
 
 Conventions: amounts in full units of the company currency; income-statement expenses are
 positive; cash-flow outflows are negative; `NULL` = not reported, `0` = reported as zero.

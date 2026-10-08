@@ -302,8 +302,8 @@ public class IngestionAgent {
         if (!companyKnown) {
             WRITE_TOOLS.forEach(offered::remove);       // nothing can be saved without the company
         }
-        if (!session.hasUnclassifiedLines()) {
-            offered.remove("classifyIncomeLines");      // only while unknown income lines exist
+        if (!session.hasUnclassifiedLines() && !session.hasRevisableClassifications()) {
+            offered.remove("classifyIncomeLines");      // only while unknown or revisable income lines exist
         }
         if (!session.hasWrites()) {
             offered.remove("refreshDerivedData");       // nothing to recalculate yet

@@ -86,6 +86,7 @@ export function yahooQuoteUrl(exchange: string, ticker: string): string {
 /** Stage label of the usage table. */
 export const STAGE_LABEL: Record<string, string> = {
   RESEARCH: "Research agent (ReAct + tools)",
+  RETRIEVAL: "Document search (embeddings)",
   AGENT: "Investor agents",
   REFLECTION: "Reflection critic",
   SYNTHESIS: "Synthesis",

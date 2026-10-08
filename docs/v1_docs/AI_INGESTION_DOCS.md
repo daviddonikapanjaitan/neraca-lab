@@ -152,7 +152,7 @@ final status is decided by the deterministic database read-back, not by the mode
 | Tool Calling Loop        | `IngestionAgent.execute`: model -> tool calls -> tool results -> model, until a final answer                                                                                                                                           |
 | Sequential Tool Calling  | dependencies enforced by tools and prompt: company -> extract -> save -> segments -> refresh -> verify; writes run one at a time                                                                                                       |
 | Parallel Tool Calling    | `ToolExecutor`: read-only calls of one turn (e.g. three `extractStatements`) run concurrently on virtual threads (`parallelGroup` in the trace)                                                                                        |
-| Conditional Tool Calling | `IngestionAgent.offeredTools`: `registerCompany` only after `findCompany` found nothing, save tools only once the company exists, `classifyIncomeLines` only while unknown income lines exist, `refreshDerivedData` only after a write |
+| Conditional Tool Calling | `IngestionAgent.offeredTools`: `registerCompany` only after `findCompany` found nothing, save tools only once the company exists, `classifyIncomeLines` only while unknown income lines exist or a column the agent classified still fails a check (its own classification can then be revised, e.g. to `IGNORE`), `refreshDerivedData` only after a write |
 | ReAct                    | executor writes `Thought:` before each action and reads each observation (`steps[].thought`)                                                                                                                                           |
 | Plan-and-Execute         | planner returns a structured `IngestionPlan`; the executor receives and follows it                                                                                                                                                     |
 | Reflection               | reviewer judges plan, trace and DB verification; issues are fed back as a new round                                                                                                                                                    |
@@ -165,7 +165,7 @@ final status is decided by the deterministic database read-back, not by the mode
 | `findCompany`            | read  | company by the filing's ticker, its existing segments                                      |
 | `registerCompany`        | write | new company; the model supplies only the short display name                                |
 | `extractStatements`      | read  | income statement, balance sheet, cash flow of a column + validation result                 |
-| `classifyIncomeLines`    | write | classifies unknown income-statement lines (re-validated: profit before tax must reconcile) |
+| `classifyIncomeLines`    | write | classifies unknown income-statement lines, or revises the agent's own classification while its column still fails a check (re-validated: profit before tax must reconcile) |
 | `saveStatements`         | write | period + statements of a column (current period replaces, comparatives fill gaps only)     |
 | `extractRevenueSegments` | read  | revenue by type (else by source) of a column                                               |
 | `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
@@ -242,7 +242,8 @@ and line items differ, so `FilingMapper` reads them with its own bank mapping:
 | `ebit`, `ebitda` | NULL: interest is a bank's operating revenue and cost |
 | `cash_and_equivalents` | cash and cash equivalents of the cash flow statement at that date (the balance sheet shows only "Cash") |
 | `marketable_securities` | marketable securities less allowance (government bonds excluded) |
-| `total_liabilities` | total liabilities + temporary syirkah funds |
+| `total_liabilities` | "Total liabilities" as filed |
+| `temporary_syirkah_funds` | "Total temporary syirkah funds" (sharia depositors; neither liabilities nor equity); assets = liabilities + these + equity. Before, they were added to `total_liabilities` (BMRI FY2025: 2,502,546,028 million stored for 2,212,925,204 filed) |
 | `long_term_debt` | borrowings + securities issued + subordinated loans, all maturities (deposits, interbank deposits and repos are not debt) |
 | `short_term_debt`, `current_assets`, `current_liabilities`, `accounts_receivable`, `inventory` | NULL: no maturity split / no current classification / no trade receivables or inventories |
 | `capital_expenditure` | PP&E + intangibles acquisitions net of disposals, as filed |
@@ -252,7 +253,8 @@ The NULLs are deliberate: total debt, net debt, enterprise value, current ratio,
 NCAV are not computed for a bank (they would mislead), while P/E, P/B and P/S are. The profit-or-loss
 checks re-add "Total profit from operation" and profit before tax from the classified lines
 (`IncomeLineCategory.FINANCIAL_KNOWN`; "Insurance commission income", a bank's bancassurance fees, is revenue
-(BTPN FY2023: 54,570 million); other insurance lines are left to `classifyIncomeLines`). There are
+(BTPN FY2023: 54,570 million); a bank's insurance subsidiary: "Revenue from insurance premiums" is revenue and
+"Claim expenses" cost of revenue (BMRI); other insurance lines are left to `classifyIncomeLines`). There are
 no revenue-segment notes. Share counts are not guessed: BNGA has two share classes with different
 par values and treasury stock, and its 2-decimal EPS does not give an exact count, so no
 `share_snapshot` count is derived from the filings; the audited counts come from the annual reports
@@ -380,7 +382,17 @@ Rules:
   (outcome `FILLED_GAPS`, e.g. SIMP FY2023 revenue from the FY2024 filing) and never changes a stored
   value; the period's own filing replaces stored values, but a field it does not report keeps the value
   another filing stored. Whatever the upload order, SIMP FY2023 ends with the revenue of the FY2024
-  filing and every other figure of its own filing.
+  filing and every other figure of its own filing. An EPS and its share count come from one filing: a
+  comparative fills a share count only where the stored EPS equals its own (BMRI FY2022: the FY2023
+  filing's post-split count beside the pre-split EPS gave EPS x shares = twice the profit).
+- **Share split restated in a comparative.** BMRI split 2:1 in 2023: its FY2022 filing states EPS 882.52,
+  the FY2023 filing's comparative 441.26 for the same profit. When the profit attributable to the parent is
+  unchanged (0.5%) and the stored EPS is a whole multiple or fraction k = 2..100 of the comparative's (1%),
+  the period's per-share figures are replaced by the comparative's (outcome `SPLIT_ADJUSTED`), and every
+  earlier period whose profit / EPS gives the same share count as the period's old figures (10%) is divided
+  by k (BMRI FY2021: 601.06 -> 300.53); the same test keeps a period from being adjusted twice. Share counts
+  and prices are split-adjusted, so EPS-based ratios stay consistent. Other restatements in comparatives
+  (BMRI's FY2023 cash flows in its FY2024 filing, FY2024 EPS 602.41 -> 597.67) keep the period's own filing.
 - **EPS checked against the share count.** A filed EPS is checked against the filing's own share
   count. (1) Across columns: each column's profit attributable to the parent / EPS must fit the share
   capital range of its period (80% of the smaller .. 105% of the larger count) at the same par value.
@@ -411,6 +423,13 @@ Rules:
   line (the filing's current-column presentation), but only if profit before tax then reconciles
   exactly; a `double_reported` warning and derivation record it. A line the agent classified is never
   second-guessed.
+- **An insurance expense line shown for information (banks).** BMRI's FY2025 filing shows, in its FY2024
+  column, "Claim expenses" 10,574,450 million beside "Revenue from insurance premiums" 2,520,813 that are
+  already net of the claims; its "Total profit from operation" 76,059,595 does not deduct them (the FY2025
+  column reports the net insurance result 550,415 and no claims). When "Total profit from operation" does
+  not reconcile and ignoring one insurance expense line (`FilingMapper.INSURANCE_EXPENSE_LINES`) makes every
+  check pass, that line is ignored; a `memo_line` warning and derivation record it. A line the agent
+  classified is never second-guessed. Before, the FY2024 column was blocked and the job INCOMPLETE.
 - Unsupported (rejected with 422): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`) in the General and Infrastructure taxonomies; the current /
   non-current balance sheet (`4210000`) and profit or loss by function (`4311000` / `4321000`) in the
@@ -449,8 +468,9 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `ConfiguredChatModel` (test helper) | the model the agent tests use, never written in Java: `spring.ai.openai.chat.model` from `application.yaml` (`${OPENAI_MODEL:<default>}`), with `OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default (the application's own precedence) |
 | `BngaShareSeedTest`              | the BNGA share-count script fills the five audited year-end counts (2021 .. 2025), outstanding + treasury = issued at every date, runs idempotently and never replaces a count already stored (rolled back) |
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
-| `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
+| `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; all five BMRI filings map without errors; BMRI FY2025's FY2024 column ignores "Claim expenses" shown for information (operating income 76,059,595 million, revenue 186,767,596), never against an agent classification; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
+| `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; split factors |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |

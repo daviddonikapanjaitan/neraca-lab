@@ -57,7 +57,8 @@ public enum IncomeLineCategory {
      * bank's revenue, not finance income). Revenue = interest and sharia income + fee, commission, trading,
      * investment and other operating income; cost of revenue = interest expense and the syirkah fund
      * holders' share. Recoveries and reversals are signed operating income; impairment charges operating
-     * expenses. Insurance lines are left to the classification by the agent.
+     * expenses. Insurance premiums are revenue and insurance claims cost of revenue (a bank's insurance
+     * subsidiary); the other insurance lines, whose signs differ between filers, are left to the agent.
      */
     static final Map<String, IncomeLineCategory> FINANCIAL_KNOWN = Map.ofEntries(
             Map.entry("Interest income", REVENUE),
@@ -77,6 +78,9 @@ public enum IncomeLineCategory {
             Map.entry("Provisions and commissions income from transactions other than loan", REVENUE),
             // bancassurance fees (BTPN FY2023: 54,570 million; profit from operation reconciles with it as revenue)
             Map.entry("Insurance commission income", REVENUE),
+            // a bank's insurance subsidiary (BMRI FY2025: 550,415 million; profit from operation reconciles with it)
+            Map.entry("Revenue from insurance premiums", REVENUE),
+            Map.entry("Claim expenses", COST_OF_REVENUE),
             Map.entry("Revenue from trading transactions", REVENUE),
             Map.entry("Dividends income", REVENUE),
             Map.entry("Realised gains (losses) from derivative instruments", REVENUE),

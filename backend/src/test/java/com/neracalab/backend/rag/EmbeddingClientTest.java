@@ -14,7 +14,8 @@ import tools.jackson.databind.json.JsonMapper;
 class EmbeddingClientTest {
 
     static RagProperties properties() {
-        return new RagProperties("openai/text-embedding-3-small", 1536, 64, 1500, 200, 10, 60, 30000);
+        return new RagProperties("openai/text-embedding-3-small", 1536, 64, 1500, 200, 10, 60, 30000, 3,
+                java.time.Duration.ZERO);
     }
 
     private final EmbeddingClient client = new EmbeddingClient(properties(), JsonMapper.builder().build(),

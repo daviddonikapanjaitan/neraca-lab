@@ -101,7 +101,7 @@ public class SynthesisAgent {
                 double adjustment = v.adjustment() == null || !Double.isFinite(v.adjustment()) ? 0
                         : Math.max(-MAX_ADJUSTMENT, Math.min(MAX_ADJUSTMENT, Math.round(v.adjustment())));
                 views.put(ticker, new StockView(ticker,
-                        CONVICTIONS.contains(conviction) ? conviction : conviction(row.overall()),
+                        conviction != null && CONVICTIONS.contains(conviction) ? conviction : conviction(row.overall()),
                         NewsBrief.clip(v.thesis(), 400), adjustment,
                         adjustment == 0 ? null : NewsBrief.clip(v.adjustmentReason(), 200)));
             }

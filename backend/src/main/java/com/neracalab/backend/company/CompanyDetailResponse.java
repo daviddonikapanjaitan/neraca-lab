@@ -77,6 +77,7 @@ public record CompanyDetailResponse(
                                BigDecimal currentAssets, BigDecimal totalAssets,
                                BigDecimal accountsPayable, BigDecimal deferredRevenue,
                                BigDecimal currentLiabilities, BigDecimal totalLiabilities,
+                               BigDecimal temporarySyirkahFunds,
                                BigDecimal shortTermDebt, BigDecimal longTermDebt, BigDecimal leaseLiabilities,
                                BigDecimal shareholdersEquity, BigDecimal nonControllingInterest,
                                BigDecimal totalEquity, BigDecimal retainedEarnings,

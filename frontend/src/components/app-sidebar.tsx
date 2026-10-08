@@ -33,6 +33,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { INGESTION_SECTIONS } from "@/lib/ingestion-sections"
+import { SCREENING_SECTIONS } from "@/lib/screening-sections"
 import { hasPermission, homePath } from "@/lib/permissions"
 import type { Permission, User } from "@/lib/types"
 
@@ -53,7 +54,13 @@ interface NavItem {
 
 const navMarket: NavItem[] = [
   { title: "Companies", url: "/companies", icon: <Building2Icon />, permission: "COMPANIES" },
-  { title: "Screening", url: "/screening", icon: <ScanSearchIcon />, permission: "SCREENING" },
+  {
+    title: "Screening",
+    url: "/screening",
+    icon: <ScanSearchIcon />,
+    permission: "SCREENING",
+    pages: SCREENING_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
+  },
   {
     title: "Ingestion",
     url: "/ingestion",
@@ -72,9 +79,15 @@ function isActive(pathname: string, url: string) {
   return pathname === url || pathname.startsWith(`${url}/`)
 }
 
+/** The sub-page shown: the longest matching URL (/screening/analysis/x is Analysis, not Screening Stocks). */
+function activePage(pathname: string, pages: NavPage[]): string | null {
+  const matching = pages.filter((page) => isActive(pathname, page.url))
+  return matching.length === 0 ? null : matching.reduce((a, b) => (b.url.length > a.url.length ? b : a)).url
+}
+
 /**
- * A sidebar entry with sub-pages (Admin Center, Ingestion): a dropdown, open while one of its pages is shown. In
- * the collapsed sidebar there is no room for the sub-menu: the icon opens the first page.
+ * A sidebar entry with sub-pages (Admin Center, Ingestion, Screening): a dropdown, open while one of its pages is
+ * shown. In the collapsed sidebar there is no room for the sub-menu: the icon opens the first page.
  */
 function NavDropdown({
   title,
@@ -91,6 +104,7 @@ function NavDropdown({
   pathname: string
   iconOnly: boolean
 }) {
+  const current = activePage(pathname, pages)
   if (iconOnly) {
     return (
       <SidebarMenuButton isActive={active} tooltip={title} render={<Link href={pages[0].url} />}>
@@ -110,7 +124,7 @@ function NavDropdown({
         <SidebarMenuSub>
           {pages.map((page) => (
             <SidebarMenuSubItem key={page.url}>
-              <SidebarMenuSubButton isActive={isActive(pathname, page.url)} render={<Link href={page.url} />}>
+              <SidebarMenuSubButton isActive={page.url === current} render={<Link href={page.url} />}>
                 <span>{page.title}</span>
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>

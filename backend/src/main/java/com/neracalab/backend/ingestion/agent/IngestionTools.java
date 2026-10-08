@@ -242,19 +242,23 @@ public class IngestionTools {
     }
 
     @Tool(description = """
-            Classifies income-statement lines that extractStatements reported as unclassified. Only offered \
-            while such lines exist. The statement is re-validated (profit before tax must reconcile), so a \
-            wrong classification is rejected by the checks.""")
+            Classifies income-statement lines that extractStatements reported as unclassified, or revises \
+            lines you classified before while that column still fails a check (category IGNORE for a line \
+            the filing shows for information only). Only offered while such lines exist. The statement is \
+            re-validated (profit before tax must reconcile), so a wrong classification is rejected by the checks.""")
     public ExtractionResult classifyIncomeLines(
             @ToolParam(description = "Column the lines belong to") StatementColumn column,
             @ToolParam(description = "One entry per unclassified line") List<LineClassification> classifications) {
         return locked(() -> {
             var unclassified = session.income(column).map(MappedStatement::unclassified).orElse(List.of());
             Set<String> open = new HashSet<>(unclassified.stream().map(MappedStatement.UnclassifiedLine::label).toList());
+            if (session.isRevisable(column)) {
+                open.addAll(session.classifications(column).keySet());     // the agent's own earlier classifications
+            }
             for (LineClassification c : classifications) {
                 if (!open.contains(c.label())) {
-                    throw new IllegalArgumentException("'" + c.label() + "' is not an unclassified line of " + column
-                            + "; unclassified: " + open);
+                    throw new IllegalArgumentException("'" + c.label() + "' is not an unclassified (or revisable) line of "
+                            + column + "; classifiable: " + open);
                 }
             }
             classifications.forEach(c -> session.classifications(column).put(c.label(), c.category()));

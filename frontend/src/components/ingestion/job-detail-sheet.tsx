@@ -419,6 +419,14 @@ export function JobDetailSheet({
                   Open the screening report <ChevronRightIcon />
                 </Link>
               )}
+              {shown.type === "ANALYSIS" && (
+                <Link
+                  href={`/screening/analysis/${shown.id}`}
+                  className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
+                >
+                  Open the analysis report <ChevronRightIcon />
+                </Link>
+              )}
 
               {shown.ticker && shown.exchange && !isActive(shown.status) && shown.status !== "FAILED" && (
                 <Link

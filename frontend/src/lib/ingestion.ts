@@ -32,6 +32,7 @@ export const TYPE_LABEL: Record<IngestionJobType, string> = {
   SCREENING: "AI screening",
   RAG_PDF: "PDF document (RAG)",
   RAG_NEWS: "News (RAG)",
+  ANALYSIS: "AI analysis",
 }
 
 /** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */

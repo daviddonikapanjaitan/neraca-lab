@@ -8,6 +8,9 @@ import { redirect } from "next/navigation"
 
 import { SESSION_COOKIE } from "@/lib/session-cookie"
 import type {
+  AnalysisOptions,
+  AnalysisPage,
+  AnalysisReport,
   CompanyDetail,
   CompanyListResponse,
   Exchange,
@@ -151,6 +154,17 @@ export const getScreeningOptions = cache(() => get<ScreeningOptions>("/api/v1/sc
 
 /** GET /api/v1/screenings?limit= (most recent runs first) */
 export const getScreenings = cache((limit: number) => get<ScreeningRun[]>(`/api/v1/screenings?limit=${limit}`))
+
+/** GET /api/v1/analyses/options: the companies with their stored data, agents, budget, models */
+export const getAnalysisOptions = cache(() => get<AnalysisOptions>("/api/v1/analyses/options"))
+
+/** GET /api/v1/analyses?limit=&offset= (one page, most recent first) */
+export const getAnalyses = cache((limit: number, offset: number) =>
+  get<AnalysisPage>(`/api/v1/analyses?limit=${limit}&offset=${offset}`)
+)
+
+/** GET /api/v1/analyses/{id}: the report */
+export const getAnalysis = cache((id: string) => get<AnalysisReport>(`/api/v1/analyses/${encodeURIComponent(id)}`))
 
 /** GET /api/v1/screenings/{id}: the report */
 export const getScreening = cache((id: string) =>
