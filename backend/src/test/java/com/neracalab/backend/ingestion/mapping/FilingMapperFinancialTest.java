@@ -305,6 +305,38 @@ class FilingMapperFinancialTest {
         }
     }
 
+    /**
+     * BRIS (a sharia bank) files the syirkah fund holders' share negative, other bank costs positive: it is a
+     * cost of revenue either way, and profit from operation reconciles only with it subtracted.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"2022-Tahunan", "2023-Tahunan", "2024-Tahunan", "2025-Tahunan", "2026-II"})
+    void syirkahShareFiledNegativeIsACost(String filing) throws Exception {
+        Path file = Path.of("..", "data", "BRIS", "xlsx", "FinancialStatement-" + filing + "-BRIS.xlsx");
+        assumeTrue(Files.exists(file), "BRIS source data not available: " + file);
+        FilingMapper mapper;
+        try (InputStream in = Files.newInputStream(file)) {
+            mapper = new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));
+        }
+        IngestionSession session = new IngestionSession(mapper);
+        for (StatementColumn column : mapper.columns()) {
+            for (MappedStatement s : session.statements(column)) {
+                assertThat(s.unclassified()).as(filing + " " + column + " " + s.table()).isEmpty();
+                assertThat(s.checks().stream().filter(Check::isError).toList()).as(filing + " " + column + " " + s.table()).isEmpty();
+            }
+        }
+        if (filing.equals("2025-Tahunan")) {
+            Map<String, BigDecimal> v = mapper.incomeStatement(StatementColumn.CURRENT_PERIOD, Map.of(), mapper.shareCapital())
+                    .orElseThrow().values();
+            // 28,265,491 mudharib + 165,017 fees + 70,647 FX + 5,396,199 other
+            assertThat(v.get("revenue")).isEqualByComparingTo(m(33897354));
+            assertThat(v.get("cost_of_revenue")).isEqualByComparingTo(m(9136405));     // filed as -9,136,405
+            assertThat(v.get("gross_profit")).isEqualByComparingTo(m(24760949));
+            assertThat(v.get("operating_income")).isEqualByComparingTo(m(9757724));
+            assertThat(v.get("net_income")).isEqualByComparingTo(m(7567523));
+        }
+    }
+
     private static BigDecimal m(long millions) {
         return BigDecimal.valueOf(millions).multiply(MILLION);
     }

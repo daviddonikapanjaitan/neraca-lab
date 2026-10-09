@@ -78,6 +78,8 @@ public class IdxWorkbookReader {
      * <ul>
      *   <li>pre-2023 template: "1410000 1 CurrentYear" -> 1410000, "1410000 2 PriorYear" -> 1410000PY
      *       (the names of the current template);</li>
+     *   <li>"Property and Real Estate Industry" taxonomy (e.g. CBDK): the same roles and line items under
+     *       codes starting with 2 (2210000, 2311000, 2410000, 2510000, ...) -> 1210000, 1311000, ...</li>
      *   <li>"Infrastructure Industry" taxonomy (e.g. SMDR): the same roles and line items under codes
      *       starting with 3 instead of 1 (3210000 balance sheet, 3311000 profit or loss, 3410000 equity,
      *       3510000 cash flow, 3611000 / 3612000 / 3617000 / 3618000 notes) -> 1210000, 1311000, ...</li>
@@ -90,7 +92,7 @@ public class IdxWorkbookReader {
      */
     static String canonicalName(String sheetName) {
         String name = filedName(sheetName);
-        if (name.matches("[34]\\d{6}(PY)?")) {
+        if (name.matches("[234]\\d{6}(PY)?")) {
             name = "1" + name.substring(1);
         }
         return name;

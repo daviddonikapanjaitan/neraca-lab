@@ -9,6 +9,8 @@ public enum IdxTaxonomy {
 
     /** "General Industry": 1210000 balance sheet, 1311000 profit or loss, ... */
     GENERAL('1'),
+    /** "Property and Real Estate Industry" (e.g. CBDK): the General Industry roles under 2xxxxxx, plus real estate assets. */
+    PROPERTY('2'),
     /** "Infrastructure Industry" (e.g. SMDR): the General Industry roles and line items under 3xxxxxx. */
     INFRASTRUCTURE('3'),
     /**

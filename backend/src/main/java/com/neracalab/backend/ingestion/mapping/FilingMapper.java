@@ -81,7 +81,9 @@ public final class FilingMapper {
             "Payments for advances for purchase of property, plant and equipment",
             "Payments for acquisition of property and equipment",
             "Payments for advances for purchase of property and equipment",
-            "Payments for acquisition of intangible assets");
+            "Payments for acquisition of intangible assets",
+            // a property developer's malls, offices and other rental assets (CBDK, PWON)
+            "Payments for acquisition of investment properties");
     private static final List<String> ACQUISITIONS = List.of(
             "Payments for acquisition of subsidiaries", "Payments for acquisition of interests in joint ventures",
             "Payments for acquisition of interests in associates");
@@ -465,7 +467,7 @@ public final class FilingMapper {
         Map<String, BigDecimal> unsigned = new LinkedHashMap<>();   // label -> contribution to profit before tax
         Map<String, BigDecimal> signed = new LinkedHashMap<>();
         for (StatementTable.Line line : income.lines()) {
-            BigDecimal raw = line.value(ctx);
+            BigDecimal raw = asCost(line.label(), line.value(ctx));
             IncomeLineCategory category = overrides.getOrDefault(line.label(), known.get(line.label()));
             if (raw == null || raw.signum() == 0 || category == null || overrides.containsKey(line.label())) {
                 continue;   // a classification given by the agent is never second-guessed
@@ -495,6 +497,11 @@ public final class FilingMapper {
         return pairs;
     }
 
+    /** A bank cost line filed with either sign ({@link IncomeLineCategory#FINANCIAL_UNSIGNED_COSTS}) as a positive cost. */
+    private BigDecimal asCost(String label, BigDecimal raw) {
+        return raw != null && financial && IncomeLineCategory.FINANCIAL_UNSIGNED_COSTS.contains(label) ? raw.abs() : raw;
+    }
+
     /** "Other income", "Other expenses", ...: a catch-all line of the template. */
     private static boolean isResidual(String label) {
         return label.toLowerCase(Locale.ROOT).startsWith("other ");
@@ -513,7 +520,7 @@ public final class FilingMapper {
         int profitIndex = income.indexOf(PROFIT);
         for (int i = 0; i < income.lines().size(); i++) {
             StatementTable.Line line = income.lines().get(i);
-            BigDecimal raw = line.value(ctx);
+            BigDecimal raw = asCost(line.label(), line.value(ctx));
             if (raw == null || STRUCTURAL_INCOME_LINES.contains(line.label())) {
                 continue;
             }
@@ -895,6 +902,20 @@ public final class FilingMapper {
 
     // ------------------------------------------------------------------ balance sheet
 
+    /**
+     * Current financial assets outside cash (time deposits, restricted funds, short-term investments) of a
+     * column's balance sheet, which some issuers count as cash in the cash flow statement; {@code null} when
+     * none is reported.
+     */
+    public BigDecimal currentFinancialAssetsOutsideCash(StatementColumn column) {
+        int ctx = instantIndex(column);
+        if (ctx < 0 || balanceSheet == null || financial) {
+            return null;
+        }
+        return sumOrNull(balanceSheet, List.of("Other current financial assets", "Current other financial assets",
+                "Short-term investments", "Current restricted funds"), ctx);
+    }
+
     public Optional<MappedStatement> balanceSheet(StatementColumn column, ShareCapital shares) {
         int ctx = instantIndex(column);
         if (ctx < 0 || balanceSheet == null || !balanceSheet.hasData(ctx)) {
@@ -940,7 +961,8 @@ public final class FilingMapper {
         v.put("cash_and_equivalents", sum(b, List.of("Cash and cash equivalents"), ctx));
         v.put("marketable_securities", sumOrNull(b, MARKETABLE_SECURITIES, ctx));
         v.put("accounts_receivable", sum(b, List.of("Trade receivables third parties", "Trade receivables related parties"), ctx));
-        v.put("inventory", sum(b, List.of("Current inventories"), ctx));
+        // a property developer's inventory is its land, houses and apartments for sale (CBDK, PWON)
+        v.put("inventory", sum(b, List.of("Current inventories", "Current real estate assets"), ctx));
         v.put("current_assets", currentAssets);
         v.put("total_assets", totalAssets);
         v.put("accounts_payable", sum(b, List.of("Trade payables third parties", "Trade payables related parties"), ctx));
@@ -1152,7 +1174,7 @@ public final class FilingMapper {
             BigDecimal bsCash = amount(balanceSheet.value("Cash and cash equivalents", 0));
             if (bsCash != null && bsCash.compareTo(ending) != 0) {
                 checks.add(Check.warning("cash_vs_balance_sheet", "Ending cash " + ending
-                        + " differs from balance-sheet cash " + bsCash + " (e.g. bank overdrafts in cash)"));
+                        + " differs from balance-sheet cash " + bsCash + " (e.g. bank overdrafts netted, or deposits counted, in cash)"));
             } else if (bsCash != null) {
                 checks.add(Check.ok("cash_vs_balance_sheet", "ending cash = balance-sheet cash"));
             }
@@ -1174,7 +1196,7 @@ public final class FilingMapper {
         v.put("cash_change", change);
         v.put("ending_cash", ending);
         Map<String, String> how = new LinkedHashMap<>();
-        how.put("capital_expenditure", "-(PP&E + advances for PP&E + intangibles) " + present(c, CAPEX, ctx));
+        how.put("capital_expenditure", "-(PP&E + advances for PP&E + intangibles + investment properties) " + present(c, CAPEX, ctx));
         how.put("debt_issued", "proceeds from borrowings and bonds " + present(c, DEBT_PROCEEDS, ctx));
         how.put("debt_repaid", "-(repayments of borrowings and bonds) " + present(c, DEBT_REPAYMENTS, ctx));
         how.put("dividends_paid", "-(dividends paid) " + present(c, DIVIDENDS_PAID, ctx));
@@ -1923,6 +1945,7 @@ public final class FilingMapper {
     private String taxonomyName() {
         return switch (taxonomy) {
             case GENERAL -> "General Industry";
+            case PROPERTY -> "Property and Real Estate Industry";
             case INFRASTRUCTURE -> "Infrastructure Industry";
             case FINANCIAL -> "Financial and Sharia Industry";
         };

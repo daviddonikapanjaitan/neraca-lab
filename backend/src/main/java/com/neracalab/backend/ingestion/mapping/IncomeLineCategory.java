@@ -1,6 +1,7 @@
 package com.neracalab.backend.ingestion.mapping;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Meaning of a profit-or-loss line item (IDX "by function" template; banks: "by nature", see
@@ -110,4 +111,11 @@ public enum IncomeLineCategory {
             Map.entry("Non-operating expenses", NON_OPERATING_EXPENSE),
             Map.entry("Share of profit (loss) of associates accounted for using equity method", NON_OPERATING_GAIN_OR_LOSS),
             Map.entry("Share of profit (loss) of joint ventures accounted for using equity method", NON_OPERATING_GAIN_OR_LOSS));
+
+    /**
+     * Bank cost lines filed with either sign, their size always a cost: BRIS files the syirkah fund holders'
+     * share negative (FY2025: -9,136,405 million; profit from operation reconciles with it as a cost).
+     */
+    static final Set<String> FINANCIAL_UNSIGNED_COSTS = Set.of(
+            "Third parties share on return of temporary syirkah funds");
 }
