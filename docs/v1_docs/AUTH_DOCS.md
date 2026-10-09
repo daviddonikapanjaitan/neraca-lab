@@ -20,7 +20,7 @@ user ──< user_roles >── role ──< role_permissions (ADMIN | INGESTION
 | `ADMIN`     | Admin Center: User Management, Role Management | `/api/v1/admin/**` (users, roles, permissions, user avatars)                                 |
 | `INGESTION` | Ingestion                                      | `/api/v1/financial-statements/**`, `/api/v1/prices/ingestions/**`, `/api/v1/ingestions/**`, `/api/v1/fundamentals/**`, and the company **list** (ticker dropdown) |
 | `COMPANIES` | Companies, company detail                      | `/api/v1/companies` (list), `/api/v1/companies/{exchange}/{ticker}` (detail)                  |
-| `SCREENING` | Screening, screening report                   | `/api/v1/screenings` (runs, reports, PDF), `/api/v1/fundamentals/status`                      |
+| `SCREENING` | Screening (Screening Stocks, Selected Stocks, Analysis), reports | `/api/v1/screenings` (runs, reports, PDF, `/companies` to select), `/api/v1/analyses`, `/api/v1/fundamentals/status` |
 | any login   | Profile                                        | `/api/v1/auth/me`, `/api/v1/profile/**`, `/api/v1/exchanges`                                 |
 | public      | Login                                          | `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/health`                  |
 

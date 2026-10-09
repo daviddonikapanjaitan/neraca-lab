@@ -26,6 +26,8 @@ import type {
   ScreeningOptions,
   ScreeningReport,
   ScreeningRun,
+  ScreeningScope,
+  SelectableCompanies,
   User,
 } from "@/lib/types"
 
@@ -152,8 +154,15 @@ export const getRagDocuments = cache((source: RagSourceType, limit: number) =>
 /** GET /api/v1/screenings/options */
 export const getScreeningOptions = cache(() => get<ScreeningOptions>("/api/v1/screenings/options"))
 
-/** GET /api/v1/screenings?limit= (most recent runs first) */
-export const getScreenings = cache((limit: number) => get<ScreeningRun[]>(`/api/v1/screenings?limit=${limit}`))
+/** GET /api/v1/screenings?limit=&scope= (most recent runs first; a tier's or selected stocks' screenings) */
+export const getScreenings = cache((limit: number, scope: ScreeningScope) =>
+  get<ScreeningRun[]>(`/api/v1/screenings?limit=${limit}&scope=${scope}`)
+)
+
+/** GET /api/v1/screenings/companies?exchange= (the companies that can be selected) */
+export const getSelectableCompanies = cache((exchange: string) =>
+  get<SelectableCompanies>(`/api/v1/screenings/companies?exchange=${encodeURIComponent(exchange)}`)
+)
 
 /** GET /api/v1/analyses/options: the companies with their stored data, agents, budget, models */
 export const getAnalysisOptions = cache(() => get<AnalysisOptions>("/api/v1/analyses/options"))

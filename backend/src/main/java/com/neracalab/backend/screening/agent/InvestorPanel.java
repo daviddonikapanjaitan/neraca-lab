@@ -227,7 +227,7 @@ public class InvestorPanel {
         Set<String> keys = new HashSet<>(StockProfile.METRIC_KEYS);
         keys.addAll(Set.of("revenue", "netIncome", "operatingIncome", "freeCashFlow", "totalDebt", "equity",
                 "totalAssets", "fiscalYearEnds", "annualIdrBillions", "news", "sentiment", "summary", "catalysts",
-                "risks", "liquidity", "sector", "industry", "tier"));
+                "risks", "liquidity", "sector", "industry", "tier", "tradabilityWarnings"));
         return keys;
     }
 

@@ -22,13 +22,20 @@ public final class Dossier {
     private Dossier() {
     }
 
-    public static String of(JsonReplies json, Candidate c, MarketCapTier tier, NewsBrief brief) {
+    /**
+     * @param flags tradability checks the stock failed but was kept for (screening of selected stocks, e.g. low
+     *              liquidity); empty otherwise
+     */
+    public static String of(JsonReplies json, Candidate c, MarketCapTier tier, List<String> flags, NewsBrief brief) {
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("ticker", c.ticker());
         d.put("company", c.snapshot().companyName());
         d.put("sector", c.snapshot().sector());
         d.put("industry", c.snapshot().industry());
         d.put("tier", tier.label());
+        if (!flags.isEmpty()) {
+            d.put("tradabilityWarnings", flags);
+        }
         d.put("dataDate", c.snapshot().snapshotDate() == null ? null : c.snapshot().snapshotDate().toString());
         d.put("metrics", c.profile().asMap());
         AnnualFigures annual = c.snapshot().fundamentals() == null ? null : c.snapshot().fundamentals().annual();

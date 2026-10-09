@@ -45,18 +45,29 @@ public class ScreeningQueue implements SmartLifecycle {
         this.worker = new SerialJobWorker("screening", jobs, service::run);
     }
 
-    /** Queues a run; the parameters are validated by the caller. */
+    /** Queues a screening of a market-cap tier; the parameters are validated by the caller. */
     public UUID submit(Exchange exchange, MarketCapTier tier, int topN, List<InvestorAgent> agents, Requester requestedBy) {
+        return submit(exchange, tier, null, topN, agents, requestedBy);
+    }
+
+    /** Queues a screening of selected stocks (tickers of the companies table); validated by the caller. */
+    public UUID submitSelection(Exchange exchange, List<String> tickers, int topN, List<InvestorAgent> agents,
+                                Requester requestedBy) {
+        return submit(exchange, null, List.copyOf(tickers), topN, agents, requestedBy);
+    }
+
+    private UUID submit(Exchange exchange, MarketCapTier tier, List<String> tickers, int topN, List<InvestorAgent> agents,
+                        Requester requestedBy) {
         UUID id = UUID.randomUUID();
         transaction.executeWithoutResult(status -> {
             jobs.save(new Snapshot(id, IngestionJobType.SCREENING, IngestionJobStatus.QUEUED,
                     "Waiting in the screening queue", exchange.code(), null, null, 0, null, Instant.now(), null, null, null,
                     null, requestedBy));
-            repository.insertRun(new RunParameters(id, exchange.code(), tier, topN, agents, properties.budgetUsd()));
+            repository.insertRun(new RunParameters(id, exchange.code(), tier, tickers, topN, agents, properties.budgetUsd()));
         });
         worker.enqueue(id);
         log.info("screening {} queued by {}: {} {} top {} {}", id, requestedBy == null ? "-" : requestedBy.username(),
-                exchange.code(), tier, topN, agents);
+                exchange.code(), tier != null ? tier : tickers, topN, agents);
         return id;
     }
 

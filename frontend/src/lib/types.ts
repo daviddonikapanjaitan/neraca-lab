@@ -481,6 +481,29 @@ export interface ScreeningOptions {
   }
 }
 
+/** A company of the companies table that can be selected (GET /api/v1/screenings/companies) */
+export interface SelectableCompany {
+  ticker: string
+  companyName: string
+  sector: string | null
+  /** latest market data of its Yahoo Finance listing; null when none is stored */
+  marketDataDate: string | null
+  marketCap: number | null
+  /** fundamentals loaded */
+  fundamentals: boolean
+}
+
+/** GET /api/v1/screenings/companies?exchange= */
+export interface SelectableCompanies {
+  exchange: string
+  /** most stocks one screening of selected stocks takes */
+  maxSelected: number
+  companies: SelectableCompany[]
+}
+
+/** Which runs a list holds: screenings of a market-cap tier or of selected stocks. */
+export type ScreeningScope = "TIER" | "SELECTION"
+
 /** One run as listed (and the head of the report). */
 export interface ScreeningRun {
   id: string
@@ -488,7 +511,10 @@ export interface ScreeningRun {
   stage: string | null
   message: string | null
   exchange: string
-  marketCapTier: MarketCapTier
+  /** null for a screening of selected stocks */
+  marketCapTier: MarketCapTier | null
+  /** the selected stocks; null for a screening of a market-cap tier */
+  tickers: string[] | null
   topN: number
   agents: InvestorAgentCode[]
   snapshotDate: string | null

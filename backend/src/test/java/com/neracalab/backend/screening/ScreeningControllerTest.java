@@ -175,13 +175,106 @@ class ScreeningControllerTest {
     }
 
     @Test
+    void companiesThatCanBeSelected() throws Exception {
+        mvc.perform(get("/api/v1/screenings/companies?exchange=idx"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.exchange").value("IDX"))
+                .andExpect(jsonPath("$.maxSelected").value(100))
+                .andExpect(jsonPath("$.companies[?(@.ticker == 'HRTA')].companyName").exists());
+        mvc.perform(get("/api/v1/screenings/companies?exchange=NYSE"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Unsupported exchange"));
+    }
+
+    @Test
+    void invalidSelectionsAreRejected() throws Exception {
+        submit(Map.of("tickers", List.of(), "agents", List.of("BUFFETT")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Choose at least one stock"));
+        submit(Map.of("marketCapTier", "LARGE", "tickers", List.of("HRTA"), "agents", List.of("BUFFETT")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Give either marketCapTier or tickers, not both"));
+        submit(Map.of("tickers", List.of("HRTA", "ZZZZ9"), "agents", List.of("BUFFETT")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Not in the IDX companies table: ZZZZ9"));
+        submit(Map.of("tickers", List.of("HR TA"), "agents", List.of("BUFFETT")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.startsWith("Invalid ticker 'HR TA'")));
+        // top N at most the number of selected stocks
+        submit(Map.of("tickers", List.of("HRTA"), "topN", 2, "agents", List.of("BUFFETT")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("topN must be between 1 and 1"));
+        submit(Map.of("tickers", List.of("HRTA"), "agents", List.of()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Choose at least one investor agent"));
+        List<String> tooMany = new ArrayList<>();
+        for (int i = 0; i < 101; i++) {
+            tooMany.add("T" + i);
+        }
+        submit(Map.of("tickers", tooMany, "agents", List.of("BUFFETT")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Choose at most 100 stocks (101 selected)"));
+        mvc.perform(get("/api/v1/screenings?scope=OTHER"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("scope must be one of ALL, TIER, SELECTION"));
+    }
+
+    @Test
+    void selectionRunIsQueuedProcessedAndListedByScope() throws Exception {
+        MockHttpServletResponse response = submit(Map.of("exchange", "IDX", "tickers", List.of(" hrta", "HRTA"),
+                "agents", List.of("LYNCH")))
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse();
+        JsonNode run = json.readTree(response.getContentAsString());
+        UUID id = UUID.fromString(run.path("id").asString());
+        created.add(id);
+        assertThat(run.path("marketCapTier").isNull()).isTrue();
+        // normalized, duplicates removed
+        assertThat(run.path("tickers").toString()).isEqualTo("[\"HRTA\"]");
+        // default top N: at most the number of selected stocks
+        assertThat(run.path("topN").asInt()).isEqualTo(1);
+        assertThat(repository.parameters(id).orElseThrow().selection()).isTrue();
+
+        JsonNode report = awaitFinished(id);
+        assertThat(report.path("run").path("status").asString()).isEqualTo("SUCCEEDED");
+        assertThat(report.path("run").path("tickers").path(0).asString()).isEqualTo("HRTA");
+
+        mvc.perform(get("/api/v1/screenings?limit=5&scope=selection"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(id.toString()));
+        JsonNode tierRuns = json.readTree(mvc.perform(get("/api/v1/screenings?limit=200&scope=TIER"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        tierRuns.forEach(r -> assertThat(r.path("id").asString()).isNotEqualTo(id.toString()));
+
+        MockHttpServletResponse pdf = mvc.perform(get("/api/v1/screenings/" + id + "/pdf"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse();
+        assertThat(pdf.getHeader("Content-Disposition")).contains("screening-IDX-selection-top1-");
+    }
+
+    @Test
+    void aRunScreensEitherATierOrSelectedStocks() {
+        UUID id = UUID.randomUUID();
+        created.add(id);
+        jobs.save(new IngestionJobRepository.Snapshot(id, com.neracalab.backend.job.IngestionJobType.SCREENING,
+                IngestionJobStatus.QUEUED, "Waiting", "IDX", null, null, 0, null, Instant.now(), null, null, null, null,
+                null));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repository.insertRun(new ScreeningRepository.RunParameters(
+                        id, "IDX", MarketCapTier.LARGE, List.of("HRTA"), 1, List.of(InvestorAgent.LYNCH), 0.45)))
+                .hasMessageContaining("ck_screening_run_scope");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repository.insertRun(new ScreeningRepository.RunParameters(
+                        id, "IDX", null, null, 1, List.of(InvestorAgent.LYNCH), 0.45)))
+                .hasMessageContaining("ck_screening_run_scope");
+    }
+
+    @Test
     void pdfOfAnActiveRunIsAConflict() throws Exception {
         UUID id = UUID.randomUUID();
         created.add(id);
         jobs.save(new IngestionJobRepository.Snapshot(id, com.neracalab.backend.job.IngestionJobType.SCREENING,
                 IngestionJobStatus.RUNNING, "Investor agents", "IDX", null, null, 1, null, Instant.now(), Instant.now(),
                 null, null, null, null));
-        repository.insertRun(new ScreeningRepository.RunParameters(id, "IDX", MarketCapTier.LARGE, 25,
+        repository.insertRun(new ScreeningRepository.RunParameters(id, "IDX", MarketCapTier.LARGE, null, 25,
                 List.of(InvestorAgent.LYNCH), 0.45));
         mvc.perform(get("/api/v1/screenings/" + id))
                 .andExpect(status().isOk())

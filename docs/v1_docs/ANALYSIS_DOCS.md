@@ -34,7 +34,8 @@ and downloadable as PDF.
 ## 1. Using it
 
 Frontend: the **Screening** entry of the sidebar is a dropdown (like Ingestion and the Admin Center)
-with **Screening Stocks** (`/screening`, the exchange screening) and **Analysis**
+with **Screening Stocks** (`/screening`, the exchange screening), **Selected Stocks**
+(`/screening/selected`, a screening of stocks chosen from the companies table) and **Analysis**
 (`/screening/analysis`). Permission `SCREENING`.
 
 1. Choose a stock (ticker) of the companies table. The form shows what the database holds for it:
