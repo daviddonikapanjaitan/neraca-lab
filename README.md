@@ -96,6 +96,7 @@ neraca_lab/
 │               ├── V1.0.14__schema_rag.sql        (RAG vector store: rag_document, rag_chunk; needs pgvector)
 │               ├── V1.0.15__schema_analysis.sql   (AI analysis of one stock: analysis_run, analysis_agent_score)
 │               ├── V1.0.16__schema_syirkah.sql    (banks: balance_sheet.temporary_syirkah_funds)
+│               ├── V1.0.17__schema_screening_selection.sql (screening of selected stocks: screening_run.tickers)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -174,7 +175,7 @@ role has one or more permissions, and the backend checks them on every API reque
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
 | `INGESTION` | Ingestion pages, upload / price / RAG / job APIs (and the company list)  |
 | `COMPANIES` | Companies pages and company APIs                                         |
-| `SCREENING` | Screening pages (Screening Stocks, Analysis): runs, analyses, reports, PDF export |
+| `SCREENING` | Screening pages (Screening Stocks, Selected Stocks, Analysis): runs, analyses, reports, PDF export |
 
 The root user `admin` (initial password `admin`, dummy profile data) has the built-in
 Administrator role with every permission; it cannot be deleted, deactivated or lose that role.
@@ -384,6 +385,8 @@ again and downloaded as PDF.
 ```bash
 curl -H "$AUTH" -H "Content-Type: application/json" http://localhost:8080/api/v1/screenings \
      -d '{"exchange":"IDX","marketCapTier":"LARGE","topN":25,"agents":["BUFFETT","MUNGER","LYNCH","FISHER","GILL","RISK"]}'
+curl -H "$AUTH" -H "Content-Type: application/json" http://localhost:8080/api/v1/screenings \
+     -d '{"exchange":"IDX","tickers":["BBCA","BBRI","TLKM"],"topN":2,"agents":["BUFFETT","RISK"]}'   # selected stocks
 curl -H "$AUTH" http://localhost:8080/api/v1/screenings/{id}         # report (progress while running)
 curl -H "$AUTH" -OJ http://localhost:8080/api/v1/screenings/{id}/pdf # PDF
 ```
@@ -392,12 +395,15 @@ Each agent score is 60% quantitative scorecard + 40% AI judgement; the overall s
 average of the investor agents, blended 20% with the Risk agent (safety). Cost is capped at
 **$0.45 per run** (`SCREENING_BUDGET_USD`); a large-cap top 10 with all six agents (30 stocks
 analysed) cost $0.12. The daily ETL runs Monday-Friday 18:00 WIB and before each screening; the
-Ingestion page can start it by hand. Details: [`docs/v1_docs/SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md).
+Ingestion page can start it by hand. **Screening > Selected Stocks** screens stocks chosen from the companies
+table (searchable multi-select, up to 100) with the same steps and report; a chosen stock that fails a tradability
+check (liquidity, price below Rp 50, no recent trade, watchlist board) is kept and flagged instead of dropped, while
+one without the data the scorecards need is left out and named in the notes. Details: [`docs/v1_docs/SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md).
 
 ## AI analysis of one stock
 
-**Screening > Analysis** in the sidebar (the Screening entry is a dropdown with Screening Stocks and
-Analysis; permission `SCREENING`): choose a stock of the companies table and the investor agents.
+**Screening > Analysis** in the sidebar (the Screening entry is a dropdown with Screening Stocks, Selected
+Stocks and Analysis; permission `SCREENING`): choose a stock of the companies table and the investor agents.
 The form shows what the database holds for it (statements, market data, PDF documents, news). The
 analysis is a background job; its report and cost are saved and can be downloaded as PDF.
 
@@ -443,6 +449,8 @@ npm run dev                   # http://localhost:3000
 | `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
+| `/screening/selected`            | Selected Stocks: stocks chosen from the companies table (search, multi-select), top N, investor agents; saved screenings of selected stocks |
+| `/screening/selected/{id}`       | report of a screening of selected stocks (same content; the selected stocks and their flags shown) |
 | `/screening/{id}`                | screening report: progress, executive summary, ranking with per-agent scores, stock details (news, reasoning, reflection), funnel, token usage, PDF download |
 | `/screening/analysis`            | Analysis: one stock of the companies table (with its stored data) and the investor agents; saved analyses (10 per page: 5 / 10 / 20 / 50) |
 | `/screening/analysis/{id}`       | analysis report: progress, overall score and cost, executive summary (bull / bear case, risks), every agent's view, research brief with its excerpts and ReAct steps, key figures, data used, notes, token usage, PDF download |
@@ -517,10 +525,11 @@ files rejected without storing, the job list filters and pages (`limit` / `offse
 name of each upload). `PriceIngestionControllerTest` also checks that price jobs are recorded in
 `ingestion_job`. The tests delete the job rows they create.
 Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), `YahooFundamentalsClientTest`
-(saved Yahoo responses), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist),
+(saved Yahoo responses), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist; selected stocks:
+flagged and excluded stocks),
 `ScreeningAgentsTest` (scripted model: options, cost metering and budget, ReAct with a tool call,
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
-(pipeline mocked: validation, job, report, PDF); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
+(pipeline mocked: validation, job, report, PDF; selectable companies, selection validation, runs by scope); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
 RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
 (date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, rolled back)
 and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
@@ -563,6 +572,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.14__schema_rag.sql`             | RAG vector store (pgvector): `rag_document`, `rag_chunk` (`vector(1536)`, HNSW); job types `RAG_PDF`, `RAG_NEWS` |
 | `V1.0.15__schema_analysis.sql`        | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id`; job type `ANALYSIS` |
 | `V1.0.16__schema_syirkah.sql`         | banks: `balance_sheet.temporary_syirkah_funds` (sharia depositors; neither liabilities nor equity) |
+| `V1.0.17__schema_screening_selection.sql` | screening of selected stocks: `screening_run.tickers`, `market_cap_tier` NULL for such runs |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |

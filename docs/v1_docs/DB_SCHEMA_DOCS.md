@@ -20,6 +20,7 @@ foreign key.
 | `V1.0.14__schema_rag.sql`                 | RAG vector store: `vector` extension, `rag_document`, `rag_chunk`; job types `RAG_PDF`, `RAG_NEWS` (section 4.12) |
 | `V1.0.15__schema_analysis.sql`            | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id` (section 4.13) |
 | `V1.0.16__schema_syirkah.sql`             | `balance_sheet.temporary_syirkah_funds`: banks' sharia depositor funds, neither liabilities nor equity (section 3) |
+| `V1.0.17__schema_screening_selection.sql` | `screening_run.tickers`: screening of selected stocks; `market_cap_tier` NULL for those runs (section 4.11) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -624,7 +625,7 @@ Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)
 | `stock_listing`         | screening universe per exchange (Yahoo screener): ticker, symbol, name, sector, industry, board, active |
 | `fundamental_snapshot`  | one row per listing per day: market data (price, market cap, volumes, P/E, P/B, ...) and fundamentals (ratios, `annual` JSONB of four fiscal years), carried forward between refreshes |
 | `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the research agent |
-| `screening_run`         | one run (`run_id` = `ingestion_job.job_id`): parameters, funnel, synthesis, notes, tokens, cost |
+| `screening_run`         | one run (`run_id` = `ingestion_job.job_id`): parameters (a `market_cap_tier`, or the selected `tickers` of a screening of selected stocks, `V1.0.17`; exactly one of both), funnel, synthesis, notes, tokens, cost |
 | `screening_candidate`   | Stage 1 shortlist of a run: metrics, quantitative score, news, overall score, rank, selected, thesis |
 | `screening_agent_score` | per candidate and agent: quantitative / AI / final score, verdict, reasoning, reflection         |
 | `screening_lesson`      | Reflexion memory: lessons per agent with their occurrence count                                  |

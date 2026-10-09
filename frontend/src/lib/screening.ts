@@ -1,6 +1,7 @@
 // AI stock screening helpers shared by the screening components.
 
 import { EMPTY } from "@/lib/format"
+import { SELECTED_STOCKS_HREF } from "@/lib/screening-sections"
 import type { InvestorAgentCode, MarketCapTier, NewsBriefView, ScreeningRun } from "@/lib/types"
 
 /** Runs shown on the screening page (most recent first). */
@@ -70,9 +71,26 @@ export function verdictLabel(verdict: string | null | undefined): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
-/** "Large cap · top 25 · 3 agents" */
-export function runTitle(run: Pick<ScreeningRun, "marketCapTier" | "topN" | "agents" | "exchange">): string {
-  return `${run.exchange} ${TIER_LABEL[run.marketCapTier]} · top ${run.topN} · ${run.agents.length} ${
+/** "Large cap", or "5 selected stocks" for a screening of selected stocks. */
+export function scopeLabel(run: Pick<ScreeningRun, "marketCapTier" | "tickers">): string {
+  if (run.marketCapTier) return TIER_LABEL[run.marketCapTier]
+  const n = run.tickers?.length ?? 0
+  return `${n} selected ${n === 1 ? "stock" : "stocks"}`
+}
+
+/** The page a run was started from: Screening Stocks or Selected Stocks. */
+export function runsPageHref(run: Pick<ScreeningRun, "tickers">): string {
+  return run.tickers ? SELECTED_STOCKS_HREF : "/screening"
+}
+
+/** The report page of a run, under the page it was started from. */
+export function reportHref(run: Pick<ScreeningRun, "id" | "tickers">): string {
+  return `${runsPageHref(run)}/${run.id}`
+}
+
+/** "IDX Large cap · top 25 · 3 agents" */
+export function runTitle(run: Pick<ScreeningRun, "marketCapTier" | "tickers" | "topN" | "agents" | "exchange">): string {
+  return `${run.exchange} ${scopeLabel(run)} · top ${run.topN} · ${run.agents.length} ${
     run.agents.length === 1 ? "agent" : "agents"
   }`
 }

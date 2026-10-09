@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.IntConsumer;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,9 +61,11 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * One screening run, end to end (called by the {@link ScreeningQueue} worker):
+ * A run screens a market-cap tier (Screening Stocks) or the stocks the user selected from the companies table
+ * (Selected Stocks; {@link RunParameters#selection()}); both take the same steps:
  * <ol>
  *   <li><b>Data</b>: today's market data (Yahoo screener) unless stored, and fresh fundamentals for the
- *       stocks that pass the market-data filters of the tier.</li>
+ *       stocks that pass the market-data filters of the tier (or of the selection).</li>
  *   <li><b>Stage 1</b> ({@link QuantScreener}, no model): filters, quantitative score per agent, shortlist.</li>
  *   <li><b>Stage 2</b>: the research agent (news brief per stock), the selected investor agents (one
  *       independent call each), Reflection (validator + critic on flagged answers).</li>
@@ -121,6 +124,8 @@ public class ScreeningService {
     private static final class Work {
         final Candidate candidate;
         final long candidateId;
+        /** screening of selected stocks: tradability steps it failed but was kept for (e.g. low liquidity) */
+        final List<String> flags;
         ResearchAgent.Result research;
         String dossier;
         final Map<InvestorAgent, Outcome> outcomes = new EnumMap<>(InvestorAgent.class);
@@ -129,9 +134,10 @@ public class ScreeningService {
         double adjustment;
         StockView view;
 
-        Work(Candidate candidate, long candidateId) {
+        Work(Candidate candidate, long candidateId, List<String> flags) {
             this.candidate = candidate;
             this.candidateId = candidateId;
+            this.flags = flags;
         }
 
         String ticker() {
@@ -173,10 +179,12 @@ public class ScreeningService {
             }
         }
         checkInterrupted();
-        List<StockSnapshot> universe = fundamentals.latestSnapshots(exchange);
+        List<StockSnapshot> universe = snapshots(exchange, p);
         if (universe.isEmpty()) {
-            finish(id, meter, notes, IngestionJobStatus.FAILED, "No market data",
-                    "No " + exchange.code() + " market data is stored and Yahoo Finance could not be reached");
+            finish(id, meter, notes, IngestionJobStatus.FAILED, "No market data", p.selection()
+                    ? "None of the " + p.tickers().size() + " selected stocks has " + exchange.code()
+                    + " market data stored, and Yahoo Finance could not be reached or does not list them"
+                    : "No " + exchange.code() + " market data is stored and Yahoo Finance could not be reached");
             return;
         }
         List<String> tickers = screener.marketFiltered(universe, p.tier(), zone).stream().map(StockSnapshot::ticker).toList();
@@ -196,17 +204,33 @@ public class ScreeningService {
         } else if (refresh.failed() > 0) {
             notes.add(refresh.failed() + " candidates have no fundamentals on Yahoo Finance and were filtered out.");
         }
-        universe = fundamentals.latestSnapshots(exchange);
+        universe = snapshots(exchange, p);
 
         // ---- Stage 1
-        jobs.progress(id, "Stage 1: quantitative pre-screen of " + universe.size() + " listings", null, null);
-        QuantScreener.Result s1 = screener.screen(universe, p.tier(), p.agents(), p.topN(), zone);
+        QuantScreener.Result s1;
+        if (p.selection()) {
+            jobs.progress(id, "Stage 1: quantitative pre-screen of " + p.tickers().size() + " selected stocks", null, null);
+            s1 = screener.screenSelection(p.tickers(), universe, p.agents(), zone);
+        } else {
+            jobs.progress(id, "Stage 1: quantitative pre-screen of " + universe.size() + " listings", null, null);
+            s1 = screener.screen(universe, p.tier(), p.agents(), p.topN(), zone);
+        }
         LocalDate snapshotDate = universe.stream().map(StockSnapshot::snapshotDate).max(Comparator.naturalOrder()).orElse(today);
         repository.saveStage1(id, snapshotDate, s1.universe(), s1.eligible().size(), s1.shortlist().size(), s1.funnel());
+        if (!s1.excluded().isEmpty()) {
+            notes.add("Filtered out in Stage 1: " + s1.excluded().entrySet().stream()
+                    .map(e -> e.getKey() + " (" + e.getValue() + ")").collect(Collectors.joining("; ")) + ".");
+        }
+        if (!s1.flags().isEmpty()) {
+            notes.add("Kept although they failed a tradability check (the agents see it; red flag in the report): "
+                    + s1.flags().entrySet().stream().map(e -> e.getKey() + " (" + String.join("; ", e.getValue()) + ")")
+                    .collect(Collectors.joining("; ")) + ".");
+        }
         if (s1.shortlist().isEmpty()) {
             notes.add("No stock passed the Stage 1 filters.");
-            finish(id, meter, notes, IngestionJobStatus.INCOMPLETE, "No stock passed the Stage 1 filters",
-                    "No " + p.tier().label().toLowerCase() + " stock passed the filters");
+            finish(id, meter, notes, IngestionJobStatus.INCOMPLETE, "No stock passed the Stage 1 filters", p.selection()
+                    ? "None of the " + p.tickers().size() + " selected stocks passed the filters"
+                    : "No " + p.tier().label().toLowerCase() + " stock passed the filters");
             return;
         }
         if (s1.eligible().size() < p.topN()) {
@@ -222,7 +246,7 @@ public class ScreeningService {
             metrics.put("coverage", c.coverage());
             long candidateId = repository.insertCandidate(id, c.ticker(), c.snapshot().companyName(), c.snapshot().sector(),
                     c.snapshot().industry(), metrics, c.overall(), i + 1);
-            works.add(new Work(c, candidateId));
+            works.add(new Work(c, candidateId, s1.flags(c.ticker())));
         }
         checkInterrupted();
 
@@ -241,7 +265,8 @@ public class ScreeningService {
             w.research = research.research(meter, exchange.code(), w.ticker(), w.candidate.snapshot().companyName(),
                     w.candidate.snapshot().sector(), today, allow, researchLessons);
             repository.saveNews(w.candidateId, newsDocument(w.research));
-            w.dossier = Dossier.of(json, w.candidate, p.tier(), w.research.brief());
+            w.dossier = Dossier.of(json, w.candidate, p.tier() != null ? p.tier()
+                    : MarketCapTier.of(w.candidate.snapshot().marketCap(), properties), w.flags, w.research.brief());
             return null;
         }, done -> progress(id, meter, "Research agent: news of " + works.size() + " stocks (" + done + "/"
                 + works.size() + ")"));
@@ -333,7 +358,11 @@ public class ScreeningService {
         }
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("exchange", exchange.code());
-        context.put("marketCapTier", p.tier().label());
+        if (p.selection()) {
+            context.put("universe", "Stocks selected by the user (" + p.tickers().size() + "), of any market cap");
+        } else {
+            context.put("marketCapTier", p.tier().label());
+        }
         context.put("topN", topN);
         context.put("agents", p.agents().stream().map(InvestorAgent::label).toList());
         context.put("shortlisted", works.size());
@@ -384,8 +413,11 @@ public class ScreeningService {
         repository.saveResult(id, topN, synthesisDoc, notes.document(meter, works.size(), flagged.size()));
         repository.saveTotals(id, meter.total());
 
-        String summary = "Top " + topN + " of " + works.size() + " shortlisted " + p.tier().label().toLowerCase()
-                + " stocks (" + s1.eligible().size() + " eligible), $" + cents(meter.spentUsd());
+        String summary = p.selection()
+                ? "Top " + topN + " of " + p.tickers().size() + " selected stocks (" + s1.eligible().size()
+                        + " eligible), $" + cents(meter.spentUsd())
+                : "Top " + topN + " of " + works.size() + " shortlisted " + p.tier().label().toLowerCase()
+                        + " stocks (" + s1.eligible().size() + " eligible), $" + cents(meter.spentUsd());
         boolean degraded = syn.fallback() != null || quantOnly.get() > 0 || failed > 0 || refresh.rateLimited()
                 || s1.eligible().size() < p.topN();
         if (degraded) {
@@ -474,7 +506,7 @@ public class ScreeningService {
     }
 
     private static List<String> redFlags(Work w) {
-        List<String> flags = new ArrayList<>();
+        List<String> flags = new ArrayList<>(w.flags);
         NewsBrief brief = w.research == null ? null : w.research.brief();
         if (brief != null && ("NEGATIVE".equals(brief.sentiment()) || "MIXED".equals(brief.sentiment()))
                 && !brief.risks().isEmpty()) {
@@ -501,6 +533,11 @@ public class ScreeningService {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** The latest snapshots of every listing of the exchange, or of the selected stocks only. */
+    private List<StockSnapshot> snapshots(Exchange exchange, RunParameters p) {
+        return p.selection() ? fundamentals.latestSnapshots(exchange, p.tickers()) : fundamentals.latestSnapshots(exchange);
+    }
 
     /** Runs {@code fn} on every item, at most {@code llm.concurrency} at once; results in item order. */
     private <T, R> List<R> parallel(List<T> items, Function<T, R> fn, IntConsumer progress) {

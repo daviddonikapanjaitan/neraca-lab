@@ -28,7 +28,7 @@ is saved in the database, shown on the Screening page and downloadable as PDF.
 ## 1. Using it
 
 Frontend: **Screening > Screening Stocks** in the sidebar (below Companies; the Screening entry is a
-dropdown with Screening Stocks and Analysis), permission `SCREENING` (the built-in Administrator role
+dropdown with Screening Stocks, Selected Stocks and Analysis), permission `SCREENING` (the built-in Administrator role
 has it; give it to other roles in Role Management). The in-depth analysis of one stock (Screening >
 Analysis) reuses the investor agents, Reflection and Reflexion of this page: [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md).
 
@@ -41,6 +41,30 @@ Analysis) reuses the investor agents, Reflection and Reflexion of this page: [AN
    the shortlist, the Stage 1 funnel, notes and lessons, token usage per stage and model.
 4. **Download PDF**. Saved screenings stay listed on the Screening page.
 
+**Screening > Selected Stocks** screens stocks you choose instead of a market-cap tier, with the same steps
+(data refresh, Stage 1, Stage 2, ranking, synthesis, report, PDF):
+
+1. Pick stocks from the companies table of the exchange (IDX; searchable multi-select, 1-100 stocks, i.e.
+   at most `max-shortlist`), the top N (1 to the number selected, at most 50; default 25 or fewer) and the
+   investor agents.
+2. Stage 1 runs the same steps on the selected stocks (section 4), with these differences:
+   - the tier filter becomes "market cap known";
+   - the **tradability checks** (price at least Rp 50, traded within 10 days, liquidity, watchlist board /
+     `excluded-tickers`) do not drop a stock the user chose: it is kept and **flagged** with the reason,
+     e.g. "Low liquidity: traded value per day 73M, below the 5B minimum of large caps" (the liquidity minimum
+     is that of the stock's own tier). The flag is a red flag in the report, listed in the notes ("Kept although
+     they failed a tradability check: ..."), and given to the agents in the dossier (`tradabilityWarnings`);
+     the Risk scorecard already rates liquidity;
+   - the **data checks** (market data, fundamentals, positive earnings, positive book equity, scoring-metric
+     coverage) still exclude a stock, as the scorecards need them; the notes name each one with the check it
+     failed ("Filtered out in Stage 1: ...");
+   - every stock that passes is shortlisted (no `top N x 3` cut), so the AI agents analyse all of them, and the
+     fundamentals of flagged stocks are refreshed like the others.
+3. The agents see each stock's own tier in its dossier; the synthesis is told the stocks were selected by
+   the user. The run is `INCOMPLETE` when fewer stocks pass than the top N.
+
+The page lists only screenings of selected stocks; Screening Stocks lists only tier screenings.
+
 The **Ingestion** page has a "Screening data" card to run the ETL by hand, and its jobs table opens
 on the ETL runs (`FUNDAMENTALS`); the screenings (`SCREENING`) and the other jobs are under the other tabs.
 
@@ -52,7 +76,8 @@ Every endpoint needs a login (`Authorization: Bearer <token>`).
 |------------------------------------------------------|-----------------------|------------------------------------------------|
 | `GET /api/v1/screenings/options`                     | SCREENING             | exchanges, tiers, agents, limits, stored data  |
 | `POST /api/v1/screenings`                            | SCREENING             | 202 with the queued run (`Location`)           |
-| `GET /api/v1/screenings[?limit=50]`                  | SCREENING             | runs, most recent first (1-200)                |
+| `GET /api/v1/screenings/companies[?exchange=IDX]`    | SCREENING             | companies that can be selected, with their market data date, market cap, fundamentals; `maxSelected` |
+| `GET /api/v1/screenings[?limit=50][&scope=ALL\|TIER\|SELECTION]` | SCREENING | runs, most recent first (1-200); `TIER` = tier screenings, `SELECTION` = of selected stocks |
 | `GET /api/v1/screenings/{id}`                        | SCREENING             | the report (also while the run is active)      |
 | `GET /api/v1/screenings/{id}/pdf`                    | SCREENING             | PDF (409 while the run is active)              |
 | `POST /api/v1/fundamentals/ingestions?exchange=IDX[&full=true]` | INGESTION  | 202 new ETL run / 200 the active one           |
@@ -62,6 +87,18 @@ Every endpoint needs a login (`Authorization: Bearer <token>`).
 curl -H "$AUTH" -H "Content-Type: application/json" http://localhost:8080/api/v1/screenings \
      -d '{"exchange":"IDX","marketCapTier":"LARGE","topN":25,"agents":["BUFFETT","MUNGER","LYNCH","FISHER","GILL","RISK"]}'
 ```
+
+A screening of selected stocks sends `tickers` instead of `marketCapTier` (never both):
+
+```bash
+curl -H "$AUTH" -H "Content-Type: application/json" http://localhost:8080/api/v1/screenings \
+     -d '{"exchange":"IDX","tickers":["BBCA","BBRI","TLKM"],"topN":2,"agents":["BUFFETT","RISK"]}'
+```
+
+`tickers` are normalized (trimmed, upper case), duplicates dropped, selection order kept; errors:
+`Choose at least one stock`, `Choose at most 100 stocks (n selected)`, `Not in the IDX companies table: ...`,
+`Invalid ticker ...`, `Give either marketCapTier or tickers, not both`, `topN must be between 1 and <selected>`.
+The run's `marketCapTier` is then `null` and `tickers` lists the stocks (`tickers` is `null` for a tier).
 
 `marketCapTier`: `LARGE`, `MID` (or `MEDIUM`), `SMALL`. `agents`: `BUFFETT`, `MUNGER`, `LYNCH`,
 `FISHER`, `GILL` (Keith Gill / Roaring Kitty), `RISK`; names such as "Warren Buffett" are accepted;
@@ -203,6 +240,8 @@ OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 `screening_lesson`, `llm_usage` (also the rows of the analyses, `llm_usage.analysis_id` of
 `V1.0.15__schema_analysis.sql`). The script also extends the CHECK constraints for the `SCREENING`
 permission and the `FUNDAMENTALS` / `SCREENING` job types. Details in the column comments.
+`V1.0.17__schema_screening_selection.sql` adds `screening_run.tickers` (the selected stocks) and makes
+`market_cap_tier` NULL for those runs; `ck_screening_run_scope` keeps exactly one of both.
 
 ## 9. Tests
 
@@ -210,10 +249,10 @@ permission and the `FUNDAMENTALS` / `SCREENING` job types. Details in the column
 |-------------------------------|-------------------------------------------------------------------------------------|
 | `NewsParsersTest`             | excerpts of the four sites' pages (headline lists, `src/test/resources/screening`) give the right headlines and dates (Jakarta time); a synthetic article page gives title, date and text; relevance matching |
 | `YahooFundamentalsClientTest` | screener, quoteSummary and time series responses are read correctly (banks too)     |
-| `QuantScreeningTest`          | metrics, scorecards, renormalization, overall blending, the funnel in order, shortlist = 3 x top N |
+| `QuantScreeningTest`          | metrics, scorecards, renormalization, overall blending, the funnel in order, shortlist = 3 x top N; selected stocks: same steps, tradability failures kept and flagged (liquidity of each stock's tier), data failures excluded and named, every eligible one shortlisted |
 | `ScreeningAgentsTest`         | model options (reasoning off, Opus effort low), cost metering and budget, ReAct with a tool call, Reflection critic, JSON retry (cut off at the limit, no strengths and concerns), provider routing without OpenInference, transient-failure retries and their limit, synthesis rules and fallback (scripted model) |
 | `FundamentalRepositoryTest`   | daily snapshots, fundamentals carried forward, stale detection (Docker Postgres)    |
-| `ScreeningControllerTest`     | options, validation, a run end to end with the pipeline mocked, report JSON and PDF, 409 for an active run |
+| `ScreeningControllerTest`     | options, validation, a run end to end with the pipeline mocked, report JSON and PDF, 409 for an active run; selectable companies, selection validation, a selection run listed by scope, its PDF name, the tier-or-tickers constraint |
 | `AccessControlTest`           | the screening APIs need SCREENING                                                   |
 
 Run against a separate database while a backend processes jobs:

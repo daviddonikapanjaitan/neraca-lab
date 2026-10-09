@@ -26,7 +26,7 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { EMPTY, formatDate, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
 import { creatorLabel, formatDuration, isActive } from "@/lib/ingestion"
-import { AGENT_SHORT, formatTokens, formatUsd, runTitle } from "@/lib/screening"
+import { AGENT_SHORT, formatTokens, formatUsd, runsPageHref, runTitle } from "@/lib/screening"
 import type { ScreeningCandidate, ScreeningReport } from "@/lib/types"
 
 const POLL_MS = 3000
@@ -85,7 +85,10 @@ export function ReportView({ initial }: { initial: ScreeningReport }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
-          <Link href="/screening" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <Link
+            href={runsPageHref(run)}
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
             <ArrowLeftIcon className="size-3.5" /> All screenings
           </Link>
           <h1 className="text-xl font-semibold tracking-tight">{runTitle(run)}</h1>
@@ -94,6 +97,9 @@ export function ReportView({ initial }: { initial: ScreeningReport }) {
             {creatorLabel(run.createdBy)}
             {run.snapshotDate && ` · market data of ${formatDate(run.snapshotDate)}`}
           </p>
+          {run.tickers && (
+            <p className="text-xs text-muted-foreground">Selected stocks: {run.tickers.join(", ")}</p>
+          )}
         </div>
         <DownloadPdfButton
           href={`/api/screenings/${encodeURIComponent(run.id)}/pdf`}
@@ -277,7 +283,7 @@ export function ReportView({ initial }: { initial: ScreeningReport }) {
       <p className="text-xs text-muted-foreground">
         Generated automatically from public data (Yahoo Finance, EmitenNews, Pasardana, IDX Channel, Investor.id, Tavily)
         and AI models. It can contain errors and is not investment advice.{" "}
-        <Link href="/screening" className={buttonVariants({ variant: "link", size: "xs", className: "px-0" })}>
+        <Link href={runsPageHref(run)} className={buttonVariants({ variant: "link", size: "xs", className: "px-0" })}>
           Back to screenings
         </Link>
       </p>

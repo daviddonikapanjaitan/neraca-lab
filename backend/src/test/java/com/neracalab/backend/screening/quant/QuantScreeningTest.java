@@ -151,6 +151,50 @@ class QuantScreeningTest {
     }
 
     @Test
+    void selectionTakesTheSameStepsButKeepsAndFlagsStocksFailingATradabilityCheck() {
+        Fundamentals f = fundamentals("Industrials", 0.2, 0.3, healthyAnnual());
+        List<StockSnapshot> universe = List.of(
+                stock("BIG", 50e12, 1000, 6e9, 50.0, f),        // large cap, liquid enough for its tier (5B)
+                stock("BIGTHIN", 50e12, 1000, 2e9, 50.0, f),    // large cap below 5B: kept, flagged
+                stock("MIDOK", 2e12, 1000, 2e9, 50.0, f),       // mid cap above 1B
+                stock("SMALLOK", 0.5e12, 1000, 3e8, 50.0, f),   // small cap above 200M
+                stock("PENNY", 0.5e12, 30, 3e8, 2.0, f),        // price below 50: kept, flagged
+                stock("LOSS", 2e12, 1000, 5e9, -5.0, f),        // negative earnings: excluded
+                stock("THINLOSS", 2e12, 1000, 1e8, -5.0, f));   // flagged (liquidity), then excluded (earnings)
+        List<String> selected = List.of("BIG", "BIGTHIN", "MIDOK", "SMALLOK", "PENNY", "LOSS", "THINLOSS", "NOLIST");
+
+        QuantScreener screener = new QuantScreener(properties());
+        List<InvestorAgent> agents = List.of(InvestorAgent.BUFFETT, InvestorAgent.RISK);
+        QuantScreener.Result result = screener.screenSelection(selected, universe, agents, JAKARTA);
+
+        assertThat(result.universe()).isEqualTo(8);
+        assertThat(result.funnel()).extracting(QuantScreener.FunnelStep::key).containsExactly("universe", "listed", "tier",
+                "price", "traded", "liquidity", "board", "fundamentals", "earnings", "equity", "coverage", "shortlist");
+        assertThat(result.funnel()).extracting(QuantScreener.FunnelStep::remaining)
+                .containsExactly(8, 7, 7, 7, 7, 7, 7, 7, 5, 5, 5, 5);
+        assertThat(result.funnel().get(5).label()).endsWith("(selected stocks below it are kept and flagged: 2)");
+        // every eligible selected stock goes to the agents, whatever top N, also the flagged ones
+        assertThat(result.shortlist()).extracting(QuantScreener.Candidate::ticker)
+                .containsExactlyInAnyOrder("BIG", "BIGTHIN", "MIDOK", "SMALLOK", "PENNY");
+        assertThat(result.excluded()).containsExactly(
+                Map.entry("NOLIST", "No market data on Yahoo Finance"),
+                Map.entry("LOSS", "Positive trailing earnings"),
+                Map.entry("THINLOSS", "Positive trailing earnings"));
+        // THINLOSS was flagged, but a later step excluded it: no flag left
+        assertThat(result.flags()).containsExactly(
+                Map.entry("PENNY", List.of("Share price 30, below 50 (special-monitoring board range)")),
+                Map.entry("BIGTHIN", List.of("Low liquidity: traded value per day 2B, below the 5B minimum of large caps")));
+        assertThat(result.flags("BIG")).isEmpty();
+        // flagged stocks are kept before the fundamentals refresh too
+        assertThat(screener.marketFiltered(universe, null, JAKARTA)).hasSize(7);
+        // a tier screening still drops them and reports no exclusions or flags
+        QuantScreener.Result tier = screener.screen(universe, MarketCapTier.MID, agents, 5, JAKARTA);
+        assertThat(tier.eligible()).extracting(QuantScreener.Candidate::ticker).containsExactly("MIDOK");
+        assertThat(tier.excluded()).isEmpty();
+        assertThat(tier.flags()).isEmpty();
+    }
+
+    @Test
     void tiers() {
         ScreeningProperties p = properties();
         assertThat(MarketCapTier.of(10e12, p)).isEqualTo(MarketCapTier.LARGE);

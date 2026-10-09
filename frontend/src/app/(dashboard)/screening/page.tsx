@@ -17,7 +17,7 @@ async function load(): Promise<
   { data: { options: ScreeningOptions; runs: ScreeningRun[] }; error?: never } | { data?: never; error: ApiError }
 > {
   try {
-    const [options, runs] = await Promise.all([getScreeningOptions(), getScreenings(RUN_LIMIT)])
+    const [options, runs] = await Promise.all([getScreeningOptions(), getScreenings(RUN_LIMIT, "TIER")])
     return { data: { options, runs } }
   } catch (error) {
     if (error instanceof ApiError) return { error }
@@ -51,7 +51,7 @@ export default async function Page() {
         </p>
       </div>
       <ScreeningForm options={data.options} />
-      <RunsTable initial={data.runs} />
+      <RunsTable initial={data.runs} scope="TIER" />
     </div>
   )
 }

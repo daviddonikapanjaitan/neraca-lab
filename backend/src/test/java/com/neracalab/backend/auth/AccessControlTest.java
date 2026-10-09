@@ -44,6 +44,8 @@ class AccessControlTest {
         RULES.put("/api/v1/admin/permissions", Set.of(Permission.ADMIN));
         RULES.put("/api/v1/screenings", Set.of(Permission.SCREENING));
         RULES.put("/api/v1/screenings/options", Set.of(Permission.SCREENING));
+        RULES.put("/api/v1/screenings/companies?exchange=IDX", Set.of(Permission.SCREENING));
+        RULES.put("/api/v1/screenings?scope=SELECTION", Set.of(Permission.SCREENING));
         RULES.put("/api/v1/analyses", Set.of(Permission.SCREENING));
         RULES.put("/api/v1/analyses/options", Set.of(Permission.SCREENING));
         RULES.put("/api/v1/fundamentals/status?exchange=IDX", Set.of(Permission.INGESTION, Permission.SCREENING));

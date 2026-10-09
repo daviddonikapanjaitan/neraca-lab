@@ -8,10 +8,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -51,20 +55,60 @@ public class ScreeningRepository {
         this.json = json;
     }
 
-    /** Parameters of a run, read by the worker. */
-    public record RunParameters(UUID id, String exchange, MarketCapTier tier, int topN, List<InvestorAgent> agents,
-                                double budgetUsd) {
+    /**
+     * Parameters of a run, read by the worker.
+     *
+     * @param tier    the market-cap tier screened; null when {@code tickers} are
+     * @param tickers the stocks selected from the companies table; null when a tier is screened
+     */
+    public record RunParameters(UUID id, String exchange, MarketCapTier tier, List<String> tickers, int topN,
+                                List<InvestorAgent> agents, double budgetUsd) {
+
+        /** A screening of selected stocks (not of a market-cap tier). */
+        public boolean selection() {
+            return tickers != null;
+        }
+    }
+
+    /** Which runs a list holds. */
+    public enum Scope {
+        /** every run */
+        ALL,
+        /** screenings of a market-cap tier (Screening Stocks) */
+        TIER,
+        /** screenings of selected stocks (Selected Stocks) */
+        SELECTION;
+
+        /** Case-insensitive; null when unknown. */
+        public static Scope parse(String value) {
+            if (value == null) {
+                return null;
+            }
+            String normalized = value.trim().toUpperCase(Locale.ROOT);
+            return Arrays.stream(values()).filter(s -> s.name().equals(normalized)).findFirst().orElse(null);
+        }
+    }
+
+    /**
+     * A company of the companies table with the screening data stored for its listing (the stock picker).
+     *
+     * @param marketDataDate date of the latest market data; null when no Yahoo Finance listing is stored
+     * @param fundamentals   whether fundamentals were loaded for it
+     */
+    public record SelectableCompany(String ticker, String companyName, String sector, String marketDataDate,
+                                    Double marketCap, boolean fundamentals) {
     }
 
     // ------------------------------------------------------------------ run
 
     public void insertRun(RunParameters p) {
         jdbc.sql("""
-                        INSERT INTO screening_run (run_id, exchange, market_cap_tier, top_n, agents, budget_usd)
-                        VALUES (:id, :exchange, :tier, :topN, CAST(:agents AS jsonb), :budget)""")
+                        INSERT INTO screening_run (run_id, exchange, market_cap_tier, tickers, top_n, agents, budget_usd)
+                        VALUES (:id, :exchange, :tier, CAST(:tickers AS jsonb), :topN, CAST(:agents AS jsonb), :budget)""")
                 .param("id", p.id())
                 .param("exchange", p.exchange())
-                .param("tier", p.tier().name())
+                .param("tier", p.tier() == null ? null : p.tier().name(), Types.VARCHAR)
+                .param("tickers", toJson(p.tickers()), Types.VARCHAR)
                 .param("topN", p.topN())
                 .param("agents", toJson(p.agents().stream().map(Enum::name).toList()))
                 .param("budget", p.budgetUsd())
@@ -72,11 +116,13 @@ public class ScreeningRepository {
     }
 
     public Optional<RunParameters> parameters(UUID id) {
-        return jdbc.sql("SELECT run_id, exchange, market_cap_tier, top_n, agents::text AS agents, budget_usd FROM screening_run WHERE run_id = :id")
+        return jdbc.sql("""
+                        SELECT run_id, exchange, market_cap_tier, tickers::text AS tickers, top_n, agents::text AS agents,
+                               budget_usd
+                        FROM screening_run WHERE run_id = :id""")
                 .param("id", id)
-                .query((rs, i) -> new RunParameters(id, rs.getString("exchange"),
-                        MarketCapTier.valueOf(rs.getString("market_cap_tier")), rs.getInt("top_n"),
-                        agents(rs.getString("agents")), dbl(rs, "budget_usd")))
+                .query((rs, i) -> new RunParameters(id, rs.getString("exchange"), tier(rs), tickers(rs.getString("tickers")),
+                        rs.getInt("top_n"), agents(rs.getString("agents")), dbl(rs, "budget_usd")))
                 .optional();
     }
 
@@ -240,7 +286,8 @@ public class ScreeningRepository {
     // ------------------------------------------------------------------ reads
 
     private static final String RUN_SELECT = """
-            SELECT r.run_id, j.status, j.stage, j.message, r.exchange, r.market_cap_tier, r.top_n, r.agents::text AS agents,
+            SELECT r.run_id, j.status, j.stage, j.message, r.exchange, r.market_cap_tier, r.tickers::text AS tickers,
+                   r.top_n, r.agents::text AS agents,
                    r.snapshot_date, r.universe_count, r.eligible_count, r.shortlist_count, r.selected_count, r.budget_usd,
                    r.cost_usd, r.prompt_tokens, r.completion_tokens, r.reasoning_tokens, r.cached_tokens, r.model_calls,
                    j.requested_at, j.started_at, j.finished_at, j.created_by, j.created_by_username,
@@ -250,7 +297,17 @@ public class ScreeningRepository {
             LEFT JOIN users u ON u.user_id = j.created_by""";
 
     public List<RunSummary> list(int limit) {
-        return jdbc.sql(RUN_SELECT + " ORDER BY j.requested_at DESC, r.run_id LIMIT :limit")
+        return list(limit, Scope.ALL);
+    }
+
+    /** The most recent runs of a scope. */
+    public List<RunSummary> list(int limit, Scope scope) {
+        String where = switch (scope) {
+            case ALL -> "";
+            case TIER -> " WHERE r.tickers IS NULL";
+            case SELECTION -> " WHERE r.tickers IS NOT NULL";
+        };
+        return jdbc.sql(RUN_SELECT + where + " ORDER BY j.requested_at DESC, r.run_id LIMIT :limit")
                 .param("limit", limit)
                 .query((rs, i) -> summary(rs))
                 .list();
@@ -335,7 +392,7 @@ public class ScreeningRepository {
         LocalDate snapshot = rs.getObject("snapshot_date", LocalDate.class);
         return new RunSummary(rs.getObject("run_id", UUID.class), IngestionJobStatus.valueOf(rs.getString("status")),
                 rs.getString("stage"), rs.getString("message"), rs.getString("exchange"),
-                MarketCapTier.valueOf(rs.getString("market_cap_tier")), rs.getInt("top_n"), agents(rs.getString("agents")),
+                tier(rs), tickers(rs.getString("tickers")), rs.getInt("top_n"), agents(rs.getString("agents")),
                 snapshot == null ? null : snapshot.toString(), intOrNull(rs, "universe_count"),
                 intOrNull(rs, "eligible_count"), intOrNull(rs, "shortlist_count"), intOrNull(rs, "selected_count"),
                 dbl(rs, "budget_usd"), dbl(rs, "cost_usd"), rs.getLong("prompt_tokens"), rs.getLong("completion_tokens"),
@@ -343,7 +400,69 @@ public class ScreeningRepository {
                 instant(rs, "requested_at"), instant(rs, "started_at"), instant(rs, "finished_at"), createdBy);
     }
 
+    // ------------------------------------------------------------------ stock picker
+
+    /**
+     * The active companies of the exchange in the companies table, by ticker, with the latest screening data of
+     * their listing (market data date, market cap, whether fundamentals are loaded).
+     */
+    public List<SelectableCompany> companies(String exchange) {
+        return jdbc.sql("""
+                        SELECT c.ticker, c.company_name, COALESCE(c.sector, s.sector) AS sector, s.snapshot_date,
+                               s.market_cap, s.fundamentals_fetched_at IS NOT NULL AS fundamentals
+                        FROM company c
+                        LEFT JOIN LATERAL (
+                            SELECT l.sector, f.snapshot_date, f.market_cap, f.fundamentals_fetched_at
+                            FROM stock_listing l
+                            JOIN fundamental_snapshot f ON f.listing_id = l.listing_id
+                            WHERE l.exchange = c.exchange AND l.ticker = c.ticker AND l.active
+                            ORDER BY f.snapshot_date DESC
+                            LIMIT 1
+                        ) s ON true
+                        WHERE c.exchange = :exchange AND c.active
+                        ORDER BY c.ticker""")
+                .param("exchange", exchange)
+                .query((rs, i) -> {
+                    LocalDate date = rs.getObject("snapshot_date", LocalDate.class);
+                    return new SelectableCompany(rs.getString("ticker"), rs.getString("company_name"),
+                            rs.getString("sector"), date == null ? null : date.toString(), dblOrNull(rs, "market_cap"),
+                            rs.getBoolean("fundamentals"));
+                })
+                .list();
+    }
+
+    /** The given tickers that are not active companies of the exchange in the companies table. */
+    public List<String> unknownCompanies(String exchange, List<String> tickers) {
+        if (tickers.isEmpty()) {
+            return List.of();
+        }
+        Set<String> known = new HashSet<>(jdbc.sql("""
+                        SELECT ticker FROM company WHERE exchange = :exchange AND active AND ticker IN (:tickers)""")
+                .param("exchange", exchange)
+                .param("tickers", tickers)
+                .query(String.class)
+                .list());
+        return tickers.stream().filter(t -> !known.contains(t)).toList();
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    private static MarketCapTier tier(ResultSet rs) throws SQLException {
+        String tier = rs.getString("market_cap_tier");
+        return tier == null ? null : MarketCapTier.valueOf(tier);
+    }
+
+    private List<String> tickers(String text) {
+        if (text == null) {
+            return null;
+        }
+        try {
+            return List.copyOf(json.readValue(text, new TypeReference<List<String>>() { }));
+        } catch (JacksonException e) {
+            log.warn("stored tickers unreadable: {}", text);
+            return List.of();
+        }
+    }
 
     private List<InvestorAgent> agents(String text) {
         if (text == null) {

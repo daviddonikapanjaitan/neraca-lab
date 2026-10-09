@@ -18,14 +18,17 @@ import {
 import { formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
 import { creatorLabel, isActive } from "@/lib/ingestion"
-import { AGENT_SHORT, formatTokens, formatUsd, RUN_LIMIT, TIER_LABEL } from "@/lib/screening"
-import type { ScreeningRun } from "@/lib/types"
+import { AGENT_SHORT, formatTokens, formatUsd, reportHref, RUN_LIMIT, scopeLabel } from "@/lib/screening"
+import type { ScreeningRun, ScreeningScope } from "@/lib/types"
 
 const ACTIVE_POLL_MS = 3000
 const IDLE_POLL_MS = 15000
 
-/** Every screening run (most recent first); refreshed every 3 s while one is active. Saved reports open on click. */
-export function RunsTable({ initial }: { initial: ScreeningRun[] }) {
+/**
+ * The screening runs of one page (most recent first): those of a market-cap tier (Screening Stocks) or of selected
+ * stocks (Selected Stocks). Refreshed every 3 s while one is active. Saved reports open on click.
+ */
+export function RunsTable({ initial, scope }: { initial: ScreeningRun[]; scope: ScreeningScope }) {
   const [runs, setRuns] = useState(initial)
   const [error, setError] = useState<string | null>(null)
 
@@ -34,7 +37,7 @@ export function RunsTable({ initial }: { initial: ScreeningRun[] }) {
     let timer: ReturnType<typeof setTimeout> | undefined
     async function load() {
       try {
-        const { body } = await requestJson<ScreeningRun[]>(`/api/screenings?limit=${RUN_LIMIT}`)
+        const { body } = await requestJson<ScreeningRun[]>(`/api/screenings?limit=${RUN_LIMIT}&scope=${scope}`)
         if (cancelled) return
         setRuns(body)
         setError(null)
@@ -50,7 +53,7 @@ export function RunsTable({ initial }: { initial: ScreeningRun[] }) {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [initial])
+  }, [initial, scope])
 
   return (
     <Card>
@@ -95,9 +98,14 @@ export function RunsTable({ initial }: { initial: ScreeningRun[] }) {
                 {runs.map((run) => (
                   <TableRow key={run.id} className="relative">
                     <TableCell className="pl-4">
-                      <Link href={`/screening/${run.id}`} className="font-medium after:absolute after:inset-0">
-                        {run.exchange} · {TIER_LABEL[run.marketCapTier]} · top {run.topN}
+                      <Link href={reportHref(run)} className="font-medium after:absolute after:inset-0">
+                        {run.exchange} · {scopeLabel(run)} · top {run.topN}
                       </Link>
+                      {run.tickers && (
+                        <div className="max-w-[320px] truncate text-xs" title={run.tickers.join(", ")}>
+                          {run.tickers.join(", ")}
+                        </div>
+                      )}
                       <div className="text-xs text-muted-foreground">
                         {run.agents.map((a) => AGENT_SHORT[a]).join(", ")}
                       </div>

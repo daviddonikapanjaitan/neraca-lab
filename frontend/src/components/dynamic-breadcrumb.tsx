@@ -13,7 +13,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
-import { ANALYSIS_HREF } from "@/lib/screening-sections"
+import { ANALYSIS_HREF, SELECTED_STOCKS_HREF } from "@/lib/screening-sections"
 
 interface Crumb {
   label: string
@@ -32,6 +32,7 @@ const ADMIN_PAGES: Record<string, string> = {
  * /ingestion/prices         -> Ingestion / Price Ingestion
  * /screening                -> Screening / Screening Stocks
  * /screening/<id>           -> Screening / Screening Stocks / Report
+ * /screening/selected/<id>  -> Screening / Selected Stocks / Report
  * /screening/analysis/<id>  -> Screening / Analysis / Report
  * The exchange crumb opens the company list filtered by that exchange.
  */
@@ -53,8 +54,10 @@ function crumbs(pathname: string): Crumb[] {
     const section =
       segments[1] === "analysis"
         ? { label: "Analysis", href: ANALYSIS_HREF }
-        : { label: "Screening Stocks", href: "/screening" }
-    const report = segments[1] === "analysis" ? segments.length > 2 : segments.length > 1
+        : segments[1] === "selected"
+          ? { label: "Selected Stocks", href: SELECTED_STOCKS_HREF }
+          : { label: "Screening Stocks", href: "/screening" }
+    const report = segments[1] === "analysis" || segments[1] === "selected" ? segments.length > 2 : segments.length > 1
     return [
       { label: "Screening", href: "/screening" },
       section,

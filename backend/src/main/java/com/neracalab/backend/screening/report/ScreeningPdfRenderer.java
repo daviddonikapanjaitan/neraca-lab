@@ -68,7 +68,7 @@ public class ScreeningPdfRenderer {
         PdfWriter writer = PdfWriter.getInstance(doc, out);
         writer.setPageEvent(new Footer());
         RunSummary run = report.run();
-        doc.addTitle("Screening " + run.exchange() + " " + run.marketCapTier().label() + " top " + run.topN());
+        doc.addTitle("Screening " + run.exchange() + " " + run.scopeLabel() + " top " + run.topN());
         doc.addCreator("Neraca Lab");
         doc.open();
 
@@ -102,10 +102,13 @@ public class ScreeningPdfRenderer {
         RunSummary run = report.run();
         doc.add(new Paragraph("Neraca Lab - AI Stock Screening Report", TITLE));
         String agents = String.join(", ", run.agents().stream().map(InvestorAgent::label).toList());
-        Paragraph p = new Paragraph(run.exchange() + " | " + run.marketCapTier().label() + " | top " + run.topN()
+        Paragraph p = new Paragraph(run.exchange() + " | " + run.scopeLabel() + " | top " + run.topN()
                 + " | agents: " + agents, BODY);
         p.setSpacingBefore(4);
         doc.add(p);
+        if (run.tickers() != null) {
+            doc.add(new Paragraph("Selected stocks: " + String.join(", ", run.tickers()), MUTED_BODY));
+        }
         String by = run.createdBy() == null ? "" : " by " + run.createdBy().username();
         doc.add(new Paragraph("Run " + run.id() + " | requested " + dateTime(run.requestedAt()) + by
                 + " | finished " + dateTime(run.finishedAt()) + " | market data of " + nvl(run.snapshotDate())
@@ -253,16 +256,20 @@ public class ScreeningPdfRenderer {
     private void methodology(Document doc, ScreeningReport report) {
         doc.newPage();
         heading(doc, "Method");
+        String shortlist = report.run().tickers() != null
+                ? "every selected stock that passes them forms the shortlist"
+                : "the best stocks (top N x multiplier) form the shortlist";
         doc.add(new Paragraph("""
                 [Daily ETL] Yahoo Finance market data and fundamentals of every listing -> PostgreSQL. \
-                [Stage 1, no AI] filters below, then a quantitative scorecard per investor agent; the best stocks \
-                (top N x multiplier) form the shortlist. [Stage 2] a research agent (ReAct with tools: EmitenNews, \
+                [Stage 1, no AI] filters below, then a quantitative scorecard per investor agent; %s. \
+                [Stage 2] a research agent (ReAct with tools: EmitenNews, \
                 Pasardana, IDX Channel, Investor.id, Tavily) writes a news brief; each selected investor agent scores \
                 every shortlisted stock independently; Reflection: a validator checks each answer against the data and \
                 a critic reviews the flagged ones; Reflexion: lessons from earlier runs are added to the prompts. \
                 Final agent score = blend of the quantitative and the AI score; overall = average of the investor \
                 agents, blended with the Risk agent (safety) when selected. [Synthesis] the top N with alternates are \
-                summarised by the synthesis model, which may adjust a score by at most 5 points.""", BODY));
+                summarised by the synthesis model, which may adjust a score by at most 5 points.""".formatted(shortlist),
+                BODY));
         JsonNode funnel = report.funnel();
         if (funnel != null && funnel.isArray()) {
             PdfPTable table = new PdfPTable(new float[] {70, 15});
