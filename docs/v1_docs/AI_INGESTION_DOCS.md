@@ -220,6 +220,14 @@ is the General "Other current financial assets" (not a marketable security, as t
 profit-or-loss line such as "Interconnection expenses" is classified by the agent
 (`classifyIncomeLines`, re-validated), like any unknown line. Sheet 1000000 is shared by all taxonomies.
 
+**Property and Real Estate Industry taxonomy.** Some property developers (e.g. CBDK, Bangun Kosambi
+Sukses) file with the IDX "Property and Real Estate Industry" taxonomy: the General Industry roles and
+line items under sheet codes starting with 2 (`2210000`, `2311000`, `2410000`, `2510000`, ...), read
+under the General codes like the Infrastructure ones. A developer's "Current real estate assets" (land,
+houses and apartments for sale) are its `inventory`, and "Payments for acquisition of investment
+properties" (malls, offices for rent) are `capital_expenditure`; both labels also appear in developers
+filing with the General taxonomy (e.g. PWON).
+
 **Financial and Sharia Industry taxonomy (banks).** Banks (e.g. BNGA, Bank CIMB Niaga, "G. Financials /
 G1. Banks") file with sheet codes starting with 4. `IdxWorkbookReader` maps them to the General codes
 too and records the taxonomy (`IdxWorkbook.taxonomy()`, `IdxTaxonomy.FINANCIAL`), but the statements
@@ -236,7 +244,7 @@ and line items differ, so `FilingMapper` reads them with its own bank mapping:
 | Column | Bank value |
 |--------|------------|
 | `revenue` | interest and sharia income + fee and commission, trading, FX, investment, dividend and other operating income |
-| `cost_of_revenue` / `gross_profit` | interest expense (+ the syirkah fund holders' share) / revenue - interest expense |
+| `cost_of_revenue` / `gross_profit` | interest expense (+ the syirkah fund holders' share, filed with either sign: BRIS files it negative, -9,136,405 million in FY2025, and it is taken as a positive cost) / revenue - interest expense |
 | `operating_expenses` | G&A + selling + impairment charges + other operating expenses (recoveries are other operating income) |
 | `operating_income` | "Total profit from operation" as filed, checked against the lines |
 | `ebit`, `ebitda` | NULL: interest is a bank's operating revenue and cost |
@@ -357,7 +365,10 @@ Rules:
   FY2025; the 261,931 million are the overdraft part of 761,931 million short-term bank loans). The
   mapper reports this as a warning; the verification accepts it with a note when the stored figures are
   the filing's own and the difference is positive and within short-term borrowings, otherwise it is a
-  problem (`INCOMPLETE`).
+  problem (`INCOMPLETE`). The mirror case is accepted too: the cash flow statement counts deposits or
+  restricted funds the balance sheet shows among other current financial assets (PWON: ending cash
+  5,243,521,448 thousand vs. balance-sheet cash 5,186,756,706 thousand in FY2025, an excess of 56,764,742
+  thousand within 684,021,490 thousand other current financial assets).
 - Restatements show up as comparative differences and are kept as filed in the period's own filing,
   e.g. INDF's FY2023 report moves Rp 36,509 million of FY2022 operating payments to investing;
   FY2022 keeps the FY2022 filing's figures.

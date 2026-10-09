@@ -147,12 +147,31 @@ public class IngestionVerifier {
             return null;
         }
         BigDecimal difference = filedCash.subtract(filedEnding);
-        if (difference.signum() <= 0 || difference.compareTo(shortTermDebt) > 0) {
+        if (difference.signum() < 0) {
+            return depositsExplanation(session, column, filedCash, filedEnding);
+        }
+        if (difference.signum() == 0 || difference.compareTo(shortTermDebt) > 0) {
             return null;
         }
         return "cash-flow ending cash " + filedEnding.toPlainString() + " is balance-sheet cash " + filedCash.toPlainString()
                 + " less " + difference.toPlainString() + ", within short-term borrowings " + shortTermDebt.toPlainString()
                 + ": bank overdrafts netted against cash in the cash flow statement, stored as filed";
+    }
+
+    /**
+     * The mirror case (e.g. PWON): the cash flow statement's cash also counts time deposits or restricted funds
+     * the balance sheet shows among other current financial assets. Accepted when the excess is within them.
+     */
+    private static String depositsExplanation(IngestionSession session, StatementColumn column, BigDecimal filedCash,
+                                              BigDecimal filedEnding) {
+        BigDecimal excess = filedEnding.subtract(filedCash);
+        BigDecimal deposits = session.mapper().currentFinancialAssetsOutsideCash(column);
+        if (deposits == null || excess.compareTo(deposits) > 0) {
+            return null;
+        }
+        return "cash-flow ending cash " + filedEnding.toPlainString() + " is balance-sheet cash " + filedCash.toPlainString()
+                + " plus " + excess.toPlainString() + ", within other current financial assets " + deposits.toPlainString()
+                + ": deposits or restricted funds counted as cash in the cash flow statement, stored as filed";
     }
 
     private static BigDecimal mapped(IngestionSession session, StatementColumn column, String table, String field) {

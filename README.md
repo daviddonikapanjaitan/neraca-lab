@@ -120,6 +120,10 @@ neraca_lab/
 │                                revenue slots, a cash flow section without activity)
 │                                MYOR, PTSN (2022 .. 2025 annual, 2026-II) and NCKL (2023 .. 2025 annual, 2026-II)
 │                                CMRY, CPIN (2022 .. 2025 annual, 2026-II)
+│                                BRIS (2022 .. 2025 annual, 2026-II; sharia bank, syirkah share filed negative)
+│                                STAA (2022 .. 2025 annual), PWON (2022 .. 2025 annual, 2026-II; cash flow cash
+│                                includes deposits) and CBDK (2024, 2025 annual, 2026-II; Property and Real Estate
+│                                Industry taxonomy)
 │                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
@@ -236,8 +240,8 @@ contradict each other (NCKL FY2024) gives no share counts and its EPS is cleared
 ten is corrected (INDF H1 2024: 0.000439 -> 439); a workbook re-run refreshes the periods it wrote. All of
 these are reported as warnings. A period's revenue breakdown always comes from one filing: the period's own filing replaces
 it, a later filing's comparative only fills a period without one (issuers re-cut segments between
-years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) is
-accepted as filed; a model call that times out or hits a provider error is retried
+years, mixing them counts revenue twice). Cash flow ending cash net of bank overdrafts (e.g. GGRM) or
+including deposits held among other current financial assets (e.g. PWON) is accepted as filed; a model call that times out or hits a provider error is retried
 (`neracalab.ingestion.model-retries`, default 2; a call stalled for 45 s is retried, `model-call-timeout`), the
 agent runs the model without reasoning (`model-reasoning: false`: a plan in 10 s instead of 69 s; a filing in 1-2
 minutes instead of 4-15), a model that fails mid-run after its retries no longer fails the job (the remaining
@@ -474,7 +478,8 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 data; `FilingMapperLegacyTemplateTest` maps the pre-2023 INDF FY2022 filing and compares it with the
 FY2022 comparatives of the FY2023 filing; `IngestionRepositorySegmentsTest` checks that a period's
 own filing replaces its whole revenue breakdown (rolled back); `IngestionVerifierOverdraftTest` checks that
-GGRM's cash net of bank overdrafts (FY2022, FY2024, FY2025) is accepted as filed;
+GGRM's cash net of bank overdrafts (FY2022, FY2024, FY2025) is accepted as filed, `IngestionVerifierDepositsTest`
+that PWON's cash including deposits (FY2022 .. 2026-II) is;
 `IngestionAgentRetryTest` that a model call is retried after a read timeout but not after a
 permanent error; `IngestionAgentModelTest` that every ingestion request names the configured model
 (Spring AI's own default would be `gpt-5-mini`). Both take the model from the configuration, not from
@@ -483,8 +488,10 @@ Java code: `ConfiguredChatModel` resolves `spring.ai.openai.chat.model` of `appl
 `EcbFxRateProviderTest` parses a real ECB (Frankfurter) response; `FilingMapperIndySharesTest`
 derives INDY's share count from the FY2023 EPS and no count from the other INDY filings;
 `FilingMapperInfrastructureTest` maps the five SMDR filings (Infrastructure Industry taxonomy);
-`FilingMapperFinancialTest` maps the five BNGA, five BMRI and four BTPN filings (Financial and Sharia Industry taxonomy,
-banks; BMRI's insurance claims shown for information); `ReclassificationTest` that the agent can revise its own
+`FilingMapperPropertyTest` the three CBDK filings (Property and Real Estate Industry taxonomy: real estate assets as
+inventory, investment properties as capex, a restated FY2024);
+`FilingMapperFinancialTest` maps the five BNGA, five BMRI, four BTPN and five BRIS filings (Financial and Sharia Industry
+taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
