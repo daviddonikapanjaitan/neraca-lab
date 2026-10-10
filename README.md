@@ -97,6 +97,7 @@ neraca_lab/
 │               ├── V1.0.15__schema_analysis.sql   (AI analysis of one stock: analysis_run, analysis_agent_score)
 │               ├── V1.0.16__schema_syirkah.sql    (banks: balance_sheet.temporary_syirkah_funds)
 │               ├── V1.0.17__schema_screening_selection.sql (screening of selected stocks: screening_run.tickers)
+│               ├── V1.0.18__schema_ingestion_error.sql (error log of the .xlsx ingestion API: ingestion_error)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -212,6 +213,24 @@ agent runs in the background. Every ingestion (uploads and prices) records its p
 user who started it in `ingestion_job`; `GET /api/v1/ingestions` lists them, `GET /api/v1/ingestions/{id}` returns one
 with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded workbook. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md).
 
+When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
+statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
+extraction** takes over: the model (DeepSeek) gets the text of the whole workbook and **decides every value
+that is not stored yet** - which rows make up every database field. No rule of the Java code decides or
+overrules a value there: the code reads the amounts of the rows the model names from the workbook's cells
+(so a stored figure always exists in the workbook), shows the model where its own mapping contradicts itself
+(assets = liabilities + equity, ...) so it can correct it, and stores its last answer; what still does not
+add up is saved, reported (INCOMPLETE) and logged, never dropped. The result is saved and verified by the
+standard steps (`neracalab.ingestion.fallback.*`). Every upload that was refused, taken
+over, INCOMPLETE or FAILED is recorded in the table **`ingestion_error`** - the work list of Claude Code, with
+`fixed_by_claude_code` set once the cause is fixed:
+
+```sql
+SELECT error_id, file_name, ticker, period, error_type, message FROM ingestion_error WHERE NOT fixed_by_claude_code;
+```
+
+Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 6.
+
 Ingestion jobs run in parallel: each ingestion queue (uploads, prices, RAG PDF / news, screening data) has
 `neracalab.jobs.workers` worker threads (default 5, env `INGESTION_WORKERS`; set `workers: 6` in
 `application.yaml` for six), so five filings uploaded together - also five years of one company - are
@@ -224,7 +243,7 @@ instead. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION
 |------|---------------------------------------------------------------------------------|
 | 202  | job queued; final status `SUCCEEDED`, `INCOMPLETE` or `FAILED` in the job       |
 | 200  | the same file is already queued / being stored: that job                        |
-| 422  | not an IDX XBRL `.xlsx` workbook, or an unsupported template (nothing stored)   |
+| 422  | not an `.xlsx` or not an IDX XBRL workbook (nothing stored; logged in `ingestion_error`). A workbook the standard extraction cannot map is accepted and goes to the full-text extraction |
 
 Both IDX layouts are read: the current one (2023 onwards) and the pre-2023 one of FY2022 and earlier
 filings (date column headers, sheets `1410000 1 CurrentYear` / `2 PriorYear`, highly compressed
@@ -240,7 +259,11 @@ Workbooks are not trusted blindly: a declared rounding level contradicted by the
 filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other gains (losses)") is
 counted once when only that makes profit before tax reconcile; a bank's insurance claims shown for
 information beside premiums already net of them (BMRI's FY2024 comparative) are not deducted again when
-only that makes profit from operation reconcile; an EPS filed in the rounding unit (SIMP
+only that makes profit from operation reconcile; lines outside the filing's own totals are not counted when the
+totals reconcile exactly without them - a residual line that repeats the net of the others (TINS FY2024), a cash
+flow line the filed section total excludes (TINS, BRI), unclassified insurance lines shown for information (BRI
+H1 2025) - while a line the totals do include stays with the agent (BBCA); an EPS takes the sign of its profit
+(TINS FY2023: a loss filed without it); an EPS filed in the rounding unit (SIMP
 H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
 stored values; an EPS and its share count always come from one filing, and a share split a later filing
@@ -514,7 +537,7 @@ inventory, investment properties as capex, a restated FY2024);
 taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps) and the error log; `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
@@ -585,6 +608,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.15__schema_analysis.sql`        | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id`; job type `ANALYSIS` |
 | `V1.0.16__schema_syirkah.sql`         | banks: `balance_sheet.temporary_syirkah_funds` (sharia depositors; neither liabilities nor equity) |
 | `V1.0.17__schema_screening_selection.sql` | screening of selected stocks: `screening_run.tickers`, `market_cap_tier` NULL for such runs |
+| `V1.0.18__schema_ingestion_error.sql` | `ingestion_error`: every upload that was refused, taken over by the full-text extraction, INCOMPLETE or FAILED; `fixed_by_claude_code` |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |

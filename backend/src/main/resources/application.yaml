@@ -49,6 +49,7 @@ spring:
         - classpath:db/V1.0.15__schema_analysis.sql # AI analysis of one stock
         - classpath:db/V1.0.16__schema_syirkah.sql  # banks: temporary syirkah funds beside liabilities
         - classpath:db/V1.0.17__schema_screening_selection.sql # screening of selected stocks
+        - classpath:db/V1.0.18__schema_ingestion_error.sql     # error log of the .xlsx ingestion API
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -86,6 +87,18 @@ neracalab:
     model-call-timeout: ${INGESTION_MODEL_CALL_TIMEOUT:45s}   # a model call taking longer counts as stalled and is retried
     web-share-counts: ${INGESTION_WEB_SHARE_COUNTS:true}   # Yahoo Finance share counts when a filing gives none
     job-timeout: ${INGESTION_JOB_TIMEOUT:5m}   # an upload job running longer is stopped and FAILED (queue time not counted)
+    # Full-text extraction: takes over when the standard extraction (the AI agent above) does not store a workbook -
+    # it cannot map it ("No balance sheet data"), leaves open items (INCOMPLETE), fails, or runs longer than `after`.
+    # The model then decides every value that is not stored yet from the text of the whole workbook (it names the rows,
+    # the amounts are read from the cells); no rule of the Java code overrules it.
+    # Every such upload is recorded in the table ingestion_error (fixed_by_claude_code).
+    fallback:
+      enabled: ${INGESTION_FALLBACK_ENABLED:true}
+      after: ${INGESTION_FALLBACK_AFTER:3m}       # longest the standard extraction runs before the full-text one takes over
+      timeout: ${INGESTION_FALLBACK_TIMEOUT:5m}   # longest the full-text extraction runs (room for two provider retries); then FAILED
+      model-call-timeout: 150s                    # one of its model calls (one long JSON answer)
+      max-chars: 120000                           # most workbook text sent to the model (statement sheets first)
+      rounds: 3                                   # answers of the model: the first, then corrections of rejected mappings
     # false: filings of one company uploaded together are stored at the same time (up to neracalab.jobs.workers).
     # true: one after the other in upload order (other companies still beside them). The stored data is the same
     # either way; in order, a job never verifies a period while another filing of the company is writing it.

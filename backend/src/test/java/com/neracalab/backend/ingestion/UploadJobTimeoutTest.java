@@ -29,7 +29,7 @@ import com.neracalab.backend.job.IngestionJobStatus;
  * FAILED. The agent is a mock that works for 4 s and then reaches its next step, where the real deadline
  * check stops it. Runs against the Docker Postgres; the job row is removed afterwards.
  */
-@SpringBootTest(properties = "neracalab.ingestion.job-timeout=3s")
+@SpringBootTest(properties = {"neracalab.ingestion.job-timeout=3s", "neracalab.ingestion.fallback.enabled=false"})
 class UploadJobTimeoutTest {
 
     private static final Path WORKBOOK = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
@@ -51,6 +51,7 @@ class UploadJobTimeoutTest {
     @AfterEach
     void removeJob() {
         if (created != null) {
+            jdbc.sql("DELETE FROM ingestion_error WHERE job_id = :id").param("id", created).update();
             jdbc.sql("DELETE FROM ingestion_job WHERE job_id = :id").param("id", created).update();
         }
     }

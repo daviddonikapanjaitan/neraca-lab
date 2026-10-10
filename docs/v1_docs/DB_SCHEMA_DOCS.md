@@ -21,6 +21,7 @@ foreign key.
 | `V1.0.15__schema_analysis.sql`            | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id` (section 4.13) |
 | `V1.0.16__schema_syirkah.sql`             | `balance_sheet.temporary_syirkah_funds`: banks' sharia depositor funds, neither liabilities nor equity (section 3) |
 | `V1.0.17__schema_screening_selection.sql` | `screening_run.tickers`: screening of selected stocks; `market_cap_tier` NULL for those runs (section 4.11) |
+| `V1.0.18__schema_ingestion_error.sql`     | `ingestion_error`: error log of the .xlsx ingestion API, work list of Claude Code (`fixed_by_claude_code`); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 6 |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |

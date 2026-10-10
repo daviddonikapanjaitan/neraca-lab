@@ -99,7 +99,7 @@ public class IngestionAgent {
     }
 
     /** Per-request options with the configured model (never Spring AI's default, see the constructor). */
-    OpenAiChatOptions.Builder options() {
+    public OpenAiChatOptions.Builder options() {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().model(model).temperature(properties.temperature());
         if (!reasoning) {
             builder.extraBody(Map.of("reasoning", Map.of("enabled", false)));
@@ -368,12 +368,18 @@ public class IngestionAgent {
      * then abandoned (a model call has no side effects) and {@link JobDeadline.JobTimeoutException} thrown.
      */
     ChatResponse call(Prompt prompt, AgentTrace trace) {
+        return call(prompt, trace, callTimeout);
+    }
+
+    /** As {@link #call(Prompt, AgentTrace)} with another call timeout (a long answer needs more than a tool turn). */
+    public ChatResponse call(Prompt prompt, AgentTrace trace, java.time.Duration callTimeout) {
         JobDeadline deadline = trace.deadline();
         for (int attempt = 0; ; attempt++) {
             deadline.check("a model call");
             trace.modelCall();
             try {
-                ChatResponse response = deadline.isNone() && !hasCallTimeout() ? chatModel.call(prompt) : callWithin(prompt, deadline);
+                ChatResponse response = deadline.isNone() && !positive(callTimeout) ? chatModel.call(prompt)
+                        : callWithin(prompt, deadline, callTimeout);
                 if (response != null && response.getMetadata() != null) {
                     trace.modelUsed(response.getMetadata().getModel());
                 }
@@ -411,17 +417,17 @@ public class IngestionAgent {
         return t;
     });
 
-    private boolean hasCallTimeout() {
-        return callTimeout != null && !callTimeout.isZero() && !callTimeout.isNegative();
+    private static boolean positive(java.time.Duration timeout) {
+        return timeout != null && !timeout.isZero() && !timeout.isNegative();
     }
 
     /**
      * A model call that waits at most until the job deadline and at most {@link #callTimeout}. Past the deadline the
      * job stops; past the call timeout the call counts as a stalled response (an I/O timeout, so it is retried).
      */
-    private ChatResponse callWithin(Prompt prompt, JobDeadline deadline) {
+    private ChatResponse callWithin(Prompt prompt, JobDeadline deadline, java.time.Duration callTimeout) {
         long untilDeadline = deadline.isNone() ? Long.MAX_VALUE : Math.max(1, deadline.remaining().toMillis());
-        long wait = hasCallTimeout() ? Math.min(untilDeadline, callTimeout.toMillis()) : untilDeadline;
+        long wait = positive(callTimeout) ? Math.min(untilDeadline, callTimeout.toMillis()) : untilDeadline;
         java.util.concurrent.Future<ChatResponse> future = MODEL_CALLS.submit(() -> chatModel.call(prompt));
         try {
             return future.get(wait, java.util.concurrent.TimeUnit.MILLISECONDS);

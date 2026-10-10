@@ -41,6 +41,10 @@ public final class IngestionSession {
     private volatile Instant lastWrite;
     private volatile Instant derivedRefreshedAt;
     private final List<String> notes = new CopyOnWriteArrayList<>();
+    /** Statements of the full-text extraction: they replace the mapper's for their column. */
+    private final Map<StatementColumn, List<MappedStatement>> fullText = new ConcurrentHashMap<>();
+    /** What the full-text extraction could not provide; part of every verification. */
+    private final List<String> fullTextProblems = new CopyOnWriteArrayList<>();
 
     public IngestionSession(FilingMapper mapper) {
         this.mapper = mapper;
@@ -102,15 +106,41 @@ public final class IngestionSession {
     }
 
     public Optional<MappedStatement> income(StatementColumn column) {
-        return mapper.incomeStatement(column, classifications(column), shareCapital);
+        return fullText.containsKey(column) ? fullText(column, "income_statement")
+                : mapper.incomeStatement(column, classifications(column), shareCapital);
     }
 
     public Optional<MappedStatement> balance(StatementColumn column) {
-        return mapper.balanceSheet(column, shareCapital);
+        return fullText.containsKey(column) ? fullText(column, "balance_sheet") : mapper.balanceSheet(column, shareCapital);
     }
 
     public Optional<MappedStatement> cashFlow(StatementColumn column) {
-        return mapper.cashFlow(column);
+        return fullText.containsKey(column) ? fullText(column, "cash_flow_statement") : mapper.cashFlow(column);
+    }
+
+    private Optional<MappedStatement> fullText(StatementColumn column, String table) {
+        return fullText.get(column).stream().filter(s -> s.table().equals(table)).findFirst();
+    }
+
+    /**
+     * The statements the full-text extraction produced for a column the standard extraction could not store;
+     * from now on they are the column's statements (an empty list: the workbook has no figures for it).
+     */
+    public void fullTextStatements(StatementColumn column, List<MappedStatement> statements) {
+        fullText.put(column, List.copyOf(statements));
+    }
+
+    /** Columns whose statements come from the full-text extraction. */
+    public Set<StatementColumn> fullTextColumns() {
+        return Set.copyOf(fullText.keySet());
+    }
+
+    public void fullTextProblem(String problem) {
+        fullTextProblems.add(problem);
+    }
+
+    public List<String> fullTextProblems() {
+        return List.copyOf(fullTextProblems);
     }
 
     public List<MappedStatement> statements(StatementColumn column) {
@@ -120,7 +150,14 @@ public final class IngestionSession {
 
     public Optional<SegmentExtraction> segments(StatementColumn column) {
         var revenue = income(column).map(s -> s.values().get("revenue")).orElse(null);
-        return mapper.segments(column, revenue);
+        if (!fullText.containsKey(column)) {
+            return mapper.segments(column, revenue);
+        }
+        try {
+            return mapper.segments(column, revenue);
+        } catch (RuntimeException e) {
+            return Optional.empty();     // a workbook the mapper cannot read: no revenue breakdown either
+        }
     }
 
     public void markExtracted(StatementColumn column) {

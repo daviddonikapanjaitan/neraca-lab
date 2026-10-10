@@ -37,7 +37,8 @@ curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRT
 ```
 
 1. The request checks the file (not empty, `.xlsx` name, readable IDX XBRL workbook in a supported
-   template, about a second). A wrong file is rejected with **422** and nothing is stored.
+   template, about a second). A file that is not an IDX XBRL workbook is rejected with **422** and nothing is
+   stored; an IDX workbook the standard extraction cannot map is accepted (the full-text extraction stores it).
 2. The SHA-256 of the bytes is computed. A new checksum stores the file in `ingestion_file`
    (`BYTEA`). A known checksum stores nothing: the existing row is reused (`file.reused = true`).
    The checksum column is unique, so two identical uploads at the same moment also store one row.
@@ -51,18 +52,29 @@ curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRT
 |------|---------------------------------------------------------------------------------|
 | 202  | new job (QUEUED)                                                                |
 | 200  | the same file is already queued / being stored: that job                        |
-| 422  | not an `.xlsx`, not an IDX XBRL workbook, unsupported template (ProblemDetail)  |
+| 422  | not an `.xlsx`, not an IDX XBRL workbook (ProblemDetail; logged in `ingestion_error`) |
 | 413  | larger than 20 MB                                                               |
 
 Upload stages: `Waiting in the upload queue` -> `Reading the workbook` -> `AI agent is storing HRTA 2026 H1`
--> final status:
+(the standard extraction) -> only when that does not store the workbook: `Full-text extraction of HRTA 2026 H1:
+the model maps the text of the whole workbook (...)` -> final status:
 
 | Final status | When                                                                                    |
 |--------------|-----------------------------------------------------------------------------------------|
-| `SUCCEEDED`  | agent `COMPLETED`: everything stored and verified by the database read-back             |
-| `INCOMPLETE` | agent `INCOMPLETE`: stored, the verification lists pending items / problems (`message`) |
-| `FAILED`     | the workbook could not be read, or the agent failed (AI provider unreachable, ...)      |
-| `FAILED`     | the job ran longer than `neracalab.ingestion.job-timeout` (5 minutes, from the start of the run; queue time not counted): stage `Stopped after the 5 minutes limit on <filing> (...)`; what was saved before the limit is kept |
+| `SUCCEEDED`  | everything stored and verified by the database read-back; `...; full-text extraction of PRIOR_PERIOD` in the stage when the full-text extraction mapped a column |
+| `INCOMPLETE` | stored, the verification lists pending items / problems (`message`) - also after the full-text extraction, e.g. a workbook without figures for its current period |
+| `FAILED`     | the workbook could not be read, or both extractions failed (AI provider unreachable, ...) |
+
+**Full-text extraction and error log.** When the standard extraction cannot map the workbook, leaves open
+items, fails or runs longer than 3 minutes, the full-text extraction takes over: the model decides every
+value that is not stored yet from the text of the whole workbook (it names the rows, the amounts are read
+from the cells; no rule of the code overrules it). Every upload that was refused
+(422), taken over, `INCOMPLETE` or `FAILED` is recorded in the table `ingestion_error`, the work list of
+Claude Code (`fixed_by_claude_code`). Details: [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6.
+
+| Final status | When                                                                                    |
+|--------------|-----------------------------------------------------------------------------------------|
+| `FAILED`     | the upload ran out of time: the standard extraction has 3 minutes (`fallback.after`; the whole `job-timeout` of 5 minutes when the full-text extraction is switched off), then the full-text extraction 5 minutes (`fallback.timeout`), from the start of the run (queue time not counted). Stage `Stopped after the 3 minutes limit on <filing> (...)`; what was saved before the limit is kept |
 
 A typical upload job takes 1-2 minutes (the AI model runs without reasoning; a model call stalled for 45 s is
 retried, and a model that keeps failing mid-run no longer fails the job: the remaining standard steps are done
@@ -205,7 +217,13 @@ The queues are in memory. At startup, before the web server accepts requests,
 for one backend instance: a second instance (or a test run) on the same database also fails the jobs
 the first one is still running.
 
-## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`)
+## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`, `V1.0.18__schema_ingestion_error.sql`)
+
+`ingestion_error`: the error log of the .xlsx ingestion API - `error_id`, `occurred_at`, `job_id` (FK
+`ingestion_job`, `NULL` for an upload refused with 422), `file_id`, `file_name`, `exchange`, `ticker`, `period`,
+`error_type`, `message`, `details` (`JSONB`), `fallback_used`, `fallback_columns`, `final_status`,
+`final_message`, `fixed_by_claude_code` (default `FALSE`), `fixed_at`, `fix_note`. One row per job (unique
+index on `job_id`). Details and the queries: [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6.
 
 `ingestion_file`: `file_id`, `file_name` (first upload), `content_type`, `size_bytes`,
 `checksum_sha256` (unique, lower-case hex), `content` (`BYTEA`), `created_at`.

@@ -197,6 +197,21 @@ public final class FilingMapper {
         }
     }
 
+    /** The workbook as read (every sheet), for the full-text extraction. */
+    public IdxWorkbook workbook() {
+        return workbook;
+    }
+
+    /** Whether the workbook uses the Financial and Sharia Industry taxonomy (a bank). */
+    public boolean financial() {
+        return financial;
+    }
+
+    /** Factor of the filed per-share figures (1, or the rounding unit when the EPS is filed in it). */
+    public BigDecimal epsScale() {
+        return epsScale;
+    }
+
     public IdxTaxonomy taxonomy() {
         return taxonomy;
     }
@@ -267,17 +282,26 @@ public final class FilingMapper {
         return v.scale() < 0 ? v.setScale(0) : v;
     }
 
-    /** Profit attributable to the parent (as filed, unscaled) / basic EPS of the current period; null when not available. */
+    /**
+     * Profit attributable to the parent (as filed, unscaled) / basic EPS of the current period; null when not
+     * available. A current period whose EPS contradicts the sign of its profit (a loss filed without the sign,
+     * TINS FY2023) says nothing about the unit: the comparative column is used instead.
+     */
     private BigDecimal impliedSharesPerUnit() {
         if (income == null) {
             return null;
         }
-        BigDecimal parent = income.value(PROFIT_PARENT, 0);
-        BigDecimal eps = income.value(EPS_BASIC, 0);
-        if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
-            return null;
+        for (int ctx = 0; ctx <= 1; ctx++) {
+            BigDecimal parent = income.value(PROFIT_PARENT, ctx);
+            BigDecimal eps = income.value(EPS_BASIC, ctx);
+            if (parent != null && eps != null && parent.signum() != 0 && eps.signum() != 0 && parent.signum() == eps.signum()) {
+                return parent.divide(eps, MathContext.DECIMAL64);
+            }
+            if (ctx == 0 && (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0)) {
+                return null;       // no EPS or no profit in the current period: nothing to judge the unit by, as before
+            }
         }
-        return parent.divide(eps, MathContext.DECIMAL64);
+        return null;
     }
 
     private static boolean plausibleShares(BigDecimal shares) {
@@ -385,6 +409,81 @@ public final class FilingMapper {
      */
     public Optional<MappedStatement> incomeStatement(StatementColumn column, Map<String, IncomeLineCategory> overrides,
                                                      ShareCapital shares) {
+        Optional<MappedStatement> statement = incomeStatementReconciled(column, overrides, shares);
+        if (statement.isPresent() && !statement.get().unclassified().isEmpty()) {
+            Optional<MappedStatement> memo = withoutUnclassifiedMemoLines(column, overrides, shares, statement.get());
+            if (memo.isPresent()) {
+                return memo;
+            }
+        }
+        return statement;
+    }
+
+    /**
+     * Lines the mapper cannot classify that the filing's own totals do not include (BRI H1 2025 in its H1 2026
+     * filing: "Other insurance income" 4,466,709 and "Other insurance expenses" 4,051,819 beside insurance premiums
+     * 4,488,953 and claims 4,051,846; "Total profit from operation" 35,004,968 and profit before tax are exactly
+     * the other lines). Such a line is shown for information: it is ignored, with a warning, instead of being
+     * left to the agent - which could only find that no category makes the statement reconcile.
+     * <p>
+     * Only on arithmetic proof: with every unclassified line left out the statement passes every check, the
+     * reconciliation checks really ran (profit before tax, and for a bank its profit from operation, against the
+     * filed totals), and no combination of the unclassified amounts cancels out - two lines that offset each
+     * other could both belong to the totals, so those stay with the agent.
+     */
+    private Optional<MappedStatement> withoutUnclassifiedMemoLines(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                                   ShareCapital shares, MappedStatement statement) {
+        List<UnclassifiedLine> lines = statement.unclassified();
+        if (lines.size() > 4 || lines.stream().anyMatch(l -> l.value() == null) || cancelsOut(lines)) {
+            return Optional.empty();
+        }
+        Map<String, IncomeLineCategory> without = new LinkedHashMap<>(overrides);
+        lines.forEach(l -> without.put(l.label(), IncomeLineCategory.IGNORE));
+        MappedStatement retry = incomeStatementReconciled(column, without, shares).orElse(null);
+        if (retry == null || retry.hasErrors() || !reconciled(retry, "profit_before_tax")
+                || (financial && !reconciled(retry, "operating_income"))) {
+            return Optional.empty();
+        }
+        List<Check> checks = new ArrayList<>(retry.checks());
+        Map<String, String> how = new LinkedHashMap<>(retry.derivations());
+        for (UnclassifiedLine line : lines) {
+            checks.add(Check.warning("memo_line", "'" + line.label() + "' " + line.value().stripTrailingZeros().toPlainString()
+                    + " is not part of the filing's own totals in this column: " + (financial ? "'" + PROFIT_FROM_OPERATION
+                    + "' and " : "") + "profit before tax are exactly the other lines (shown for information); ignored"));
+        }
+        how.put("memo_line", lines.stream().map(UnclassifiedLine::label).toList() + " ignored: the filing's totals "
+                + "reconcile exactly without them");
+        return Optional.of(new MappedStatement(retry.table(), retry.column(), retry.period(), retry.sourceSheet(),
+                retry.values(), how, checks, retry.unclassified(), retry.rejected()));
+    }
+
+    /** The check of that rule ran against a filed total and passed. */
+    private static boolean reconciled(MappedStatement statement, String rule) {
+        return statement.checks().stream().anyMatch(c -> c.rule().equals(rule) && c.severity() == Check.Severity.OK);
+    }
+
+    /** Whether some of the amounts, each added or subtracted, cancel out (within the filing's rounding). */
+    private boolean cancelsOut(List<UnclassifiedLine> lines) {
+        BigDecimal tolerance = precision.compareTo(BigDecimal.ONE) > 0 ? precision : ZERO;
+        int combinations = (int) Math.pow(3, lines.size());
+        for (int code = 1; code < combinations; code++) {
+            BigDecimal sum = ZERO;
+            int rest = code;
+            for (UnclassifiedLine line : lines) {
+                int sign = rest % 3;       // 0: left out, 1: added, 2: subtracted
+                rest /= 3;
+                sum = sign == 1 ? sum.add(line.value()) : sign == 2 ? sum.subtract(line.value()) : sum;
+            }
+            if (sum.abs().compareTo(tolerance) <= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The income statement with an amount the filing reports twice counted once, see {@link #incomeStatement}. */
+    private Optional<MappedStatement> incomeStatementReconciled(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                                ShareCapital shares) {
         Optional<MappedStatement> filed = incomeStatementAsFiled(column, overrides, shares);
         if (filed.isPresent() && financial
                 && filed.get().checks().stream().anyMatch(c -> c.isError() && c.rule().equals("operating_income"))) {
@@ -494,6 +593,29 @@ public final class FilingMapper {
                 pairs.add(new String[] {a, b});
             }
         }));
+        // a residual line that repeats the net of the other residual lines (TINS FY2024 in its FY2025 filing:
+        // "Other expenses" 18,883 = -("Other income" 2,250 + "Other gains (losses)" -21,133); profit before tax
+        // 1,657,269 reconciles with the two, not with all three)
+        Map<String, BigDecimal> residual = new LinkedHashMap<>();
+        unsigned.forEach((label, contribution) -> {
+            if (isResidual(label)) {
+                residual.put(label, contribution);
+            }
+        });
+        signed.forEach((label, value) -> {
+            if (isResidual(label)) {
+                residual.putIfAbsent(label, value);
+            }
+        });
+        if (residual.size() >= 3) {
+            residual.forEach((label, contribution) -> {
+                List<String> others = residual.keySet().stream().filter(l -> !l.equals(label)).toList();
+                BigDecimal net = others.stream().map(residual::get).reduce(ZERO, BigDecimal::add);
+                if (unsigned.containsKey(label) && net.compareTo(contribution) == 0) {
+                    pairs.add(new String[] {label, String.join(" + ", others)});
+                }
+            });
+        }
         return pairs;
     }
 
@@ -601,8 +723,8 @@ public final class FilingMapper {
         BigDecimal ebitda = ebit == null || depreciation == null || amortization == null ? null
                 : ebit.add(depreciation).add(amortization);
 
-        BigDecimal basicEps = sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx));
-        BigDecimal dilutedEps = sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx));
+        BigDecimal basicEps = signOfProfit(sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx)), parent, checks, "Basic");
+        BigDecimal dilutedEps = signOfProfit(sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx)), parent, checks, "Diluted");
         BigDecimal basicShares = shares == null ? null
                 : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
         BigDecimal[] reconciled = reconcileEps(basicEps, dilutedEps, parent, basicShares, checks);
@@ -715,8 +837,8 @@ public final class FilingMapper {
 
         BigDecimal depreciation = depreciation(column);
         BigDecimal amortization = amortization(column);
-        BigDecimal basicEps = sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx));
-        BigDecimal dilutedEps = sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx));
+        BigDecimal basicEps = signOfProfit(sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx)), parent, checks, "Basic");
+        BigDecimal dilutedEps = signOfProfit(sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx)), parent, checks, "Diluted");
         BigDecimal basicShares = shares == null ? null
                 : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
         BigDecimal[] reconciled = reconcileEps(basicEps, dilutedEps, parent, basicShares, checks);
@@ -840,6 +962,20 @@ public final class FilingMapper {
             }
         }
         return fits;
+    }
+
+    /**
+     * An EPS filed without the sign of its loss (TINS FY2023: 60 per share for a loss of 449,690 million attributable
+     * to the parent, filed as 0.00006 in millions) or with a wrong one: earnings per share is the profit attributable
+     * to the parent divided by a share count, so it has the profit's sign. Stored with it; a warning says so.
+     */
+    private static BigDecimal signOfProfit(BigDecimal eps, BigDecimal parent, List<Check> checks, String which) {
+        if (eps == null || parent == null || eps.signum() == 0 || parent.signum() == 0 || eps.signum() == parent.signum()) {
+            return eps;
+        }
+        checks.add(Check.warning("eps_sign", which + " EPS " + eps.toPlainString() + " is filed with the opposite sign of the "
+                + "profit attributable to the parent (" + parent.toPlainString() + "); stored as " + eps.negate().toPlainString()));
+        return eps.negate();
     }
 
     private static final BigDecimal EPS_MISMATCH = new BigDecimal("3");
@@ -1310,6 +1446,8 @@ public final class FilingMapper {
         }
         BigDecimal sum = ZERO;
         List<String> unknown = new ArrayList<>();
+        Map<String, BigDecimal> residual = new LinkedHashMap<>();
+        Map<String, BigDecimal> specific = new LinkedHashMap<>();
         for (StatementTable.Line line : c.lines().subList(from + 1, to)) {
             BigDecimal raw = line.value(ctx);
             if (raw == null) {
@@ -1320,10 +1458,32 @@ public final class FilingMapper {
                 unknown.add(line.label());
             } else {
                 sum = sum.add(signed);
+                if (signed.signum() != 0) {
+                    (isResidual(line.label()) ? residual : specific).putIfAbsent(line.label(), signed);
+                }
             }
         }
         if (!unknown.isEmpty()) {
             return List.of(Check.error(name + "_section", "Cannot determine the cash direction of " + unknown));
+        }
+        // one line that the filing's section total does not include: the total is exactly the sum of the other
+        // lines. A residual "Other cash ..." line shown for information (TINS FY2024 in its FY2025 filing: "Other
+        // cash inflows (outflows) from investing activities" 25,395 beside a total of -453,950), or a line that
+        // repeats another one (BRI's comparatives: "Withdrawal of financial assets amortized cost investments"
+        // 9,884,450 beside "Withdrawal (placement) of marketable securities" 9,884,449 in FY2024; "Increase
+        // (decrease) in securities issued" 13,426,357 beside "Proceeds from bonds issuance" 13,426,357 in H1 2025).
+        // Residual lines are tried first. The statement's fields are read from their own rows, not from this sum.
+        if (total != null && sum.compareTo(total) != 0) {
+            Map<String, BigDecimal> candidates = new LinkedHashMap<>(residual);
+            candidates.putAll(specific);
+            for (Map.Entry<String, BigDecimal> extra : candidates.entrySet()) {
+                if (sum.subtract(extra.getValue()).compareTo(total) == 0) {
+                    return List.of(Check.warning(name + "_section", "'" + extra.getKey() + "' "
+                            + extra.getValue().stripTrailingZeros().toPlainString() + " is not part of the filing's " + name
+                            + " total " + total.stripTrailingZeros().toPlainString() + " in this column (the total is the sum "
+                            + "of the other lines); not counted"));
+                }
+            }
         }
         return List.of(equal(name + "_section", "sum of " + name + " lines (payments negative) = " + name + " total", sum, total));
     }

@@ -31,9 +31,25 @@ public record IngestionResponse(
         IngestionVerifier.Verification verification,
         List<String> notes,
         Metrics metrics,
-        String error) {
+        String error,
+        Fallback fallback) {
 
     public enum Status { COMPLETED, INCOMPLETE, FAILED }
+
+    /**
+     * The full-text extraction that took over from the standard extraction; {@code null} when it was not needed.
+     *
+     * @param trigger    UNSUPPORTED_WORKBOOK, INCOMPLETE, SLOW_EXTRACTION or EXTRACTION_FAILED
+     * @param reason     what went wrong in the standard extraction
+     * @param columns    columns whose statements the model mapped from the text of the workbook
+     * @param statements statements it provided, e.g. "PRIOR_PERIOD 2024 FY income_statement"
+     * @param problems   what it could not provide
+     * @param steps      the saves done after it
+     * @param error      why it stopped, when it did not finish
+     */
+    public record Fallback(String trigger, String reason, List<String> columns, int modelCalls, List<String> statements,
+                           List<String> problems, List<String> steps, String error) {
+    }
 
     public record Filing(String ticker, String legalName, String submission, String periodType, int fiscalYear,
                          String periodStart, String periodEnd, boolean audited, String currency,

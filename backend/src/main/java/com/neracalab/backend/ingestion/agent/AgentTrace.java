@@ -35,7 +35,7 @@ public final class AgentTrace {
         this.deadline = deadline;
     }
 
-    JobDeadline deadline() {
+    public JobDeadline deadline() {
         return deadline;
     }
 

@@ -49,7 +49,7 @@ import tools.jackson.databind.json.JsonMapper;
  * checksum, the job is recorded in ingestion_job and processed by the background worker. The AI
  * agent is a mock that fails (no model call, nothing written to the company tables).
  */
-@SpringBootTest
+@SpringBootTest(properties = "neracalab.ingestion.fallback.enabled=false")
 @AutoConfigureMockMvc
 class FinancialStatementUploadTest {
 
@@ -92,7 +92,11 @@ class FinancialStatementUploadTest {
             for (UUID id : createdJobs) {
                 awaitFinished(id);   // through the API, so before the logout below
             }
+            // the error log keeps only real uploads too: the failed test jobs and the rejected test files
+            jdbc.sql("DELETE FROM ingestion_error WHERE job_id IS NULL AND file_name IN ('report.xlsx', 'report.csv', 'empty.xlsx')")
+                    .update();
             if (!createdJobs.isEmpty()) {
+                jdbc.sql("DELETE FROM ingestion_error WHERE job_id IN (:ids)").param("ids", createdJobs).update();
                 jdbc.sql("DELETE FROM ingestion_job WHERE job_id IN (:ids)").param("ids", createdJobs).update();
             }
             if (!createdFiles.isEmpty()) {
@@ -163,6 +167,13 @@ class FinancialStatementUploadTest {
 
         assertThat(jdbc.sql("SELECT count(*) FROM ingestion_file WHERE checksum_sha256 = :c")
                 .param("c", IngestionFileRepository.sha256(garbage)).query(Long.class).single()).isZero();
+        // every rejected upload is in the error log, open for Claude Code
+        assertThat(jdbc.sql("""
+                        SELECT file_name || ' ' || error_type || ' ' || final_status || ' ' || fixed_by_claude_code
+                        FROM ingestion_error WHERE job_id IS NULL AND file_name IN ('report.xlsx', 'report.csv', 'empty.xlsx')
+                        ORDER BY file_name""").query(String.class).list())
+                .containsExactly("empty.xlsx UPLOAD_REJECTED REJECTED false", "report.csv UPLOAD_REJECTED REJECTED false",
+                        "report.xlsx UPLOAD_REJECTED REJECTED false");
     }
 
     @Test

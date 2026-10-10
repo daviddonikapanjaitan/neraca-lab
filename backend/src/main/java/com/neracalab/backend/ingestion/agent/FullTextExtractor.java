@@ -1,0 +1,825 @@
+package com.neracalab.backend.ingestion.agent;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.stereotype.Component;
+
+import com.neracalab.backend.ingestion.agent.WorkbookText.Kind;
+import com.neracalab.backend.ingestion.mapping.Check;
+import com.neracalab.backend.ingestion.mapping.FilingMapper;
+import com.neracalab.backend.ingestion.mapping.MappedStatement;
+import com.neracalab.backend.ingestion.mapping.StatementColumn;
+import com.neracalab.backend.ingestion.persistence.IngestionRepository;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * The full-text extraction: the fallback for a workbook the standard extraction cannot store (it takes too
+ * long, the workbook fails a validation, the result is incomplete, or it failed). The text of the whole workbook
+ * ({@link WorkbookText}) is given to the model, and <b>the model decides every value that is stored</b>: for
+ * every database field of every statement that is not stored yet, which rows of the workbook make it up.
+ * <p>
+ * No rule of the Java code decides or overrules a value here. The code only
+ * <ul>
+ *   <li>reads the amounts of the rows the model names from the workbook's cells and scales them by its rounding
+ *       unit - the model answers with row references and signs, so a stored figure always exists in the workbook
+ *       and cannot be mistyped;</li>
+ *   <li>tells the model what the rule-based extraction had read and which of its checks failed (a reference
+ *       only; it may be wrong, which is why the fallback runs);</li>
+ *   <li>shows the model where its own mapping contradicts itself (assets = liabilities + equity, gross profit =
+ *       revenue - cost of revenue, a required total without rows) and lets it answer again, up to
+ *       {@code neracalab.ingestion.fallback.rounds} times.</li>
+ * </ul>
+ * The model's last answer is what is stored. A contradiction that remains is not a reason to drop the statement:
+ * it is saved as mapped, the upload ends INCOMPLETE and the contradiction is recorded in {@code ingestion_error}.
+ * <p>
+ * The mapped statements replace the mapper's in the session ({@link IngestionSession#fullTextStatements}); they
+ * are saved by the same tools as every other upload (the current period replaces, comparatives fill gaps) and
+ * the result is verified by the database read-back. Columns the standard extraction had already saved and
+ * verified are not touched.
+ */
+@Component
+public class FullTextExtractor {
+
+    private static final Logger log = LoggerFactory.getLogger(FullTextExtractor.class);
+
+    /**
+     * What the full-text extraction did.
+     *
+     * @param columns    columns it worked on
+     * @param modelCalls model calls made (0: nothing to ask, e.g. the column is empty in the workbook)
+     * @param mapped     statements it provides, e.g. "PRIOR_PERIOD 2024 FY income_statement"
+     * @param problems   what it could not provide
+     */
+    public record Report(List<String> columns, int modelCalls, List<String> mapped, List<String> problems, List<String> notes) {
+    }
+
+    /** A field the model maps: how it is defined and signed. */
+    private record Field(String name, String definition) {
+    }
+
+    private static final List<Field> INCOME_FIELDS = List.of(
+            new Field("revenue", "total sales and revenue. A bank has no such row: interest income + sharia income + insurance premium and other insurance income + fees and commissions + gains on trading, on marketable securities and on foreign exchange + other operating income; NOT recoveries of written-off assets and reversals of impairment (those are other operating income below it)"),
+            new Field("cost_of_revenue", "cost of sales and revenue, POSITIVE (a bank: interest expenses + the syirkah fund holders' share + insurance claims)"),
+            new Field("gross_profit", "total gross profit (a bank: the rows of revenue with sign 1 and the rows of cost_of_revenue with sign -1)"),
+            new Field("sga_expense", "selling expenses + general and administrative expenses, POSITIVE"),
+            new Field("operating_expenses", "every operating expense below gross profit: selling, general and administrative, other operating expenses (a bank: also impairment charges), POSITIVE"),
+            new Field("operating_income", "profit from operations. Use the filing's own 'profit from operation' row when it has one; otherwise ALWAYS give the terms that compute it: the gross profit row with sign 1, every operating expense row (selling, general and administrative, other operating expenses) with sign -1, other operating income rows with sign 1. Without finance income and costs, share of associates, foreign exchange and other non-operating gains and losses"),
+            new Field("interest_income", "finance / interest income, POSITIVE"),
+            new Field("interest_expense", "interest and finance costs, POSITIVE"),
+            new Field("pretax_income", "total profit (loss) before tax, as reported"),
+            new Field("income_tax", "income tax EXPENSE as a POSITIVE number: a row 'Tax benefit (expenses)' shows an expense negative, so reference it with sign -1"),
+            new Field("net_income", "total profit (loss) of the period (continuing and discontinued operations)"),
+            new Field("net_income_to_parent", "profit (loss) attributable to the parent entity"),
+            new Field("basic_eps", "basic earnings (loss) per share"),
+            new Field("diluted_eps", "diluted earnings (loss) per share"));
+
+    private static final List<Field> BALANCE_FIELDS = List.of(
+            new Field("cash_and_equivalents", "cash and cash equivalents. A bank's balance sheet shows only 'Cash': use the cash flow statement's row 'cash and cash equivalents, end of the period' instead (a row of sheet 15...)"),
+            new Field("marketable_securities", "short-term investments and current financial assets at fair value through profit or loss (not 'other current financial assets', not derivatives)"),
+            new Field("accounts_receivable", "trade receivables, third and related parties (not other receivables)"),
+            new Field("inventory", "current inventories"),
+            new Field("current_assets", "total current assets"),
+            new Field("total_assets", "total assets"),
+            new Field("accounts_payable", "trade payables, third and related parties"),
+            new Field("deferred_revenue", "current advances from customers, contract liabilities and unearned revenue"),
+            new Field("current_liabilities", "total current liabilities"),
+            new Field("total_liabilities", "total liabilities"),
+            new Field("short_term_debt", "short-term loans + current maturities of long-term borrowings and bonds, WITHOUT lease liabilities"),
+            new Field("long_term_debt", "long-term borrowings and bonds net of current maturities, WITHOUT lease liabilities"),
+            new Field("lease_liabilities", "lease liabilities, current + non-current"),
+            new Field("shareholders_equity", "total equity attributable to the owners of the parent"),
+            new Field("non_controlling_interest", "non-controlling interests"),
+            new Field("total_equity", "total equity"),
+            new Field("retained_earnings", "retained earnings: BOTH rows, appropriated + unappropriated"),
+            new Field("goodwill", "goodwill"),
+            new Field("intangible_assets", "intangible assets other than goodwill"),
+            new Field("temporary_syirkah_funds", "total temporary syirkah funds (sharia banks only; neither liabilities nor equity)"));
+
+    private static final List<Field> CASH_FLOW_FIELDS = List.of(
+            new Field("operating_cash_flow", "total net cash flows from (used in) operating activities"),
+            new Field("investing_cash_flow", "total net cash flows from (used in) investing activities"),
+            new Field("financing_cash_flow", "total net cash flows from (used in) financing activities"),
+            new Field("capital_expenditure", "cash paid for property, plant and equipment, intangible assets and investment properties, NEGATIVE (an outflow). 'Payments for acquisition of ...' rows hold positive amounts: sign -1. A bank's 'Proceeds from disposal (acquisition) of property and equipment / intangible assets' rows are signed already (negative = acquisition): sign 1"),
+            new Field("acquisitions", "payments to acquire subsidiaries, associates and other businesses, NEGATIVE"),
+            new Field("share_buybacks", "payments to buy back the company's own shares, NEGATIVE"),
+            new Field("stock_issuance", "proceeds from issuing shares of the parent, POSITIVE"),
+            new Field("dividends_paid", "dividends paid, NEGATIVE"),
+            new Field("debt_issued", "proceeds from borrowings, bonds, medium term notes, sukuk and subordinated loans, POSITIVE; a signed 'increase (decrease)' row of securities issued counts here when positive"),
+            new Field("debt_repaid", "repayments of borrowings, bonds, medium term notes, sukuk and subordinated loans, NEGATIVE"),
+            new Field("lease_payments", "payments of lease liabilities (principal), NEGATIVE"),
+            new Field("cash_change", "total net increase (decrease) in cash and cash equivalents"),
+            new Field("ending_cash", "cash and cash equivalents at the end of the period"));
+
+    /** Fields the model does not map: kept from the standard extraction's statement, else computed or left empty. */
+    private static final Map<String, List<String>> KEPT_FIELDS = Map.of(
+            "income_statement", List.of("rd_expense", "depreciation", "amortization", "ebit", "ebitda", "basic_shares", "diluted_shares"),
+            "balance_sheet", List.of("shares_outstanding"),
+            "cash_flow_statement", List.of());
+
+    /** Totals a statement cannot do without: the model is asked again when it names no rows for one. */
+    private static final Map<String, List<String>> REQUIRED = Map.of(
+            "income_statement", List.of("pretax_income", "net_income"),
+            "balance_sheet", List.of("total_assets", "total_liabilities", "total_equity"),
+            "cash_flow_statement", List.of("operating_cash_flow", "investing_cash_flow", "financing_cash_flow"));
+
+    private static final Set<String> PER_SHARE = Set.of("basic_eps", "diluted_eps");
+
+    private final IngestionAgent agent;
+    private final IngestionRepository repository;
+    private final IngestionVerifier verifier;
+    private final JsonMapper json;
+    private final FallbackProperties properties;
+
+    public FullTextExtractor(IngestionAgent agent, IngestionRepository repository, IngestionVerifier verifier,
+                             JsonMapper json, FallbackProperties properties) {
+        this.agent = agent;
+        this.repository = repository;
+        this.verifier = verifier;
+        this.json = json;
+        this.properties = properties;
+    }
+
+    public FallbackProperties properties() {
+        return properties;
+    }
+
+    /**
+     * Outcome of {@link #run}.
+     *
+     * @param report       what the model mapped
+     * @param steps        the saves done after it (the standard steps, without the model)
+     * @param verification the database read-back after them
+     */
+    public record Result(Report report, List<String> steps, IngestionVerifier.Verification verification, AgentTrace trace) {
+    }
+
+    /**
+     * Takes over an upload the standard extraction could not finish: the model maps every statement that is not
+     * stored yet from the text of the workbook, then every step still open is done - register the company, save the
+     * statements, the revenue segments and the share counts, refresh the derived data - with the standard
+     * tools (so the rules of the database apply unchanged: the current period replaces, comparatives fill
+     * gaps) and verifies the result. Statements the standard extraction had already saved are not touched.
+     * Runs within the session's deadline.
+     *
+     * @param reason why the standard extraction did not store the workbook
+     */
+    public Result run(IngestionSession session, String reason) {
+        AgentTrace trace = new AgentTrace(session.deadline());
+        List<StatementColumn> columns = columnsToExtract(session);
+        Report report = columns.isEmpty() ? new Report(List.of(), 0, List.of(), List.of(), List.of())
+                : extract(session, columns, reason, trace);
+        IngestionTools tools = new IngestionTools(session, repository, verifier);
+        List<String> steps = DeterministicFinisher.finish(tools, session, repository, session.deadline());
+        session.deadline().check("the final refresh and verification");
+        if (session.hasWrites() && !session.isDerivedCurrent()) {
+            repository.refreshDerivedData();
+            session.derivedRefreshed();
+        }
+        return new Result(report, steps, verifier.verify(session), trace);
+    }
+
+    /** A term of a field: a statement row and the sign it is added with. */
+    record Term(WorkbookText.Row row, int sign) {
+    }
+
+    /** One statement of one column that the model has to map. */
+    private record Target(StatementColumn column, Kind kind, int valueColumn, Optional<MappedStatement> standard) {
+
+        String name(FilingMapper mapper) {
+            return column + " " + mapper.period(column).key() + " " + kind.table();
+        }
+
+        /** How the model names the statement in "adopt": "PRIOR_PERIOD income_statement". */
+        String key() {
+            return column + " " + kind.table();
+        }
+
+        /** The rule-based extraction read the statement and it passed every check: the model may adopt it. */
+        boolean adoptable() {
+            return standard.isPresent() && !standard.get().hasErrors();
+        }
+    }
+
+    /**
+     * The columns the model decides: every column that is not stored yet. A column the standard extraction saved
+     * (and verified) is left alone.
+     */
+    public static List<StatementColumn> columnsToExtract(IngestionSession session) {
+        List<StatementColumn> columns = new ArrayList<>();
+        for (StatementColumn column : session.mapper().columns()) {
+            if (!session.savedStatements().containsKey(column) && !session.fullTextColumns().contains(column)) {
+                columns.add(column);
+            }
+        }
+        return columns;
+    }
+
+    /**
+     * Maps the statements of {@code columns} from the text of the workbook and puts them into the session.
+     *
+     * @param reason why the standard extraction did not store them (shown to the model)
+     */
+    public Report extract(IngestionSession session, List<StatementColumn> columns, String reason, AgentTrace trace) {
+        FilingMapper mapper = session.mapper();
+        WorkbookText text = new WorkbookText(mapper.workbook(), properties.maxChars());
+        List<String> mapped = new ArrayList<>();
+        List<String> problems = new ArrayList<>();
+        List<String> notes = new ArrayList<>();
+        Map<StatementColumn, List<MappedStatement>> result = new LinkedHashMap<>();
+        List<Target> targets = new ArrayList<>();
+        for (StatementColumn column : columns) {
+            int figures = 0;
+            for (Kind kind : Kind.values()) {
+                int valueColumn = kind == Kind.BALANCE_SHEET ? mapper.instantIndex(column) : mapper.durationIndex(column);
+                if (valueColumn < 0) {
+                    continue;       // the column has no such statement (e.g. the prior year end of an interim filing)
+                }
+                if (!text.hasFigures(kind, valueColumn)) {
+                    continue;       // the statement's column is empty in the workbook (a lone opening balance at most)
+                }
+                // what the rule-based extraction read is passed to the model as a reference only
+                Optional<MappedStatement> standard = standard(session, column, kind);
+                targets.add(new Target(column, kind, valueColumn, standard));
+                figures++;
+            }
+            result.put(column, new ArrayList<>());
+            if (figures == 0 && column == StatementColumn.CURRENT_PERIOD) {
+                problems.add(column + " " + mapper.period(column).key() + ": the workbook has no figures for this "
+                        + "period - its column of the balance sheet, profit or loss and cash flow is empty - so nothing "
+                        + "can be stored for it. The file itself lacks the data: download it again from IDX, or upload the "
+                        + "next filing, whose comparative column carries this period");
+            } else if (figures == 0) {
+                notes.add(column + " " + mapper.period(column).key() + ": the workbook has no figures in this comparative "
+                        + "column; nothing to store for it");
+            }
+        }
+
+        int callsBefore = trace.modelCalls();
+        if (!targets.isEmpty()) {
+            Map<Target, MappedStatement> statements = map(session, text, targets, reason, trace, problems, notes);
+            for (Target target : targets) {
+                MappedStatement statement = statements.get(target);
+                if (statement != null) {
+                    result.get(target.column()).add(statement);
+                    mapped.add(target.name(mapper));
+                }
+            }
+        }
+        result.forEach(session::fullTextStatements);
+        problems.forEach(session::fullTextProblem);
+        if (text.truncated()) {
+            notes.add("Some notes sheets were left out of the text given to the model (limit " + properties.maxChars()
+                    + " characters); the statement sheets were complete");
+        }
+        notes.forEach(session::note);
+        return new Report(columns.stream().map(Enum::name).toList(), trace.modelCalls() - callsBefore, mapped, problems, notes);
+    }
+
+    /** The statement of the rule-based extraction, when it can produce one (it cannot for a workbook it cannot map). */
+    private static Optional<MappedStatement> standard(IngestionSession session, StatementColumn column, Kind kind) {
+        try {
+            return session.statements(column).stream().filter(s -> s.table().equals(kind.table())).findFirst();
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    // ------------------------------------------------------------------ the model's mapping
+
+    /** The model's answer: the rows of every field, for all columns and - where a column differs - for that column. */
+    private record Mapping(Map<Kind, Map<String, List<Term>>> shared,
+                           Map<StatementColumn, Map<Kind, Map<String, List<Term>>>> overrides, Set<String> adopt) {
+
+        Map<String, List<Term>> of(Target target) {
+            Map<String, List<Term>> terms = new LinkedHashMap<>(shared.getOrDefault(target.kind(), Map.of()));
+            terms.putAll(overrides.getOrDefault(target.column(), Map.of()).getOrDefault(target.kind(), Map.of()));
+            return terms;
+        }
+    }
+
+    /**
+     * Asks the model and returns the statements of its last answer. What contradicts itself is shown to the model,
+     * which may answer again; whatever it then decides is used.
+     */
+    private Map<Target, MappedStatement> map(IngestionSession session, WorkbookText text, List<Target> targets, String reason,
+                                             AgentTrace trace, List<String> problems, List<String> notes) {
+        FilingMapper mapper = session.mapper();
+        List<Kind> kinds = targets.stream().map(Target::kind).distinct().toList();
+        List<StatementColumn> columns = targets.stream().map(Target::column).distinct().toList();
+        List<Message> history = new ArrayList<>();
+        history.add(new SystemMessage(systemPrompt(mapper.financial())));
+        history.add(new UserMessage(userPrompt(mapper, text, targets, kinds, reason)));
+        Map<Target, MappedStatement> statements = new LinkedHashMap<>();
+        Map<Target, List<String>> open = new LinkedHashMap<>();
+        List<String> errors = new ArrayList<>();
+        for (int round = 1; round <= properties.rounds(); round++) {
+            trace.deadline().check("the full-text extraction's model call");
+            String answer;
+            try {
+                answer = agent.call(new Prompt(history, agent.options().build()), trace, properties.modelCallTimeout())
+                        .getResult().getOutput().getText();
+            } catch (JobDeadline.JobTimeoutException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                log.warn("full-text extraction: model call failed in round {}: {}", round, ToolExecutor.rootMessage(e));
+                problems.add("Full-text extraction: the model call failed (" + ToolExecutor.rootMessage(e) + ")");
+                break;
+            }
+            errors.clear();
+            Mapping mapping;
+            try {
+                mapping = parse(answer, text, kinds, columns, errors);
+            } catch (RuntimeException e) {
+                // nothing usable in this answer: the statements of the answer before (if any) stay
+                errors.add("The answer is not the JSON document asked for: " + ToolExecutor.rootMessage(e));
+                if (round < properties.rounds()) {
+                    history.add(new AssistantMessage(answer == null ? "" : answer));
+                    history.add(new UserMessage(feedback(mapper, Map.of(), errors)));
+                }
+                continue;
+            }
+            open.clear();
+            for (Target target : targets) {
+                List<String> issues = new ArrayList<>();
+                if (mapping.adopt().contains(target.key()) && target.adoptable()) {
+                    statements.put(target, adopted(target));
+                    continue;
+                }
+                if (mapping.adopt().contains(target.key())) {
+                    errors.add("\"" + target.key() + "\" cannot be adopted: the rule-based extraction did not read it without "
+                            + "failed checks; map its fields");
+                }
+                MappedStatement statement = statement(mapper, text, target, mapping.of(target), issues);
+                if (statement.values().values().stream().anyMatch(java.util.Objects::nonNull)) {
+                    statements.put(target, statement);
+                } else {
+                    statements.remove(target);
+                    issues.add(0, "no rows of the statement were named");
+                }
+                if (!issues.isEmpty()) {
+                    open.put(target, issues);
+                }
+            }
+            log.info("full-text extraction round {}: {} of {} statements mapped, {} with open checks, {} unusable references",
+                    round, statements.size(), targets.size(), open.size(), errors.size());
+            if (open.isEmpty() || round == properties.rounds()) {
+                break;
+            }
+            history.add(new AssistantMessage(answer));
+            history.add(new UserMessage(feedback(mapper, open, errors)));
+        }
+        errors.forEach(e -> notes.add("Full-text extraction: " + e));
+        // the model's last answer is stored as it is; what does not add up is reported, not dropped
+        open.forEach((target, issues) -> problems.add("Full-text extraction of " + target.name(mapper) + ": "
+                + (statements.containsKey(target) ? "stored as the model mapped it, although " : "not stored, ")
+                + String.join("; ", issues)));
+        for (Target target : targets) {
+            if (!statements.containsKey(target) && !open.containsKey(target)) {
+                problems.add("Full-text extraction of " + target.name(mapper) + ": the model gave no usable answer");
+            }
+        }
+        return statements;
+    }
+
+    private static String systemPrompt(boolean bank) {
+        StringBuilder sb = new StringBuilder("""
+                You map an Indonesian listed company's financial statements, filed as an IDX XBRL workbook, to the \
+                fields of a database. You get the text of the whole workbook. Each row of the three statements has \
+                a reference such as 1311000!R6 (sheet!row); c1 is the current period, c2 the comparative.
+
+                You decide every value that is stored. A rule-based extraction ran before you and did not get \
+                there; what it read and which of its checks failed is given as a reference. Its figures can be \
+                right - reuse them when they are - or wrong: where a filing reports an amount twice, shows a line \
+                for information only or files it under an unusual label, map what the statement really says, so \
+                that the filing's own totals hold.
+
+                For every field, answer which rows make it up: a list of terms {"row": "<reference>", "sign": 1 or -1}. \
+                The amounts are read from the workbook by the system and the same rows are used for every period, so:
+                - never write an amount, only references that appear in the text;
+                - a field that is one row has one term; a field that is a sum lists every row of the sum;
+                - use sign -1 to subtract a row or to turn it into the sign the field asks for;
+                - prefer the filing's own total row over adding up its parts;
+                - never use a row twice within one field, and do not add a subtotal together with its parts;
+                - a field the filing does not report is an empty list [];
+                - a row whose label names both directions - "Gains (losses) ...", "Increase (decrease) ...", \
+                "Proceeds from disposal (acquisition) of ...", "... received (paid)" - is signed already: a negative \
+                amount is the loss, the decrease, the acquisition, the payment. A row that names one direction \
+                ("Payments ...", "... expenses") holds a positive amount.
+                A field normally uses rows of its own statement (balance sheet 12..., profit or loss 13..., cash flow \
+                15...); a row of another statement may be used where the field definition says so.
+
+                A statement of the reference that is marked "passed every check" was read completely and \
+                consistently by the rule-based extraction. You may adopt it as it is instead of mapping it again: \
+                list it in "adopt". Adopt it unless you see that it is wrong.
+
+                Answer with one JSON document and nothing else:
+                {"income_statement": {"revenue": [{"row": "1311000!R6", "sign": 1}], "...": []},
+                 "balance_sheet": {"...": []},
+                 "cash_flow_statement": {"...": []},
+                 "overrides": {"PRIOR_PERIOD": {"income_statement": {"operating_expenses": [...]}}},
+                 "adopt": ["CURRENT_PERIOD balance_sheet"],
+                 "notes": ["anything unusual about the filing, one short sentence each"]}
+                Include only the statements you are asked for; a statement that is adopted for every column \
+                it is needed for can be left out. "overrides" is optional: use it only when a field \
+                is made up of other rows in one column than in the others (a line that counts in one period and \
+                repeats another line in the other); its keys are the column names you are given.
+
+                Fields.
+                """);
+        fields(sb, "income_statement", INCOME_FIELDS, bank);
+        fields(sb, "balance_sheet", BALANCE_FIELDS, bank);
+        fields(sb, "cash_flow_statement", CASH_FLOW_FIELDS, bank);
+        if (bank) {
+            sb.append("""
+
+                    The company is a bank: its balance sheet has no current / non-current split (leave current_assets, \
+                    current_liabilities, inventory, accounts_receivable empty) and all its borrowings and securities \
+                    issued go to long_term_debt (customer deposits are not debt).
+                    """);
+        }
+        return sb.toString();
+    }
+
+    private static void fields(StringBuilder sb, String table, List<Field> fields, boolean bank) {
+        sb.append('\n').append(table).append(":\n");
+        for (Field f : fields) {
+            if (f.name().equals("temporary_syirkah_funds") && !bank) {
+                continue;
+            }
+            sb.append("- ").append(f.name()).append(": ").append(f.definition()).append('\n');
+        }
+    }
+
+    private static String userPrompt(FilingMapper mapper, WorkbookText text, List<Target> targets, List<Kind> kinds, String reason) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Filing ").append(mapper.info().fileName()).append(" of ").append(mapper.info().ticker())
+                .append(", current period ").append(mapper.info().current().key()).append(".\n");
+        sb.append("Statements to map: ").append(kinds.stream().map(Kind::table).toList()).append(".\n");
+        sb.append("They are stored for these columns:\n");
+        for (Target target : targets) {
+            sb.append("- ").append(target.column()).append(" (").append(mapper.period(target.column()).key()).append(") ")
+                    .append(target.kind().table()).append(": value column c").append(target.valueColumn() + 1).append('\n');
+        }
+        if (reason != null && !reason.isBlank()) {
+            sb.append("\nWhy the rule-based extraction did not store the filing: ").append(reason).append("\n");
+        }
+        StringBuilder reference = new StringBuilder();
+        for (Target target : targets) {
+            target.standard().ifPresent(standard -> reference.append(reference(mapper, target, standard)));
+        }
+        if (!reference.isEmpty()) {
+            sb.append("\nReference - what the rule-based extraction read (amounts in the workbook's unit; it may be wrong "
+                    + "or incomplete, you decide):\n").append(reference);
+        }
+        sb.append("\nText of the workbook:\n\n").append(text.text());
+        return sb.toString();
+    }
+
+    /** One statement of the rule-based extraction as a reference for the model: its values and what failed. */
+    private static String reference(FilingMapper mapper, Target target, MappedStatement standard) {
+        StringBuilder sb = new StringBuilder("- ").append(target.adoptable() ? "\"" + target.key() + "\" (passed every check; may be adopted)"
+                : "\"" + target.key() + "\" (FAILED, map it yourself)").append(", ").append(mapper.period(target.column()).key()).append(": ");
+        List<String> values = new ArrayList<>();
+        standard.values().forEach((field, value) -> {
+            if (value != null && !KEPT_FIELDS.get(standard.table()).contains(field)) {
+                values.add(field + "=" + (PER_SHARE.contains(field) ? value.stripTrailingZeros().toPlainString() : filed(value, mapper)));
+            }
+        });
+        sb.append(String.join(", ", values)).append('\n');
+        standard.checks().stream().filter(Check::isError)
+                .forEach(c -> sb.append("    failed check: ").append(c.message()).append('\n'));
+        if (!standard.unclassified().isEmpty()) {
+            sb.append("    lines it could not classify: ").append(standard.unclassified().stream()
+                    .map(MappedStatement.UnclassifiedLine::label).toList()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static String feedback(FilingMapper mapper, Map<Target, List<String>> open, List<String> errors) {
+        StringBuilder sb = new StringBuilder("Your mapping was applied to the workbook. These points do not add up:\n");
+        errors.forEach(e -> sb.append("- ").append(e).append('\n'));
+        open.forEach((target, issues) -> issues.forEach(i -> sb.append("- ").append(target.name(mapper)).append(": ")
+                .append(i).append('\n')));
+        sb.append("If a field is mapped to the wrong rows, correct it. If the filing itself is inconsistent, keep your "
+                + "mapping and say so in \"notes\". Answer again with the complete JSON document.");
+        return sb.toString();
+    }
+
+    /** The rule-based statement the model adopted, marked as its decision. */
+    private static MappedStatement adopted(Target target) {
+        MappedStatement standard = target.standard().orElseThrow();
+        List<Check> checks = new ArrayList<>(standard.checks());
+        checks.add(Check.ok("full_text", "Adopted by the model: the statement as the rule-based extraction read it (every check passed)"));
+        return new MappedStatement(standard.table(), standard.column(), standard.period(), standard.sourceSheet(), standard.values(),
+                standard.derivations(), checks, standard.unclassified(), standard.rejected());
+    }
+
+    /** The answer as terms per statement and field; references that cannot be used are reported in {@code errors}. */
+    private Mapping parse(String answer, WorkbookText text, List<Kind> kinds, List<StatementColumn> columns, List<String> errors) {
+        if (answer == null) {
+            throw new IllegalStateException("empty answer");
+        }
+        int start = answer.indexOf('{');
+        int end = answer.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            throw new IllegalStateException("no JSON object in the answer");
+        }
+        JsonNode root = json.readTree(answer.substring(start, end + 1));
+        Map<Kind, Map<String, List<Term>>> shared = new LinkedHashMap<>();
+        for (Kind kind : kinds) {
+            shared.put(kind, table(root.path(kind.table()), kind, text, errors, kind.table(), true));
+        }
+        Map<StatementColumn, Map<Kind, Map<String, List<Term>>>> overrides = new LinkedHashMap<>();
+        for (StatementColumn column : columns) {
+            JsonNode forColumn = root.path("overrides").path(column.name());
+            for (Kind kind : kinds) {
+                Map<String, List<Term>> fields = table(forColumn.path(kind.table()), kind, text, errors,
+                        "overrides." + column + "." + kind.table(), false);
+                if (!fields.isEmpty()) {
+                    overrides.computeIfAbsent(column, c -> new LinkedHashMap<>()).put(kind, fields);
+                }
+            }
+        }
+        JsonNode notes = root.path("notes");
+        if (notes.isArray()) {
+            log.info("full-text extraction notes of the model: {}", notes);
+        }
+        Set<String> adopt = new java.util.LinkedHashSet<>();
+        if (root.path("adopt").isArray()) {
+            root.path("adopt").forEach(a -> adopt.add(a.asString("").trim().replaceAll("\\s+", " ")));
+        }
+        return new Mapping(shared, overrides, adopt);
+    }
+
+    /**
+     * The fields of one statement in the answer.
+     *
+     * @param every true: every field of the statement (one the answer leaves out has no rows); false: only the
+     *              fields the answer names (an override)
+     */
+    private static Map<String, List<Term>> table(JsonNode table, Kind kind, WorkbookText text, List<String> errors, String where,
+                                                 boolean every) {
+        Map<String, List<Term>> fields = new LinkedHashMap<>();
+        for (Field field : fieldsOf(kind)) {
+            JsonNode terms = table.path(field.name());
+            if (!every && !terms.isArray()) {
+                continue;
+            }
+            List<Term> list = new ArrayList<>();
+            if (terms.isArray()) {
+                for (JsonNode term : terms) {
+                    String ref = term.path("row").asString("");
+                    Optional<WorkbookText.Row> row = text.row(ref);
+                    if (row.isEmpty()) {
+                        errors.add(where + "." + field.name() + ": '" + ref + "' is not a row reference of the text");
+                        continue;
+                    }
+                    if (list.stream().anyMatch(t -> t.row().ref().equals(row.get().ref()))) {
+                        errors.add(where + "." + field.name() + ": " + ref + " is used twice");
+                        continue;
+                    }
+                    list.add(new Term(row.get(), sign(term.path("sign"))));
+                }
+            }
+            fields.put(field.name(), list);
+        }
+        return fields;
+    }
+
+    private static int sign(JsonNode node) {
+        if (node.isNumber()) {
+            return node.asDouble() < 0 ? -1 : 1;
+        }
+        return node.asString("1").trim().startsWith("-") ? -1 : 1;
+    }
+
+    private static List<Field> fieldsOf(Kind kind) {
+        return switch (kind) {
+            case INCOME -> INCOME_FIELDS;
+            case BALANCE_SHEET -> BALANCE_FIELDS;
+            case CASH_FLOW -> CASH_FLOW_FIELDS;
+        };
+    }
+
+    // ------------------------------------------------------------------ values and checks
+
+    /**
+     * The statement of a target from the model's terms. Where the mapping contradicts itself - an identity that
+     * does not hold, a required total without rows - is added to {@code issues} (shown to the model, and kept in
+     * the statement as warnings); it never keeps the statement from being stored.
+     */
+    private MappedStatement statement(FilingMapper mapper, WorkbookText text, Target target, Map<String, List<Term>> terms,
+                                      List<String> issues) {
+        String table = target.kind().table();
+        boolean bank = mapper.financial();
+        Map<String, BigDecimal> values = new LinkedHashMap<>();
+        Map<String, String> how = new LinkedHashMap<>();
+        String sheet = null;
+        for (Field field : fieldsOf(target.kind())) {
+            if (field.name().equals("temporary_syirkah_funds") && !bank) {
+                continue;
+            }
+            List<Term> list = terms.getOrDefault(field.name(), List.of());
+            BigDecimal sum = null;
+            List<String> parts = new ArrayList<>();
+            for (Term term : list) {
+                // a row of another statement (a bank's cash from the cash flow) is read from that statement's column
+                Kind rowKind = Kind.ofSheet(term.row().sheet()).orElse(target.kind());
+                int valueColumn = rowKind == target.kind() ? target.valueColumn()
+                        : rowKind == Kind.BALANCE_SHEET ? mapper.instantIndex(target.column()) : mapper.durationIndex(target.column());
+                BigDecimal raw = text.value(term.row(), valueColumn);
+                if (raw == null) {
+                    continue;
+                }
+                sum = (sum == null ? BigDecimal.ZERO : sum).add(term.sign() < 0 ? raw.negate() : raw);
+                parts.add((term.sign() < 0 ? "-" : "+") + " '" + term.row().label() + "' (" + term.row().ref() + ")");
+                sheet = sheet == null ? term.row().sheet() : sheet;
+            }
+            BigDecimal value = sum == null ? null
+                    : plainScale(sum.multiply(PER_SHARE.contains(field.name()) ? mapper.epsScale() : mapper.unit()));
+            values.put(field.name(), value);
+            how.put(field.name(), value == null ? "full-text extraction: not reported"
+                    : "full-text extraction: " + String.join(" ", parts));
+        }
+        Map<String, BigDecimal> standard = target.standard().map(MappedStatement::values).orElse(Map.of());
+        for (String kept : KEPT_FIELDS.get(table)) {
+            values.put(kept, standard.get(kept));
+            how.put(kept, standard.get(kept) == null ? "not derived by the full-text extraction" : "from the standard extraction");
+        }
+        if (target.kind() == Kind.INCOME && target.standard().isEmpty()) {
+            // no statement of the standard extraction to take them from: its roll-forward notes may still give them
+            noteValue(values, how, "depreciation", () -> mapper.depreciation(target.column()));
+            noteValue(values, how, "amortization", () -> mapper.amortization(target.column()));
+        }
+        if (target.kind() == Kind.INCOME && !bank) {
+            derive(values, how);
+        }
+        if (target.kind() == Kind.INCOME) {
+            // earnings per share has the sign of the profit attributable to the parent (a loss filed without it)
+            BigDecimal parent = values.get("net_income_to_parent");
+            for (String eps : PER_SHARE) {
+                BigDecimal filedEps = values.get(eps);
+                if (filedEps != null && parent != null && filedEps.signum() * parent.signum() < 0) {
+                    values.put(eps, filedEps.negate());
+                    how.put(eps, how.get(eps) + "; sign of the profit attributable to the parent");
+                }
+            }
+        }
+
+        List<Check> checks = new ArrayList<>();
+        BigDecimal tolerance = mapper.unit().max(BigDecimal.ONE).multiply(BigDecimal.valueOf(2));
+        for (String required : REQUIRED.get(table)) {
+            if (values.get(required) == null) {
+                issues.add(required + " has no amount: its rows are empty in " + columnName(target) + " or it is not mapped");
+            }
+        }
+        switch (target.kind()) {
+            case BALANCE_SHEET -> {
+                identity(issues, checks, tolerance, mapper, "total_assets = total_liabilities + temporary_syirkah_funds + total_equity",
+                        values.get("total_assets"), sum(values.get("total_liabilities"), values.get("temporary_syirkah_funds"),
+                                values.get("total_equity")), values.get("total_liabilities"), values.get("total_equity"));
+                identity(issues, checks, tolerance, mapper, "total_equity = shareholders_equity + non_controlling_interest",
+                        values.get("total_equity"), sum(values.get("shareholders_equity"), values.get("non_controlling_interest")),
+                        values.get("shareholders_equity"));
+            }
+            case INCOME -> {
+                if (!bank) {
+                    identity(issues, checks, tolerance, mapper, "gross_profit = revenue - cost_of_revenue", values.get("gross_profit"),
+                            sum(values.get("revenue"), negate(values.get("cost_of_revenue"))), values.get("revenue"),
+                            values.get("cost_of_revenue"));
+                }
+                BigDecimal afterTax = sum(values.get("pretax_income"), negate(values.get("income_tax")));
+                if (values.get("net_income") != null && values.get("income_tax") != null
+                        && afterTax.subtract(values.get("net_income")).abs().compareTo(tolerance) > 0) {
+                    checks.add(Check.warning("full_text", "profit before tax - income tax = " + afterTax.toPlainString()
+                            + " but the profit of the period is " + values.get("net_income").toPlainString()
+                            + " (discontinued operations or a tax row not found)"));
+                }
+            }
+            case CASH_FLOW -> {
+                BigDecimal flows = sum(values.get("operating_cash_flow"), values.get("investing_cash_flow"),
+                        values.get("financing_cash_flow"));
+                if (values.get("cash_change") != null && flows != null
+                        && flows.subtract(values.get("cash_change")).abs().compareTo(tolerance) > 0) {
+                    checks.add(Check.warning("full_text", "operating + investing + financing cash flow = " + flows.toPlainString()
+                            + " but the change in cash is " + values.get("cash_change").toPlainString()
+                            + " (effect of exchange rate changes)"));
+                }
+            }
+        }
+        issues.forEach(issue -> checks.add(Check.warning("full_text", issue)));
+        // what the rule-based extraction read differently, for the audit trail
+        List<String> differences = new ArrayList<>();
+        standard.forEach((field, read) -> {
+            BigDecimal mappedValue = values.get(field);
+            if (read != null && mappedValue != null && read.compareTo(mappedValue) != 0 && !KEPT_FIELDS.get(table).contains(field)) {
+                differences.add(field + " " + mappedValue.toPlainString() + " (standard extraction: " + read.toPlainString() + ")");
+            }
+        });
+        if (!differences.isEmpty()) {
+            checks.add(Check.warning("full_text", "The model decided differently from the rule-based extraction: "
+                    + String.join(", ", differences)));
+        }
+        checks.add(Check.ok("full_text", "Every value decided by the model from the text of the workbook; amounts read from its cells"));
+        return new MappedStatement(table, target.column(), mapper.period(target.column()),
+                sheet == null ? target.kind().table() : sheet, values, how, checks, List.of());
+    }
+
+    /** A value the standard extraction derives from the notes; left empty when it cannot. */
+    private static void noteValue(Map<String, BigDecimal> values, Map<String, String> how, String field,
+                                  java.util.function.Supplier<BigDecimal> source) {
+        try {
+            BigDecimal value = source.get();
+            if (value != null) {
+                values.put(field, value);
+                how.put(field, "from the roll-forward notes (standard extraction)");
+            }
+        } catch (RuntimeException e) {
+            log.debug("full-text extraction: {} not derivable from the notes: {}", field, e.getMessage());
+        }
+    }
+
+    private static String columnName(Target target) {
+        return "c" + (target.valueColumn() + 1);
+    }
+
+    /** ebit and ebitda as the standard extraction derives them. */
+    private static void derive(Map<String, BigDecimal> values, Map<String, String> how) {
+        BigDecimal pretax = values.get("pretax_income");
+        if (pretax == null) {
+            return;
+        }
+        BigDecimal ebit = pretax.add(orZero(values.get("interest_expense"))).subtract(orZero(values.get("interest_income")));
+        values.put("ebit", ebit);
+        how.put("ebit", "profit before tax + finance costs - finance income");
+        if (values.get("depreciation") != null) {
+            values.put("ebitda", ebit.add(values.get("depreciation")).add(orZero(values.get("amortization"))));
+            how.put("ebitda", "ebit + depreciation + amortization");
+        } else {
+            values.put("ebitda", null);
+            how.put("ebitda", "not derived: depreciation unknown");
+        }
+    }
+
+    /** An identity that must hold when both sides are known (and every operand in {@code needed} was mapped). */
+    private static void identity(List<String> issues, List<Check> checks, BigDecimal tolerance, FilingMapper mapper, String rule,
+                                 BigDecimal left, BigDecimal right, BigDecimal... needed) {
+        if (left == null || right == null) {
+            return;
+        }
+        for (BigDecimal operand : needed) {
+            if (operand == null) {
+                return;
+            }
+        }
+        if (left.subtract(right).abs().compareTo(tolerance) > 0) {
+            issues.add(rule + " does not hold: " + filed(left, mapper) + " vs " + filed(right, mapper));
+        } else {
+            checks.add(Check.ok("full_text", rule));
+        }
+    }
+
+    /** An amount as the workbook shows it (in its rounding unit), for messages to the model. */
+    private static String filed(BigDecimal value, FilingMapper mapper) {
+        return value.divide(mapper.unit().max(BigDecimal.ONE)).stripTrailingZeros().toPlainString();
+    }
+
+    private static BigDecimal sum(BigDecimal... values) {
+        BigDecimal total = null;
+        for (BigDecimal v : values) {
+            if (v != null) {
+                total = total == null ? v : total.add(v);
+            }
+        }
+        return total;
+    }
+
+    /** 7925966000000.0 -> 7925966000000 (no trailing zeros, never an exponent). */
+    private static BigDecimal plainScale(BigDecimal value) {
+        BigDecimal stripped = value.stripTrailingZeros();
+        return stripped.scale() < 0 ? stripped.setScale(0) : stripped;
+    }
+
+    private static BigDecimal negate(BigDecimal value) {
+        return value == null ? null : value.negate();
+    }
+
+    private static BigDecimal orZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+}

@@ -56,9 +56,17 @@ public class IngestionVerifier {
                     + (column == StatementColumn.CURRENT_PERIOD ? "" : " (comparative: fills gaps only, never overwrites)"));
         }
         List<String> notes = new ArrayList<>(NOTES);
-        if (!session.mapper().templateProblems().isEmpty()) {
+        // a workbook the standard extraction cannot map is only storable through the full-text extraction
+        if (!session.mapper().templateProblems().isEmpty() && session.fullTextColumns().isEmpty()) {
             problems.addAll(session.mapper().templateProblems());
             return new Verification(false, pending, problems, expected, periods, Map.of(), notes);
+        }
+        problems.addAll(session.fullTextProblems());
+        if (!session.fullTextColumns().isEmpty()) {
+            notes.add("Full-text extraction: the statements of " + session.fullTextColumns().stream().sorted()
+                    .map(c -> c + " (" + session.mapper().period(c).key() + ")").toList()
+                    + " were mapped by the model from the text of the workbook (every amount is read from its cells), "
+                    + "because the standard extraction could not store them");
         }
         var company = session.company().or(() -> repository.findCompany(session.info().ticker()));
         if (company.isEmpty()) {

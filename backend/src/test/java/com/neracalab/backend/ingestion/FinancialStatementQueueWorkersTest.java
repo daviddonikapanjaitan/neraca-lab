@@ -31,9 +31,12 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import com.neracalab.backend.ingestion.IngestionResponse.Status;
 import com.neracalab.backend.ingestion.agent.IngestionSession;
+import com.neracalab.backend.ingestion.error.IngestionErrorRepository;
+import com.neracalab.backend.ingestion.error.IngestionErrorRepository.NewError;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository.StoredFile;
 import com.neracalab.backend.job.IngestionJob;
@@ -55,6 +58,9 @@ class FinancialStatementQueueWorkersTest {
     private final Map<IngestionSession, String> sessions = Collections.synchronizedMap(new IdentityHashMap<>());
     /** What the agent does with a file (its name); set by the test. */
     private volatile Consumer<String> agent = file -> { };
+    /** What the ingestion of every file returns; set by the test. */
+    private volatile IngestionResponse outcome = response(Status.COMPLETED, null);
+    private final IngestionErrorRepository errors = mock(IngestionErrorRepository.class);
     private FinancialStatementQueue queue;
 
     @BeforeEach
@@ -68,18 +74,23 @@ class FinancialStatementQueueWorkersTest {
         });
         when(files.content(anyLong())).thenAnswer(call -> Optional.ofNullable(stored.get(call.<Long>getArgument(0))));
         when(jobs.find(any())).thenAnswer(call -> Optional.of(mock(IngestionJob.class)));
-        when(service.prepare(any(), anyString())).thenAnswer(call -> {
+        when(service.standardLimit(any())).thenAnswer(call -> call.getArgument(0));
+        when(service.open(any(), anyString())).thenAnswer(call -> {
             String file = call.getArgument(1);
             IngestionSession session = mock(IngestionSession.class, RETURNS_DEEP_STUBS);
             when(session.info().ticker()).thenReturn(ticker(file));
             sessions.put(session, file);
             return session;
         });
-        when(service.run(any())).thenAnswer(call -> {
+        when(service.run(any(), any())).thenAnswer(call -> {
             agent.accept(sessions.get(call.<IngestionSession>getArgument(0)));
-            return new IngestionResponse("test", Status.COMPLETED, null, null, null, null, false, List.of(), List.of(),
-                    List.of(), Map.of(), Map.of(), null, List.of(), null, null);
+            return outcome;
         });
+    }
+
+    private static IngestionResponse response(Status status, IngestionResponse.Fallback fallback) {
+        return new IngestionResponse("test", status, null, null, null, null, false, List.of(), List.of(),
+                List.of(), Map.of(), Map.of(), null, List.of(), null, status == Status.FAILED ? "model offline" : null, fallback);
     }
 
     @AfterEach
@@ -203,12 +214,80 @@ class FinancialStatementQueueWorkersTest {
         assertThat(queue.pendingCount()).isZero();
     }
 
+    @Test
+    void anUploadStoredCleanlyIsNotAnError() {
+        queue = queue(1);
+        submit("HRTA-1.xlsx");
+
+        queue.start();
+
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), any(), any(), any());
+        verify(errors, org.mockito.Mockito.after(200).never()).record(any());
+    }
+
+    @Test
+    void anIncompleteUploadIsRecordedInTheErrorLog() {
+        outcome = response(Status.INCOMPLETE, null);
+        queue = queue(1);
+        submit("TINS-2025.xlsx");
+
+        queue.start();
+
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.INCOMPLETE), any(), any(), any());
+        ArgumentCaptor<NewError> error = ArgumentCaptor.forClass(NewError.class);
+        verify(errors, timeout(10_000)).record(error.capture());
+        assertThat(error.getValue().type()).isEqualTo(IngestionErrorRepository.Type.INCOMPLETE);
+        assertThat(error.getValue().fileName()).isEqualTo("TINS-2025.xlsx");
+        assertThat(error.getValue().ticker()).isEqualTo("TINS");
+        assertThat(error.getValue().jobId()).isNotNull();
+        assertThat(error.getValue().fallbackUsed()).isFalse();
+        assertThat(error.getValue().finalStatus()).isEqualTo("INCOMPLETE");
+    }
+
+    @Test
+    void anUploadTheFullTextExtractionRescuedSucceedsAndIsStillRecorded() {
+        outcome = response(Status.COMPLETED, new IngestionResponse.Fallback("INCOMPLETE",
+                "saveStatements(PRIOR_PERIOD) is blocked: income_statement failed checks", List.of("PRIOR_PERIOD"), 1,
+                List.of("PRIOR_PERIOD 2024 FY income_statement"), List.of(), List.of("saveStatements(PRIOR_PERIOD) done"), null));
+        queue = queue(1);
+        submit("TINS-2025.xlsx");
+
+        queue.start();
+
+        ArgumentCaptor<String> stage = ArgumentCaptor.forClass(String.class);
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), stage.capture(), any(), any());
+        assertThat(stage.getValue()).startsWith("Stored and verified TINS").endsWith("; full-text extraction of PRIOR_PERIOD");
+        ArgumentCaptor<NewError> error = ArgumentCaptor.forClass(NewError.class);
+        verify(errors, timeout(10_000)).record(error.capture());
+        assertThat(error.getValue().type()).isEqualTo(IngestionErrorRepository.Type.INCOMPLETE);
+        assertThat(error.getValue().message()).startsWith("saveStatements(PRIOR_PERIOD) is blocked");
+        assertThat(error.getValue().fallbackUsed()).isTrue();
+        assertThat(error.getValue().fallbackColumns()).isEqualTo("PRIOR_PERIOD");
+        assertThat(error.getValue().finalStatus()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    void aFailedUploadIsRecordedInTheErrorLog() {
+        outcome = response(Status.FAILED, null);
+        queue = queue(1);
+        submit("HRTA-1.xlsx");
+
+        queue.start();
+
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.FAILED), eq("AI agent failed on HRTA null"), eq("model offline"), any());
+        ArgumentCaptor<NewError> error = ArgumentCaptor.forClass(NewError.class);
+        verify(errors, timeout(10_000)).record(error.capture());
+        assertThat(error.getValue().type()).isEqualTo(IngestionErrorRepository.Type.EXTRACTION_FAILED);
+        assertThat(error.getValue().message()).isEqualTo("model offline");
+        assertThat(error.getValue().finalStatus()).isEqualTo("FAILED");
+    }
+
     private FinancialStatementQueue queue(int workers) {
         return queue(workers, false);
     }
 
     private FinancialStatementQueue queue(int workers, boolean sameCompanyInOrder) {
-        return new FinancialStatementQueue(service, files, jobs, Duration.ofMinutes(5), sameCompanyInOrder,
+        return new FinancialStatementQueue(service, files, jobs, errors, Duration.ofMinutes(5), sameCompanyInOrder,
                 new JobProperties(workers));
     }
 

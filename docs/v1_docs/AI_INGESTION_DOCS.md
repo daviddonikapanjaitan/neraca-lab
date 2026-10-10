@@ -29,7 +29,7 @@ in a background thread. Details of storage, job statuses and the job API:
 |------|--------------------------------------------------------------------------------------|
 | 202  | job queued (`Location: /api/v1/ingestions/{id}`)                                     |
 | 200  | the same file is already queued / being stored: that job                             |
-| 422  | not an .xlsx / not an IDX XBRL workbook / unsupported template (ProblemDetail body)  |
+| 422  | not an .xlsx / not an IDX XBRL workbook (ProblemDetail body; logged in `ingestion_error`). An IDX workbook the standard extraction cannot map is accepted (202) and stored by the full-text extraction, section 6 |
 | 413  | file larger than 20 MB                                                               |
 
 Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
@@ -122,6 +122,7 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
 | `neracalab.jobs.workers`                | 5       | uploads stored at the same time, each by its own agent (env `INGESTION_WORKERS`), also several filings of one company ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
 | `neracalab.ingestion.same-company-in-order` | false | true: filings of one company are stored one after the other in upload order instead (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
+| `neracalab.ingestion.fallback.*`        | on, 3m  | the full-text extraction that takes over when the standard extraction does not store a workbook, and its time limits (section 6) |
 | `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
 
 ## 3. Design: the model orchestrates, Java owns the numbers
@@ -461,7 +462,7 @@ Rules:
   not reconcile and ignoring one insurance expense line (`FilingMapper.INSURANCE_EXPENSE_LINES`) makes every
   check pass, that line is ignored; a `memo_line` warning and derivation record it. A line the agent
   classified is never second-guessed. Before, the FY2024 column was blocked and the job INCOMPLETE.
-- Unsupported (rejected with 422): balance sheet by order of liquidity (`1220000`), profit or loss
+- Unsupported by the standard extraction (stored by the full-text extraction, section 6; rejected with 422 only when that is switched off): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`) in the General and Infrastructure taxonomies; the current /
   non-current balance sheet (`4210000`) and profit or loss by function (`4311000` / `4321000`) in the
   Financial taxonomy.
@@ -502,6 +503,11 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; all five BMRI filings map without errors; BMRI FY2025's FY2024 column ignores "Claim expenses" shown for information (operating income 76,059,595 million, revenue 186,767,596), never against an agent classification; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
 | `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; the other upload order (comparative first, then the period's own filing: MAPA 1:10) ends the same, with balance sheet shares and share snapshots adjusted, the split recorded once and the own filing uploaded again changing nothing; a restatement that is no split is replaced by the own filing; split factors |
+| `FilingMapperTinsTest` (unit) | the TINS filings: FY2025's comparative counts its residual profit or loss lines once and its cash flow's residual investing line not at all, the current year still counts every line, every statement of FY2025 is storable; FY2024 as published has no current-year figures; FY2023's loss per share is scaled and gets its sign (-60) |
+| `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed |
+| `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
+| `IngestionServiceFallbackTest` (unit, scripted stages) | when the full-text extraction takes over: unsupported workbook (agent not started), INCOMPLETE, past the 3 minutes, failed; never after a clean result; its own failure leaves what the standard extraction reached, its own timeout fails the upload; switched off; the upload endpoint accepts an unsupported workbook and refuses an unreadable one |
+| `FullTextExtractionDatabaseTest` (Docker Postgres, scripted model, rolled back) | TINS FY2024 is stored from its text with the standard steps: the comparative 2023 FY in the database, nothing for 2024, the verification says why; the error log keeps what went wrong and starts unfixed |
 | `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
@@ -555,3 +561,199 @@ the 2022, 2024, 2025 and 2026-II filings cannot give a count and `saveShareSnaps
 (the filing still completes). The extra rounds of INDY 2024 / 2025 came from the agent retrying that
 save. Re-uploading INDY 2023-Tahunan stored the counts (SUCCEEDED, 61 s, 12 model calls, 0 tool
 errors); INDY then has market caps from 2022-01-03 and valuation snapshots for every period end.
+
+## 6. Full-text extraction (fallback) and the error log
+
+The standard extraction above is strict: a statement that fails a validation is not saved, and a workbook
+whose statement sheets it cannot map is not stored at all. When it does not get there, the **full-text
+extraction** takes over: the model (DeepSeek) gets the text of the whole workbook and **decides every value
+that is still to be stored** - the rules of the Java code no longer decide anything. Every such upload is
+written to the table `ingestion_error` so the cause can be fixed in the rule-based code afterwards.
+
+### When it takes over
+
+| Trigger (`ingestion_error.error_type`) | When                                                                                         |
+|----------------------------------------|----------------------------------------------------------------------------------------------|
+| `UNSUPPORTED_WORKBOOK`                 | the upload is a readable IDX XBRL workbook, but the mapper reports template problems, e.g. `No balance sheet data (1210000)`. Before, this was refused with HTTP 422; now it is accepted (202) and the agent is not started |
+| `INCOMPLETE`                           | the standard extraction ended with open items, e.g. `saveStatements(PRIOR_PERIOD) is blocked: income_statement failed checks [...]` |
+| `SLOW_EXTRACTION`                      | the standard extraction ran longer than `neracalab.ingestion.fallback.after` (3 minutes)     |
+| `EXTRACTION_FAILED`                    | the standard extraction failed (the AI provider kept failing, an unexpected error)           |
+
+A file that is not an .xlsx or not an IDX XBRL workbook at all (no sheet 1000000, a truncated download) is
+still refused with **422** - there is nothing to extract - and logged as `UPLOAD_REJECTED`.
+
+### What it does (`FullTextExtractor`, `WorkbookText`)
+
+**The model decides every value that is stored.** In this stage no rule of the Java code decides or
+overrules a value: the code gives the model the workbook, reads the amounts of the rows the model names, and
+reports what does not add up.
+
+1. **Everything that is not stored yet.** Every column the standard extraction has not saved is the
+   model's to decide - all its statements, not only the one that failed. Columns the standard extraction
+   saved and verified are not touched. A statement whose column is empty in the workbook is skipped; when
+   that is the current period, the upload ends `INCOMPLETE` with the reason (see TINS FY2024 below).
+2. **The text of the whole workbook goes to the model**: the general information, every row of the balance
+   sheet, profit or loss and cash flow that carries an amount, and the notes sheets (up to
+   `max-chars`). Each statement row has a reference:
+
+   ```text
+   ## Sheet 1311000: [1311000] Statement of profit or loss and other comprehensive income ...
+   columns: c1=CurrentYearDuration, c2=PriorYearDuration
+   1311000!R6 | Sales and revenue | c1=11552733 | c2=10856422
+   1311000!R7 | Cost of sales and revenue | c1=8788780 | c2=8106640
+   ```
+   With it the model gets, **as a reference only**, what the rule-based extraction had read for these
+   statements, which of its checks failed and which lines it could not classify ("it may be wrong or
+   incomplete, you decide").
+3. **The model answers which rows make up every database field**, with references and signs:
+
+   ```json
+   {"income_statement": {"revenue": [{"row": "1311000!R6", "sign": 1}],
+                         "income_tax": [{"row": "1311000!R38", "sign": -1}],
+                         "sga_expense": [{"row": "1311000!R9", "sign": 1}, {"row": "1311000!R10", "sign": 1}]},
+    "overrides": {"PRIOR_PERIOD": {"income_statement": {"operating_expenses": [{"row": "1311000!R9", "sign": 1}]}}},
+    "adopt": ["CURRENT_PERIOD balance_sheet"]}
+   ```
+   - The amounts are read from the workbook's own cells and multiplied by its rounding unit. The model
+     decides what a value is made of; it does not type the digits, so a stored figure always exists in the
+     workbook and cannot be mistyped. An amount written into the answer is ignored; a reference that is not
+     in the text is dropped and reported.
+   - `overrides`: a field that is made up of other rows in one column than in the others (a line that
+     counts in one period and repeats another line in the comparative).
+   - `adopt`: a statement the rule-based extraction read without a failed check may be adopted by the model
+     as it is, instead of mapping it again. A statement that failed cannot be adopted.
+4. **The model sees where its own mapping contradicts itself** - total assets != liabilities (+ temporary
+   syirkah funds) + equity, equity != parent + non-controlling interests, gross profit != revenue - cost of
+   revenue, a required total without rows - and may answer again, up to `rounds` (3) times ("if the filing
+   itself is inconsistent, keep your mapping and say so"). **Its last answer is what is stored.** A
+   contradiction that remains does not drop the statement: it is saved as mapped (with a warning), the
+   upload ends `INCOMPLETE` and the contradiction is in `ingestion_error`.
+5. **Saved by the standard steps.** The model's statements replace the mapper's in the session and are
+   saved by the same tools as every upload (`DeterministicFinisher`): the company, the statements (the
+   current period replaces, comparatives only fill gaps), revenue segments, share counts, the derived data.
+   The verification is the database read-back (stored = what the model decided, the balance sheet balances,
+   segments sum to revenue), so `SUCCEEDED` still means verified. The job stage says which columns the
+   model decided (`...; full-text extraction of PRIOR_PERIOD`), its result carries `fallback` (trigger,
+   reason, columns, statements, problems) and the verification notes name the columns.
+
+Fields the model decides: the income statement, balance sheet and cash flow columns of section 4 except
+`depreciation`, `amortization`, `rd_expense` and the share counts, which come from the notes and the equity
+statement (kept from the rule-based statement when it has them; `ebit` / `ebitda` are derived from the
+model's values as usual). An EPS gets the sign of the profit attributable to the parent.
+
+Measured with the configured model (DeepSeek V4 Flash):
+
+| Workbook | What the model decided | Calls, time | Result |
+|----------|------------------------|-------------|--------|
+| TINS FY2024 (no figures for 2024) | balance sheet and profit or loss of the comparative 2023, 55 fields, nothing to lean on | 1 call, 9 s | every amount equals the FY2023 filing's own figure except the two the FY2024 workbook restates |
+| BBRI H1 2026, all six statements (before the mapper could read its comparative) | adopted the four that passed every check; mapped the comparative profit or loss and cash flow | 1 call, 17 s | profit from operation 35,004,968 and profit before tax 34,744,196 as filed; it counted two insurance lines in revenue and cost of revenue that the filing's totals exclude (the mapper now stores 123,348,477 / 33,153,552) |
+| BBRI FY2025, all six statements | adopted five, mapped the comparative cash flow | 1 call, 20 s (after two provider stream resets of 60 s each) | every value as the rule-based extraction |
+
+### Timing
+
+The standard extraction gets `fallback.after` (3 minutes) of the job, then the full-text extraction its own
+`fallback.timeout` (5 minutes: one answer takes 10-30 seconds, but a provider that drops the stream after 60
+seconds is retried twice); an upload that passes both is stopped and `FAILED`. Without the fallback
+(`enabled: false`) the standard extraction has the whole `job-timeout` (5 minutes), as before.
+
+| Property (`neracalab.ingestion.fallback.*`) | Default | Meaning                                                    |
+|---------------------------------------------|---------|------------------------------------------------------------|
+| `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
+| `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
+| `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
+| `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
+| `max-chars`                                 | `120000`| most workbook text sent to the model; the statement sheets always fit, notes sheets are left out first |
+| `rounds`                                    | `3`     | answers of the model: the first, then its own corrections; the last one is stored |
+
+### The error log `ingestion_error`
+
+One row per upload that did not go through cleanly: refused at the upload, taken over by the full-text
+extraction (whatever the end), `INCOMPLETE` or `FAILED`. A clean upload writes nothing. The application only
+inserts; **Claude Code reads the open rows, fixes the cause in the ingestion code, and marks the row.**
+
+```sql
+-- what is open
+SELECT error_id, occurred_at, file_name, ticker, period, error_type, message, fallback_used, final_status
+FROM ingestion_error WHERE NOT fixed_by_claude_code ORDER BY occurred_at;
+
+-- everything about one error (failed checks, open items, what the full-text extraction did)
+SELECT message, final_message, jsonb_pretty(details) FROM ingestion_error WHERE error_id = 26;
+
+-- after the fix
+UPDATE ingestion_error
+SET fixed_by_claude_code = TRUE, fixed_at = now(), fix_note = 'what was changed, which test covers it'
+WHERE error_id = 26;
+```
+
+| Column                  | Meaning                                                                                     |
+|-------------------------|---------------------------------------------------------------------------------------------|
+| `error_id`, `occurred_at` | key, when                                                                                 |
+| `job_id`, `file_id`, `file_name` | the job (`NULL` for an upload refused with 422) and the stored workbook; the file can be downloaded with `GET /api/v1/ingestions/{job_id}/file` |
+| `exchange`, `ticker`, `period` | the filing, e.g. `IDX`, `TINS`, `2025 FY`                                            |
+| `error_type`            | `UPLOAD_REJECTED`, `UNSUPPORTED_WORKBOOK`, `INCOMPLETE`, `SLOW_EXTRACTION`, `EXTRACTION_FAILED` |
+| `message`               | what went wrong in the standard extraction: the failed checks, the open items, the error    |
+| `details` (JSONB)       | `pending`, `problems`, `error`, `notes` and `fullTextExtraction` (trigger, columns, statements, problems, steps) |
+| `fallback_used`, `fallback_columns` | whether the full-text extraction took over, and for which columns               |
+| `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
+| `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
+| `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The BBRI uploads (errors 27, 28, 41)
+
+BRI's comparative columns repeat lines.
+
+- **`FinancialStatement-2026-II-BBRI.xlsx` ended INCOMPLETE although the full-text extraction ran.** The
+  model had mapped the comparative profit or loss (2025 H1), but a check of the first version of the
+  full-text extraction rejected it: `revenue must be 123348477 (the filing's own total row), the mapped rows
+  give 129669359`. For a bank revenue is no filed row at all; 123,348,477 was the figure the failing
+  rule-based extraction had derived - without "Other insurance income" 4,466,709, the line it could not
+  classify. Java overruled the model with the very figure that was wrong. That check is gone: in the
+  fallback the model decides every value (above). Re-uploaded: `SUCCEEDED`, `full-text extraction of
+  PRIOR_PERIOD`; revenue 127,815,186, profit from operation 35,004,968 and profit before tax 34,744,196 as
+  filed.
+- **Why the standard extraction ran into the 3-minute limit for that column (error 41, fixed):** "Other
+  insurance income" 4,466,709 and "Other insurance expenses" 4,051,819 appear only in the comparative. The
+  mapper cannot classify them and left them to the agent - but no category could make the statement
+  reconcile, because the filing's totals do not include them at all: profit from operation 35,004,968 and
+  profit before tax 34,744,196 are exactly the other lines. The mapper now ignores unclassified lines on that
+  arithmetic proof (warning `memo_line`): with them left out every check passes, the reconciliation checks
+  really ran against the filed totals, and no combination of their amounts cancels out (two lines that offset
+  each other could both belong to the totals; those stay with the agent). A line the totals do include is
+  untouched: BBCA's "Other insurance expenses" still goes to the agent. Re-uploaded: `SUCCEEDED` in 30 seconds
+  by the standard extraction. The fallback had counted the two lines in revenue (127,815,186) and cost of
+  revenue; stored now: revenue 123,348,477, cost of revenue 33,153,552.
+- **`FinancialStatement-2025-Tahunan-BBRI.xlsx`** (INCOMPLETE in the standard extraction, rescued by the
+  fallback): the comparative cash flow has "Withdrawal of financial assets amortized cost investments"
+  9,884,450 beside "Withdrawal (placement) of marketable securities" 9,884,449, and the investing total
+  -188,189 is exactly the sum without the first. The H1 2026 filing's comparative repeats two more lines
+  (19,245 and 13,426,357). The mapper's cash flow section check now recognises **one line that the filed
+  section total does not include** (residual "Other cash ..." lines first), when the total is exactly the sum
+  of the other lines, and stores the statement with a warning. Re-uploaded: `SUCCEEDED` by the standard
+  extraction, no fallback.
+
+### The two TINS uploads
+
+- **`FinancialStatement-2025-Tahunan-TINS.xlsx` ended INCOMPLETE** (`saveStatements(PRIOR_PERIOD) is blocked:
+  income_statement failed checks [... computed 1638386000000 vs reported 1657269000000 (difference
+  18883000000)]`). Two lines of its comparative 2024 FY are not part of the filing's own totals, and both are
+  now recognised by the mapper, so the standard extraction stores the filing (no fallback needed):
+  - profit or loss: "Other expenses" 18,883 repeats the net of "Other income" 2,250 and "Other gains
+    (losses)" -21,133. Profit before tax 1,657,269 reconciles with the residual lines counted once; the
+    repeat is ignored with a warning (`double_reported`), only when that makes the statement reconcile
+    exactly. In the current column (32,341 and 88,850) both amounts count, as before.
+  - cash flow: "Other cash inflows (outflows) from investing activities" 25,395 beside an investing total
+    of -453,950 that is exactly the sum of the other lines. A line the section total does not include is
+    not counted (warning), only when the section then reconciles exactly.
+- **`FinancialStatement-2024-Tahunan-TINS.xlsx` was refused** (`Unsupported filing: No balance sheet data
+  (1210000); No profit or loss data (1311000 / 1321000)`). The workbook IDX published has an **empty
+  current-year column**: the balance sheet, profit or loss and cash flow carry only the comparative 2023 FY
+  (and one opening cash balance). The 2024 figures are not in the file, so no extraction can produce them.
+  The upload is now accepted; the full-text extraction stores the comparative 2023 FY (one model call, about
+  20 seconds) and the job ends `INCOMPLETE` with: `CURRENT_PERIOD 2024 FY: the workbook has no figures for
+  this period ... download it again from IDX, or upload the next filing, whose comparative column carries
+  this period`. 2024 FY is in the database from the comparative of the FY2025 filing.
+- **TINS FY2023's loss per share** was stored as 0.00006: the filing gives the EPS in millions (like its
+  comparative's 0.00014 for Rp 140) and without the sign of the loss of 449,690 million. The EPS unit is now
+  judged from the comparative column when the current one contradicts its own profit, and an EPS takes the
+  sign of the profit attributable to the parent (warning `eps_sign`): -60.
+
