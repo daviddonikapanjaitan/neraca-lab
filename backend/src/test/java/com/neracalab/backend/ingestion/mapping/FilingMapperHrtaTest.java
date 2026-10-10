@@ -23,12 +23,12 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Maps the six HRTA filings in data/HRTA/xlsx and compares every field with the values that were
+ * Maps the six HRTA filings in data/IDX_XBRL/HRTA/xlsx and compares every field with the values that were
  * validated for V1.0.4__data_HRTA_financials.sql (src/test/resources/ingestion/hrta_expected.json).
  */
 class FilingMapperHrtaTest {
 
-    private static final Path DATA = Path.of("..", "data", "HRTA", "xlsx");
+    private static final Path DATA = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx");
     private static final JsonNode EXPECTED = loadExpected();
 
     static Stream<String> filings() {

@@ -68,6 +68,13 @@ neracalab:
     session-ttl: ${AUTH_SESSION_TTL:12h}            # a login is valid this long
     root-password: ${AUTH_ROOT_PASSWORD:admin}      # password of the root user "admin" when it is first created
 
+  # Background jobs of the ingestion APIs: financial statement uploads, prices, RAG PDF / news, screening data
+  jobs:
+    # Worker threads of EACH ingestion queue: that many of its jobs run at the same time, the rest wait their turn.
+    # The requests to Yahoo Finance and to each news site stay paced one at a time (more workers do not send
+    # requests faster).
+    workers: ${INGESTION_WORKERS:5}
+
   # AI ingestion agent (POST /api/v1/financial-statements/upload)
   ingestion:
     max-iterations: 30      # model turns per execution round
@@ -79,6 +86,10 @@ neracalab:
     model-call-timeout: ${INGESTION_MODEL_CALL_TIMEOUT:45s}   # a model call taking longer counts as stalled and is retried
     web-share-counts: ${INGESTION_WEB_SHARE_COUNTS:true}   # Yahoo Finance share counts when a filing gives none
     job-timeout: ${INGESTION_JOB_TIMEOUT:5m}   # an upload job running longer is stopped and FAILED (queue time not counted)
+    # false: filings of one company uploaded together are stored at the same time (up to neracalab.jobs.workers).
+    # true: one after the other in upload order (other companies still beside them). The stored data is the same
+    # either way; in order, a job never verifies a period while another filing of the company is writing it.
+    same-company-in-order: ${INGESTION_SAME_COMPANY_IN_ORDER:false}
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:

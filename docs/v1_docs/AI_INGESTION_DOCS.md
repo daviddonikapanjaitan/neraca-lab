@@ -16,7 +16,7 @@ file=<FinancialStatement-2026-II-HRTA.xlsx>
 ```
 
 ```bash
-curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
@@ -120,6 +120,8 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.model-reasoning`   | false   | let a reasoning model think before answering; off sends `"reasoning": {"enabled": false}` (env `INGESTION_MODEL_REASONING`) |
 | `neracalab.ingestion.model-call-timeout`| 45s     | a model call taking longer counts as a stalled response and is retried (env `INGESTION_MODEL_CALL_TIMEOUT`) |
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
+| `neracalab.jobs.workers`                | 5       | uploads stored at the same time, each by its own agent (env `INGESTION_WORKERS`), also several filings of one company ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `neracalab.ingestion.same-company-in-order` | false | true: filings of one company are stored one after the other in upload order instead (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
 | `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
 
 ## 3. Design: the model orchestrates, Java owns the numbers
@@ -404,6 +406,24 @@ Rules:
   by k (BMRI FY2021: 601.06 -> 300.53); the same test keeps a period from being adjusted twice. Share counts
   and prices are split-adjusted, so EPS-based ratios stay consistent. Other restatements in comparatives
   (BMRI's FY2023 cash flows in its FY2024 filing, FY2024 EPS 602.41 -> 597.67) keep the period's own filing.
+  The result does not depend on the upload order. MAPA split 1:10 in 2023 (FY2022 filing: EPS 412 and
+  2,850,400,000 shares of Rp 100; FY2023 filing: FY2022 EPS 41, 28,504,000,000 shares of Rp 10): when the
+  FY2023 filing is stored first, the FY2022 filing's own per-share figures do not replace the restated ones
+  (outcome `SPLIT_ADJUSTED`). The split is recorded in `corporate_action` (`STOCK_SPLIT` 1:10, dated the day
+  after the restated period, description "Restated in the filings: ..."), and after every save the figures of
+  dates before it that are still on the old basis are adjusted: EPS / k and share counts x k of earlier
+  periods (MAPA FY2021: 88 -> 8.8), `balance_sheet.shares_outstanding` and the share snapshots (2,850,400,000
+  -> 28,504,000,000 at 2020-12-31 .. 2022-12-31; before, MAPA's market cap of 2022 was a tenth of the real
+  one, split-adjusted prices x pre-split shares). The verification accepts the adjusted figures of a filing
+  of before the split and says so in its notes.
+- **Treasury stock and weighted shares.** `basic_shares` (share capital / par value when the capital did
+  not change in the period) is left empty for a period with treasury stock at its start or end: treasury
+  shares are not outstanding and their count is not in the filing. ULTJ FY2022: 11,553,520,000 issued
+  shares, 1,155,352,800 of them bought back; its EPS 92 is per outstanding share (10.44 billion), so the
+  issued count beside it gave EPS x shares 10.6% above the profit.
+- **Lines filed as 0.** An income statement line of amount zero is never reported as unclassified (BBCA
+  files 0 on the 17 insurance lines it does not use; only "Other insurance expenses" with an amount is left
+  to the agent).
 - **EPS checked against the share count.** A filed EPS is checked against the filing's own share
   count. (1) Across columns: each column's profit attributable to the parent / EPS must fit the share
   capital range of its period (80% of the smaller .. 105% of the larger count) at the same par value.
@@ -465,7 +485,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 
 | Test                             | What it proves                                                                                                                                                                                                                                       |
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
+| `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/IDX_XBRL/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
 | `FilingMapperLegacyTemplateTest` (unit) | the pre-2023 template: INDF FY2022 maps to the same FY2022 figures as the comparative column of the INDF FY2023 filing (except the restated operating / investing cash flow), incl. share capital and depreciation from the `1 CurrentYear` sheets; the revenue breakdowns of GGRM, HRTA and INDY FY2022 reconcile to revenue in both columns, and HRTA / INDY FY2022 equal their FY2023 filings' comparatives |
 | `FilingMapperInfrastructureTest` (unit) | the Infrastructure Industry taxonomy: all five SMDR filings map without errors or unclassified lines; capex includes the infrastructure labels (FY2025: -81,650,677); every comparative column equals the previous filing's current column except SMDR's own reclassification of 161,196 from "Other income" to "Other gains (losses)" in FY2024 operating income; no share count is guessed |
 | `ModelSpeedSettingsTest` (unit, local HTTP server) | the real Spring AI client sends `"reasoning": {"enabled": false}` (and nothing when reasoning is on); a call slower than the per-call timeout is retried at once and a fast answer used; a call that always stalls gives up after the retries in under 3 s |
@@ -481,7 +501,8 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
 | `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; all five BMRI filings map without errors; BMRI FY2025's FY2024 column ignores "Claim expenses" shown for information (operating income 76,059,595 million, revenue 186,767,596), never against an agent classification; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
-| `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; split factors |
+| `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; the other upload order (comparative first, then the period's own filing: MAPA 1:10) ends the same, with balance sheet shares and share snapshots adjusted, the split recorded once and the own filing uploaded again changing nothing; a restatement that is no split is replaced by the own filing; split factors |
+| `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |

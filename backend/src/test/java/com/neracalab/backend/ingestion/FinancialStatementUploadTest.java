@@ -53,7 +53,7 @@ import tools.jackson.databind.json.JsonMapper;
 @AutoConfigureMockMvc
 class FinancialStatementUploadTest {
 
-    private static final Path WORKBOOK = Path.of("..", "data", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
+    private static final Path WORKBOOK = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
 
     @MockitoBean
     private IngestionAgent agent;

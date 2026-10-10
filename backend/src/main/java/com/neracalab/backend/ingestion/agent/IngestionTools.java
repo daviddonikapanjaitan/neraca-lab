@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import org.springframework.ai.tool.annotation.Tool;
@@ -298,6 +299,9 @@ public class IngestionTools {
                 case PRIOR_PERIOD -> session.info().current().isFullYear() ? session.info().audited() : Boolean.FALSE;
                 case PRIOR_YEAR_END -> null;
             };
+            // who stored the period before this save: a later filing's comparative may have restated a share split
+            boolean storedByOtherFiling = repository.periodId(company.companyId(), period).flatMap(repository::sourceFiling)
+                    .filter(source -> !source.equals(session.info().fileName())).isPresent();
             long periodId = repository.upsertPeriod(company.companyId(), period, session.info().fileName(), audited, current);
             if (current) {
                 var info = session.info();
@@ -310,8 +314,10 @@ public class IngestionTools {
             boolean own = !current && session.info().fileName().equals(repository.sourceFiling(periodId).orElse(null));
             List<WriteResult> writes = new ArrayList<>();
             for (MappedStatement s : statements) {
-                writes.add(repository.writeStatement(company.companyId(), periodId, s, current || own));
+                writes.add(repository.writeStatement(company.companyId(), periodId, s, current || own, storedByOtherFiling));
             }
+            // a split detected from another filing of the company: this column's figures of before it are adjusted too
+            repository.applyDetectedSplits(company.companyId()).forEach(session::note);
             session.statementsSaved(column, writes);
             return new SaveResult(column, period.key(), current ? "REPLACE (current period)"
                     : own ? "REFRESH (this filing wrote the period)" : "FILL GAPS (comparative)",
@@ -434,6 +440,8 @@ public class IngestionTools {
                 rows.add(s.date() + ": " + (s.sharesOutstanding() == null ? "n/a" : s.sharesOutstanding().toPlainString())
                         + " shares (" + s.source() + ")");
             }
+            // counts of dates before a detected split are stored split-adjusted, like the prices
+            repository.applyDetectedSplits(company.companyId()).forEach(session::note);
             session.sharesSaved();
             return new ShareSaveResult(shares.basis(), rows,
                     shares.checks().stream().filter(c -> c.severity() == Check.Severity.WARNING).map(Check::message).toList());
@@ -465,13 +473,17 @@ public class IngestionTools {
                 + " is not registered: call findCompany, then registerCompany"));
     }
 
-    /** Writes are serialised per session even when the model requests them in parallel. */
+    /**
+     * Writes are serialised per company: one at a time even when the model requests them in parallel, and
+     * never at the same moment as a write of another filing of the same company that is stored beside this one.
+     */
     private <T> T locked(Supplier<T> action) {
-        session.writeLock().lock();
+        ReentrantLock lock = repository.companyLock(session.info().ticker());
+        lock.lock();
         try {
             return action.get();
         } finally {
-            session.writeLock().unlock();
+            lock.unlock();
         }
     }
 }

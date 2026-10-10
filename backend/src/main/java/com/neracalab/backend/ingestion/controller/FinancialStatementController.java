@@ -63,8 +63,9 @@ public class FinancialStatementController {
             throw new IdxWorkbookException("Only .xlsx files are accepted (IDX XBRL FinancialStatement-<period>-<TICKER>.xlsx)");
         }
         byte[] content = file.getBytes();
-        service.prepare(content, fileName);   // rejects a wrong workbook before anything is stored
-        Submission submission = queue.submit(content, fileName, file.getContentType(), Requester.of(user));
+        // rejects a wrong workbook before anything is stored
+        String ticker = service.prepare(content, fileName).info().ticker();
+        Submission submission = queue.submit(content, fileName, file.getContentType(), ticker, Requester.of(user));
         IngestionJob job = submission.job();
         return ResponseEntity.status(submission.created() ? HttpStatus.ACCEPTED : HttpStatus.OK)
                 .location(URI.create("/api/v1/ingestions/" + job.id()))

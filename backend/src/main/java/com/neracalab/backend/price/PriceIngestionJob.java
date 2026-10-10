@@ -7,7 +7,7 @@ import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.PriceIngestionService.Result;
 
-/** One queued ingestion of one company. State changes come from the worker thread only. */
+/** One queued ingestion of one company. State changes come only from the worker thread that processes it. */
 public final class PriceIngestionJob {
 
     public enum Status {

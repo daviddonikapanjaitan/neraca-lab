@@ -108,7 +108,7 @@ class FilingMapperCekaTest {
     }
 
     private static FilingMapper mapper(String filing) throws Exception {
-        Path file = Path.of("..", "data", "CEKA", "xlsx", "FinancialStatement-" + filing + "-CEKA.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "CEKA", "xlsx", "FinancialStatement-" + filing + "-CEKA.xlsx");
         assumeTrue(Files.exists(file), "CEKA source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));

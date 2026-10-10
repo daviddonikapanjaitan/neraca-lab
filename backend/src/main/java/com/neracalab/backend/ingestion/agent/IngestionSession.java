@@ -8,7 +8,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.locks.ReentrantLock;
 
 import com.neracalab.backend.ingestion.mapping.FilingInfo;
 import com.neracalab.backend.ingestion.mapping.FilingMapper;
@@ -29,7 +28,6 @@ public final class IngestionSession {
     private final String id = UUID.randomUUID().toString();
     private final FilingMapper mapper;
     private volatile ShareCapital shareCapital;
-    private final ReentrantLock writeLock = new ReentrantLock();
 
     private volatile CompanyRow company;
     private volatile boolean companyLookedUp;
@@ -78,10 +76,6 @@ public final class IngestionSession {
     /** Replaces the share counts, e.g. with checked counts from a website when the filing gives none. */
     public void shareCapital(ShareCapital shares) {
         this.shareCapital = shares;
-    }
-
-    public ReentrantLock writeLock() {
-        return writeLock;
     }
 
     // ---- company

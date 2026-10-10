@@ -25,7 +25,7 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbookReader;
  */
 class IngestionVerifierOverdraftTest {
 
-    private static final Path DATA = Path.of("..", "data", "GGRM", "xlsx");
+    private static final Path DATA = Path.of("..", "data", "IDX_XBRL", "GGRM", "xlsx");
     private static final StatementColumn CURRENT = StatementColumn.CURRENT_PERIOD;
 
     @ParameterizedTest

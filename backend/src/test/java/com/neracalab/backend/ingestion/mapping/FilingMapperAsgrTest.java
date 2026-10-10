@@ -124,7 +124,7 @@ class FilingMapperAsgrTest {
     }
 
     private static FilingMapper simp(String filing) throws Exception {
-        Path file = Path.of("..", "data", "SIMP", "xlsx", "FinancialStatement-" + filing + "-SIMP.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "SIMP", "xlsx", "FinancialStatement-" + filing + "-SIMP.xlsx");
         assumeTrue(Files.exists(file), "SIMP source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));
@@ -158,7 +158,7 @@ class FilingMapperAsgrTest {
     }
 
     private static FilingMapper mapper(String filing) throws Exception {
-        Path file = Path.of("..", "data", "ASGR", "xlsx", "FinancialStatement-" + filing + "-ASGR.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "ASGR", "xlsx", "FinancialStatement-" + filing + "-ASGR.xlsx");
         assumeTrue(Files.exists(file), "ASGR source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));

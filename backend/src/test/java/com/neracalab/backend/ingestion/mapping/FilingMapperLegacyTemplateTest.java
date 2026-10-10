@@ -28,7 +28,7 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbookReader;
  */
 class FilingMapperLegacyTemplateTest {
 
-    private static final Path DATA = Path.of("..", "data", "INDF", "xlsx");
+    private static final Path DATA = Path.of("..", "data", "IDX_XBRL", "INDF", "xlsx");
 
     @Test
     void legacyTemplateMatchesComparativeOfNextYear() throws Exception {
@@ -117,7 +117,7 @@ class FilingMapperLegacyTemplateTest {
     }
 
     private static FilingMapper mapper(String ticker, String filing) throws Exception {
-        return mapper(Path.of("..", "data", ticker, "xlsx").resolve("FinancialStatement-" + filing + "-" + ticker + ".xlsx"));
+        return mapper(Path.of("..", "data", "IDX_XBRL", ticker, "xlsx").resolve("FinancialStatement-" + filing + "-" + ticker + ".xlsx"));
     }
 
     private static FilingMapper mapper(String fileName) throws Exception {

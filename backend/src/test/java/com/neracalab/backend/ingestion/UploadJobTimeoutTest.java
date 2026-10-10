@@ -32,7 +32,7 @@ import com.neracalab.backend.job.IngestionJobStatus;
 @SpringBootTest(properties = "neracalab.ingestion.job-timeout=3s")
 class UploadJobTimeoutTest {
 
-    private static final Path WORKBOOK = Path.of("..", "data", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
+    private static final Path WORKBOOK = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
 
     @MockitoBean
     private IngestionAgent agent;

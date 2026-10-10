@@ -106,7 +106,8 @@ neraca_lab/
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
-├── data/<TICKER>/               source data per company
+├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
+├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF (upload them on Ingestion > PDF Documents (RAG))
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
@@ -193,7 +194,7 @@ Details: [`docs/v1_docs/AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md).
 ## Uploading financial statements (AI ingestion)
 
 ```bash
-curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
@@ -210,6 +211,14 @@ The upload is asynchronous. The workbook is checked, stored once per SHA-256 che
 agent runs in the background. Every ingestion (uploads and prices) records its progress and the
 user who started it in `ingestion_job`; `GET /api/v1/ingestions` lists them, `GET /api/v1/ingestions/{id}` returns one
 with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded workbook. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md).
+
+Ingestion jobs run in parallel: each ingestion queue (uploads, prices, RAG PDF / news, screening data) has
+`neracalab.jobs.workers` worker threads (default 5, env `INGESTION_WORKERS`; set `workers: 6` in
+`application.yaml` for six), so five filings uploaded together - also five years of one company - are
+stored at the same time, each by its own agent. The write steps of filings of one company never overlap,
+and the requests to Yahoo Finance and to each news site stay paced one at a time.
+`neracalab.ingestion.same-company-in-order=true` stores the filings of one company one after the other
+instead. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md), section 4.
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|
@@ -234,8 +243,10 @@ information beside premiums already net of them (BMRI's FY2024 comparative) are 
 only that makes profit from operation reconcile; an EPS filed in the rounding unit (SIMP
 H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
-stored values; an EPS and its share count always come from one filing, and a share split a comparative
-restates - BMRI 2:1 in 2023 - adjusts the per-share figures of that and earlier periods). A bank's temporary
+stored values; an EPS and its share count always come from one filing, and a share split a later filing
+restates - BMRI 2:1, MAPA 1:10 in 2023 - adjusts the per-share figures and share counts of that and earlier
+periods, whatever the upload order, and is recorded in `corporate_action`; a year with treasury stock gets no
+weighted share count - ULTJ FY2022 - and a line filed as 0 needs no classification). A bank's temporary
 syirkah funds are stored beside its liabilities (`temporary_syirkah_funds`), not in them. A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
 contradict each other (NCKL FY2024) gives no share counts and its EPS is cleared, and an EPS off by a power of
 ten is corrected (INDF H1 2024: 0.000439 -> 439); a workbook re-run refreshes the periods it wrote. All of
@@ -301,7 +312,7 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                 
 | `GET /api/v1/prices/ingestions/{id}`                          | the job: `status` (`QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `FAILED`), `message`, `result` (requests, rows inserted / updated, valuation rows) |
 | `GET /api/v1/prices/ingestions`                               | `provider`, `pending` jobs and the recent jobs, most recent first                                                                        |
 
-A background worker (one thread) fetches the
+Background workers (5 companies at the same time, `neracalab.jobs.workers`) fetch the
 [Yahoo Finance chart API](https://query1.finance.yahoo.com/v8/finance/chart/HRTA.JK) (`HRTA.JK` for IDX) and never inside a web request;
 the frontend only reads the database. Per job:
 
@@ -322,8 +333,8 @@ decimals; days without a rate in the 7 days before are not stored. Yahoo's own `
 (days off by a factor of 10). The UI shows prices and EPS below 1 with 6 decimals. Details:
 [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 2.
 
-Polite crawling: one request at a time with a random 1-2 s pause, a browser User-Agent and one HTTP
-client with a cookie store. On HTTP 429 the queue pauses 15, 30, then 60 minutes and retries the
+Polite crawling: one request at a time with a random 1-2 s pause (shared by all workers), a browser
+User-Agent and one HTTP client with a cookie store. On HTTP 429 the queue pauses 15, 30, then 60 minutes and retries the
 same job; a 429 after that stops the run (queued jobs fail, re-submit later; each job resumes from
 `MAX(trading_date)`). The queue lives in memory (a restart drops queued jobs; re-submit), but every
 job and its progress is also recorded in `ingestion_job` and listed by `GET /api/v1/ingestions`.
@@ -335,6 +346,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.min-delay`, `max-delay`             | `1s`, `2s`                  | pause between two requests                          |
 | `neracalab.prices.backoff`                            | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429                    |
 | `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: queues every active company of `IDX`   |
+| `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 
 `full=true` re-fetches the whole history instead of starting at the latest stored day; a first
@@ -346,7 +358,7 @@ limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTI
 Two Ingestion pages fill a pgvector store that the AI features can search by meaning; every
 document is linked to its company (`rag_document.company_id` -> `company`):
 
-- **PDF Documents (RAG)**: upload a `.pdf` with a text layer (e.g. `data/HRTA/pdf`) for a stored
+- **PDF Documents (RAG)**: upload a `.pdf` with a text layer (e.g. `data/IDX_XBRL/HRTA/pdf`) for a stored
   company (picked automatically from a file name ending with the ticker). Its text is read page by
   page (PDFBox), split into ~1,500-character chunks, embedded and stored.
 - **News (RAG)**: choose an IDX company and a date range (this month, last 7 / 30 days, previous
@@ -354,7 +366,7 @@ document is linked to its company (`rag_document.company_id` -> `company`):
   and Pasardana published in the range are read and stored; articles already stored are skipped.
 
 ```bash
-curl -H "$AUTH" -F file=@data/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
+curl -H "$AUTH" -F file=@data/IDX_XBRL/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
 curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=gold%20sales%202025"   # closest chunks
 ```
@@ -502,7 +514,7 @@ inventory, investment properties as capex, a restated FY2024);
 taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment; `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
@@ -573,7 +585,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.15__schema_analysis.sql`        | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id`; job type `ANALYSIS` |
 | `V1.0.16__schema_syirkah.sql`         | banks: `balance_sheet.temporary_syirkah_funds` (sharia depositors; neither liabilities nor equity) |
 | `V1.0.17__schema_screening_selection.sql` | screening of selected stocks: `screening_run.tickers`, `market_cap_tier` NULL for such runs |
-| `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/HRTA` |
+| `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
 | `V1.0.13__data_BNGA_shares.sql`       | BNGA audited year-end share counts 2021 .. 2025 (note 33 of the annual reports; two share classes and treasury shares) |
@@ -643,7 +655,7 @@ At runtime: upload the filing (`POST /api/v1/financial-statements/upload`), then
 when the filing fills the breakdown sheets 1617000 / 1618000 (INDF, for example, leaves them blank).
 As seed data that exists on every start:
 
-1. Put the filing in `data/<TICKER>/xlsx/` (and prices in `data/<TICKER>/price/`).
+1. Put the filing in `data/IDX_XBRL/<TICKER>/xlsx/` (and prices in `data/IDX_XBRL/<TICKER>/price/`).
 2. Create the data script(s), e.g. `V1.0.10__data_<TICKER>_financials.sql`, following the
    upsert pattern of `V1.0.4__data_HRTA_financials.sql` / `V1.0.5__data_HRTA_market.sql`.
 3. Add them to `spring.sql.init.data-locations` in `application.yaml` **before**

@@ -529,6 +529,9 @@ public final class FilingMapper {
                 if (profitIndex >= 0 && i > profitIndex) {
                     continue;   // other comprehensive income / comprehensive totals: not profit or loss
                 }
+                if (raw.signum() == 0) {
+                    continue;   // filed as 0 (BBCA files 0 on its unused insurance lines): nothing to classify
+                }
                 unclassified.add(new UnclassifiedLine(line.label(), amount(raw)));
                 continue;
             }
@@ -1700,9 +1703,9 @@ public final class FilingMapper {
 
         // weighted shares only for the period whose EPS gave the count: another period's EPS may use another
         // denominator (INDY's FY2022 EPS implies 5,210,191,995 shares, FY2023's exactly 5,202,692,000)
-        BigDecimal weightedCurrent = epsShares == null ? weighted(currentYear, par)
+        BigDecimal weightedCurrent = epsShares == null ? weighted(currentYear, treasuryStartEnd.get(IdxSheets.EQUITY), par)
                 : epsShares.column() == StatementColumn.CURRENT_PERIOD ? epsShares.shares() : null;
-        BigDecimal weightedPrior = epsShares == null ? weighted(priorYear, par)
+        BigDecimal weightedPrior = epsShares == null ? weighted(priorYear, treasuryStartEnd.get(IdxSheets.EQUITY_PRIOR_YEAR), par)
                 : epsShares.column() == StatementColumn.PRIOR_PERIOD ? epsShares.shares() : null;
         Map<LocalDate, ShareAt> byDate = new LinkedHashMap<>();
         for (Position p : positions) {
@@ -1888,10 +1891,19 @@ public final class FilingMapper {
                         + " / basic EPS " + eps.toPlainString() + " = " + shares.toPlainString() + " shares outstanding");
     }
 
-    /** Weighted shares = shares outstanding when share capital did not change during the period. */
-    private static BigDecimal weighted(BigDecimal[] startEnd, BigDecimal par) {
+    /**
+     * Weighted shares = shares outstanding when share capital did not change during the period and the company
+     * held no treasury stock in it. Treasury shares are not outstanding and their count is not in the filing, so
+     * with treasury stock at the start or the end of the period the weighted count is unknown (ULTJ FY2022:
+     * 11,553,520,000 issued shares of which 1,155,352,800 bought back; its EPS 92 is per outstanding share).
+     */
+    private static BigDecimal weighted(BigDecimal[] startEnd, BigDecimal[] treasuryStartEnd, BigDecimal par) {
         if (par == null || startEnd == null || startEnd[0] == null || startEnd[1] == null
                 || startEnd[0].compareTo(startEnd[1]) != 0) {
+            return null;
+        }
+        if (treasuryStartEnd != null && ((treasuryStartEnd[0] != null && treasuryStartEnd[0].signum() != 0)
+                || (treasuryStartEnd[1] != null && treasuryStartEnd[1].signum() != 0))) {
             return null;
         }
         return startEnd[1].divide(par);

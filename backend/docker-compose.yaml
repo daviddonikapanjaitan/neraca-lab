@@ -64,7 +64,12 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-neracalab}
-      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m}
+      # 1 GB heap: several uploads / PDFs are read at the same time (INGESTION_WORKERS)
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx1024m}
+      # jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time
+      INGESTION_WORKERS: ${INGESTION_WORKERS:-5}
+      # true: filings of one company are stored one after the other in upload order, not at the same time
+      INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-false}
       # AI ingestion (values from backend/.env, which compose reads automatically; never baked into the image)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}

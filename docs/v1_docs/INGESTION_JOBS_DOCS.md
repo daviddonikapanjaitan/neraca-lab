@@ -32,7 +32,7 @@ Code: `backend/src/main/java/com/neracalab/backend/`
 ## 1. Upload: stored once per checksum
 
 ```bash
-curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
@@ -43,8 +43,9 @@ curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
    The checksum column is unique, so two identical uploads at the same moment also store one row.
 3. If the same stored file is already QUEUED or RUNNING, that job is returned (**200**). Otherwise a
    new job is recorded as QUEUED and returned (**202**, `Location: /api/v1/ingestions/{id}`).
-4. The worker reads the bytes from `ingestion_file`, parses the workbook again and runs the AI agent.
-   Re-uploading a known file therefore extracts the data again from the stored copy.
+4. A worker reads the bytes from `ingestion_file`, parses the workbook again and runs the AI agent.
+   Re-uploading a known file therefore extracts the data again from the stored copy. Several
+   uploads are stored at the same time (section 4).
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|
@@ -166,7 +167,37 @@ Jobs recorded before this column existed were attributed **once** to the root us
 startup, after the root user is ensured, `IngestionCreatorBackfill` sets their creator and records
 the migration in `app_migration`, so it never runs again (later scheduled runs stay `null`).
 
-## 4. Restarts
+## 4. Workers and restarts
+
+Each ingestion queue has `neracalab.jobs.workers` worker threads (default 5, env `INGESTION_WORKERS`):
+that many of its jobs run at the same time and the others wait as QUEUED. To run 6 at a time, set
+`workers: 6` under `neracalab.jobs` in `application.yaml` (or `INGESTION_WORKERS=6` in `backend/.env`)
+and restart the backend.
+
+| Queue (job type)                              | Runs at the same time                     | Still one after the other                                                                 |
+|-----------------------------------------------|-------------------------------------------|-------------------------------------------------------------------------------------------|
+| Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings, also several of one company | the write steps of filings of one company (never two at the same moment); the recalculation of the derived data |
+| Prices (`PRICE`)                              | different companies (one job per company) | the requests to the provider: one at a time with the 1-2 s pause; an HTTP 429 pauses every worker |
+| RAG (`RAG_PDF`, `RAG_NEWS`)                   | different documents / companies           | the requests to one news site                                                             |
+| Screening data (`FUNDAMENTALS`)               | different exchanges (one run per exchange) | the requests to Yahoo Finance                                                            |
+
+**Filings of one company.** Uploaded together (for example five years of MAPA) they are stored at the
+same time, each by its own agent. Every write step of an agent (save the statements of a column, save
+its revenue segments, save share counts, register the company) holds the company's write lock, so the
+stored data is what storing the filings one after the other in some order gives: the period's own
+filing replaces, comparatives only fill gaps. A share split restated by a later filing ends on the basis
+after the split whatever the order ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 4). One thing can
+differ from storing them one by one: a job may end `INCOMPLETE` because it verified a period while the
+period's own filing was between two of its steps (revenue already replaced, segments not yet): upload
+that file again.
+
+`neracalab.ingestion.same-company-in-order=true` (env `INGESTION_SAME_COMPANY_IN_ORDER`) stores the
+filings of one company one after the other in upload order instead (other companies still run beside
+them); the waiting ones stay `QUEUED`.
+
+More workers therefore store more uploads and documents at the same time; they do not send requests
+to Yahoo Finance or a news site faster. Screening runs and analyses are not ingestion jobs: each of
+those queues keeps one worker.
 
 The queues are in memory. At startup, before the web server accepts requests,
 `IngestionJobRecovery` marks every job still QUEUED / RUNNING / WAITING_RATE_LIMIT as `FAILED`
@@ -194,6 +225,9 @@ the first one is still running.
 | `FinancialStatementUploadTest` (creator) | an upload is recorded as started by the uploading user; after the user is deleted the job keeps the username |
 | `IngestionCreatorBackfillTest`  | existing jobs are attributed to the root user exactly once; later jobs without a user stay unattributed        |
 | `PriceIngestionControllerTest`  | a price job is recorded in `ingestion_job` with the same final state and requester as the queue                  |
+| `JobWorkerPoolTest`             | five workers process five jobs at the same time, never more jobs than workers, one worker keeps the order, a failing job does not stop its worker |
+| `FinancialStatementQueueWorkersTest` | five filings of one company and filings of different companies are stored at the same time; with `same-company-in-order` filings of one company one after the other in upload order and a failed filing lets the next one run (scripted agent, no database) |
+| `CompanyWriteLockTest`          | one write lock per company whatever the spelling of the ticker, another lock for another company; a write step waits while another filing of the company holds it |
 
 Both tests delete the rows they create. Because the application startup fails jobs left active,
 run the tests against a separate database when a backend on the same database is processing jobs

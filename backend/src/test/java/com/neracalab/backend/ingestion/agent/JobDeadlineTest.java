@@ -112,7 +112,7 @@ class JobDeadlineTest {
     /** The planner's fallback (default plan on a bad answer) must not swallow the time limit. */
     @Test
     void thePlannerDoesNotSwallowTheTimeLimit() throws Exception {
-        Path file = Path.of("..", "data", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
         assumeTrue(Files.exists(file), "HRTA source data not available");
         IngestionSession session;
         try (InputStream in = Files.newInputStream(file)) {

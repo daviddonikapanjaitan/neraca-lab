@@ -19,18 +19,23 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
+import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
+import com.neracalab.backend.job.WorkerThreads;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.provider.RateLimitedException;
 
 /**
- * In-memory queue of price ingestions with ONE worker thread, so the provider sees one request at
- * a time (the pause between requests is applied by {@code PacedHttpClient}).
+ * In-memory queue of price ingestions with several worker threads ({@code neracalab.jobs.workers}, 5):
+ * that many companies are ingested at the same time. The provider still sees one request at a time,
+ * with the pause between two requests: {@code PacedHttpClient} is shared by all workers.
  * <p>
- * HTTP 429: the worker pauses the whole queue for the next wait of {@code neracalab.prices.backoff}
- * (15m, 30m, 60m; longer when Retry-After asks for it), then retries the same job, which starts again
- * from MAX(trading_date) - nothing of it was written. A success resets the sequence. A 429 after the
- * last wait stops the run: the job and every queued job fail, and the next submission starts fresh.
+ * HTTP 429: the whole queue (every worker) pauses for the next wait of {@code neracalab.prices.backoff}
+ * (15m, 30m, 60m; longer when Retry-After asks for it), then the job is retried, which starts again
+ * from MAX(trading_date) - nothing of it was written. Jobs running at that moment that are answered
+ * 429 too share the pause: it counts once. A success resets the sequence. A 429 after the last wait
+ * stops the run: the job, every job answered 429 with it and every queued job fail, and the next
+ * submission starts fresh.
  * <p>
  * At most one active job per company; jobs are lost on restart (re-submit; nothing is fetched twice).
  * Every state change is also reported to the {@link Listener} ({@link PriceIngestionTracker} records
@@ -58,20 +63,37 @@ public class PriceIngestionQueue implements SmartLifecycle {
     private final LinkedBlockingQueue<PriceIngestionJob> pending = new LinkedBlockingQueue<>();
     /** All known jobs in submission order; guarded by {@code this}. */
     private final Map<UUID, PriceIngestionJob> jobs = new LinkedHashMap<>();
-    private volatile Thread worker;
-    /** Consecutive HTTP 429 answers; worker thread only. */
+    private final WorkerThreads workers;
+
+    /** Guards the rate-limit state below, which all workers share. */
+    private final Object rateLimit = new Object();
+    /** Pauses since the last success (index of the next wait in {@code backoff}). */
     private int rateLimitStreak;
+    /** Pauses and run stops so far: an attempt that began before the latest one does not count its 429 again. */
+    private long rateLimitEvents;
+    /** Value of {@link #rateLimitEvents} after the last run stop (0: none yet). */
+    private long runStoppedAt;
+    /** End of the current pause ({@code null}: none). */
+    private Instant pausedUntil;
+    /** The 429 that started the current pause, with the wait: "...; queue paused for 15m (wait 1 of 3)". */
+    private String pauseReason;
 
     @Autowired
-    public PriceIngestionQueue(PriceIngestionService service, PriceProperties properties, Listener listener) {
+    public PriceIngestionQueue(PriceIngestionService service, PriceProperties properties, Listener listener,
+                               JobProperties jobProperties) {
+        this(service, properties, listener, jobProperties.workers());
+    }
+
+    /** One worker, no listener (tests). */
+    PriceIngestionQueue(PriceIngestionService service, PriceProperties properties) {
+        this(service, properties, job -> { }, 1);
+    }
+
+    PriceIngestionQueue(PriceIngestionService service, PriceProperties properties, Listener listener, int workers) {
         this.service = service;
         this.properties = properties;
         this.listener = listener;
-    }
-
-    /** Without listener (tests). */
-    PriceIngestionQueue(PriceIngestionService service, PriceProperties properties) {
-        this(service, properties, job -> { });
+        this.workers = new WorkerThreads("price-ingestion", workers, this::work);
     }
 
     // ------------------------------------------------------------------ API
@@ -154,38 +176,28 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     private void process(PriceIngestionJob job) {
         CompanyRef company = job.company();
+        boolean attempted = false;
         while (true) {
+            long eventsBefore = awaitResume(job, attempted);
+            if (eventsBefore < 0) {
+                job.failed("Stopped: the application is shutting down");
+                report(job);
+                return;
+            }
+            attempted = true;
             job.running();
             report(job);
             try {
                 job.succeeded(service.ingest(company, job.full()));
                 report(job);
-                rateLimitStreak = 0;
+                synchronized (rateLimit) {
+                    if (rateLimitEvents == eventsBefore) {
+                        rateLimitStreak = 0;
+                    }
+                }
                 return;
             } catch (RateLimitedException e) {
-                rateLimitStreak++;
-                List<Duration> backoff = properties.backoff();
-                if (rateLimitStreak > backoff.size()) {
-                    rateLimitStreak = 0;
-                    stopRun(job, e);
-                    return;
-                }
-                Duration wait = backoff.get(rateLimitStreak - 1);
-                if (e.retryAfter() != null && e.retryAfter().compareTo(wait) > 0) {
-                    wait = e.retryAfter();
-                }
-                Instant resumeAt = Instant.now().plus(wait);
-                String message = e.getMessage() + "; queue paused for " + format(wait) + " (wait "
-                        + rateLimitStreak + " of " + backoff.size() + "), then " + company.ticker() + " is retried";
-                job.waitingForRateLimit(resumeAt, message);
-                report(job);
-                log.warn(message);
-                try {
-                    Thread.sleep(wait);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    job.failed("Stopped: the application is shutting down");
-                    report(job);
+                if (!rateLimited(job, e, eventsBefore)) {
                     return;
                 }
             } catch (RuntimeException e) {
@@ -200,6 +212,80 @@ public class PriceIngestionQueue implements SmartLifecycle {
                 report(job);
                 return;
             }
+        }
+    }
+
+    /**
+     * Waits until the queue is not paused. A job that has run before shows WAITING_RATE_LIMIT meanwhile; a
+     * job that has not stays QUEUED.
+     *
+     * @return {@link #rateLimitEvents} at the moment the job may run; -1 when the thread was interrupted
+     */
+    private long awaitResume(PriceIngestionJob job, boolean attempted) {
+        while (true) {
+            Instant until;
+            String reason;
+            synchronized (rateLimit) {
+                if (pausedUntil == null || !Instant.now().isBefore(pausedUntil)) {
+                    pausedUntil = null;
+                    return rateLimitEvents;
+                }
+                until = pausedUntil;
+                reason = pauseReason;
+            }
+            if (attempted) {
+                job.waitingForRateLimit(until, reason + ", then " + job.company().ticker() + " is retried");
+                report(job);
+            }
+            Duration wait = Duration.between(Instant.now(), until);
+            if (wait.isPositive()) {
+                try {
+                    Thread.sleep(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /**
+     * The provider answered HTTP 429 for {@code job}: pauses the queue for the next back-off wait, or stops the
+     * run after the last one. A 429 of an attempt that began before the latest pause or run stop belongs to
+     * that one (the job ran beside the job that caused it) and is not counted again.
+     *
+     * @param eventsBefore {@link #rateLimitEvents} when the attempt began
+     * @return true: the job is retried after the pause; false: it has failed
+     */
+    private boolean rateLimited(PriceIngestionJob job, RateLimitedException e, long eventsBefore) {
+        synchronized (rateLimit) {
+            if (rateLimitEvents != eventsBefore) {
+                if (runStoppedAt > eventsBefore) {
+                    job.failed("Run stopped: " + providerName() + " kept answering HTTP 429; submit again later");
+                    report(job);
+                    return false;
+                }
+                return true;
+            }
+            rateLimitEvents++;
+            rateLimitStreak++;
+            List<Duration> backoff = properties.backoff();
+            if (rateLimitStreak > backoff.size()) {
+                rateLimitStreak = 0;
+                runStoppedAt = rateLimitEvents;
+                pausedUntil = null;
+                stopRun(job, e);
+                return false;
+            }
+            Duration wait = backoff.get(rateLimitStreak - 1);
+            if (e.retryAfter() != null && e.retryAfter().compareTo(wait) > 0) {
+                wait = e.retryAfter();
+            }
+            pausedUntil = Instant.now().plus(wait);
+            pauseReason = e.getMessage() + "; queue paused for " + format(wait) + " (wait "
+                    + rateLimitStreak + " of " + backoff.size() + ")";
+            log.warn("{}, then {} is retried", pauseReason, job.company().ticker());
+            return true;
         }
     }
 
@@ -230,28 +316,16 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     @Override
     public void start() {
-        Thread thread = new Thread(this::work, "price-ingestion");
-        thread.setDaemon(true);
-        worker = thread;
-        thread.start();
+        workers.start();
     }
 
     @Override
     public void stop() {
-        Thread thread = worker;
-        worker = null;
-        if (thread != null) {
-            thread.interrupt();
-            try {
-                thread.join(Duration.ofSeconds(10));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        workers.stop();
     }
 
     @Override
     public boolean isRunning() {
-        return worker != null;
+        return workers.isRunning();
     }
 }

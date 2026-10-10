@@ -6,8 +6,11 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.sql.DataSource;
 
@@ -45,6 +48,10 @@ public class IngestionRepository {
     private final JdbcClient jdbc;
     private final DataSource dataSource;
     private final ValuationRepository valuations;
+    /** One {@link #refreshDerivedData} at a time. */
+    private final ReentrantLock derivedDataLock = new ReentrantLock();
+    /** {@link #companyLock}: one lock per ticker. */
+    private final Map<String, ReentrantLock> companyLocks = new ConcurrentHashMap<>();
 
     public IngestionRepository(JdbcClient jdbc, DataSource dataSource, ValuationRepository valuations) {
         this.jdbc = jdbc;
@@ -73,6 +80,18 @@ public class IngestionRepository {
     }
 
     // ------------------------------------------------------------------ company
+
+    /**
+     * The write lock of a company. Several filings of one company are stored at the same time, each by its own
+     * agent; every write step of an agent (register the company, save the statements of a column, save its
+     * revenue segments, save share counts) reads the stored rows and then writes, and holds this lock meanwhile.
+     * So a step never sees another filing's step half done: a comparative cannot overwrite the data the period's
+     * own filing saves at the same moment, and two breakdowns of one period are never mixed.
+     */
+    public ReentrantLock companyLock(String ticker) {
+        return companyLocks.computeIfAbsent(ticker == null ? "" : ticker.trim().toUpperCase(Locale.ROOT),
+                t -> new ReentrantLock());
+    }
 
     private static final String COMPANY_COLUMNS =
             "company_id, ticker, company_name, legal_name, sector, industry, currency, fiscal_year_end";
@@ -184,6 +203,20 @@ public class IngestionRepository {
      */
     @Transactional
     public WriteResult writeStatement(long companyId, long periodId, MappedStatement statement, boolean overwrite) {
+        return writeStatement(companyId, periodId, statement, overwrite, false);
+    }
+
+    /**
+     * As {@link #writeStatement(long, long, MappedStatement, boolean)}.
+     *
+     * @param storedByOtherFiling the period's stored data was written by another filing (a later filing's
+     *                            comparative, stored before this filing): when that comparative restated the
+     *                            per-share figures for a share split, this filing's own figures do not replace
+     *                            them (see {@link #restatedFactor})
+     */
+    @Transactional
+    public WriteResult writeStatement(long companyId, long periodId, MappedStatement statement, boolean overwrite,
+                                      boolean storedByOtherFiling) {
         String table = statement.table();
         Map<String, BigDecimal> values = statement.values();
         Optional<Map<String, Object>> existing = readStatement(table, periodId);
@@ -235,9 +268,82 @@ public class IngestionRepository {
             spec = spec.param(c, values.get(c), java.sql.Types.NUMERIC);
         }
         spec.update();
+        BigDecimal restated = existing.isPresent() && table.equals("income_statement")
+                ? restatedFactor(companyId, periodId, existing.get(), values, storedByOtherFiling) : null;
+        if (restated != null) {
+            return new WriteResult(table, statement.period().key(), WriteOutcome.SPLIT_ADJUSTED,
+                    keepRestatedPerShare(companyId, periodId, existing.get(), values, restated));
+        }
         List<String> diffs = existing.map(e -> differences(e, values)).orElse(List.of());
         return new WriteResult(table, statement.period().key(),
                 existing.isPresent() ? WriteOutcome.UPDATED : WriteOutcome.INSERTED, diffs);
+    }
+
+    /**
+     * The mirror of {@link #adjustForShareSplit}, for the other upload order: the period's own filing is written
+     * over a row whose per-share figures a later filing's comparative had already restated for a share split (MAPA
+     * split 1:10 in 2023; its FY2023 filing states FY2022's EPS as 41, its FY2022 filing as 412). Recognised by the
+     * same test - the profit attributable to the parent unchanged (0.5%), this filing's EPS a whole multiple or
+     * fraction k = 2..100 of the stored one (1%) - when the stored row came from another filing, or when that split
+     * was already detected for the period (the own filing uploaded again).
+     *
+     * @return own EPS / stored EPS (the split factor), or null: the own figures replace the stored ones
+     */
+    private BigDecimal restatedFactor(long companyId, long periodId, Map<String, Object> stored, Map<String, BigDecimal> own,
+                                      boolean storedByOtherFiling) {
+        BigDecimal factor = splitBetween(own.get("basic_eps"), own.get("net_income_to_parent"),
+                decimal(stored.get("basic_eps")), decimal(stored.get("net_income_to_parent")));
+        if (factor == null) {
+            return null;
+        }
+        if (storedByOtherFiling) {
+            return factor;
+        }
+        LocalDate periodEnd = periodEnd(periodId);
+        return detectedSplits(companyId).stream().anyMatch(s -> s.effectiveFrom().isAfter(periodEnd)
+                && s.factor().compareTo(factor) == 0) ? factor : null;
+    }
+
+    /** Puts the restated per-share figures back after the own filing's write; a missing one: the own one / k, x k. */
+    private List<String> keepRestatedPerShare(long companyId, long periodId, Map<String, Object> stored,
+                                              Map<String, BigDecimal> own, BigDecimal factor) {
+        BigDecimal eps = decimal(stored.get("basic_eps"));
+        updatePerShare(periodId, eps,
+                orElse(decimal(stored.get("diluted_eps")), scaled(own.get("diluted_eps"), factor, false)),
+                orElse(decimal(stored.get("basic_shares")), scaled(own.get("basic_shares"), factor, true)),
+                orElse(decimal(stored.get("diluted_shares")), scaled(own.get("diluted_shares"), factor, true)));
+        BigDecimal oldBasis = own.get("net_income_to_parent").divide(own.get("basic_eps"), 0, RoundingMode.HALF_UP);
+        List<String> notes = new ArrayList<>();
+        notes.add("share split " + ratio(factor) + " restated by a later filing's comparative: basic_eps " + plain(eps)
+                + " kept (this filing states " + plain(own.get("basic_eps")) + ", before the split)");
+        recordSplit(companyId, periodId, factor, oldBasis);
+        notes.addAll(applyDetectedSplits(companyId));
+        return notes;
+    }
+
+    private static BigDecimal orElse(BigDecimal value, BigDecimal fallback) {
+        return value != null ? value : fallback;
+    }
+
+    /** "10:1" for a split into ten, "1:5" for a reverse split. */
+    private static String ratio(BigDecimal factor) {
+        return factor.compareTo(BigDecimal.ONE) > 0 ? factor.toPlainString() + ":1"
+                : "1:" + BigDecimal.ONE.divide(factor, 0, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /**
+     * The split factor between a period's per-share figures before a split and after it: the profit attributable
+     * to the parent is the same (within 0.5%) and the EPS before is k or 1/k times the EPS after, k = 2..100.
+     *
+     * @return EPS before / EPS after (k, or 1/k for a reverse split); null: no split
+     */
+    static BigDecimal splitBetween(BigDecimal epsBefore, BigDecimal profitBefore, BigDecimal epsAfter, BigDecimal profitAfter) {
+        if (epsBefore == null || epsAfter == null || profitBefore == null || profitAfter == null || epsBefore.signum() == 0
+                || epsAfter.signum() == 0 || epsBefore.signum() != epsAfter.signum() || profitBefore.signum() == 0
+                || profitAfter.subtract(profitBefore).abs().compareTo(profitBefore.abs().multiply(new BigDecimal("0.005"))) > 0) {
+            return null;
+        }
+        return splitFactor(epsBefore, epsAfter);
     }
 
     /**
@@ -268,20 +374,13 @@ public class IngestionRepository {
         BigDecimal storedEps = decimal(stored.get("basic_eps"));
         BigDecimal eps = values.get("basic_eps");
         BigDecimal storedProfit = decimal(stored.get("net_income_to_parent"));
-        BigDecimal profit = values.get("net_income_to_parent");
-        if (storedEps == null || eps == null || storedProfit == null || profit == null || storedEps.signum() == 0
-                || eps.signum() == 0 || storedEps.signum() != eps.signum() || storedProfit.signum() == 0
-                || profit.subtract(storedProfit).abs().compareTo(storedProfit.abs().multiply(new BigDecimal("0.005"))) > 0) {
-            return List.of();
-        }
-        BigDecimal factor = splitFactor(storedEps, eps);
+        BigDecimal factor = splitBetween(storedEps, storedProfit, eps, values.get("net_income_to_parent"));
         if (factor == null) {
             return List.of();
         }
         BigDecimal oldBasis = storedProfit.divide(storedEps, 0, RoundingMode.HALF_UP);   // implied share count before
         List<String> notes = new ArrayList<>();
-        String ratio = factor.compareTo(BigDecimal.ONE) > 0 ? factor.toPlainString() + ":1"
-                : "1:" + BigDecimal.ONE.divide(factor, 0, RoundingMode.HALF_UP).toPlainString();
+        String ratio = ratio(factor);
         BigDecimal diluted = values.get("diluted_eps") != null ? values.get("diluted_eps")
                 : scaled(decimal(stored.get("diluted_eps")), factor, false);
         BigDecimal shares = values.get("basic_shares") != null ? values.get("basic_shares")
@@ -316,7 +415,177 @@ public class IngestionRepository {
             notes.add("share split " + ratio + ": " + row.get("fiscal_year") + " " + row.get("period_type") + " basic_eps "
                     + plain(rowEps) + " -> " + plain(adjusted));
         }
+        recordSplit(companyId, periodId, factor, oldBasis);
+        notes.addAll(applyDetectedSplits(companyId));
         return notes;
+    }
+
+    // ------------------------------------------------------------------ detected share splits
+
+    /** Start of the description of a corporate_action row written by {@link #recordSplit}. */
+    static final String DETECTED_SPLIT = "Restated in the filings: ";
+    /** A stored share count within this share of the count before a split is on the old basis. */
+    private static final BigDecimal OLD_BASIS_TOLERANCE = new BigDecimal("0.10");
+
+    /**
+     * A share split detected from the filings.
+     *
+     * @param effectiveFrom  the day after the latest period end a later filing restated; the split took effect
+     *                       on or after it
+     * @param factor         new shares per old share (k; 1/k for a reverse split)
+     * @param oldBasisShares share count before the split
+     */
+    public record DetectedSplit(LocalDate effectiveFrom, BigDecimal factor, BigDecimal oldBasisShares) {
+    }
+
+    private LocalDate periodEnd(long periodId) {
+        return jdbc.sql("SELECT period_end FROM reporting_period WHERE period_id = :p").param("p", periodId)
+                .query((rs, i) -> rs.getObject(1, LocalDate.class)).single();
+    }
+
+    /**
+     * Records a detected split in corporate_action (STOCK_SPLIT 1:k or REVERSE_SPLIT k:1), once: a split of the
+     * same ratio detected within a year of it is the same split, seen in another restated period, and only moves
+     * its date to the later period end. shares_issued holds the shares the split added (old count x (k - 1)).
+     */
+    private void recordSplit(long companyId, long periodId, BigDecimal factor, BigDecimal oldBasisShares) {
+        LocalDate from = periodEnd(periodId).plusDays(1);
+        boolean split = factor.compareTo(BigDecimal.ONE) > 0;
+        BigDecimal k = split ? factor : BigDecimal.ONE.divide(factor, 0, RoundingMode.HALF_UP);
+        BigDecimal ratioFrom = split ? BigDecimal.ONE : k;
+        BigDecimal ratioTo = split ? k : BigDecimal.ONE;
+        int moved = jdbc.sql("""
+                        UPDATE corporate_action SET action_date = GREATEST(action_date, :d)
+                        WHERE company_id = :c AND action_type = :type AND ratio_from = :rf AND ratio_to = :rt
+                          AND description LIKE :marker AND action_date BETWEEN :lo AND :hi""")
+                .param("d", from).param("c", companyId).param("type", split ? "STOCK_SPLIT" : "REVERSE_SPLIT")
+                .param("rf", ratioFrom).param("rt", ratioTo).param("marker", DETECTED_SPLIT + "%")
+                .param("lo", from.minusYears(1)).param("hi", from.plusYears(1)).update();
+        if (moved > 0) {
+            return;
+        }
+        BigDecimal newBasis = scaled(oldBasisShares, factor, true);
+        jdbc.sql("""
+                        INSERT INTO corporate_action (company_id, action_date, action_type, ratio_from, ratio_to,
+                                                      shares_issued, description)
+                        VALUES (:c, :d, :type, :rf, :rt, :issued, :description)""")
+                .param("c", companyId).param("d", from).param("type", split ? "STOCK_SPLIT" : "REVERSE_SPLIT")
+                .param("rf", ratioFrom).param("rt", ratioTo).param("issued", newBasis.subtract(oldBasisShares))
+                .param("description", DETECTED_SPLIT + (split ? "stock split 1:" + plain(k) : "reverse split " + plain(k) + ":1")
+                        + " (about " + oldBasisShares.toPlainString() + " -> " + newBasis.toPlainString() + " shares). A later "
+                        + "filing restates the earnings per share of the period ending " + from.minusDays(1)
+                        + " for it; the split took effect after that date (exact date not in the filings). Share counts "
+                        + "and per-share figures of earlier dates are stored split-adjusted, like the prices.")
+                .update();
+    }
+
+    /** The splits recorded by {@link #recordSplit}, oldest first. */
+    public List<DetectedSplit> detectedSplits(long companyId) {
+        return jdbc.sql("""
+                        SELECT action_date, ratio_from, ratio_to, shares_issued FROM corporate_action
+                        WHERE company_id = :c AND action_type IN ('STOCK_SPLIT', 'REVERSE_SPLIT')
+                          AND description LIKE :marker AND ratio_from > 0 AND ratio_to > 0 AND ratio_from <> ratio_to
+                          AND shares_issued IS NOT NULL
+                        ORDER BY action_date, corporate_action_id""")
+                .param("c", companyId).param("marker", DETECTED_SPLIT + "%")
+                .query((rs, i) -> {
+                    BigDecimal factor = rs.getBigDecimal(3).compareTo(rs.getBigDecimal(2)) > 0
+                            ? rs.getBigDecimal(3).divide(rs.getBigDecimal(2), 0, RoundingMode.HALF_UP)
+                            : BigDecimal.ONE.divide(rs.getBigDecimal(2).divide(rs.getBigDecimal(3), 0, RoundingMode.HALF_UP),
+                                    12, RoundingMode.HALF_UP);
+                    BigDecimal oldBasis = rs.getBigDecimal(4).divide(factor.subtract(BigDecimal.ONE), 0, RoundingMode.HALF_UP);
+                    return new DetectedSplit(rs.getObject(1, LocalDate.class), factor, oldBasis);
+                }).list();
+    }
+
+    /** Whether a detected split took effect after {@code date}: figures of that date are stored split-adjusted. */
+    public boolean splitAfter(long companyId, LocalDate date) {
+        return detectedSplits(companyId).stream().anyMatch(s -> s.effectiveFrom().isAfter(date));
+    }
+
+    /**
+     * Brings everything stored for dates before a detected split onto the basis after it, whatever the order the
+     * filings were stored in: the per-share figures of the earlier periods (EPS / k, share counts x k), the share
+     * count of their balance sheets and the share snapshots. Prices are split-adjusted, so share counts of earlier
+     * dates must be too (market cap = price x shares). Only rows still on the old basis are changed - their share
+     * count (for an income statement without one: profit / EPS) is within 10% of the count before the split - so
+     * running it again changes nothing and a period stored after the split is never touched.
+     *
+     * @return what was adjusted
+     */
+    @Transactional
+    public List<String> applyDetectedSplits(long companyId) {
+        List<String> notes = new ArrayList<>();
+        for (DetectedSplit split : detectedSplits(companyId)) {
+            BigDecimal factor = split.factor();
+            String ratio = ratio(factor);
+            List<Map<String, Object>> incomes = jdbc.sql("""
+                            SELECT i.period_id, rp.fiscal_year, rp.period_type, i.basic_eps, i.diluted_eps, i.basic_shares,
+                                   i.diluted_shares, i.net_income_to_parent
+                            FROM income_statement i JOIN reporting_period rp ON rp.period_id = i.period_id
+                            WHERE i.company_id = :c AND rp.period_end < :d ORDER BY rp.period_end""")
+                    .param("c", companyId).param("d", split.effectiveFrom()).query().listOfRows();
+            for (Map<String, Object> row : incomes) {
+                BigDecimal eps = decimal(row.get("basic_eps"));
+                BigDecimal profit = decimal(row.get("net_income_to_parent"));
+                BigDecimal shares = decimal(row.get("basic_shares"));
+                BigDecimal basis = shares != null ? shares
+                        : eps != null && eps.signum() != 0 && profit != null ? profit.divide(eps, 0, RoundingMode.HALF_UP) : null;
+                if (!onOldBasis(basis, split)) {
+                    continue;
+                }
+                updatePerShare(((Number) row.get("period_id")).longValue(), scaled(eps, factor, false),
+                        scaled(decimal(row.get("diluted_eps")), factor, false), scaled(shares, factor, true),
+                        scaled(decimal(row.get("diluted_shares")), factor, true));
+                notes.add("share split " + ratio + ": " + row.get("fiscal_year") + " " + row.get("period_type")
+                        + (eps == null ? " share count" : " basic_eps " + plain(eps) + " -> " + plain(scaled(eps, factor, false))));
+            }
+            List<Map<String, Object>> balances = jdbc.sql("""
+                            SELECT b.period_id, rp.fiscal_year, rp.period_type, b.shares_outstanding
+                            FROM balance_sheet b JOIN reporting_period rp ON rp.period_id = b.period_id
+                            WHERE b.company_id = :c AND rp.period_end < :d AND b.shares_outstanding IS NOT NULL
+                            ORDER BY rp.period_end""")
+                    .param("c", companyId).param("d", split.effectiveFrom()).query().listOfRows();
+            for (Map<String, Object> row : balances) {
+                BigDecimal shares = decimal(row.get("shares_outstanding"));
+                if (!onOldBasis(shares, split)) {
+                    continue;
+                }
+                jdbc.sql("UPDATE balance_sheet SET shares_outstanding = :s WHERE period_id = :p")
+                        .param("s", scaled(shares, factor, true)).param("p", ((Number) row.get("period_id")).longValue()).update();
+                notes.add("share split " + ratio + ": " + row.get("fiscal_year") + " " + row.get("period_type")
+                        + " balance sheet shares " + plain(shares) + " -> " + plain(scaled(shares, factor, true)));
+            }
+            List<Map<String, Object>> snapshots = jdbc.sql("""
+                            SELECT share_snapshot_id, snapshot_date, basic_shares, shares_outstanding, treasury_shares
+                            FROM share_snapshot WHERE company_id = :c AND snapshot_date < :d ORDER BY snapshot_date""")
+                    .param("c", companyId).param("d", split.effectiveFrom()).query().listOfRows();
+            for (Map<String, Object> row : snapshots) {
+                BigDecimal outstanding = decimal(row.get("shares_outstanding"));
+                BigDecimal basic = decimal(row.get("basic_shares"));
+                if (!onOldBasis(outstanding != null ? outstanding : basic, split)) {
+                    continue;
+                }
+                jdbc.sql("""
+                                UPDATE share_snapshot SET basic_shares = :basic, shares_outstanding = :outstanding,
+                                       treasury_shares = :treasury
+                                WHERE share_snapshot_id = :id""")
+                        .param("basic", scaled(basic, factor, true), java.sql.Types.NUMERIC)
+                        .param("outstanding", scaled(outstanding, factor, true), java.sql.Types.NUMERIC)
+                        .param("treasury", scaled(decimal(row.get("treasury_shares")), factor, true), java.sql.Types.NUMERIC)
+                        .param("id", ((Number) row.get("share_snapshot_id")).longValue()).update();
+                notes.add("share split " + ratio + ": share count at " + row.get("snapshot_date") + " "
+                        + plain(outstanding != null ? outstanding : basic) + " -> "
+                        + plain(scaled(outstanding != null ? outstanding : basic, factor, true)));
+            }
+        }
+        return notes;
+    }
+
+    private static boolean onOldBasis(BigDecimal shares, DetectedSplit split) {
+        BigDecimal old = split.oldBasisShares();
+        return shares != null && shares.signum() > 0
+                && shares.subtract(old).abs().compareTo(old.abs().multiply(OLD_BASIS_TOLERANCE)) <= 0;
     }
 
     private void updatePerShare(long periodId, BigDecimal eps, BigDecimal diluted, BigDecimal shares, BigDecimal dilutedShares) {
@@ -512,16 +781,26 @@ public class IngestionRepository {
 
     // ------------------------------------------------------------------ derived data and verification
 
-    /** Re-runs V1.0.6: market_snapshot, valuation_snapshot and financial_metric for all companies. */
+    /**
+     * Re-runs V1.0.6: market_snapshot, valuation_snapshot and financial_metric for all companies. One run at a
+     * time: several uploads are stored at the same time, and two runs rewriting the rows of every company
+     * together could block each other (a database deadlock fails one of them). A run that waited starts after
+     * the other one ended, so it sees everything its own upload saved.
+     */
     public void refreshDerivedData() {
-        ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
-        SHARE_SCRIPTS.forEach(s -> populator.addScript(new ClassPathResource(s)));
-        populator.addScript(new ClassPathResource(DERIVED_SCRIPT));
-        populator.execute(dataSource);
-        // the script only inserts and updates: drop valuation metrics whose value became NULL (e.g. a
-        // re-ingested period without EBITDA), as the price refresh does
-        for (long companyId : jdbc.sql("SELECT company_id FROM company").query(Long.class).list()) {
-            valuations.deleteStaleValuationMetrics(companyId);
+        derivedDataLock.lock();
+        try {
+            ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
+            SHARE_SCRIPTS.forEach(s -> populator.addScript(new ClassPathResource(s)));
+            populator.addScript(new ClassPathResource(DERIVED_SCRIPT));
+            populator.execute(dataSource);
+            // the script only inserts and updates: drop valuation metrics whose value became NULL (e.g. a
+            // re-ingested period without EBITDA), as the price refresh does
+            for (long companyId : jdbc.sql("SELECT company_id FROM company").query(Long.class).list()) {
+                valuations.deleteStaleValuationMetrics(companyId);
+            }
+        } finally {
+            derivedDataLock.unlock();
         }
     }
 

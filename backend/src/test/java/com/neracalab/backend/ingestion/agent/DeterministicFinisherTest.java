@@ -38,7 +38,7 @@ import tools.jackson.databind.json.JsonMapper;
 @Transactional
 class DeterministicFinisherTest {
 
-    private static final Path WORKBOOK = Path.of("..", "data", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
+    private static final Path WORKBOOK = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
 
     @Autowired
     private IngestionRepository repository;

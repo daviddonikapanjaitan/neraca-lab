@@ -27,7 +27,7 @@ class ReclassificationTest {
 
     @Test
     void aClassificationThatLeavesItsColumnFailingCanBeRevised() throws Exception {
-        Path file = Path.of("..", "data", "BMRI", "xlsx", "FinancialStatement-2025-Tahunan-BMRI.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "BMRI", "xlsx", "FinancialStatement-2025-Tahunan-BMRI.xlsx");
         assumeTrue(Files.exists(file), "BMRI source data not available: " + file);
         FilingMapper mapper;
         try (InputStream in = Files.newInputStream(file)) {

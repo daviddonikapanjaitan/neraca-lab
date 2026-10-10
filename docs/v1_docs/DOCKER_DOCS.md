@@ -111,6 +111,8 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `PRICE_PROVIDER`         | `yahoo` | `yahoo` (no key) or `eodhd`                                          |
 | `EODHD_API_TOKEN`        | -       | required for `eodhd`                                                 |
 | `PRICE_SCHEDULE_ENABLED` | `false` | `true`: queue every active IDX company at 17:30 WIB, Monday-Friday   |
+| `INGESTION_WORKERS`      | `5`     | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `INGESTION_SAME_COMPANY_IN_ORDER` | `false` | `true`: filings of one company are stored one after the other in upload order, not at the same time |
 | `AUTH_SESSION_TTL`       | `12h`   | how long a login stays valid                                        |
 | `AUTH_ROOT_PASSWORD`     | `admin` | password of the root user `admin` when it is first created ([AUTH_DOCS.md](AUTH_DOCS.md)) |
 

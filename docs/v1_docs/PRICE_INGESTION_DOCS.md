@@ -9,7 +9,7 @@ Code: `backend/src/main/java/com/neracalab/backend/price/`
 | Class                      | Role                                                                                                     |
 |----------------------------|----------------------------------------------------------------------------------------------------------|
 | `PriceIngestionController` | `/api/v1/prices/ingestions` endpoints and error responses (ProblemDetail)                                |
-| `PriceIngestionQueue`      | in-memory job queue with one worker thread; HTTP 429 back-off; one active job per company               |
+| `PriceIngestionQueue`      | in-memory job queue with 5 worker threads (`neracalab.jobs.workers`); HTTP 429 back-off; one active job per company |
 | `PriceIngestionJob`        | job state and its JSON view                                                                              |
 | `PriceIngestionService`    | one ingestion: date range, provider request, cleaning, re-adjustment check, write + valuation refresh   |
 | `PriceDailyRepository`     | company lookup, latest stored day, `price_daily` upsert                                                  |
@@ -177,17 +177,22 @@ prices have no market cap. INDY on 2026-10-05: USD 0.14317549 x 5,202,692,000 = 
 
 | Rule                                   | Implementation                                                                                                           |
 |----------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| Slowly, one request at a time          | one worker thread; `PacedHttpClient.get` is synchronized and waits a random `min-delay`..`max-delay` (1-2 s) between requests |
+| Slowly, one request at a time          | `PacedHttpClient.get` is synchronized and waits a random `min-delay`..`max-delay` (1-2 s) between requests; all workers share it, so more workers do not send requests faster |
 | Never re-request what is stored        | range starts at `MAX(trading_date)`; no request when up to date; never called from a web request                        |
-| Back off on HTTP 429                   | queue paused 15, 30, then 60 minutes (`backoff`, longer when `Retry-After` asks), then the same job is retried          |
+| Back off on HTTP 429                   | queue (every worker) paused 15, 30, then 60 minutes (`backoff`, longer when `Retry-After` asks), then the same job is retried |
 | Normal browser, persistent cookies     | browser `User-Agent` on every request; one `java.net.http.HttpClient` with a `CookieManager` for the application        |
 | Fallback provider                      | `PriceProvider` interface; `neracalab.prices.provider=eodhd` switches to EODHD                                           |
 
 **HTTP 429 in detail.** A retried job starts again from `MAX(trading_date)` (nothing of it was
-written). A success resets the wait sequence. A 429 after the last wait stops the run: the job and
-every queued job fail ("Run stopped ..."); submit again later and each ticker continues from its
-latest stored day. Other failures (unknown symbol, network error, currency mismatch) fail only
-their own job.
+written). Jobs that were running beside the job answered 429 and are answered 429 too share its
+pause: it counts once. A success resets the wait sequence. A 429 after the last wait stops the run:
+the job, the jobs answered 429 beside it and every queued job fail ("Run stopped ..."); submit again
+later and each ticker continues from its latest stored day. Other failures (unknown symbol, network
+error, currency mismatch) fail only their own job.
+
+**Workers.** `neracalab.jobs.workers` (default 5, env `INGESTION_WORKERS`) companies are ingested at
+the same time: their database work (upsert, valuation refresh) runs side by side, their provider
+requests still go out one at a time. A job waiting for a free worker is `QUEUED`.
 
 **Throughput.** One request per ticker and day: about 900 requests for the whole IDX, i.e. 15-30
 minutes with the 1-2 s pause. Yahoo publishes no limits; a server in a cloud data centre is
@@ -253,7 +258,7 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 |-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | `PriceIngestionServiceTest`   | against the Docker Postgres with a stub provider, each test rolled back: incremental fetch with new rows, market / valuation snapshot and metrics of the new day; intraday cutoff; no request when up to date; full re-fetch after re-adjustment; first ingestion of a company without prices; the company-scoped valuation SQL produces exactly the `V1.0.6` rows; a listing quoted in another currency: conversion with the previous FX day's rate at 8 decimals, rates of the trading day and before the window not used, bars without a rate dropped, EODHD (no currency) converted with the exchange currency, same-currency listings untouched, no rates = nothing stored, rates of another source ignored |
 | `EcbFxRateProviderTest`       | a real Frankfurter response: business days only, quote units per base unit; wrong base and missing rates rejected; days without the quote ignored |
-| `PriceIngestionQueueTest`     | 429 back-off and retry of the same job, run stop and failed queued jobs, back-off reset after a success, other failures, one active job per company |
+| `PriceIngestionQueueTest`     | 429 back-off and retry of the same job, run stop and failed queued jobs, back-off reset after a success, other failures, one active job per company; five workers ingest five companies at the same time, 429 of jobs running together counts as one pause, the run stop fails them all, a queued job stays QUEUED during a pause |
 | `PriceIngestionControllerTest`| the endpoints over MockMvc: 202 + `Location`, job polling, queue listing, 400 / 404                                                           |
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
 | `YahooPriceProviderTest`      | parsing of a real Yahoo response (HRTA.JK around the Rp40 dividend and a holiday), symbol mapping, `Retry-After`                              |

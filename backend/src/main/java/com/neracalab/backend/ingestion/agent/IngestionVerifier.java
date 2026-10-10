@@ -115,7 +115,7 @@ public class IngestionVerifier {
                 }
             }
             if (column == StatementColumn.CURRENT_PERIOD) {
-                compareCurrent(session, companyId, column, problems);
+                compareCurrent(session, companyId, column, problems, notes);
             }
         }
         if (session.shareCapital().resolved() && !session.isSharesSaved()) {
@@ -180,14 +180,20 @@ public class IngestionVerifier {
     }
 
     /** The stored current-period rows must equal the mapped values (they were written by this filing). */
-    private void compareCurrent(IngestionSession session, long companyId, StatementColumn column, List<String> problems) {
+    private void compareCurrent(IngestionSession session, long companyId, StatementColumn column, List<String> problems,
+                                List<String> notes) {
         if (!session.savedStatements().containsKey(column)) {
             return;
         }
-        var periodId = repository.periodId(companyId, session.mapper().period(column));
+        PeriodRef period = session.mapper().period(column);
+        var periodId = repository.periodId(companyId, period);
         if (periodId.isEmpty()) {
             return;
         }
+        // a share split after this period, restated by a later filing: per-share figures and share counts are
+        // stored on the basis after the split, not as this filing states them
+        boolean splitAdjusted = repository.splitAfter(companyId, period.end());
+        List<String> adjusted = new ArrayList<>();
         for (MappedStatement statement : session.statements(column)) {
             repository.readStatement(statement.table(), periodId.get()).ifPresent(row ->
                     statement.values().forEach((field, value) -> {
@@ -196,12 +202,25 @@ public class IngestionVerifier {
                         // a field the filing does not report keeps another filing's value; a rejected one is NULL
                         boolean expected = value != null || statement.rejected().contains(field);
                         if (expected && !IngestionRepository.sameAsStored(stored, value)) {
+                            if (splitAdjusted && value != null && stored != null && SPLIT_ADJUSTED_FIELDS.contains(field)) {
+                                adjusted.add(field + " " + value.stripTrailingZeros().toPlainString() + " -> "
+                                        + stored.stripTrailingZeros().toPlainString());
+                                return;
+                            }
                             problems.add(statement.period().key() + " " + statement.table() + "." + field
                                     + ": stored " + stored + " but the filing says " + value);
                         }
                     }));
         }
+        if (!adjusted.isEmpty()) {
+            notes.add(period.key() + ": a later filing restates this period for a share split; stored split-adjusted, "
+                    + "like the prices: " + String.join(", ", adjusted));
+        }
     }
+
+    /** Fields a share split after the period changes: stored on the basis after the split. */
+    private static final java.util.Set<String> SPLIT_ADJUSTED_FIELDS = java.util.Set.of("basic_eps", "diluted_eps",
+            "basic_shares", "diluted_shares", "shares_outstanding");
 
     static String blockReason(MappedStatement statement) {
         if (!statement.unclassified().isEmpty()) {
