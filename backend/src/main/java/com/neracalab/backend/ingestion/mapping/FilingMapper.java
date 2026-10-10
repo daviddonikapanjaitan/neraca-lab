@@ -157,7 +157,8 @@ public final class FilingMapper {
         this.workbook = workbook;
         this.info = FilingInfo.from(workbook);
         this.taxonomy = workbook.taxonomy();
-        this.financial = taxonomy == IdxTaxonomy.FINANCIAL;
+        // the Financing Industry taxonomy has the Financial one's sheets (by order of liquidity, by nature)
+        this.financial = taxonomy == IdxTaxonomy.FINANCIAL || taxonomy == IdxTaxonomy.FINANCING;
         if (financial) {
             this.balanceSheet = data(IdxSheets.BALANCE_SHEET_LIQUIDITY).orElse(null);
             this.income = data(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX).or(() -> data(IdxSheets.INCOME_BY_NATURE)).orElse(null);
@@ -195,11 +196,26 @@ public final class FilingMapper {
             templateProblems.add("No cash flow data (" + code(IdxSheets.CASH_FLOW_DIRECT) + " / "
                     + code(IdxSheets.CASH_FLOW_INDIRECT) + ")");
         }
+        if (taxonomy == IdxTaxonomy.FINANCING) {
+            // its line items are not the bank template's: no rule here decides them
+            templateProblems.add("The line items of the Financing Industry taxonomy (" + code(IdxSheets.BALANCE_SHEET_LIQUIDITY)
+                    + ", " + code(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX) + ", " + code(IdxSheets.CASH_FLOW_DIRECT)
+                    + ") are not mapped by the rule-based extraction; the model decides them from the text of the workbook");
+        }
     }
 
     /** The workbook as read (every sheet), for the full-text extraction. */
     public IdxWorkbook workbook() {
         return workbook;
+    }
+
+    /**
+     * Whether the statements of this workbook are the model's to decide by design: a taxonomy the rule-based
+     * extraction does not map (Financing Industry) and nothing else wrong with the workbook. Such an upload goes
+     * straight to the full-text extraction; when that stores it, nothing went wrong.
+     */
+    public boolean decidedByModel() {
+        return taxonomy == IdxTaxonomy.FINANCING && templateProblems.size() == 1;
     }
 
     /** Whether the workbook uses the Financial and Sharia Industry taxonomy (a bank). */
@@ -1698,6 +1714,24 @@ public final class FilingMapper {
             return Optional.empty();
         }
         List<Check> checks = new ArrayList<>();
+        // one line that the breakdown's own total does not include: the reported total - and the revenue of the
+        // income statement - are exactly the sum of the other lines (MIKA's comparatives: an unnamed "Service
+        // revenue 5" of 602,309,854,653, the amount of "Jasa tenaga ahli" again, in FY2024; one of 261,182,623,893
+        // in H1 2025; the services subtotal and the total are the four named lines). Not counted; a warning says so.
+        BigDecimal filed = lines.stream().map(SegmentLine::revenue).reduce(ZERO, BigDecimal::add);
+        if (total != null && incomeRevenue != null && total.compareTo(incomeRevenue) == 0 && filed.compareTo(total) != 0) {
+            for (int i = 0; i < lines.size(); i++) {
+                if (lines.get(i).revenue().signum() != 0 && filed.subtract(lines.get(i).revenue()).compareTo(total) == 0) {
+                    SegmentLine extra = lines.remove(i);
+                    String slot = slots.remove(i);
+                    checks.add(Check.warning("segment_line", "'" + (extra.name().equals(slot) ? slot : extra.name() + "' ('" + slot + "')")
+                            + " " + extra.revenue().stripTrailingZeros().toPlainString() + " is not part of the breakdown's total "
+                            + total.stripTrailingZeros().toPlainString() + " in this column (the total and the revenue are the sum "
+                            + "of the other lines); not counted"));
+                    break;
+                }
+            }
+        }
         lines = distinctSegmentNames(lines, slots, checks);
         BigDecimal sum = lines.stream().map(SegmentLine::revenue).reduce(ZERO, BigDecimal::add);
         if (total != null) {
@@ -2120,6 +2154,7 @@ public final class FilingMapper {
             case PROPERTY -> "Property and Real Estate Industry";
             case INFRASTRUCTURE -> "Infrastructure Industry";
             case FINANCIAL -> "Financial and Sharia Industry";
+            case FINANCING -> "Financing Industry";
         };
     }
 

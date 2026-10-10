@@ -12,12 +12,14 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbookReader;
 import com.neracalab.backend.ingestion.xlsx.RawSheet;
 
 /**
- * The text of a whole workbook as it is given to the model by the {@link FullTextExtractor}: every sheet, every
- * row that carries a figure, each row under a reference such as {@code 1311000!R6} (sheet and row number as in
- * Excel). The model answers with references, never with amounts, and {@link #value} reads the amount back from
+ * The text of a whole workbook as it is given to the model by the {@link FullTextExtractor}: every sheet of the
+ * file ({@link IdxWorkbook#allSheets()}, whatever its taxonomy - also sheets the rule-based extraction does not
+ * know, e.g. the Financing Industry's 8220000), every row that carries a figure, each row under a reference such
+ * as {@code 1311000!R6} (sheet name and row number as in Excel). The model answers with references, never with amounts, and {@link #value} reads the amount back from
  * the cell - so a figure that is stored always exists in the workbook.
  * <p>
- * The statement sheets (balance sheet 12xxxxx, profit or loss 13xxxxx, cash flow 15xxxxx) have one layout:
+ * The statement sheets (balance sheet x2xxxxx, profit or loss x3xxxxx, cash flow x5xxxxx; x is the taxonomy's
+ * digit, 1 General .. 8 Financing) have one layout:
  * Indonesian label, one value column per period, English label. Their value columns are shown as c1, c2
  * (c1 = the current period, c2 = the comparative).
  */
@@ -25,13 +27,14 @@ public final class WorkbookText {
 
     /** The three primary statements; only rows of their sheets may be referenced. */
     public enum Kind {
-        BALANCE_SHEET("12", "balance_sheet"), INCOME("13", "income_statement"), CASH_FLOW("15", "cash_flow_statement");
+        BALANCE_SHEET('2', "balance_sheet"), INCOME('3', "income_statement"), CASH_FLOW('5', "cash_flow_statement");
 
-        private final String prefix;
+        /** Second digit of the sheet code: 1210000 / 4220000 / 8220000 are balance sheets, x3xxxxx profit or loss. */
+        private final char role;
         private final String table;
 
-        Kind(String prefix, String table) {
-            this.prefix = prefix;
+        Kind(char role, String table) {
+            this.role = role;
             this.table = table;
         }
 
@@ -40,8 +43,11 @@ public final class WorkbookText {
         }
 
         static Optional<Kind> ofSheet(String sheet) {
+            if (!sheet.matches("[1-9]\\d{6}")) {
+                return Optional.empty();       // general information, equity, notes, "... PY" sheets
+            }
             for (Kind k : values()) {
-                if (sheet.startsWith(k.prefix)) {
+                if (sheet.charAt(1) == k.role) {
                     return Optional.of(k);
                 }
             }
@@ -77,11 +83,11 @@ public final class WorkbookText {
         boolean cut = false;
         // general information first, then the three statements, then the notes
         List<String> order = new ArrayList<>();
-        workbook.sheets().keySet().stream().filter(IdxWorkbookReader.GENERAL_INFO::equals).forEach(order::add);
-        workbook.sheets().keySet().stream().filter(s -> Kind.ofSheet(s).isPresent()).forEach(order::add);
-        workbook.sheets().keySet().stream().filter(s -> !order.contains(s)).forEach(order::add);
+        workbook.allSheets().keySet().stream().filter(IdxWorkbookReader.GENERAL_INFO::equals).forEach(order::add);
+        workbook.allSheets().keySet().stream().filter(s -> Kind.ofSheet(s).isPresent()).forEach(order::add);
+        workbook.allSheets().keySet().stream().filter(s -> !order.contains(s)).forEach(order::add);
         for (String name : order) {
-            String block = render(workbook.sheets().get(name));
+            String block = render(workbook.allSheets().get(name));
             if (block.isEmpty()) {
                 continue;
             }
@@ -105,13 +111,18 @@ public final class WorkbookText {
         return truncated;
     }
 
+    /** Every referenced row, in the order of the text. */
+    public List<Row> rows() {
+        return List.copyOf(rows.values());
+    }
+
     public Optional<Row> row(String ref) {
         return Optional.ofNullable(rows.get(ref == null ? null : ref.trim()));
     }
 
     /** The amount of a statement row in a value column (0 = current period, 1 = comparative); null when empty. */
     public BigDecimal value(Row row, int valueColumn) {
-        RawSheet sheet = workbook.sheets().get(row.sheet());
+        RawSheet sheet = workbook.allSheets().get(row.sheet());
         int width = sheet.width(row.index());
         int col = 1 + valueColumn;
         if (valueColumn < 0 || col >= width - 1) {
@@ -120,7 +131,10 @@ public final class WorkbookText {
         return sheet.cell(row.index(), col) instanceof BigDecimal d ? d : null;
     }
 
-    /** Whether the statement sheets of a kind carry figures in a value column (at least three amounts that are not 0). */
+    /**
+     * Whether the statement sheets of a kind carry figures in a value column (at least three amounts that are not
+     * 0). Only used to explain a statement the model found nothing for; it never keeps the model from being asked.
+     */
     public boolean hasFigures(Kind kind, int valueColumn) {
         if (valueColumn < 0) {
             return false;
@@ -131,6 +145,11 @@ public final class WorkbookText {
                 .filter(v -> v != null && v.signum() != 0)
                 .count();
         return amounts >= 3;
+    }
+
+    /** Whether the file has a statement sheet of the kind with rows at all. */
+    public boolean hasSheet(Kind kind) {
+        return rows.values().stream().anyMatch(r -> Kind.ofSheet(r.sheet()).filter(kind::equals).isPresent());
     }
 
     // ------------------------------------------------------------------ rendering

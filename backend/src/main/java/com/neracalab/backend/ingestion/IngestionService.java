@@ -142,6 +142,11 @@ public class IngestionService {
             error = unsupported(session);
             trigger = IngestionErrorRepository.Type.UNSUPPORTED_WORKBOOK;
             reason = error;
+            try {
+                webShareCounts.complete(session);      // share counts are not rows of the statements
+            } catch (RuntimeException e) {
+                log.warn("ingestion {}: web share counts not available: {}", session.id(), e.getMessage());
+            }
         } else {
             try {
                 webShareCounts.complete(session);

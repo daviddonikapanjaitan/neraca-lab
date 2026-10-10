@@ -72,6 +72,8 @@ services:
       INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-false}
       # full-text extraction when the standard extraction cannot store a workbook, and when it takes over
       INGESTION_FALLBACK_ENABLED: ${INGESTION_FALLBACK_ENABLED:-true}
+      # OpenRouter providers the ingestion never uses (OpenInference: its DeepSeek endpoint loops for 60 s)
+      INGESTION_PROVIDER_IGNORE: ${INGESTION_PROVIDER_IGNORE:-OpenInference}
       INGESTION_FALLBACK_AFTER: ${INGESTION_FALLBACK_AFTER:-3m}
       INGESTION_FALLBACK_TIMEOUT: ${INGESTION_FALLBACK_TIMEOUT:-5m}
       # AI ingestion (values from backend/.env, which compose reads automatically; never baked into the image)

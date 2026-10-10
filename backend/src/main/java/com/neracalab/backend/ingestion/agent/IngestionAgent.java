@@ -61,6 +61,7 @@ public class IngestionAgent {
     private final String model;
     private final boolean reasoning;
     private final java.time.Duration callTimeout;
+    private final List<String> providerIgnore;
 
     /**
      * @param model the configured chat model ({@code spring.ai.openai.chat.model}, env {@code OPENAI_MODEL}).
@@ -82,12 +83,28 @@ public class IngestionAgent {
      * @param callTimeout {@code neracalab.ingestion.model-call-timeout}: longest one model call may take before it
      *                    counts as a stalled provider response and is retried (0 = only the HTTP read timeout)
      */
+    public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
+                          AgentProperties properties, JsonMapper json, String model, boolean reasoning,
+                          java.time.Duration callTimeout) {
+        this(chatModel, repository, verifier, properties, json, model, reasoning, callTimeout, List.of());
+    }
+
+    /**
+     * @param providerIgnore {@code neracalab.ingestion.provider-ignore}: OpenRouter providers never used for the
+     *                       ingestion's model calls. Default OpenInference: its DeepSeek endpoint loops on long
+     *                       answers until OpenRouter resets the stream after 60 s ("stream was reset: CANCEL"),
+     *                       so a call routed to it cost a minute and a retry - two in a row most of the 3 minutes
+     *                       of an upload. Sent as {@code "provider": {"ignore": [...]}}; empty: no restriction.
+     */
     @org.springframework.beans.factory.annotation.Autowired
     public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
                           AgentProperties properties, JsonMapper json,
                           @Value("${spring.ai.openai.chat.model}") String model,
                           @Value("${neracalab.ingestion.model-reasoning:false}") boolean reasoning,
-                          @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout) {
+                          @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout,
+                          @Value("${neracalab.ingestion.provider-ignore:OpenInference}") List<String> providerIgnore) {
+        this.providerIgnore = providerIgnore == null ? List.of()
+                : providerIgnore.stream().filter(p -> p != null && !p.isBlank()).map(String::trim).toList();
         this.chatModel = chatModel;
         this.repository = repository;
         this.verifier = verifier;
@@ -101,8 +118,15 @@ public class IngestionAgent {
     /** Per-request options with the configured model (never Spring AI's default, see the constructor). */
     public OpenAiChatOptions.Builder options() {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().model(model).temperature(properties.temperature());
+        Map<String, Object> extra = new LinkedHashMap<>();
         if (!reasoning) {
-            builder.extraBody(Map.of("reasoning", Map.of("enabled", false)));
+            extra.put("reasoning", Map.of("enabled", false));
+        }
+        if (!providerIgnore.isEmpty()) {
+            extra.put("provider", Map.of("ignore", providerIgnore));
+        }
+        if (!extra.isEmpty()) {
+            builder.extraBody(extra);
         }
         return builder;
     }

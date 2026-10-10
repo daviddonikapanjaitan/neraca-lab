@@ -215,8 +215,10 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 
 When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
 statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
-extraction** takes over: the model (DeepSeek) gets the text of the whole workbook and **decides every value
-that is not stored yet** - which rows make up every database field. No rule of the Java code decides or
+extraction** takes over: the model (DeepSeek) gets the text of the whole workbook - every sheet of the file,
+whatever its taxonomy - and **decides every value that is not stored yet** - which rows make up every
+database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
+8220000 / 8322000 / 8510000) goes straight to the model. No rule of the Java code decides or
 overrules a value there: the code reads the amounts of the rows the model names from the workbook's cells
 (so a stored figure always exists in the workbook), shows the model where its own mapping contradicts itself
 (assets = liabilities + equity, ...) so it can correct it, and stores its last answer; what still does not
@@ -369,6 +371,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.min-delay`, `max-delay`             | `1s`, `2s`                  | pause between two requests                          |
 | `neracalab.prices.backoff`                            | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429                    |
 | `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: queues every active company of `IDX`   |
+| `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 
@@ -537,7 +540,7 @@ inventory, investment properties as capex, a restated FY2024);
 taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps) and the error log; `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps) and the error log; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);

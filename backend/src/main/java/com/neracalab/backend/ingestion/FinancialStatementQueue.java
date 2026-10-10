@@ -272,6 +272,9 @@ public class FinancialStatementQueue implements SmartLifecycle {
         if (fallback == null && status == IngestionJobStatus.SUCCEEDED) {
             return;
         }
+        if (status == IngestionJobStatus.SUCCEEDED && session.mapper().decidedByModel()) {
+            return;     // a taxonomy the model decides by design, stored and verified: not an error
+        }
         IngestionErrorRepository.Type type = fallback != null ? IngestionErrorRepository.Type.valueOf(fallback.trigger())
                 : status == IngestionJobStatus.INCOMPLETE ? IngestionErrorRepository.Type.INCOMPLETE
                 : session.deadline().passed() ? IngestionErrorRepository.Type.SLOW_EXTRACTION

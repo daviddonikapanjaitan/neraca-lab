@@ -122,6 +122,7 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
 | `neracalab.jobs.workers`                | 5       | uploads stored at the same time, each by its own agent (env `INGESTION_WORKERS`), also several filings of one company ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
 | `neracalab.ingestion.same-company-in-order` | false | true: filings of one company are stored one after the other in upload order instead (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
+| `neracalab.ingestion.provider-ignore`   | OpenInference | OpenRouter providers the ingestion's model calls never use (env `INGESTION_PROVIDER_IGNORE`), section 6 |
 | `neracalab.ingestion.fallback.*`        | on, 3m  | the full-text extraction that takes over when the standard extraction does not store a workbook, and its time limits (section 6) |
 | `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
 
@@ -472,6 +473,13 @@ domestic revenue 2 and export revenue 1) is qualified by its slot, "Produk Palm 
 "(ekspor)" (before, the second line overwrote the first: CEKA FY2025 segments summed to 6.34 instead of
 9.73 trillion). Names filed once keep their name; a name that still repeats blocks the breakdown.
 
+A line the breakdown's own total does not include is not counted: when the reported total equals the
+revenue of the income statement and is exactly the sum of the other lines, that one line is left out with
+a warning (`segment_line`). MIKA's comparative columns carry an unnamed "Service revenue 5" outside the
+filed subtotal and total - 602,309,854,653 in FY2024 (the amount of the fourth service line again),
+261,182,623,893 in H1 2025. Nothing is dropped when the lines add up as filed, or when no single line
+explains the difference.
+
 Revenue segments come only from the breakdown sheets `1617000` (by type) and `1618000` (by
 source). Some issuers leave both blank and disclose segments only in the PDF notes (e.g. INDF:
 the sheets contain the template labels without names or amounts); the upload then stores no
@@ -504,10 +512,12 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
 | `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; the other upload order (comparative first, then the period's own filing: MAPA 1:10) ends the same, with balance sheet shares and share snapshots adjusted, the split recorded once and the own filing uploaded again changing nothing; a restatement that is no split is replaced by the own filing; split factors |
 | `FilingMapperTinsTest` (unit) | the TINS filings: FY2025's comparative counts its residual profit or loss lines once and its cash flow's residual investing line not at all, the current year still counts every line, every statement of FY2025 is storable; FY2024 as published has no current-year figures; FY2023's loss per share is scaled and gets its sign (-60) |
-| `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed |
+| `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned |
+| `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
 | `IngestionServiceFallbackTest` (unit, scripted stages) | when the full-text extraction takes over: unsupported workbook (agent not started), INCOMPLETE, past the 3 minutes, failed; never after a clean result; its own failure leaves what the standard extraction reached, its own timeout fails the upload; switched off; the upload endpoint accepts an unsupported workbook and refuses an unreadable one |
 | `FullTextExtractionDatabaseTest` (Docker Postgres, scripted model, rolled back) | TINS FY2024 is stored from its text with the standard steps: the comparative 2023 FY in the database, nothing for 2024, the verification says why; the error log keeps what went wrong and starts unfixed |
+| `FilingMapperMikaTest` (unit) | MIKA: the comparative breakdowns of FY2025 and H1 2026 reconcile once the one line outside the filed total is left out (warning `segment_line`); the current columns are stored as filed |
 | `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
@@ -574,7 +584,7 @@ written to the table `ingestion_error` so the cause can be fixed in the rule-bas
 
 | Trigger (`ingestion_error.error_type`) | When                                                                                         |
 |----------------------------------------|----------------------------------------------------------------------------------------------|
-| `UNSUPPORTED_WORKBOOK`                 | the upload is a readable IDX XBRL workbook, but the mapper reports template problems, e.g. `No balance sheet data (1210000)`. Before, this was refused with HTTP 422; now it is accepted (202) and the agent is not started |
+| `UNSUPPORTED_WORKBOOK`                 | the upload is a readable IDX XBRL workbook, but the mapper reports template problems, e.g. `No balance sheet data (1210000)`, or it is of a taxonomy the rules do not map (Financing Industry, 8xxxxxx: straight to the model by design, and not logged when it succeeds). Before, this was refused with HTTP 422; now it is accepted (202) and the agent is not started |
 | `INCOMPLETE`                           | the standard extraction ended with open items, e.g. `saveStatements(PRIOR_PERIOD) is blocked: income_statement failed checks [...]` |
 | `SLOW_EXTRACTION`                      | the standard extraction ran longer than `neracalab.ingestion.fallback.after` (3 minutes)     |
 | `EXTRACTION_FAILED`                    | the standard extraction failed (the AI provider kept failing, an unexpected error)           |
@@ -590,11 +600,16 @@ reports what does not add up.
 
 1. **Everything that is not stored yet.** Every column the standard extraction has not saved is the
    model's to decide - all its statements, not only the one that failed. Columns the standard extraction
-   saved and verified are not touched. A statement whose column is empty in the workbook is skipped; when
-   that is the current period, the upload ends `INCOMPLETE` with the reason (see TINS FY2024 below).
-2. **The text of the whole workbook goes to the model**: the general information, every row of the balance
-   sheet, profit or loss and cash flow that carries an amount, and the notes sheets (up to
-   `max-chars`). Each statement row has a reference:
+   saved and verified are not touched. The model is **always asked**: no rule decides beforehand that a
+   statement has nothing to extract. Only after its answer, a column it found nothing for because the file
+   has nothing in it is reported (the current period: `INCOMPLETE` with the reason, see TINS FY2024 below).
+2. **The text of the whole workbook goes to the model - every sheet of the file**, whatever its taxonomy
+   (`IdxWorkbook.allSheets`; only the template's technical sheets Context, InlineXBRL, hidden and Token are
+   left out): the general information, every row of the balance sheet, profit or loss and cash flow that
+   carries an amount, the equity statement and the notes sheets (up to `max-chars`). The statements are
+   recognised by the second digit of the sheet code (x2xxxxx balance sheet, x3xxxxx profit or loss, x5xxxxx
+   cash flow; x = 1 General, 2 Property, 3 Infrastructure, 4 Financial, 8 Financing, ...), so a taxonomy the
+   rules do not know is read like any other. Each statement row has a reference:
 
    ```text
    ## Sheet 1311000: [1311000] Statement of profit or loss and other comprehensive income ...
@@ -627,7 +642,11 @@ reports what does not add up.
    revenue, a required total without rows - and may answer again, up to `rounds` (3) times ("if the filing
    itself is inconsistent, keep your mapping and say so"). **Its last answer is what is stored.** A
    contradiction that remains does not drop the statement: it is saved as mapped (with a warning), the
-   upload ends `INCOMPLETE` and the contradiction is in `ingestion_error`.
+   upload ends `INCOMPLETE` and the contradiction is in `ingestion_error`. Three slips are pointed out to
+   the model once, with the rows concerned, and its next answer stands (they are hints, never a problem of
+   the upload): an outflow that comes out positive (dividends, repayments, capital expenditure, buybacks) or
+   a positive amount that comes out negative; an asset row among the lease liabilities; retained earnings
+   without the appropriated part.
 5. **Saved by the standard steps.** The model's statements replace the mapper's in the session and are
    saved by the same tools as every upload (`DeterministicFinisher`): the company, the statements (the
    current period replaces, comparatives only fill gaps), revenue segments, share counts, the derived data.
@@ -636,10 +655,15 @@ reports what does not add up.
    model decided (`...; full-text extraction of PRIOR_PERIOD`), its result carries `fallback` (trigger,
    reason, columns, statements, problems) and the verification notes name the columns.
 
-Fields the model decides: the income statement, balance sheet and cash flow columns of section 4 except
-`depreciation`, `amortization`, `rd_expense` and the share counts, which come from the notes and the equity
-statement (kept from the rule-based statement when it has them; `ebit` / `ebitda` are derived from the
-model's values as usual). An EPS gets the sign of the profit attributable to the parent.
+Fields the model decides: the income statement, balance sheet and cash flow columns of section 4,
+including `depreciation` and `amortization` where the statements show them as rows of their own (else they
+come from the roll-forward notes, as usual). Not rows of the statements, and therefore not the model's:
+`rd_expense`, and the share counts, which come from the share capital of the equity statement or - when
+that gives none - from Yahoo Finance checked against the filing's EPS, as for every upload. `ebit` /
+`ebitda` are derived from the model's values. An EPS gets the sign of the profit attributable to the parent.
+
+For a workbook of a taxonomy the rules do not map, nothing of the rule-based extraction is shown to the
+model and nothing can be adopted.
 
 Measured with the configured model (DeepSeek V4 Flash):
 
@@ -648,6 +672,13 @@ Measured with the configured model (DeepSeek V4 Flash):
 | TINS FY2024 (no figures for 2024) | balance sheet and profit or loss of the comparative 2023, 55 fields, nothing to lean on | 1 call, 9 s | every amount equals the FY2023 filing's own figure except the two the FY2024 workbook restates |
 | BBRI H1 2026, all six statements (before the mapper could read its comparative) | adopted the four that passed every check; mapped the comparative profit or loss and cash flow | 1 call, 17 s | profit from operation 35,004,968 and profit before tax 34,744,196 as filed; it counted two insurance lines in revenue and cost of revenue that the filing's totals exclude (the mapper now stores 123,348,477 / 33,153,552) |
 | BBRI FY2025, all six statements | adopted five, mapped the comparative cash flow | 1 call, 20 s (after two provider stream resets of 60 s each) | every value as the rule-based extraction |
+| BFIN, five filings (Financing Industry, nothing of the rules) | all 28 statements | 1-2 calls, 10-47 s each | all 93 totals (assets, liabilities, equity, profit before tax, profit, EPS, the cash flow totals, cash) equal the workbook's cells |
+
+**Providers.** The model calls of the ingestion never go to an OpenRouter provider listed in
+`neracalab.ingestion.provider-ignore` (default `OpenInference`, env `INGESTION_PROVIDER_IGNORE`): its DeepSeek
+endpoint loops on long answers until OpenRouter resets the stream after 60 seconds (`stream was reset:
+CANCEL`). Before, a call routed to it cost a minute and a retry - the two stream resets in the table above,
+and likely many of the standard extractions that ran into their time limit.
 
 ### Timing
 
@@ -697,6 +728,37 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The BFIN uploads (errors 64 - 68): "no figures" for a complete workbook
+
+All five BFI Finance filings ended `INCOMPLETE` within a second: `CURRENT_PERIOD ...: the workbook has no
+figures for this period ... The file itself lacks the data`. That message was **wrong**. The workbooks are
+complete; BFI Finance files in the **Financing Industry taxonomy**, whose sheets are numbered 8220000
+(balance sheet), 8322000 (profit or loss), 8510000 (cash flow). Two faults in the code, not in the files:
+
+- The workbook reader kept only the sheets whose numbers the rule-based extraction knows. So the "text of
+  the whole workbook" given to the full-text extraction was the general information sheet alone.
+- The full-text extraction then decided in Java that the statements were empty and never asked the model.
+
+Fixed: the reader keeps every sheet of the file for the full-text extraction; statements are recognised in
+any taxonomy; the model is always asked. The Financing Industry taxonomy is read under the usual sheet
+roles (so the share capital, the EPS unit and the notes are available) but its line items are not mapped by
+rules: such a workbook is accepted and goes **straight to the model** (`decidedByModel`), without the
+3 minutes of the standard extraction, and a successful upload of it is not logged as an error.
+Re-uploaded: all five `SUCCEEDED` in 24 - 78 seconds, `full-text extraction of CURRENT_PERIOD,
+PRIOR_PERIOD`. One thing the filing itself lacks: the FY2023 workbook has no "Bonds payable" row (its
+liabilities do not add up to its total), so 2023's debt is the borrowings alone.
+
+### The MIKA uploads (errors 96, 97): a segment line outside the filed total
+
+MIKA FY2025 and H1 2026 ended `INCOMPLETE` after the 3 minutes of the standard extraction, with
+`saveRevenueSegments(PRIOR_PERIOD)` open ("segments do not reconcile"). All six statements were stored;
+only the comparative revenue breakdown was not. Its sheet 1617000 has one unnamed line, "Service revenue
+5", that the filing's own services subtotal and total leave out, so the lines summed to more than the
+revenue. The full-text extraction could not help: the breakdown is not one of its statements. Fixed in the
+rule-based extraction (section 4, a line the breakdown's own total does not include). Re-uploaded: both
+`SUCCEEDED` in 49 and 100 seconds without the fallback, 10 segment rows each, the comparative totals
+4,874,369,366,591 (FY2024) and 2,563,460,446,888 (H1 2025) equal to the filed revenue.
 
 ### The BBRI uploads (errors 27, 28, 41)
 

@@ -67,8 +67,9 @@ the model maps the text of the whole workbook (...)` -> final status:
 
 **Full-text extraction and error log.** When the standard extraction cannot map the workbook, leaves open
 items, fails or runs longer than 3 minutes, the full-text extraction takes over: the model decides every
-value that is not stored yet from the text of the whole workbook (it names the rows, the amounts are read
-from the cells; no rule of the code overrules it). Every upload that was refused
+value that is not stored yet from the text of the whole workbook - every sheet of the file, whatever its
+taxonomy (it names the rows, the amounts are read from the cells; no rule of the code overrules it). A
+workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN) goes straight to the model. Every upload that was refused
 (422), taken over, `INCOMPLETE` or `FAILED` is recorded in the table `ingestion_error`, the work list of
 Claude Code (`fixed_by_claude_code`). Details: [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6.
 

@@ -46,8 +46,6 @@ import tools.jackson.databind.json.JsonMapper;
  */
 public class FullTextExtractorTest {
 
-    private static final Path DATA = Path.of("..", "data", "IDX_XBRL", "TINS", "xlsx");
-
     private final IngestionAgent agent = mock(IngestionAgent.class);
     private final List<String> prompts = new ArrayList<>();
 
@@ -99,12 +97,14 @@ public class FullTextExtractorTest {
         assertThat(cash.derivations().get("capital_expenditure")).startsWith("full-text extraction: - 'Payments for acquisition of");
         assertThat(cash.checks()).noneMatch(Check::isError);
 
-        // the model saw the whole workbook with row references, why the rule-based extraction failed, and - as a
-        // reference only - the one statement that extraction did read
+        // the model saw the whole workbook with row references and why the rule-based extraction failed; it was
+        // asked for every statement of both columns (the empty 2024 column included: no rule decides beforehand
+        // that there is nothing), and nothing of the rules is offered for a workbook they cannot map
         assertThat(prompts.getFirst()).contains("## Sheet 1000000: General information", "Entity code: TINS",
                 "## Sheet 1210000", "| Total assets | c1=- | c2=12853277", "Unsupported filing",
-                "- PRIOR_PERIOD (2023 FY) income_statement: value column c2",
-                "\"PRIOR_PERIOD cash_flow_statement\" (passed every check; may be adopted)", "operating_cash_flow=681969");
+                "- CURRENT_PERIOD (2024 FY) balance_sheet: value column c1",
+                "- PRIOR_PERIOD (2023 FY) income_statement: value column c2");
+        assertThat(prompts.getFirst()).doesNotContain("Reference - what the rule-based extraction read");
     }
 
     @Test
@@ -207,18 +207,98 @@ public class FullTextExtractorTest {
 
     @Test
     void aStatementThatFailedItsChecksCannotBeAdopted() throws Exception {
-        // FY2024 as published: the rule-based extraction has no balance sheet at all, so there is nothing to adopt
+        // FY2024 as published: a workbook the rule-based extraction cannot map, so nothing of it can be adopted
         IngestionSession session = session("2024-Tahunan");
         answers("{\"adopt\": [\"PRIOR_PERIOD balance_sheet\", \"PRIOR_PERIOD income_statement\", "
                 + "\"PRIOR_PERIOD cash_flow_statement\"], \"notes\": []}");
 
         FullTextExtractor.Report report = extractor(1).extract(session, List.of(StatementColumn.PRIOR_PERIOD), "test", new AgentTrace());
 
-        assertThat(report.mapped()).containsExactly("PRIOR_PERIOD 2023 FY cash_flow_statement");
+        assertThat(report.mapped()).isEmpty();
         assertThat(report.notes()).anyMatch(n -> n.contains("\"PRIOR_PERIOD balance_sheet\" cannot be adopted"));
-        assertThat(report.problems()).hasSize(2).allMatch(p -> p.contains("not stored, no rows of the statement were named"));
+        assertThat(report.problems()).hasSize(3).allMatch(p -> p.contains("not stored, no rows of the statement were named"));
         assertThat(session.balance(StatementColumn.PRIOR_PERIOD)).isEmpty();
         verify(agent, never()).run(any());
+    }
+
+    /**
+     * BFI Finance files in the Financing Industry taxonomy (sheets 8220000, 8322000, 8510000), which the rule-based
+     * extraction does not map. Every sheet of the file is in the text, and the model's rows are stored - the
+     * upload does not end "no figures" because the rules do not know the sheet numbers.
+     */
+    @Test
+    void aWorkbookOfATaxonomyTheRulesDoNotMapIsDecidedFromEverySheetOfTheFile() throws Exception {
+        IngestionSession session = session("BFIN", "2025-Tahunan");
+        assertThat(session.mapper().templateProblems()).singleElement().asString()
+                .startsWith("The line items of the Financing Industry taxonomy (8220000, 8322000, 8510000) are not mapped");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        assertThat(text.text()).contains("## Sheet 8220000", "## Sheet 8322000", "## Sheet 8510000", "## Sheet 8410000",
+                "| Income from finance lease | c1=3577276 | c2=3361141", "| Total assets | c1=25472524 | c2=25119820");
+        answers("{\"balance_sheet\": {\"total_assets\": " + terms(text, "8220000", "+Total assets")
+                + ", \"total_liabilities\": " + terms(text, "8220000", "+Total liabilities")
+                + ", \"total_equity\": " + terms(text, "8220000", "+Total equity")
+                + ", \"long_term_debt\": " + terms(text, "8220000", "+Borrowings third parties", "+Bonds payable") + "},"
+                + " \"income_statement\": {\"revenue\": " + terms(text, "8322000", "+Income from finance lease", "+Income from consumer financing")
+                + ", \"pretax_income\": " + terms(text, "8322000", "+Total profit (loss) before tax")
+                + ", \"income_tax\": " + terms(text, "8322000", "-Tax benefit (expenses)")
+                + ", \"net_income\": " + terms(text, "8322000", "+Total profit (loss)")
+                + ", \"basic_eps\": " + terms(text, "8322000", "+Basic earnings (loss) per share from continuing operations") + "},"
+                + " \"cash_flow_statement\": {\"operating_cash_flow\": "
+                + terms(text, "8510000", "+Total net cash flows received from (used in) operating activities")
+                + ", \"investing_cash_flow\": " + terms(text, "8510000", "+Total net cash flows received from (used in) investing activities")
+                + ", \"financing_cash_flow\": " + terms(text, "8510000", "+Total net cash flows received from (used in) financing activities")
+                + ", \"dividends_paid\": " + terms(text, "8510000", "-Dividends paid from financing activities") + "}, \"notes\": []}");
+
+        List<StatementColumn> columns = FullTextExtractor.columnsToExtract(session);
+        FullTextExtractor.Report report = extractor(3).extract(session, columns, "Unsupported filing", new AgentTrace());
+
+        assertThat(columns).containsExactly(StatementColumn.CURRENT_PERIOD, StatementColumn.PRIOR_PERIOD);
+        assertThat(report.modelCalls()).isEqualTo(1);
+        assertThat(report.problems()).isEmpty();
+        assertThat(report.mapped()).hasSize(6);
+        MappedStatement balance = session.balance(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(balance.values().get("total_assets")).isEqualByComparingTo("25472524000000");
+        assertThat(balance.values().get("total_liabilities")).isEqualByComparingTo("14819233000000");
+        assertThat(balance.values().get("total_equity")).isEqualByComparingTo("10653291000000");
+        assertThat(balance.values().get("long_term_debt")).isEqualByComparingTo("13595521000000");
+        assertThat(balance.derivations().get("total_assets")).contains("(8220000!R");
+        MappedStatement income = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(income.period().key()).isEqualTo("2024 FY");
+        assertThat(income.values().get("revenue")).isEqualByComparingTo("5031129000000");
+        assertThat(income.values().get("pretax_income")).isEqualByComparingTo("1926614000000");
+        assertThat(income.values().get("income_tax")).isEqualByComparingTo("361940000000");
+        assertThat(income.values().get("net_income")).isEqualByComparingTo("1564674000000");
+        assertThat(income.values().get("basic_eps")).isEqualByComparingTo("104");
+        MappedStatement cash = session.cashFlow(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(cash.values().get("operating_cash_flow")).isEqualByComparingTo("1413431000000");
+        assertThat(cash.values().get("dividends_paid")).isEqualByComparingTo("-1000989000000");
+        // nothing of the rules is shown for a taxonomy they do not map
+        assertThat(prompts.getFirst()).doesNotContain("Reference - what the rule-based extraction read")
+                .contains("## Sheet 8220000", "- PRIOR_PERIOD (2024 FY) cash_flow_statement: value column c2");
+    }
+
+    @Test
+    void aSignThatContradictsTheFieldIsPointedOutOnceAndTheModelDecides() throws Exception {
+        IngestionSession session = session("BFIN", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String totals = "\"operating_cash_flow\": " + terms(text, "8510000", "+Total net cash flows received from (used in) operating activities")
+                + ", \"investing_cash_flow\": " + terms(text, "8510000", "+Total net cash flows received from (used in) investing activities")
+                + ", \"financing_cash_flow\": " + terms(text, "8510000", "+Total net cash flows received from (used in) financing activities");
+        // dividends paid 1,000,989 is a payment: with sign 1 it comes out positive
+        answers("{\"cash_flow_statement\": {" + totals + ", \"dividends_paid\": "
+                        + terms(text, "8510000", "+Dividends paid from financing activities") + "}}",
+                "{\"cash_flow_statement\": {" + totals + ", \"dividends_paid\": "
+                        + terms(text, "8510000", "-Dividends paid from financing activities") + "}}");
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "test", new AgentTrace());
+
+        assertThat(prompts.get(1)).contains("dividends_paid is an outflow and must come out negative, but your rows give 1000989 in c1",
+                "'Dividends paid from financing activities' holds 1000989 and has sign 1");
+        assertThat(session.cashFlow(StatementColumn.CURRENT_PERIOD).orElseThrow().values().get("dividends_paid"))
+                .isEqualByComparingTo("-1000989000000");
+        // the balance sheet and profit or loss were not named at all although the file has them: reported
+        assertThat(report.problems()).hasSize(2)
+                .allMatch(p -> p.contains("no rows of the statement were named, although the workbook has figures"));
     }
 
     // ------------------------------------------------------------------ helpers
@@ -306,8 +386,12 @@ public class FullTextExtractorTest {
     }
 
     private static IngestionSession session(String filing) throws Exception {
-        Path file = DATA.resolve("FinancialStatement-" + filing + "-TINS.xlsx");
-        assumeTrue(Files.exists(file), "TINS source data not available: " + file);
+        return session("TINS", filing);
+    }
+
+    private static IngestionSession session(String ticker, String filing) throws Exception {
+        Path file = Path.of("..", "data", "IDX_XBRL", ticker, "xlsx", "FinancialStatement-" + filing + "-" + ticker + ".xlsx");
+        assumeTrue(Files.exists(file), ticker + " source data not available: " + file);
         IdxWorkbook workbook;
         try (InputStream in = Files.newInputStream(file)) {
             workbook = new IdxWorkbookReader().read(in, file.getFileName().toString());
