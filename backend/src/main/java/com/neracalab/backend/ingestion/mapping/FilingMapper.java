@@ -234,11 +234,12 @@ public final class FilingMapper {
 
     /**
      * Whether the statements of this workbook are the model's to decide by design: a taxonomy the rule-based
-     * extraction does not map (Financing Industry) and nothing else wrong with the workbook. Such an upload goes
+     * extraction does not map (Financing Industry), or a profit or loss presented by nature where the rule-based
+     * extraction reads it by function (NSSS, MSIN), and nothing else wrong with the workbook. Such an upload goes
      * straight to the full-text extraction; when that stores it, nothing went wrong.
      */
     public boolean decidedByModel() {
-        return taxonomy == IdxTaxonomy.FINANCING && templateProblems.size() == 1;
+        return templateProblems.size() == 1 && (taxonomy == IdxTaxonomy.FINANCING || incomeByNature());
     }
 
     /** Whether the workbook uses the Financial and Sharia Industry taxonomy (a bank). */
@@ -264,6 +265,14 @@ public final class FilingMapper {
     public List<String> warnings() {
         return warnings;
     }
+
+    /**
+     * Equity row between the parent's equity and the non-controlling interests: the equity of an entity combined
+     * under common control, restated into a comparative column (IMPC FY2023 in its FY2024 filing: 138,044,698,258;
+     * MSIN FY2021 in its FY2022 filing). Total equity includes it, the parent's equity does not; it is stored with
+     * the non-controlling interests, so that parent + non-controlling = total holds.
+     */
+    static final String PROFORMA_EQUITY = "Proforma equity";
 
     /** Fewest / most shares a listed company could have; an EPS-implied count outside means a wrong unit. */
     private static final BigDecimal MIN_PLAUSIBLE_SHARES = new BigDecimal("1e6");
@@ -300,7 +309,7 @@ public final class FilingMapper {
                 return new Units(BigDecimal.ONE, BigDecimal.ONE);
             }
             warnings.add("The workbook's EPS is filed in its rounding unit ('" + info.rounding() + "': basic EPS "
-                    + income.value(EPS_BASIC, 0).toPlainString() + " implies " + shares + " shares only when multiplied by "
+                    + profitOrLossAsFiled().value(EPS_BASIC, 0).toPlainString() + " implies " + shares + " shares only when multiplied by "
                     + declared.toPlainString() + "); per-share figures are multiplied by " + declared.toPlainString());
             return new Units(declared, declared);
         }
@@ -331,6 +340,9 @@ public final class FilingMapper {
      * TINS FY2023) says nothing about the unit: the comparative column is used instead.
      */
     private BigDecimal impliedSharesPerUnit() {
+        // the profit or loss as filed: a filing by nature has the same totals (MSIN FY2024: basic EPS 0.00000655
+        // for Rp 6.55, amounts in millions)
+        StatementTable income = profitOrLossAsFiled();
         if (income == null) {
             return null;
         }
@@ -353,7 +365,7 @@ public final class FilingMapper {
 
     private boolean allAmountsMultipleOf(BigDecimal declared) {
         int amounts = 0;
-        for (StatementTable t : java.util.Arrays.asList(balanceSheet, income, cashFlow)) {
+        for (StatementTable t : java.util.Arrays.asList(balanceSheet, profitOrLossAsFiled(), cashFlow)) {
             if (t == null) {
                 continue;
             }
@@ -608,12 +620,14 @@ public final class FilingMapper {
         Map<String, IncomeLineCategory> known = financial ? IncomeLineCategory.FINANCIAL_KNOWN : IncomeLineCategory.KNOWN;
         Map<String, BigDecimal> unsigned = new LinkedHashMap<>();   // label -> contribution to profit before tax
         Map<String, BigDecimal> signed = new LinkedHashMap<>();
+        Map<String, IncomeLineCategory> categories = new LinkedHashMap<>();
         for (StatementTable.Line line : income.lines()) {
             BigDecimal raw = asCost(line.label(), line.value(ctx));
             IncomeLineCategory category = overrides.getOrDefault(line.label(), known.get(line.label()));
             if (raw == null || raw.signum() == 0 || category == null || overrides.containsKey(line.label())) {
                 continue;   // a classification given by the agent is never second-guessed
             }
+            categories.putIfAbsent(line.label(), category);
             if (EXPENSE_CATEGORIES.contains(category)) {
                 unsigned.putIfAbsent(line.label(), raw.negate());
             } else if (INCOME_CATEGORIES.contains(category)) {
@@ -636,6 +650,20 @@ public final class FilingMapper {
                 pairs.add(new String[] {a, b});
             }
         }));
+        // two lines of the same kind with the same amount, neither a residual line (WIIM H1 2025 in its H1 2026
+        // filing: "Finance income" 5,797,003,720 and "Interest income" 5,797,003,720; profit before tax reconciles
+        // with the amount counted once): the line filed first is the repeat
+        List<String> labels = new ArrayList<>(unsigned.keySet());
+        for (int i = 0; i < labels.size(); i++) {
+            for (int j = i + 1; j < labels.size(); j++) {
+                String a = labels.get(i);
+                String b = labels.get(j);
+                if (!isResidual(a) && !isResidual(b) && categories.get(a) == categories.get(b)
+                        && unsigned.get(a).compareTo(unsigned.get(b)) == 0) {
+                    pairs.add(new String[] {a, b});
+                }
+            }
+        }
         // a residual line that repeats the net of the other residual lines (TINS FY2024 in its FY2025 filing:
         // "Other expenses" 18,883 = -("Other income" 2,250 + "Other gains (losses)" -21,133); profit before tax
         // 1,657,269 reconciles with the two, not with all three)
@@ -1116,7 +1144,8 @@ public final class FilingMapper {
         BigDecimal nonCurrentLiabilities = req(b, "Total non-current liabilities", ctx, checks);
         BigDecimal totalLiabilities = req(b, "Total liabilities", ctx, checks);
         BigDecimal parentEquity = req(b, "Total equity attributable to equity owners of parent entity", ctx, checks);
-        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx);
+        BigDecimal proformaEquity = sum(b, List.of(PROFORMA_EQUITY), ctx);
+        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx).add(proformaEquity);
         BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
         BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities and equity", ctx));
         if (currentAssets != null && nonCurrentAssets != null && totalAssets != null) {
@@ -1134,6 +1163,11 @@ public final class FilingMapper {
         }
         if (parentEquity != null && totalEquity != null) {
             checks.add(equal("equity", "parent equity + non-controlling interests = total equity", parentEquity.add(nci), totalEquity));
+        }
+        if (proformaEquity.signum() != 0) {
+            checks.add(Check.warning("proforma_equity", "'" + PROFORMA_EQUITY + "' " + proformaEquity.stripTrailingZeros().toPlainString()
+                    + " (equity of an entity combined under common control, restated into this column) is not attributable"
+                    + " to the owners of the parent; counted with the non-controlling interests"));
         }
         if (!b.duplicates().isEmpty()) {
             checks.add(Check.warning("duplicates", "Labels reported on more than one row: " + b.duplicates()));
@@ -1214,7 +1248,8 @@ public final class FilingMapper {
         BigDecimal liabilities = req(b, "Total liabilities", ctx, checks);
         BigDecimal syirkah = sum(b, List.of("Total temporary syirkah funds"), ctx);
         BigDecimal parentEquity = req(b, "Total equity attributable to equity owners of parent entity", ctx, checks);
-        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx);
+        BigDecimal proformaEquity = sum(b, List.of(PROFORMA_EQUITY), ctx);
+        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx).add(proformaEquity);
         BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
         BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities, temporary syirkah funds and equity", ctx));
         BigDecimal syirkahReported = sumOrNull(b, List.of("Total temporary syirkah funds"), ctx);
@@ -1228,6 +1263,11 @@ public final class FilingMapper {
         }
         if (parentEquity != null && totalEquity != null) {
             checks.add(equal("equity", "parent equity + non-controlling interests = total equity", parentEquity.add(nci), totalEquity));
+        }
+        if (proformaEquity.signum() != 0) {
+            checks.add(Check.warning("proforma_equity", "'" + PROFORMA_EQUITY + "' " + proformaEquity.stripTrailingZeros().toPlainString()
+                    + " (equity of an entity combined under common control, restated into this column) is not attributable"
+                    + " to the owners of the parent; counted with the non-controlling interests"));
         }
         if (!b.duplicates().isEmpty()) {
             checks.add(Check.warning("duplicates", "Labels reported on more than one row: " + b.duplicates()));

@@ -864,7 +864,7 @@ Write rules of the upload endpoint (the SQL scripts follow the same rules):
 | Fiscal year end        | `company.fiscal_year_end` advances to the latest fiscal year end seen                                                                                                                                                               |
 | Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines); a filing that leaves sheets 1617000 / 1618000 blank (e.g. INDF) stores no segments |
 | Share counts           | `share_snapshot` at every date of the statements of changes in equity; known values are never replaced by NULL                                                                                                                      |
-| Derived data           | `refreshDerivedData` re-runs `V1.0.6__data_metrics_valuation.sql` after the last save                                                                                                                                               |
+| Derived data           | `refreshDerivedData` re-runs `V1.0.6__data_metrics_valuation.sql` after the last save (about 2 s: only market snapshots that are missing or differ are written)                                                                                                                                               |
 
 Uploading the six HRTA filings into an empty database (in any order) reproduces the data of
 `V1.0.4__data_HRTA_financials.sql` and the share counts of `V1.0.5__data_HRTA_market.sql`

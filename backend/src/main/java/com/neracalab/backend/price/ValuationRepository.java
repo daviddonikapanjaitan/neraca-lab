@@ -60,14 +60,27 @@ public class ValuationRepository {
         return jdbc.sql("""
                         INSERT INTO market_snapshot (
                             company_id, snapshot_date, share_price, shares_outstanding, market_cap, enterprise_value)
+                        WITH bs AS MATERIALIZED (
+                            SELECT d.company_id, d.period_end, d.net_debt, d.non_controlling_interest,
+                                   LEAD(d.period_end) OVER (PARTITION BY d.company_id ORDER BY d.period_end) AS next_period_end
+                            FROM (
+                                SELECT DISTINCT ON (km.company_id, km.period_end)
+                                       km.company_id, km.period_end, km.net_debt, km.non_controlling_interest
+                                FROM v_key_metrics km
+                                WHERE km.company_id = :c
+                                  AND km.total_assets IS NOT NULL
+                                ORDER BY km.company_id, km.period_end, km.period_id
+                            ) d
+                        ),
+                        calc AS (
                         SELECT
                             pd.company_id,
                             pd.trading_date,
                             pd.close_price,
                             sh.shares_outstanding,
-                            ROUND(pd.close_price * sh.shares_outstanding, 4),
+                            ROUND(pd.close_price * sh.shares_outstanding, 4) AS market_cap,
                             ROUND(pd.close_price * sh.shares_outstanding + bs.net_debt
-                                  + COALESCE(bs.non_controlling_interest, 0), 4)
+                                  + COALESCE(bs.non_controlling_interest, 0), 4) AS enterprise_value
                         FROM price_daily pd
                         LEFT JOIN LATERAL (
                             SELECT ss.shares_outstanding
@@ -78,17 +91,19 @@ public class ValuationRepository {
                             ORDER BY ss.snapshot_date DESC
                             LIMIT 1
                         ) sh ON TRUE
-                        LEFT JOIN LATERAL (
-                            SELECT km.net_debt, km.non_controlling_interest
-                            FROM v_key_metrics km
-                            WHERE km.company_id = pd.company_id
-                              AND km.period_end <= pd.trading_date
-                              AND km.total_assets IS NOT NULL
-                            ORDER BY km.period_end DESC
-                            LIMIT 1
-                        ) bs ON TRUE
+                        LEFT JOIN bs ON bs.company_id = pd.company_id
+                                    AND bs.period_end <= pd.trading_date
+                                    AND (bs.next_period_end IS NULL OR bs.next_period_end > pd.trading_date)
                         WHERE pd.company_id = :c
                           AND pd.close_price IS NOT NULL
+                        )
+                        SELECT c.company_id, c.trading_date, c.close_price, c.shares_outstanding, c.market_cap, c.enterprise_value
+                        FROM calc c
+                        LEFT JOIN market_snapshot ms ON ms.company_id = c.company_id AND ms.snapshot_date = c.trading_date
+                        WHERE ms.snapshot_id IS NULL
+                           OR (ms.share_price, ms.shares_outstanding, ms.market_cap, ms.enterprise_value)
+                              IS DISTINCT FROM
+                              (c.close_price, c.shares_outstanding, c.market_cap, c.enterprise_value)
                         ON CONFLICT ON CONSTRAINT uq_market_snapshot DO UPDATE SET
                             share_price        = EXCLUDED.share_price,
                             shares_outstanding = EXCLUDED.shares_outstanding,

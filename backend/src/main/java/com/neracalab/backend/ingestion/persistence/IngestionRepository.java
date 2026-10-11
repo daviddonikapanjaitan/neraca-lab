@@ -10,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 import javax.sql.DataSource;
@@ -50,6 +51,11 @@ public class IngestionRepository {
     private final ValuationRepository valuations;
     /** One {@link #refreshDerivedData} at a time. */
     private final ReentrantLock derivedDataLock = new ReentrantLock();
+    /** Orders the requests for a refresh and the starts of its runs. */
+    private final AtomicLong derivedDataClock = new AtomicLong();
+    /** When the last completed run started ({@link #derivedDataClock}); read and written under the lock. */
+    private long lastDerivedRunStarted;
+    private final AtomicLong derivedDataRuns = new AtomicLong();
     /** {@link #companyLock}: one lock per ticker. */
     private final Map<String, ReentrantLock> companyLocks = new ConcurrentHashMap<>();
 
@@ -786,10 +792,21 @@ public class IngestionRepository {
      * time: several uploads are stored at the same time, and two runs rewriting the rows of every company
      * together could block each other (a database deadlock fails one of them). A run that waited starts after
      * the other one ended, so it sees everything its own upload saved.
+     * <p>
+     * A request that waited while a whole run started and ended is served by that run - it began after the
+     * request, so after everything the caller had saved - and does not run again: five filings of one company
+     * that finish together cost two runs, not five in a row (each caller holds its company's write lock
+     * meanwhile).
      */
     public void refreshDerivedData() {
+        long requested = derivedDataClock.incrementAndGet();
         derivedDataLock.lock();
         try {
+            if (lastDerivedRunStarted > requested) {
+                return;
+            }
+            long started = derivedDataClock.incrementAndGet();
+            derivedDataRuns.incrementAndGet();
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
             SHARE_SCRIPTS.forEach(s -> populator.addScript(new ClassPathResource(s)));
             populator.addScript(new ClassPathResource(DERIVED_SCRIPT));
@@ -799,9 +816,15 @@ public class IngestionRepository {
             for (long companyId : jdbc.sql("SELECT company_id FROM company").query(Long.class).list()) {
                 valuations.deleteStaleValuationMetrics(companyId);
             }
+            lastDerivedRunStarted = started;       // only a run that completed serves the requests that waited
         } finally {
             derivedDataLock.unlock();
         }
+    }
+
+    /** How often the derived data was recalculated (a request served by another run does not count). */
+    public long derivedDataRuns() {
+        return derivedDataRuns.get();
     }
 
     public record StoredPeriod(String period, boolean incomeStatement, boolean balanceSheet, boolean cashFlow,

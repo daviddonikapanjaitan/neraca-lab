@@ -106,7 +106,7 @@ public class FullTextExtractor {
             new Field("long_term_debt", "long-term borrowings and bonds net of current maturities, WITHOUT lease liabilities"),
             new Field("lease_liabilities", "lease liabilities, current + non-current: rows of the LIABILITIES side only (never 'Right of use assets', which is an asset); [] when the balance sheet has no lease liability row"),
             new Field("shareholders_equity", "total equity attributable to the owners of the parent"),
-            new Field("non_controlling_interest", "non-controlling interests"),
+            new Field("non_controlling_interest", "non-controlling interests, plus the 'Proforma equity' row when the column has one (equity of an entity combined under common control; total equity includes it, the parent's equity does not)"),
             new Field("total_equity", "total equity"),
             new Field("retained_earnings", "retained earnings: BOTH rows, appropriated (also filed as 'General and legal reserves') + unappropriated"),
             new Field("goodwill", "goodwill"),
@@ -788,6 +788,10 @@ public class FullTextExtractor {
             how.put(field.name(), value == null ? "full-text extraction: not reported"
                     : "full-text extraction: " + String.join(" ", parts));
         }
+        if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
+            // before the checks: a gross profit the model built from expense rows by nature is not held against it
+            BY_FUNCTION_ONLY.forEach(field -> values.put(field, null));
+        }
         Map<String, BigDecimal> standard = target.standard().map(MappedStatement::values).orElse(Map.of());
         for (String kept : KEPT_FIELDS.get(table)) {
             values.put(kept, standard.get(kept));
@@ -881,11 +885,12 @@ public class FullTextExtractor {
         Set<String> cleared = new java.util.LinkedHashSet<>();
         if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
             for (String field : BY_FUNCTION_ONLY) {
-                if (values.get(field) == null) {
-                    // not a gap to fill: the filing has no such figure, so one stored by an earlier upload goes
-                    cleared.add(field);
-                    how.put(field, "full-text extraction: not reported (profit or loss by nature has no such row)");
-                }
+                // not a gap to fill: the filing has no such figure, so one stored by an earlier upload goes. Rows
+                // the model named all the same (MSIN: 'Program and broadcasting expenses' as cost of revenue, and
+                // no gross profit beside it) are expenses by nature, not a cost of sales: left out
+                values.put(field, null);
+                cleared.add(field);
+                how.put(field, "full-text extraction: not reported (profit or loss by nature has no such row)");
             }
         }
         return new MappedStatement(table, target.column(), mapper.period(target.column()),

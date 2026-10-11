@@ -226,8 +226,14 @@ public class IngestionTools {
             if (name.isEmpty() || name.length() > 120) {
                 throw new IllegalArgumentException("companyName must be 1-120 characters");
             }
-            if (repository.findCompany(session.info().ticker()).isPresent()) {
-                throw new IllegalStateException("Company " + session.info().ticker() + " already exists; use findCompany");
+            Optional<CompanyRow> existing = repository.findCompany(session.info().ticker());
+            if (existing.isPresent()) {
+                // registered meanwhile by another filing of the same company stored beside this one (five filings
+                // of a new company uploaded together): that company is the one to save to
+                CompanyRow known = existing.get();
+                session.company(known);
+                return new CompanyResult(false, known.companyId(), known.ticker(), known.companyName(), known.legalName(),
+                        known.sector(), known.industry());
             }
             CompanyRow row = repository.upsertCompany(session.info(), name);
             session.company(row);

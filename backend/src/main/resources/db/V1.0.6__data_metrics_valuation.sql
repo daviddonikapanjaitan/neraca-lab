@@ -23,17 +23,35 @@
 
 -- ---------------------------------------------------------------------
 -- market_snapshot
+--
+-- The balance sheet of a trading day is found by range (period_end <= day < next
+-- period_end) over the balance sheets read once, not by a lookup in v_key_metrics per
+-- price row, and only the days whose stored snapshot is missing or differs are written:
+-- the same rows, in about a second instead of 20 s for 157,000 prices (the uploads run
+-- this script after their last save).
 -- ---------------------------------------------------------------------
 INSERT INTO market_snapshot (
     company_id, snapshot_date, share_price, shares_outstanding, market_cap, enterprise_value)
+WITH bs AS MATERIALIZED (
+    SELECT d.company_id, d.period_end, d.net_debt, d.non_controlling_interest,
+           LEAD(d.period_end) OVER (PARTITION BY d.company_id ORDER BY d.period_end) AS next_period_end
+    FROM (
+        SELECT DISTINCT ON (km.company_id, km.period_end)
+               km.company_id, km.period_end, km.net_debt, km.non_controlling_interest
+        FROM v_key_metrics km
+        WHERE km.total_assets IS NOT NULL
+        ORDER BY km.company_id, km.period_end, km.period_id
+    ) d
+),
+calc AS (
 SELECT
     pd.company_id,
     pd.trading_date,
     pd.close_price,
     sh.shares_outstanding,
-    ROUND(pd.close_price * sh.shares_outstanding, 4),
+    ROUND(pd.close_price * sh.shares_outstanding, 4) AS market_cap,
     ROUND(pd.close_price * sh.shares_outstanding + bs.net_debt
-          + COALESCE(bs.non_controlling_interest, 0), 4)
+          + COALESCE(bs.non_controlling_interest, 0), 4) AS enterprise_value
 FROM price_daily pd
 LEFT JOIN LATERAL (
     SELECT ss.shares_outstanding
@@ -44,16 +62,18 @@ LEFT JOIN LATERAL (
     ORDER BY ss.snapshot_date DESC
     LIMIT 1
 ) sh ON TRUE
-LEFT JOIN LATERAL (
-    SELECT km.net_debt, km.non_controlling_interest
-    FROM v_key_metrics km
-    WHERE km.company_id = pd.company_id
-      AND km.period_end <= pd.trading_date
-      AND km.total_assets IS NOT NULL
-    ORDER BY km.period_end DESC
-    LIMIT 1
-) bs ON TRUE
+LEFT JOIN bs ON bs.company_id = pd.company_id
+            AND bs.period_end <= pd.trading_date
+            AND (bs.next_period_end IS NULL OR bs.next_period_end > pd.trading_date)
 WHERE pd.close_price IS NOT NULL
+)
+SELECT c.company_id, c.trading_date, c.close_price, c.shares_outstanding, c.market_cap, c.enterprise_value
+FROM calc c
+LEFT JOIN market_snapshot ms ON ms.company_id = c.company_id AND ms.snapshot_date = c.trading_date
+WHERE ms.snapshot_id IS NULL
+   OR (ms.share_price, ms.shares_outstanding, ms.market_cap, ms.enterprise_value)
+      IS DISTINCT FROM
+      (c.close_price, c.shares_outstanding, c.market_cap, c.enterprise_value)
 ON CONFLICT ON CONSTRAINT uq_market_snapshot DO UPDATE SET
     share_price        = EXCLUDED.share_price,
     shares_outstanding = EXCLUDED.shares_outstanding,
@@ -83,6 +103,16 @@ WITH valuation_dates AS (
     WHERE pd.close_price IS NOT NULL
     GROUP BY pd.company_id
 ),
+-- the periods with TTM revenue and a balance sheet, read once (the views are not evaluated per valuation date)
+fundamentals AS MATERIALIZED (
+    SELECT t.company_id, t.period_end, t.period_id, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
+           t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
+           km.net_debt, km.non_controlling_interest, km.shares, km.shareholders_equity
+    FROM v_ttm_financials t
+    JOIN v_key_metrics km ON km.period_id = t.period_id
+    WHERE t.revenue_ttm IS NOT NULL
+      AND km.total_assets IS NOT NULL
+),
 valued AS (
     SELECT
         d.company_id,
@@ -103,13 +133,10 @@ valued AS (
     JOIN LATERAL (
         SELECT t.period_id, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
                t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
-               km.net_debt, km.non_controlling_interest, km.shares, km.shareholders_equity
-        FROM v_ttm_financials t
-        JOIN v_key_metrics km ON km.period_id = t.period_id
+               t.net_debt, t.non_controlling_interest, t.shares, t.shareholders_equity
+        FROM fundamentals t
         WHERE t.company_id = d.company_id
           AND t.period_end <= d.valuation_date
-          AND t.revenue_ttm IS NOT NULL
-          AND km.total_assets IS NOT NULL
         ORDER BY t.period_end DESC
         LIMIT 1
     ) f ON TRUE

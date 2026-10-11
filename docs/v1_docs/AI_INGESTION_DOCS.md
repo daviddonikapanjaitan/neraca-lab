@@ -174,7 +174,7 @@ final status is decided by the deterministic database read-back, not by the mode
 | `extractRevenueSegments` | read  | revenue by type (else by source) of a column                                               |
 | `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
 | `saveShareSnapshots`     | write | share counts at every date in the statements of changes in equity                          |
-| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL |
+| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL; one run at a time, about 2 s, and a request that waited for a whole run is served by it |
 | `verifyStoredData`       | read  | database read-back: pending work and inconsistencies (the final gate of `COMPLETED`)       |
 
 **One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
@@ -182,7 +182,9 @@ trimmed and upper-cased (`Tickers.normalize`; a code that is not a ticker reject
 422); the exchange is always `IDX`. `findCompany` looks the company up by that key, and
 `registerCompany` writes it with a single
 `INSERT ... ON CONFLICT ON CONSTRAINT uq_company_ticker_exchange DO UPDATE ... RETURNING`, so two
-uploads of the same company, even concurrent ones, end in one row. The database enforces the
+uploads of the same company, even concurrent ones, end in one row. When several filings of a new company
+are uploaded together, each looks it up, finds nothing and registers it: the ones that come second get the
+company the first one registered (`registered: false`) instead of a refusal. The database enforces the
 same rule independently: `uq_company_ticker_exchange`, `exchange NOT NULL`, and the upper-case
 checks `ck_company_ticker` / `ck_company_exchange`.
 
@@ -389,7 +391,17 @@ Rules:
   files the basic EPS in millions too (0.0000563514954 for Rp 56.35). Profit / EPS then gives the real
   share count (15.5 billion) from the filed figures and an impossible one with the declared unit, while the
   amounts are not whole multiples of the unit (which tells this case from full amounts): the per-share
-  figures are multiplied by the unit, with a warning. Plausible share counts: 10^6 .. 10^13.
+  figures are multiplied by the unit, with a warning. Plausible share counts: 10^6 .. 10^13. The unit is
+  judged from the profit or loss as filed, by function or by nature: MSIN (by nature, 1322000) files
+  0.00000655 for Rp 6.55 in FY2024, and its EPS was stored a million times too small - and every published
+  share count refused - while only the profit or loss by function was read.
+- **Proforma equity.** A comparative column restated for an entity combined under common control carries
+  that entity's equity on a 'Proforma equity' row between the parent's equity and the non-controlling
+  interests (IMPC FY2023 in its FY2024 filing: 138,044,698,258; MSIN FY2021 in its FY2022 filing: 2,418,216
+  million). Total equity includes it, the parent's equity does not, so "parent equity + non-controlling
+  interests = total equity" failed by exactly that row. It is counted with the non-controlling interests
+  (`non_controlling_interest`), with a `proforma_equity` warning; the full-text extraction's field
+  definition says the same.
 - **Revenue not tagged.** SIMP's FY2023 workbook tags only "Total gross profit", no "Sales and revenue"
   or cost. When neither is reported but gross profit is, and profit before tax reconciles from it, revenue
   and cost of revenue are left empty with a warning (instead of blocking the filing).
@@ -449,6 +461,11 @@ Rules:
 - **One amount reported twice in a column.** Also a specific line and a residual "Other ..." line with
   the same amount (CEKA H1 2025: "Interest and finance costs" and "Other expenses" 79,134; interest paid
   79,134): counted once on the specific line, only when profit before tax then reconciles exactly.
+- **One amount reported twice in a column (two lines of the same kind).** WIIM's H1 2026 filing carries
+  5,797,003,720 on 'Finance income' and again on 'Interest income' in its H1 2025 column; profit before tax
+  196,550,613,747 only reconciles with the amount counted once. Two lines of the same category with the same
+  amount, neither a residual line: the one filed first is the repeat, ignored only when the statement then
+  passes every check (`double_reported`).
 - **One amount reported twice in a column (signed line).** ASGR's H1 2026 filing reports an H1 2025 loss both as
   "Other expenses" 2,750 and as "Other gains (losses)" -2,750 (millions); profit before tax 139,690
   counts it once. When profit before tax does not reconcile, an expense (income) line and a signed
@@ -521,6 +538,8 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not |
+| `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
+| `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
@@ -695,6 +714,17 @@ them from the profit or loss as filed, by function or by nature (the totals carr
 FY2025, 647,824 million / 23,801,568,645 shares = 27.2177, the EPS filed. A count that does not fit the EPS is
 still refused.
 
+**A filing by nature is the model's to decide.** NSSS (1312000) and MSIN (1322000) present profit or loss
+by nature, which the rule-based extraction does not map: such a workbook goes straight to the full-text
+extraction, and when that stores and verifies it nothing went wrong - it is no longer written to the error
+log (`FilingMapper.decidedByModel`: a filing by nature, or the Financing Industry taxonomy, with nothing else
+wrong). An upload of it that ends `INCOMPLETE` or `FAILED` is still logged. `cost_of_revenue` and
+`gross_profit` are never stored for it, whatever the model answers (MSIN: 'Program and broadcasting
+expenses' named as cost of revenue, no gross profit beside it) - they are cleared before the checks.
+MSIN, five filings uploaded together, Claude Haiku 5.5: one call each, 21-40 s, USD 0.002-0.003, all
+`SUCCEEDED`; share counts 60,676,178,205 from Yahoo Finance accepted for 2023-12-31 .. 2025-12-31 (397,637
+million / count = 6.5534, the FY2024 EPS 6.55).
+
 **Providers.** The model calls of the ingestion never go to an OpenRouter provider listed in
 `neracalab.ingestion.provider-ignore` (default `OpenInference`, env `INGESTION_PROVIDER_IGNORE`): its DeepSeek
 endpoint loops on long answers until OpenRouter resets the stream after 60 seconds (`stream was reset:
@@ -770,6 +800,29 @@ rules: such a workbook is accepted and goes **straight to the model** (`decidedB
 Re-uploaded: all five `SUCCEEDED` in 24 - 78 seconds, `full-text extraction of CURRENT_PERIOD,
 PRIOR_PERIOD`. One thing the filing itself lacks: the FY2023 workbook has no "Bonds payable" row (its
 liabilities do not add up to its total), so 2023's debt is the borrowings alone.
+
+### The uploads of 2026-10-11 (errors 120 - 243): thirty-five rows, five causes
+
+Fifty filings of ten new companies were uploaded, five of a company at a time. Thirty-four rows of the error
+log came from five causes; every file was uploaded again after the fixes and none left a row.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **The refresh of the derived data took 20 s and more.** The model calls took 1-10 s each; the three minutes went into the last step. `refreshDerivedData` recalculated `market_snapshot` for every company with a lookup in `v_key_metrics` per price row (157,000 of them) and upserted every row, one run at a time, each caller holding its company's write lock: 43 s on average and up to 138 s that day, with the saves of sibling uploads waiting up to 60 s behind it. | 234, 235, 237, 238, 239, 241, 242 (`SLOW_EXTRACTION`, all rescued) | `V1.0.6`: the balance sheet of a trading day is found by range over the balance sheets read once, and only snapshots that are missing or differ are written (the same rows: 20 s -> 1 s); the fundamentals of the valuation snapshots are read once (3.7 s -> 0.1 s). A refresh request that waited while a whole run started and ended is served by that run. Ten filings uploaded together afterwards: refresh 2.0 s on average, 3.0 s at most; every upload `SUCCEEDED` in 26-43 s on the standard extraction. |
+| **A filing by nature logged although stored.** | 120, 121, 136 - 217, 230 - 232 (NSSS, MSIN, `SUCCEEDED`) | Decided by the model by design, not recorded (above). MSIN's EPS unit and cost of revenue fixed with it. Rows 122 - 124 (NSSS on DeepSeek, gross profit from expense rows by nature) were solved by the Haiku change. |
+| **A company registered by a sibling upload.** MSIN FY2025 looked the company up (not found), another of the five registered it, and `registerCompany` refused: the full-text extraction stored nothing. | 229 | `registerCompany` adopts the company registered meanwhile. |
+| **'Proforma equity'.** | 233 (MSIN FY2021), 236 (IMPC FY2023) | Counted with the non-controlling interests (section 4). |
+| **An amount filed on two lines of the same kind.** | 240 (WIIM H1 2025) | Counted once (section 4). |
+
+Row 243 is not a defect: `FinancialStatement-2024-Tahunan-MSTI.xlsx` as uploaded was not an .xlsx file
+("No valid entries or contents found"), was rejected with 422 and is not stored; download it again.
+
+Two things the filings themselves leave open, noted in the job, not errors: **RAJA** has no share count -
+every Yahoo Finance count is five times the one its EPS implies in all five filings (prices and counts on
+Yahoo are adjusted for a 1:5 split that no filing reflects yet), so it has no market cap and no valuation
+until a filing after the split is uploaded; **MSIN**'s H1 2026 workbook files its EPS ten times too high
+even after the rounding unit (46.9 and 39.8 for 284,347 and 241,315 million / 60.7 billion shares = 4.69 and
+3.98) - stored as filed; the valuation does not use it (`eps_ttm` = TTM profit / shares outstanding).
 
 ### The MIKA uploads (errors 96, 97): a segment line outside the filed total
 

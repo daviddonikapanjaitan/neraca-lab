@@ -218,6 +218,35 @@ public class FullTextExtractorTest {
         assertThat(report.problems()).hasSize(2).allMatch(p -> p.contains("'1670000!R11' is not a row reference of the text"));
     }
 
+    /**
+     * MSIN (a broadcaster, profit or loss by nature): the model named 'Program and broadcasting expenses' as cost of
+     * revenue and no gross profit. An expense by nature is not a cost of sales: neither field is stored, whatever
+     * the model answered, and nothing is reported as open. The EPS, filed in the rounding unit (0.00000655), is
+     * stored in rupiah.
+     */
+    @Test
+    void aCostOfRevenueTheModelBuiltFromExpensesByNatureIsNotStored() throws Exception {
+        IngestionSession session = session("MSIN", "2024-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String programExpenses = terms(text, "1322000", "+Program and broadcasting expenses");
+        answers(byNature(text, "1322000", "Interest income", programExpenses,
+                terms(text, "1322000", "+Sales and revenue", "-Program and broadcasting expenses")));
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature",
+                new AgentTrace());
+
+        assertThat(report.modelCalls()).isEqualTo(1);
+        assertThat(report.problems()).isEmpty();
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isEqualByComparingTo("3238780000000");
+        assertThat(income.values().get("cost_of_revenue")).isNull();
+        assertThat(income.values().get("gross_profit")).isNull();
+        assertThat(income.rejected()).containsExactlyInAnyOrder("cost_of_revenue", "gross_profit");
+        assertThat(income.values().get("net_income_to_parent")).isEqualByComparingTo("397637000000");
+        assertThat(income.values().get("basic_eps")).isEqualByComparingTo("6.55");
+    }
+
     /** A profit or loss by function is not touched: its gross profit is never cleared. */
     @Test
     void aProfitOrLossByFunctionKeepsItsGrossProfit() throws Exception {
@@ -448,17 +477,22 @@ public class FullTextExtractorTest {
 
     /** A mapping of the NSSS statements (profit or loss by nature) with the given cost of revenue and gross profit. */
     private static String nsss(WorkbookText text, String costOfRevenue, String grossProfit) {
+        return byNature(text, "1312000", "Finance income", costOfRevenue, grossProfit);
+    }
+
+    /** A mapping of a filing by nature whose profit or loss is {@code sheet} (1312000, or 1322000 for MSIN). */
+    private static String byNature(WorkbookText text, String sheet, String financeIncome, String costOfRevenue, String grossProfit) {
         Map<String, String> income = Map.ofEntries(
-                Map.entry("revenue", terms(text, "1312000", "+Sales and revenue")),
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
                 Map.entry("cost_of_revenue", costOfRevenue),
                 Map.entry("gross_profit", grossProfit),
-                Map.entry("interest_income", terms(text, "1312000", "+Finance income")),
-                Map.entry("interest_expense", terms(text, "1312000", "+Interest and finance costs")),
-                Map.entry("pretax_income", terms(text, "1312000", "+Total profit (loss) before tax")),
-                Map.entry("income_tax", terms(text, "1312000", "-Tax benefit (expenses)")),
-                Map.entry("net_income", terms(text, "1312000", "+Total profit (loss)")),
-                Map.entry("net_income_to_parent", terms(text, "1312000", "+Profit (loss) attributable to parent entity")),
-                Map.entry("basic_eps", terms(text, "1312000", "+Basic earnings (loss) per share from continuing operations")));
+                Map.entry("interest_income", terms(text, sheet, "+" + financeIncome)),
+                Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")),
+                Map.entry("basic_eps", terms(text, sheet, "+Basic earnings (loss) per share from continuing operations")));
         Map<String, String> balance = Map.ofEntries(
                 Map.entry("total_assets", terms(text, "1210000", "+Total assets")),
                 Map.entry("total_liabilities", terms(text, "1210000", "+Total liabilities")),

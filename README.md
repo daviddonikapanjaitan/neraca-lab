@@ -130,6 +130,10 @@ neraca_lab/
 │                                Industry taxonomy)
 │                                NSSS (2022 .. 2025 annual, 2026-II; profit or loss by nature: stored by the
 │                                full-text extraction, share counts from Yahoo Finance checked against its EPS)
+│                                AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM, WIIM (2022 .. 2025 annual, 2026-II),
+│                                MSIN (the same; profit or loss by nature, 1322000) and MSTI (2023, 2025 annual,
+│                                2026-II) - RAJA: no share count yet (Yahoo Finance's counts are adjusted for a
+│                                1:5 split no filing reflects), so no valuation
 │                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
@@ -238,7 +242,8 @@ over, INCOMPLETE or FAILED is recorded in the table **`ingestion_error`** - the 
 SELECT error_id, file_name, ticker, period, error_type, message FROM ingestion_error WHERE NOT fixed_by_claude_code;
 ```
 
-A row of the error log names the model of the full-text extraction and every model call of the job that
+A workbook the model decides by design - the Financing Industry taxonomy, a profit or loss presented by nature
+(NSSS, MSIN) - that is stored and verified is not an error and leaves no row. A row of the error log names the model of the full-text extraction and every model call of the job that
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
@@ -289,7 +294,9 @@ totals reconcile exactly without them - a residual line that repeats the net of 
 flow line the filed section total excludes (TINS, BRI), unclassified insurance lines shown for information (BRI
 H1 2025) - while a line the totals do include stays with the agent (BBCA); an EPS takes the sign of its profit
 (TINS FY2023: a loss filed without it); an EPS filed in the rounding unit (SIMP
-H1 2026: 0.0000564 for Rp 56.35) is scaled; a filing that tags only gross profit (SIMP FY2023) is stored
+H1 2026: 0.0000564 for Rp 56.35; MSIN, by nature: 0.00000655 for Rp 6.55) is scaled; an amount filed on two
+lines of the same kind (WIIM H1 2025: 'Finance income' and 'Interest income') is counted once; a 'Proforma
+equity' row of a restated comparative (IMPC FY2023, MSIN FY2021) is counted with the non-controlling interests; a filing that tags only gross profit (SIMP FY2023) is stored
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
 stored values; an EPS and its share count always come from one filing, and a share split a later filing
 restates - BMRI 2:1, MAPA 1:10 in 2023 - adjusts the per-share figures and share counts of that and earlier
@@ -567,7 +574,7 @@ classification while the column still fails;
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
-`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
+`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
