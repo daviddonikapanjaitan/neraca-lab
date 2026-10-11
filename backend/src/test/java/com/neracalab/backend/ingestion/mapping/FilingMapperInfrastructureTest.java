@@ -108,7 +108,7 @@ class FilingMapperInfrastructureTest {
     }
 
     private static FilingMapper mapper(String filing) throws Exception {
-        Path file = Path.of("..", "data", "SMDR", "xlsx", "FinancialStatement-" + filing + "-SMDR.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "SMDR", "xlsx", "FinancialStatement-" + filing + "-SMDR.xlsx");
         assumeTrue(Files.exists(file), "SMDR source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));

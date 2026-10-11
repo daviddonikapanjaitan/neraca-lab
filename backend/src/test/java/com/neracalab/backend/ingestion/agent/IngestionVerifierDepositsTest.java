@@ -25,7 +25,7 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbookReader;
  */
 class IngestionVerifierDepositsTest {
 
-    private static final Path DATA = Path.of("..", "data", "PWON", "xlsx");
+    private static final Path DATA = Path.of("..", "data", "IDX_XBRL", "PWON", "xlsx");
     private static final StatementColumn CURRENT = StatementColumn.CURRENT_PERIOD;
     private static final BigDecimal THOUSAND = new BigDecimal("1000");
 

@@ -61,6 +61,7 @@ public class IngestionAgent {
     private final String model;
     private final boolean reasoning;
     private final java.time.Duration callTimeout;
+    private final List<String> providerIgnore;
 
     /**
      * @param model the configured chat model ({@code spring.ai.openai.chat.model}, env {@code OPENAI_MODEL}).
@@ -82,12 +83,28 @@ public class IngestionAgent {
      * @param callTimeout {@code neracalab.ingestion.model-call-timeout}: longest one model call may take before it
      *                    counts as a stalled provider response and is retried (0 = only the HTTP read timeout)
      */
+    public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
+                          AgentProperties properties, JsonMapper json, String model, boolean reasoning,
+                          java.time.Duration callTimeout) {
+        this(chatModel, repository, verifier, properties, json, model, reasoning, callTimeout, List.of());
+    }
+
+    /**
+     * @param providerIgnore {@code neracalab.ingestion.provider-ignore}: OpenRouter providers never used for the
+     *                       ingestion's model calls. Default OpenInference: its DeepSeek endpoint loops on long
+     *                       answers until OpenRouter resets the stream after 60 s ("stream was reset: CANCEL"),
+     *                       so a call routed to it cost a minute and a retry - two in a row most of the 3 minutes
+     *                       of an upload. Sent as {@code "provider": {"ignore": [...]}}; empty: no restriction.
+     */
     @org.springframework.beans.factory.annotation.Autowired
     public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
                           AgentProperties properties, JsonMapper json,
                           @Value("${spring.ai.openai.chat.model}") String model,
                           @Value("${neracalab.ingestion.model-reasoning:false}") boolean reasoning,
-                          @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout) {
+                          @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout,
+                          @Value("${neracalab.ingestion.provider-ignore:OpenInference}") List<String> providerIgnore) {
+        this.providerIgnore = providerIgnore == null ? List.of()
+                : providerIgnore.stream().filter(p -> p != null && !p.isBlank()).map(String::trim).toList();
         this.chatModel = chatModel;
         this.repository = repository;
         this.verifier = verifier;
@@ -99,11 +116,18 @@ public class IngestionAgent {
     }
 
     /** Per-request options with the configured model (never Spring AI's default, see the constructor). */
-    OpenAiChatOptions.Builder options() {
+    public OpenAiChatOptions.Builder options() {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().model(model).temperature(properties.temperature());
+        Map<String, Object> extra = new LinkedHashMap<>();
         if (!reasoning) {
-            builder.extraBody(Map.of("reasoning", Map.of("enabled", false)));
+            extra.put("reasoning", Map.of("enabled", false));
         }
+        if (!providerIgnore.isEmpty()) {
+            extra.put("provider", Map.of("ignore", providerIgnore));
+        }
+        // OpenRouter then reports the cost of the call (usage.cost), recorded per upload job
+        extra.put("usage", Map.of("include", true));
+        builder.extraBody(extra);
         return builder;
     }
 
@@ -129,7 +153,7 @@ public class IngestionAgent {
     // ------------------------------------------------------------------ run
 
     public Outcome run(IngestionSession session) {
-        AgentTrace trace = new AgentTrace(session.deadline());
+        AgentTrace trace = new AgentTrace(session.deadline(), session.modelCalls());
         IngestionTools tools = new IngestionTools(session, repository, verifier);
         Map<String, ToolCallback> catalog = new LinkedHashMap<>();
         for (ToolCallback cb : ToolCallbacks.from(tools)) {
@@ -235,6 +259,7 @@ public class IngestionAgent {
                 new UserMessage("Filing overview:\n" + overview + "\n\nTool catalog:\n" + tools
                         + "\n" + converter.getFormat())),
                 options().build());
+        trace.stage(ModelCallListener.PLAN);
         String text = call(prompt, trace).getResult().getOutput().getText();
         IngestionPlan plan = converter.convert(text);
         if (plan == null || plan.steps() == null || plan.steps().isEmpty()) {
@@ -275,6 +300,7 @@ public class IngestionAgent {
                     .toolCallbacks(new ArrayList<>(offered.values()))
                     .parallelToolCalls(true)
                     .build();
+            trace.stage(ModelCallListener.EXECUTE);
             ChatResponse response = call(new Prompt(history, options), trace);
             AssistantMessage message = response.getResult().getOutput();
             history.add(message);
@@ -341,6 +367,7 @@ public class IngestionAgent {
                         toJson(verification), converter.getFormat()))),
                 options().build());
         try {
+            trace.stage(ModelCallListener.REVIEW);
             Reflection reflection = converter.convert(call(prompt, trace).getResult().getOutput().getText());
             if (reflection == null) {
                 throw new IllegalStateException("empty reflection");
@@ -368,17 +395,26 @@ public class IngestionAgent {
      * then abandoned (a model call has no side effects) and {@link JobDeadline.JobTimeoutException} thrown.
      */
     ChatResponse call(Prompt prompt, AgentTrace trace) {
+        return call(prompt, trace, callTimeout);
+    }
+
+    /** As {@link #call(Prompt, AgentTrace)} with another call timeout (a long answer needs more than a tool turn). */
+    public ChatResponse call(Prompt prompt, AgentTrace trace, java.time.Duration callTimeout) {
         JobDeadline deadline = trace.deadline();
         for (int attempt = 0; ; attempt++) {
             deadline.check("a model call");
             trace.modelCall();
+            long started = System.nanoTime();
             try {
-                ChatResponse response = deadline.isNone() && !hasCallTimeout() ? chatModel.call(prompt) : callWithin(prompt, deadline);
+                ChatResponse response = deadline.isNone() && !positive(callTimeout) ? chatModel.call(prompt)
+                        : callWithin(prompt, deadline, callTimeout);
+                told(trace, prompt, response, started, null);
                 if (response != null && response.getMetadata() != null) {
                     trace.modelUsed(response.getMetadata().getModel());
                 }
                 return response;
             } catch (RuntimeException e) {
+                told(trace, prompt, null, started, ToolExecutor.rootMessage(e));
                 if (attempt >= properties.modelRetries() || !isTransient(e)) {
                     throw e;
                 }
@@ -404,6 +440,20 @@ public class IngestionAgent {
         }
     }
 
+    /**
+     * Tells the run's listener one attempt of a model call (its tokens and cost are recorded for the job). The
+     * model is the one of the request - the full-text extraction asks its own. Never throws.
+     */
+    private void told(AgentTrace trace, Prompt prompt, ChatResponse response, long startedNanos, String error) {
+        try {
+            String asked = prompt.getOptions() == null ? null : prompt.getOptions().getModel();
+            trace.listener().called(trace.stage(), asked == null || asked.isBlank() ? model : asked, response,
+                    (System.nanoTime() - startedNanos) / 1_000_000, error);
+        } catch (RuntimeException e) {
+            log.warn("model call not recorded: {}", e.getMessage());
+        }
+    }
+
     /** Daemon threads for model calls bounded by a job deadline; an abandoned call ends with its HTTP timeout. */
     private static final java.util.concurrent.ExecutorService MODEL_CALLS = java.util.concurrent.Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "ingestion-model-call");
@@ -411,17 +461,17 @@ public class IngestionAgent {
         return t;
     });
 
-    private boolean hasCallTimeout() {
-        return callTimeout != null && !callTimeout.isZero() && !callTimeout.isNegative();
+    private static boolean positive(java.time.Duration timeout) {
+        return timeout != null && !timeout.isZero() && !timeout.isNegative();
     }
 
     /**
      * A model call that waits at most until the job deadline and at most {@link #callTimeout}. Past the deadline the
      * job stops; past the call timeout the call counts as a stalled response (an I/O timeout, so it is retried).
      */
-    private ChatResponse callWithin(Prompt prompt, JobDeadline deadline) {
+    private ChatResponse callWithin(Prompt prompt, JobDeadline deadline, java.time.Duration callTimeout) {
         long untilDeadline = deadline.isNone() ? Long.MAX_VALUE : Math.max(1, deadline.remaining().toMillis());
-        long wait = hasCallTimeout() ? Math.min(untilDeadline, callTimeout.toMillis()) : untilDeadline;
+        long wait = positive(callTimeout) ? Math.min(untilDeadline, callTimeout.toMillis()) : untilDeadline;
         java.util.concurrent.Future<ChatResponse> future = MODEL_CALLS.submit(() -> chatModel.call(prompt));
         try {
             return future.get(wait, java.util.concurrent.TimeUnit.MILLISECONDS);

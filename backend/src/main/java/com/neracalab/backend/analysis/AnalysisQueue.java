@@ -15,8 +15,8 @@ import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobRepository.Snapshot;
 import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.IngestionJobType;
+import com.neracalab.backend.job.JobWorkerPool;
 import com.neracalab.backend.job.Requester;
-import com.neracalab.backend.job.SerialJobWorker;
 import com.neracalab.backend.rag.RagRepository.Company;
 import com.neracalab.backend.screening.InvestorAgent;
 
@@ -39,7 +39,7 @@ public class AnalysisQueue implements SmartLifecycle {
     private final IngestionJobRepository jobs;
     private final AnalysisProperties properties;
     private final TransactionTemplate transaction;
-    private final SerialJobWorker worker;
+    private final JobWorkerPool worker;
 
     public AnalysisQueue(AnalysisService service, AnalysisRepository repository, IngestionJobRepository jobs,
                          AnalysisProperties properties, TransactionTemplate transaction) {
@@ -47,7 +47,7 @@ public class AnalysisQueue implements SmartLifecycle {
         this.jobs = jobs;
         this.properties = properties;
         this.transaction = transaction;
-        this.worker = new SerialJobWorker("analysis", jobs, service::run);
+        this.worker = new JobWorkerPool("analysis", 1, jobs, service::run);
     }
 
     /** Queues an analysis of the company; the agents are validated by the caller. */

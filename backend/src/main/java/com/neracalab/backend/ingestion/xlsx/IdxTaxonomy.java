@@ -17,7 +17,15 @@ public enum IdxTaxonomy {
      * "Financial and Sharia Industry" (banks, e.g. BNGA): balance sheet by order of liquidity (4220000),
      * profit or loss by nature (4312000 / 4322000), cash flow (4510000 / 4520000), with own line items.
      */
-    FINANCIAL('4');
+    FINANCIAL('4'),
+    /**
+     * "Financing Industry" (multifinance companies, e.g. BFIN): balance sheet by order of liquidity (8220000),
+     * profit or loss by nature (8312000 / 8322000), cash flow (8510000). Its line items (income from finance
+     * lease, consumer financing, murabahah, ...) are not mapped by the rule-based extraction: the statements of
+     * such a workbook are decided by the full-text extraction. The sheets are still read under the General
+     * Industry codes, so the share capital, the per-share unit and the notes can be used.
+     */
+    FINANCING('8');
 
     private final char digit;
 

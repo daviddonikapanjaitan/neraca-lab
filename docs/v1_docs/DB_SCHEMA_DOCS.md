@@ -21,8 +21,10 @@ foreign key.
 | `V1.0.15__schema_analysis.sql`            | AI analysis of one stock: `analysis_run`, `analysis_agent_score`, `llm_usage.analysis_id` (section 4.13) |
 | `V1.0.16__schema_syirkah.sql`             | `balance_sheet.temporary_syirkah_funds`: banks' sharia depositor funds, neither liabilities nor equity (section 3) |
 | `V1.0.17__schema_screening_selection.sql` | `screening_run.tickers`: screening of selected stocks; `market_cap_tier` NULL for those runs (section 4.11) |
-| `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/HRTA/xlsx`        |
-| `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/HRTA/price`)                 |
+| `V1.0.18__schema_ingestion_error.sql`     | `ingestion_error`: error log of the .xlsx ingestion API, work list of Claude Code (`fixed_by_claude_code`); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 6 |
+| `V1.0.19__schema_ingestion_cost.sql`      | `llm_usage.job_id`: the model calls of a financial statement upload (tokens and cost per job); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 7 |
+| `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
+| `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
 | `V1.0.13__data_BNGA_shares.sql`           | BNGA audited year-end share counts 2021 .. 2025 from its annual reports (not derivable from its filings: two share classes, treasury shares); no-op until BNGA is uploaded; also run after every upload |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
@@ -629,7 +631,7 @@ Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)
 | `screening_candidate`   | Stage 1 shortlist of a run: metrics, quantitative score, news, overall score, rank, selected, thesis |
 | `screening_agent_score` | per candidate and agent: quantitative / AI / final score, verdict, reasoning, reflection         |
 | `screening_lesson`      | Reflexion memory: lessons per agent with their occurrence count                                  |
-| `llm_usage`             | every model call of a run (`run_id`) or an analysis (`analysis_id`, section 4.13): tokens, cost, duration, error |
+| `llm_usage`             | every model call of a run (`run_id`), an analysis (`analysis_id`, section 4.13) or a financial statement upload (`job_id`): tokens, cost, duration, error |
 
 The script also widens `ck_role_permissions_permission` (`SCREENING`) and `ck_ingestion_job_type`
 (`FUNDAMENTALS`, `SCREENING`). Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
@@ -690,6 +692,7 @@ One analysis of one company (Screening > Analysis). Full description: [ANALYSIS_
 |                        | `verdict`, `thesis`, `strengths`, `concerns`, `reflection` | | the agent's view and its Reflection review               |
 |                        | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `QUANT_ONLY`, `NO_SCORE` (check)                  |
 | `llm_usage`            | `analysis_id`                  | UUID FK       | the analysis of a model call (`run_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_analysis` |
+| `llm_usage`            | `job_id`                       | UUID FK       | the financial statement upload job of a model call (`ingestion_job`; `run_id` and `analysis_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_job`. `stage`: `PLAN`, `EXECUTE`, `REVIEW` (standard extraction), `FULL_TEXT` (full-text extraction) |
 
 Index `ix_analysis_run_company`. Lessons learned by the analyses go to `screening_lesson` (Reflexion memory
 shared with the screening).
@@ -776,13 +779,13 @@ denominator yields `NULL` instead of an error.
 
 | Source                                                     | Content                                                             |
 |------------------------------------------------------------|---------------------------------------------------------------------|
-| `data/HRTA/xlsx/FinancialStatement-2025-I-HRTA.xlsx`       | Q1 2025 + Q1 2024 comparative, balance sheet 2025-03-31             |
-| `data/HRTA/xlsx/FinancialStatement-2025-II-HRTA.xlsx`      | H1 2025 + H1 2024, balance sheet 2025-06-30                         |
-| `data/HRTA/xlsx/FinancialStatement-2025-III-HRTA.xlsx`     | 9M 2025 + 9M 2024, balance sheet 2025-09-30                         |
-| `data/HRTA/xlsx/FinancialStatement-2025-Tahunan-HRTA.xlsx` | FY 2025 + FY 2024 (audited), balance sheets 2025-12-31 / 2024-12-31 |
-| `data/HRTA/xlsx/FinancialStatement-2026-I-HRTA.xlsx`       | Q1 2026, balance sheet 2026-03-31                                   |
-| `data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx`      | H1 2026, balance sheet 2026-06-30                                   |
-| `data/HRTA/price/HRTA.JK_daily_yahoo.csv`                  | daily OHLCV from Yahoo Finance, 2024-01-02 .. 2026-09-30            |
+| `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2025-I-HRTA.xlsx`       | Q1 2025 + Q1 2024 comparative, balance sheet 2025-03-31             |
+| `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2025-II-HRTA.xlsx`      | H1 2025 + H1 2024, balance sheet 2025-06-30                         |
+| `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2025-III-HRTA.xlsx`     | 9M 2025 + 9M 2024, balance sheet 2025-09-30                         |
+| `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2025-Tahunan-HRTA.xlsx` | FY 2025 + FY 2024 (audited), balance sheets 2025-12-31 / 2024-12-31 |
+| `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-I-HRTA.xlsx`       | Q1 2026, balance sheet 2026-03-31                                   |
+| `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx`      | H1 2026, balance sheet 2026-06-30                                   |
+| `data/IDX_XBRL/HRTA/price/HRTA.JK_daily_yahoo.csv`                  | daily OHLCV from Yahoo Finance, 2024-01-02 .. 2026-09-30            |
 
 | Table                 | Rows | Notes                                                                                       |
 |-----------------------|-----:|---------------------------------------------------------------------------------------------|
@@ -800,7 +803,7 @@ denominator yields `NULL` instead of an error.
 | `financial_metric`    |  370 | 286 fundamental + 84 valuation rows (incl. 8 `ev_op`)                                       |
 | `corporate_action`    |    0 |                                                                                             |
 
-Other companies have no seed script: their data comes from the upload. `data/INDF/xlsx` holds the
+Other companies have no seed script: their data comes from the upload. `data/IDX_XBRL/INDF/xlsx` holds the
 IDX XBRL workbooks of PT Indofood Sukses Makmur Tbk (`INDF`) from 2024-III to 2026-II
 (`FinancialStatement-2024-III-INDF.xlsx` ... `FinancialStatement-2026-II-INDF.xlsx`) for that; their
 breakdown sheets 1617000 / 1618000 are blank, so they store no revenue segments.
@@ -861,7 +864,7 @@ Write rules of the upload endpoint (the SQL scripts follow the same rules):
 | Fiscal year end        | `company.fiscal_year_end` advances to the latest fiscal year end seen                                                                                                                                                               |
 | Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines); a filing that leaves sheets 1617000 / 1618000 blank (e.g. INDF) stores no segments |
 | Share counts           | `share_snapshot` at every date of the statements of changes in equity; known values are never replaced by NULL                                                                                                                      |
-| Derived data           | `refreshDerivedData` re-runs `V1.0.6__data_metrics_valuation.sql` after the last save                                                                                                                                               |
+| Derived data           | `refreshDerivedData` re-runs `V1.0.6__data_metrics_valuation.sql` after the last save (about 2 s: only market snapshots that are missing or differ are written)                                                                                                                                               |
 
 Uploading the six HRTA filings into an empty database (in any order) reproduces the data of
 `V1.0.4__data_HRTA_financials.sql` and the share counts of `V1.0.5__data_HRTA_market.sql`
@@ -869,7 +872,7 @@ exactly; only the English segment names may be worded differently. Prices are no
 load `price_daily` with the price ingestion (or a seed script such as `V1.0.5__data_HRTA_market.sql`),
 otherwise `market_snapshot` and `valuation_snapshot` stay empty for that company.
 
-Adding seed data as SQL: put the files in `data/<TICKER>/xlsx` (and prices in `data/<TICKER>/price`),
+Adding seed data as SQL: put the files in `data/IDX_XBRL/<TICKER>/xlsx` (and prices in `data/IDX_XBRL/<TICKER>/price`),
 create data scripts following `V1.0.4__data_HRTA_financials.sql` and `V1.0.5__data_HRTA_market.sql`,
 and add them to `spring.sql.init.data-locations` in `application.yaml` **before**
 `V1.0.6__data_metrics_valuation.sql`, then restart the backend.

@@ -117,6 +117,7 @@ public record ScreeningProperties(
         public Llm {
             if (prices == null || prices.isEmpty()) {
                 prices = List.of(new ModelPrice("deepseek/deepseek-v4-flash-0731", 0.06, 1.28),
+                        new ModelPrice("anthropic/claude-haiku-5.5", 0.10, 0.50),
                         new ModelPrice("anthropic/claude-opus-5.5", 4, 20));
             }
             if (concurrency < 1 || researchIterations < 1) {

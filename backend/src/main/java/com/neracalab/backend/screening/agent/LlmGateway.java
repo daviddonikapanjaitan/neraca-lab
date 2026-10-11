@@ -183,12 +183,23 @@ public class LlmGateway {
     }
 
     private UsageMeter.Usage usage(Purpose purpose, String model, ChatResponse response, long ms) {
+        return usageOf(purpose, model, response, ms, properties::price);
+    }
+
+    /**
+     * Tokens and cost of one answered model call: the cost OpenRouter reports ({@code usage.cost}), else an
+     * estimate from {@code prices} (flagged). Shared with the ingestion, which records its calls the same way.
+     *
+     * @param prices list price of a model, asked only when the response carries no cost
+     */
+    public static UsageMeter.Usage usageOf(Purpose purpose, String model, ChatResponse response, long ms,
+                                           java.util.function.Function<String, ModelPrice> prices) {
         int prompt = 0;
         int completion = 0;
         int reasoning = 0;
         int cached = 0;
         Double cost = null;
-        Usage usage = response.getMetadata() == null ? null : response.getMetadata().getUsage();
+        Usage usage = response == null || response.getMetadata() == null ? null : response.getMetadata().getUsage();
         if (usage != null) {
             prompt = usage.getPromptTokens() == null ? 0 : usage.getPromptTokens();
             completion = usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens();
@@ -205,8 +216,7 @@ public class LlmGateway {
         }
         boolean estimated = cost == null;
         if (estimated) {
-            ModelPrice price = properties.price(model);
-            cost = price.cost(prompt, completion);
+            cost = prices.apply(model).cost(prompt, completion);
         }
         return new UsageMeter.Usage(purpose.stage(), purpose.agent(), purpose.ticker(), model, prompt, completion,
                 reasoning, cached, cost, estimated, ms, null);

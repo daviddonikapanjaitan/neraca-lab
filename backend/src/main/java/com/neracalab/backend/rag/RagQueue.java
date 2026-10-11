@@ -20,17 +20,20 @@ import com.neracalab.backend.job.IngestionJobRepository.NewUpload;
 import com.neracalab.backend.job.IngestionJobRepository.Snapshot;
 import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.IngestionJobType;
+import com.neracalab.backend.job.JobProperties;
+import com.neracalab.backend.job.JobWorkerPool;
 import com.neracalab.backend.job.Requester;
-import com.neracalab.backend.job.SerialJobWorker;
 import com.neracalab.backend.rag.RagIngestionService.NewsResult;
 import com.neracalab.backend.rag.RagIngestionService.PdfResult;
 import com.neracalab.backend.rag.RagRepository.Company;
 
 /**
  * Asynchronous RAG ingestions (job types RAG_PDF and RAG_NEWS in {@code ingestion_job}). A submit records a QUEUED
- * job and returns at once; ONE worker thread chunks, embeds and stores the documents, one job after the other.
- * At most one active job per company and source (an identical request while one is queued / running returns that
- * job). The queue is in memory: jobs still active when the application stops are failed at the next start.
+ * job and returns at once; the worker threads ({@code neracalab.jobs.workers}, 5) chunk, embed and store the
+ * documents, that many jobs at the same time. At most one active job per company and source (an identical request
+ * while one is queued / running returns that job), so two running jobs never write the same document; the news
+ * sites are still read one request at a time per site ({@code NewsHttpClient}). The queue is in memory: jobs still
+ * active when the application stops are failed at the next start.
  */
 @Component
 public class RagQueue implements SmartLifecycle {
@@ -53,14 +56,15 @@ public class RagQueue implements SmartLifecycle {
     private final RagIngestionService service;
     private final IngestionFileRepository files;
     private final IngestionJobRepository jobs;
-    private final SerialJobWorker worker;
+    private final JobWorkerPool worker;
     private final Map<UUID, Task> tasks = new ConcurrentHashMap<>();
 
-    public RagQueue(RagIngestionService service, IngestionFileRepository files, IngestionJobRepository jobs) {
+    public RagQueue(RagIngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
+                    JobProperties properties) {
         this.service = service;
         this.files = files;
         this.jobs = jobs;
-        this.worker = new SerialJobWorker("rag-ingestion", jobs, this::process);
+        this.worker = new JobWorkerPool("rag-ingestion", properties.workers(), jobs, this::process);
     }
 
     // ------------------------------------------------------------------ API

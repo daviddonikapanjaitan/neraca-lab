@@ -204,7 +204,7 @@ class FilingMapperFinancialTest {
     @ParameterizedTest
     @ValueSource(strings = {"2022-Tahunan", "2023-Tahunan", "2024-Tahunan", "2025-Tahunan"})
     void everyBtpnFilingMapsWithoutErrors(String filing) throws Exception {
-        Path file = Path.of("..", "data", "BTPN", "xlsx", "FinancialStatement-" + filing + "-BTPN.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "BTPN", "xlsx", "FinancialStatement-" + filing + "-BTPN.xlsx");
         assumeTrue(Files.exists(file), "BTPN source data not available: " + file);
         FilingMapper mapper;
         try (InputStream in = Files.newInputStream(file)) {
@@ -298,7 +298,7 @@ class FilingMapperFinancialTest {
     }
 
     private static FilingMapper bmri(String filing) throws Exception {
-        Path file = Path.of("..", "data", "BMRI", "xlsx", "FinancialStatement-" + filing + "-BMRI.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "BMRI", "xlsx", "FinancialStatement-" + filing + "-BMRI.xlsx");
         assumeTrue(Files.exists(file), "BMRI source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));
@@ -312,7 +312,7 @@ class FilingMapperFinancialTest {
     @ParameterizedTest
     @ValueSource(strings = {"2022-Tahunan", "2023-Tahunan", "2024-Tahunan", "2025-Tahunan", "2026-II"})
     void syirkahShareFiledNegativeIsACost(String filing) throws Exception {
-        Path file = Path.of("..", "data", "BRIS", "xlsx", "FinancialStatement-" + filing + "-BRIS.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "BRIS", "xlsx", "FinancialStatement-" + filing + "-BRIS.xlsx");
         assumeTrue(Files.exists(file), "BRIS source data not available: " + file);
         FilingMapper mapper;
         try (InputStream in = Files.newInputStream(file)) {
@@ -342,7 +342,7 @@ class FilingMapperFinancialTest {
     }
 
     private static FilingMapper mapper(String filing) throws Exception {
-        Path file = Path.of("..", "data", "BNGA", "xlsx", "FinancialStatement-" + filing + "-BNGA.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "BNGA", "xlsx", "FinancialStatement-" + filing + "-BNGA.xlsx");
         assumeTrue(Files.exists(file), "BNGA source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));

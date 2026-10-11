@@ -10,6 +10,8 @@ import com.neracalab.backend.auth.RequiresPermission;
 import com.neracalab.backend.ingestion.FinancialStatementQueue;
 import com.neracalab.backend.ingestion.FinancialStatementQueue.Submission;
 import com.neracalab.backend.ingestion.IngestionService;
+import com.neracalab.backend.ingestion.error.IngestionErrorRepository;
+import com.neracalab.backend.ingestion.error.IngestionErrorRepository.NewError;
 import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.Requester;
 import org.springframework.http.HttpStatus;
@@ -36,7 +38,7 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbookException;
  * <ul>
  *   <li>202 - new job (QUEUED), {@code Location: /api/v1/ingestions/{id}}</li>
  *   <li>200 - the same file is already queued / being stored: that job</li>
- *   <li>422 - not an .xlsx / not an IDX XBRL workbook / unsupported template; 413 - larger than 20 MB</li>
+ *   <li>422 - not an .xlsx / not an IDX XBRL workbook (recorded in {@code ingestion_error}); 413 - larger than 20 MB</li>
  * </ul>
  */
 @RestController
@@ -46,25 +48,37 @@ public class FinancialStatementController {
 
     private final IngestionService service;
     private final FinancialStatementQueue queue;
+    private final IngestionErrorRepository errors;
 
-    public FinancialStatementController(IngestionService service, FinancialStatementQueue queue) {
+    public FinancialStatementController(IngestionService service, FinancialStatementQueue queue, IngestionErrorRepository errors) {
         this.service = service;
         this.queue = queue;
+        this.errors = errors;
     }
 
     @PostMapping(path = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<IngestionJob> upload(@RequestParam("file") MultipartFile file, AuthenticatedUser user)
             throws IOException {
-        if (file.isEmpty()) {
-            throw new IdxWorkbookException("The uploaded file is empty");
-        }
         String fileName = fileName(file.getOriginalFilename());
-        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
-            throw new IdxWorkbookException("Only .xlsx files are accepted (IDX XBRL FinancialStatement-<period>-<TICKER>.xlsx)");
+        byte[] content;
+        String ticker;
+        try {
+            if (file.isEmpty()) {
+                throw new IdxWorkbookException("The uploaded file is empty");
+            }
+            if (!fileName.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
+                throw new IdxWorkbookException("Only .xlsx files are accepted (IDX XBRL FinancialStatement-<period>-<TICKER>.xlsx)");
+            }
+            content = file.getBytes();
+            // rejects a file nothing can be extracted from before anything is stored; a workbook the standard
+            // extraction cannot map is accepted (the full-text extraction stores it)
+            ticker = service.check(content, fileName).info().ticker();
+        } catch (IdxWorkbookException e) {
+            errors.record(new NewError(null, null, fileName, null, null, null, IngestionErrorRepository.Type.UPLOAD_REJECTED,
+                    e.getMessage(), null, false, null, "REJECTED", "HTTP 422: " + e.getMessage()));
+            throw e;
         }
-        byte[] content = file.getBytes();
-        service.prepare(content, fileName);   // rejects a wrong workbook before anything is stored
-        Submission submission = queue.submit(content, fileName, file.getContentType(), Requester.of(user));
+        Submission submission = queue.submit(content, fileName, file.getContentType(), ticker, Requester.of(user));
         IngestionJob job = submission.job();
         return ResponseEntity.status(submission.created() ? HttpStatus.ACCEPTED : HttpStatus.OK)
                 .location(URI.create("/api/v1/ingestions/" + job.id()))

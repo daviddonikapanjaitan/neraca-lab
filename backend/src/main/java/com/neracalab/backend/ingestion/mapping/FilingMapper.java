@@ -157,7 +157,8 @@ public final class FilingMapper {
         this.workbook = workbook;
         this.info = FilingInfo.from(workbook);
         this.taxonomy = workbook.taxonomy();
-        this.financial = taxonomy == IdxTaxonomy.FINANCIAL;
+        // the Financing Industry taxonomy has the Financial one's sheets (by order of liquidity, by nature)
+        this.financial = taxonomy == IdxTaxonomy.FINANCIAL || taxonomy == IdxTaxonomy.FINANCING;
         if (financial) {
             this.balanceSheet = data(IdxSheets.BALANCE_SHEET_LIQUIDITY).orElse(null);
             this.income = data(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX).or(() -> data(IdxSheets.INCOME_BY_NATURE)).orElse(null);
@@ -195,6 +196,60 @@ public final class FilingMapper {
             templateProblems.add("No cash flow data (" + code(IdxSheets.CASH_FLOW_DIRECT) + " / "
                     + code(IdxSheets.CASH_FLOW_INDIRECT) + ")");
         }
+        if (taxonomy == IdxTaxonomy.FINANCING) {
+            // its line items are not the bank template's: no rule here decides them
+            templateProblems.add("The line items of the Financing Industry taxonomy (" + code(IdxSheets.BALANCE_SHEET_LIQUIDITY)
+                    + ", " + code(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX) + ", " + code(IdxSheets.CASH_FLOW_DIRECT)
+                    + ") are not mapped by the rule-based extraction; the model decides them from the text of the workbook");
+        }
+    }
+
+    /**
+     * Profit or loss as filed, whatever its template: the sheet the rule-based extraction maps, else the other
+     * presentation (by nature for the General taxonomies, e.g. NSSS). Its totals - profit attributable to the
+     * parent, EPS - carry the same labels in both, so a published share count can be checked against either.
+     */
+    private StatementTable profitOrLossAsFiled() {
+        if (income != null) {
+            return income;
+        }
+        List<String> other = financial
+                ? List.of(IdxSheets.INCOME_BY_FUNCTION, IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX)
+                : List.of(IdxSheets.INCOME_BY_NATURE, IdxSheets.INCOME_BY_NATURE_BEFORE_TAX);
+        return other.stream().map(this::data).flatMap(Optional::stream).findFirst().orElse(null);
+    }
+
+    /**
+     * Whether profit or loss is presented by nature in a taxonomy whose rule-based extraction reads it by function
+     * (e.g. NSSS): expenses by type, no 'Cost of sales and revenue' and no 'Total gross profit' row.
+     */
+    public boolean incomeByNature() {
+        return !financial && income == null && profitOrLossAsFiled() != null;
+    }
+
+    /** The workbook as read (every sheet), for the full-text extraction. */
+    public IdxWorkbook workbook() {
+        return workbook;
+    }
+
+    /**
+     * Whether the statements of this workbook are the model's to decide by design: a taxonomy the rule-based
+     * extraction does not map (Financing Industry), or a profit or loss presented by nature where the rule-based
+     * extraction reads it by function (NSSS, MSIN), and nothing else wrong with the workbook. Such an upload goes
+     * straight to the full-text extraction; when that stores it, nothing went wrong.
+     */
+    public boolean decidedByModel() {
+        return templateProblems.size() == 1 && (taxonomy == IdxTaxonomy.FINANCING || incomeByNature());
+    }
+
+    /** Whether the workbook uses the Financial and Sharia Industry taxonomy (a bank). */
+    public boolean financial() {
+        return financial;
+    }
+
+    /** Factor of the filed per-share figures (1, or the rounding unit when the EPS is filed in it). */
+    public BigDecimal epsScale() {
+        return epsScale;
     }
 
     public IdxTaxonomy taxonomy() {
@@ -210,6 +265,14 @@ public final class FilingMapper {
     public List<String> warnings() {
         return warnings;
     }
+
+    /**
+     * Equity row between the parent's equity and the non-controlling interests: the equity of an entity combined
+     * under common control, restated into a comparative column (IMPC FY2023 in its FY2024 filing: 138,044,698,258;
+     * MSIN FY2021 in its FY2022 filing). Total equity includes it, the parent's equity does not; it is stored with
+     * the non-controlling interests, so that parent + non-controlling = total holds.
+     */
+    static final String PROFORMA_EQUITY = "Proforma equity";
 
     /** Fewest / most shares a listed company could have; an EPS-implied count outside means a wrong unit. */
     private static final BigDecimal MIN_PLAUSIBLE_SHARES = new BigDecimal("1e6");
@@ -246,7 +309,7 @@ public final class FilingMapper {
                 return new Units(BigDecimal.ONE, BigDecimal.ONE);
             }
             warnings.add("The workbook's EPS is filed in its rounding unit ('" + info.rounding() + "': basic EPS "
-                    + income.value(EPS_BASIC, 0).toPlainString() + " implies " + shares + " shares only when multiplied by "
+                    + profitOrLossAsFiled().value(EPS_BASIC, 0).toPlainString() + " implies " + shares + " shares only when multiplied by "
                     + declared.toPlainString() + "); per-share figures are multiplied by " + declared.toPlainString());
             return new Units(declared, declared);
         }
@@ -259,7 +322,11 @@ public final class FilingMapper {
 
     /** A per-share figure as filed, scaled to currency units per share. */
     private BigDecimal eps(String label, int ctx) {
-        BigDecimal raw = income.value(label, ctx);
+        return eps(income, label, ctx);
+    }
+
+    private BigDecimal eps(StatementTable profitOrLoss, String label, int ctx) {
+        BigDecimal raw = profitOrLoss.value(label, ctx);
         if (raw == null || epsScale.compareTo(BigDecimal.ONE) == 0) {
             return raw;
         }
@@ -267,17 +334,29 @@ public final class FilingMapper {
         return v.scale() < 0 ? v.setScale(0) : v;
     }
 
-    /** Profit attributable to the parent (as filed, unscaled) / basic EPS of the current period; null when not available. */
+    /**
+     * Profit attributable to the parent (as filed, unscaled) / basic EPS of the current period; null when not
+     * available. A current period whose EPS contradicts the sign of its profit (a loss filed without the sign,
+     * TINS FY2023) says nothing about the unit: the comparative column is used instead.
+     */
     private BigDecimal impliedSharesPerUnit() {
+        // the profit or loss as filed: a filing by nature has the same totals (MSIN FY2024: basic EPS 0.00000655
+        // for Rp 6.55, amounts in millions)
+        StatementTable income = profitOrLossAsFiled();
         if (income == null) {
             return null;
         }
-        BigDecimal parent = income.value(PROFIT_PARENT, 0);
-        BigDecimal eps = income.value(EPS_BASIC, 0);
-        if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
-            return null;
+        for (int ctx = 0; ctx <= 1; ctx++) {
+            BigDecimal parent = income.value(PROFIT_PARENT, ctx);
+            BigDecimal eps = income.value(EPS_BASIC, ctx);
+            if (parent != null && eps != null && parent.signum() != 0 && eps.signum() != 0 && parent.signum() == eps.signum()) {
+                return parent.divide(eps, MathContext.DECIMAL64);
+            }
+            if (ctx == 0 && (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0)) {
+                return null;       // no EPS or no profit in the current period: nothing to judge the unit by, as before
+            }
         }
-        return parent.divide(eps, MathContext.DECIMAL64);
+        return null;
     }
 
     private static boolean plausibleShares(BigDecimal shares) {
@@ -286,7 +365,7 @@ public final class FilingMapper {
 
     private boolean allAmountsMultipleOf(BigDecimal declared) {
         int amounts = 0;
-        for (StatementTable t : java.util.Arrays.asList(balanceSheet, income, cashFlow)) {
+        for (StatementTable t : java.util.Arrays.asList(balanceSheet, profitOrLossAsFiled(), cashFlow)) {
             if (t == null) {
                 continue;
             }
@@ -385,6 +464,81 @@ public final class FilingMapper {
      */
     public Optional<MappedStatement> incomeStatement(StatementColumn column, Map<String, IncomeLineCategory> overrides,
                                                      ShareCapital shares) {
+        Optional<MappedStatement> statement = incomeStatementReconciled(column, overrides, shares);
+        if (statement.isPresent() && !statement.get().unclassified().isEmpty()) {
+            Optional<MappedStatement> memo = withoutUnclassifiedMemoLines(column, overrides, shares, statement.get());
+            if (memo.isPresent()) {
+                return memo;
+            }
+        }
+        return statement;
+    }
+
+    /**
+     * Lines the mapper cannot classify that the filing's own totals do not include (BRI H1 2025 in its H1 2026
+     * filing: "Other insurance income" 4,466,709 and "Other insurance expenses" 4,051,819 beside insurance premiums
+     * 4,488,953 and claims 4,051,846; "Total profit from operation" 35,004,968 and profit before tax are exactly
+     * the other lines). Such a line is shown for information: it is ignored, with a warning, instead of being
+     * left to the agent - which could only find that no category makes the statement reconcile.
+     * <p>
+     * Only on arithmetic proof: with every unclassified line left out the statement passes every check, the
+     * reconciliation checks really ran (profit before tax, and for a bank its profit from operation, against the
+     * filed totals), and no combination of the unclassified amounts cancels out - two lines that offset each
+     * other could both belong to the totals, so those stay with the agent.
+     */
+    private Optional<MappedStatement> withoutUnclassifiedMemoLines(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                                   ShareCapital shares, MappedStatement statement) {
+        List<UnclassifiedLine> lines = statement.unclassified();
+        if (lines.size() > 4 || lines.stream().anyMatch(l -> l.value() == null) || cancelsOut(lines)) {
+            return Optional.empty();
+        }
+        Map<String, IncomeLineCategory> without = new LinkedHashMap<>(overrides);
+        lines.forEach(l -> without.put(l.label(), IncomeLineCategory.IGNORE));
+        MappedStatement retry = incomeStatementReconciled(column, without, shares).orElse(null);
+        if (retry == null || retry.hasErrors() || !reconciled(retry, "profit_before_tax")
+                || (financial && !reconciled(retry, "operating_income"))) {
+            return Optional.empty();
+        }
+        List<Check> checks = new ArrayList<>(retry.checks());
+        Map<String, String> how = new LinkedHashMap<>(retry.derivations());
+        for (UnclassifiedLine line : lines) {
+            checks.add(Check.warning("memo_line", "'" + line.label() + "' " + line.value().stripTrailingZeros().toPlainString()
+                    + " is not part of the filing's own totals in this column: " + (financial ? "'" + PROFIT_FROM_OPERATION
+                    + "' and " : "") + "profit before tax are exactly the other lines (shown for information); ignored"));
+        }
+        how.put("memo_line", lines.stream().map(UnclassifiedLine::label).toList() + " ignored: the filing's totals "
+                + "reconcile exactly without them");
+        return Optional.of(new MappedStatement(retry.table(), retry.column(), retry.period(), retry.sourceSheet(),
+                retry.values(), how, checks, retry.unclassified(), retry.rejected()));
+    }
+
+    /** The check of that rule ran against a filed total and passed. */
+    private static boolean reconciled(MappedStatement statement, String rule) {
+        return statement.checks().stream().anyMatch(c -> c.rule().equals(rule) && c.severity() == Check.Severity.OK);
+    }
+
+    /** Whether some of the amounts, each added or subtracted, cancel out (within the filing's rounding). */
+    private boolean cancelsOut(List<UnclassifiedLine> lines) {
+        BigDecimal tolerance = precision.compareTo(BigDecimal.ONE) > 0 ? precision : ZERO;
+        int combinations = (int) Math.pow(3, lines.size());
+        for (int code = 1; code < combinations; code++) {
+            BigDecimal sum = ZERO;
+            int rest = code;
+            for (UnclassifiedLine line : lines) {
+                int sign = rest % 3;       // 0: left out, 1: added, 2: subtracted
+                rest /= 3;
+                sum = sign == 1 ? sum.add(line.value()) : sign == 2 ? sum.subtract(line.value()) : sum;
+            }
+            if (sum.abs().compareTo(tolerance) <= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The income statement with an amount the filing reports twice counted once, see {@link #incomeStatement}. */
+    private Optional<MappedStatement> incomeStatementReconciled(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                                ShareCapital shares) {
         Optional<MappedStatement> filed = incomeStatementAsFiled(column, overrides, shares);
         if (filed.isPresent() && financial
                 && filed.get().checks().stream().anyMatch(c -> c.isError() && c.rule().equals("operating_income"))) {
@@ -466,12 +620,14 @@ public final class FilingMapper {
         Map<String, IncomeLineCategory> known = financial ? IncomeLineCategory.FINANCIAL_KNOWN : IncomeLineCategory.KNOWN;
         Map<String, BigDecimal> unsigned = new LinkedHashMap<>();   // label -> contribution to profit before tax
         Map<String, BigDecimal> signed = new LinkedHashMap<>();
+        Map<String, IncomeLineCategory> categories = new LinkedHashMap<>();
         for (StatementTable.Line line : income.lines()) {
             BigDecimal raw = asCost(line.label(), line.value(ctx));
             IncomeLineCategory category = overrides.getOrDefault(line.label(), known.get(line.label()));
             if (raw == null || raw.signum() == 0 || category == null || overrides.containsKey(line.label())) {
                 continue;   // a classification given by the agent is never second-guessed
             }
+            categories.putIfAbsent(line.label(), category);
             if (EXPENSE_CATEGORIES.contains(category)) {
                 unsigned.putIfAbsent(line.label(), raw.negate());
             } else if (INCOME_CATEGORIES.contains(category)) {
@@ -494,6 +650,43 @@ public final class FilingMapper {
                 pairs.add(new String[] {a, b});
             }
         }));
+        // two lines of the same kind with the same amount, neither a residual line (WIIM H1 2025 in its H1 2026
+        // filing: "Finance income" 5,797,003,720 and "Interest income" 5,797,003,720; profit before tax reconciles
+        // with the amount counted once): the line filed first is the repeat
+        List<String> labels = new ArrayList<>(unsigned.keySet());
+        for (int i = 0; i < labels.size(); i++) {
+            for (int j = i + 1; j < labels.size(); j++) {
+                String a = labels.get(i);
+                String b = labels.get(j);
+                if (!isResidual(a) && !isResidual(b) && categories.get(a) == categories.get(b)
+                        && unsigned.get(a).compareTo(unsigned.get(b)) == 0) {
+                    pairs.add(new String[] {a, b});
+                }
+            }
+        }
+        // a residual line that repeats the net of the other residual lines (TINS FY2024 in its FY2025 filing:
+        // "Other expenses" 18,883 = -("Other income" 2,250 + "Other gains (losses)" -21,133); profit before tax
+        // 1,657,269 reconciles with the two, not with all three)
+        Map<String, BigDecimal> residual = new LinkedHashMap<>();
+        unsigned.forEach((label, contribution) -> {
+            if (isResidual(label)) {
+                residual.put(label, contribution);
+            }
+        });
+        signed.forEach((label, value) -> {
+            if (isResidual(label)) {
+                residual.putIfAbsent(label, value);
+            }
+        });
+        if (residual.size() >= 3) {
+            residual.forEach((label, contribution) -> {
+                List<String> others = residual.keySet().stream().filter(l -> !l.equals(label)).toList();
+                BigDecimal net = others.stream().map(residual::get).reduce(ZERO, BigDecimal::add);
+                if (unsigned.containsKey(label) && net.compareTo(contribution) == 0) {
+                    pairs.add(new String[] {label, String.join(" + ", others)});
+                }
+            });
+        }
         return pairs;
     }
 
@@ -528,6 +721,9 @@ public final class FilingMapper {
             if (category == null) {
                 if (profitIndex >= 0 && i > profitIndex) {
                     continue;   // other comprehensive income / comprehensive totals: not profit or loss
+                }
+                if (raw.signum() == 0) {
+                    continue;   // filed as 0 (BBCA files 0 on its unused insurance lines): nothing to classify
                 }
                 unclassified.add(new UnclassifiedLine(line.label(), amount(raw)));
                 continue;
@@ -598,8 +794,8 @@ public final class FilingMapper {
         BigDecimal ebitda = ebit == null || depreciation == null || amortization == null ? null
                 : ebit.add(depreciation).add(amortization);
 
-        BigDecimal basicEps = sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx));
-        BigDecimal dilutedEps = sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx));
+        BigDecimal basicEps = signOfProfit(sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx)), parent, checks, "Basic");
+        BigDecimal dilutedEps = signOfProfit(sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx)), parent, checks, "Diluted");
         BigDecimal basicShares = shares == null ? null
                 : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
         BigDecimal[] reconciled = reconcileEps(basicEps, dilutedEps, parent, basicShares, checks);
@@ -712,8 +908,8 @@ public final class FilingMapper {
 
         BigDecimal depreciation = depreciation(column);
         BigDecimal amortization = amortization(column);
-        BigDecimal basicEps = sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx));
-        BigDecimal dilutedEps = sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx));
+        BigDecimal basicEps = signOfProfit(sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx)), parent, checks, "Basic");
+        BigDecimal dilutedEps = signOfProfit(sumNullable(eps(EPS_DILUTED, ctx), eps(EPS_DILUTED_DISC, ctx)), parent, checks, "Diluted");
         BigDecimal basicShares = shares == null ? null
                 : column == StatementColumn.CURRENT_PERIOD ? shares.weightedCurrent() : shares.weightedPrior();
         BigDecimal[] reconciled = reconcileEps(basicEps, dilutedEps, parent, basicShares, checks);
@@ -839,6 +1035,20 @@ public final class FilingMapper {
         return fits;
     }
 
+    /**
+     * An EPS filed without the sign of its loss (TINS FY2023: 60 per share for a loss of 449,690 million attributable
+     * to the parent, filed as 0.00006 in millions) or with a wrong one: earnings per share is the profit attributable
+     * to the parent divided by a share count, so it has the profit's sign. Stored with it; a warning says so.
+     */
+    private static BigDecimal signOfProfit(BigDecimal eps, BigDecimal parent, List<Check> checks, String which) {
+        if (eps == null || parent == null || eps.signum() == 0 || parent.signum() == 0 || eps.signum() == parent.signum()) {
+            return eps;
+        }
+        checks.add(Check.warning("eps_sign", which + " EPS " + eps.toPlainString() + " is filed with the opposite sign of the "
+                + "profit attributable to the parent (" + parent.toPlainString() + "); stored as " + eps.negate().toPlainString()));
+        return eps.negate();
+    }
+
     private static final BigDecimal EPS_MISMATCH = new BigDecimal("3");
 
     /**
@@ -934,7 +1144,8 @@ public final class FilingMapper {
         BigDecimal nonCurrentLiabilities = req(b, "Total non-current liabilities", ctx, checks);
         BigDecimal totalLiabilities = req(b, "Total liabilities", ctx, checks);
         BigDecimal parentEquity = req(b, "Total equity attributable to equity owners of parent entity", ctx, checks);
-        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx);
+        BigDecimal proformaEquity = sum(b, List.of(PROFORMA_EQUITY), ctx);
+        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx).add(proformaEquity);
         BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
         BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities and equity", ctx));
         if (currentAssets != null && nonCurrentAssets != null && totalAssets != null) {
@@ -952,6 +1163,11 @@ public final class FilingMapper {
         }
         if (parentEquity != null && totalEquity != null) {
             checks.add(equal("equity", "parent equity + non-controlling interests = total equity", parentEquity.add(nci), totalEquity));
+        }
+        if (proformaEquity.signum() != 0) {
+            checks.add(Check.warning("proforma_equity", "'" + PROFORMA_EQUITY + "' " + proformaEquity.stripTrailingZeros().toPlainString()
+                    + " (equity of an entity combined under common control, restated into this column) is not attributable"
+                    + " to the owners of the parent; counted with the non-controlling interests"));
         }
         if (!b.duplicates().isEmpty()) {
             checks.add(Check.warning("duplicates", "Labels reported on more than one row: " + b.duplicates()));
@@ -1032,7 +1248,8 @@ public final class FilingMapper {
         BigDecimal liabilities = req(b, "Total liabilities", ctx, checks);
         BigDecimal syirkah = sum(b, List.of("Total temporary syirkah funds"), ctx);
         BigDecimal parentEquity = req(b, "Total equity attributable to equity owners of parent entity", ctx, checks);
-        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx);
+        BigDecimal proformaEquity = sum(b, List.of(PROFORMA_EQUITY), ctx);
+        BigDecimal nci = sum(b, List.of("Non-controlling interests"), ctx).add(proformaEquity);
         BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
         BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities, temporary syirkah funds and equity", ctx));
         BigDecimal syirkahReported = sumOrNull(b, List.of("Total temporary syirkah funds"), ctx);
@@ -1046,6 +1263,11 @@ public final class FilingMapper {
         }
         if (parentEquity != null && totalEquity != null) {
             checks.add(equal("equity", "parent equity + non-controlling interests = total equity", parentEquity.add(nci), totalEquity));
+        }
+        if (proformaEquity.signum() != 0) {
+            checks.add(Check.warning("proforma_equity", "'" + PROFORMA_EQUITY + "' " + proformaEquity.stripTrailingZeros().toPlainString()
+                    + " (equity of an entity combined under common control, restated into this column) is not attributable"
+                    + " to the owners of the parent; counted with the non-controlling interests"));
         }
         if (!b.duplicates().isEmpty()) {
             checks.add(Check.warning("duplicates", "Labels reported on more than one row: " + b.duplicates()));
@@ -1307,6 +1529,8 @@ public final class FilingMapper {
         }
         BigDecimal sum = ZERO;
         List<String> unknown = new ArrayList<>();
+        Map<String, BigDecimal> residual = new LinkedHashMap<>();
+        Map<String, BigDecimal> specific = new LinkedHashMap<>();
         for (StatementTable.Line line : c.lines().subList(from + 1, to)) {
             BigDecimal raw = line.value(ctx);
             if (raw == null) {
@@ -1317,10 +1541,32 @@ public final class FilingMapper {
                 unknown.add(line.label());
             } else {
                 sum = sum.add(signed);
+                if (signed.signum() != 0) {
+                    (isResidual(line.label()) ? residual : specific).putIfAbsent(line.label(), signed);
+                }
             }
         }
         if (!unknown.isEmpty()) {
             return List.of(Check.error(name + "_section", "Cannot determine the cash direction of " + unknown));
+        }
+        // one line that the filing's section total does not include: the total is exactly the sum of the other
+        // lines. A residual "Other cash ..." line shown for information (TINS FY2024 in its FY2025 filing: "Other
+        // cash inflows (outflows) from investing activities" 25,395 beside a total of -453,950), or a line that
+        // repeats another one (BRI's comparatives: "Withdrawal of financial assets amortized cost investments"
+        // 9,884,450 beside "Withdrawal (placement) of marketable securities" 9,884,449 in FY2024; "Increase
+        // (decrease) in securities issued" 13,426,357 beside "Proceeds from bonds issuance" 13,426,357 in H1 2025).
+        // Residual lines are tried first. The statement's fields are read from their own rows, not from this sum.
+        if (total != null && sum.compareTo(total) != 0) {
+            Map<String, BigDecimal> candidates = new LinkedHashMap<>(residual);
+            candidates.putAll(specific);
+            for (Map.Entry<String, BigDecimal> extra : candidates.entrySet()) {
+                if (sum.subtract(extra.getValue()).compareTo(total) == 0) {
+                    return List.of(Check.warning(name + "_section", "'" + extra.getKey() + "' "
+                            + extra.getValue().stripTrailingZeros().toPlainString() + " is not part of the filing's " + name
+                            + " total " + total.stripTrailingZeros().toPlainString() + " in this column (the total is the sum "
+                            + "of the other lines); not counted"));
+                }
+            }
         }
         return List.of(equal(name + "_section", "sum of " + name + " lines (payments negative) = " + name + " total", sum, total));
     }
@@ -1535,6 +1781,24 @@ public final class FilingMapper {
             return Optional.empty();
         }
         List<Check> checks = new ArrayList<>();
+        // one line that the breakdown's own total does not include: the reported total - and the revenue of the
+        // income statement - are exactly the sum of the other lines (MIKA's comparatives: an unnamed "Service
+        // revenue 5" of 602,309,854,653, the amount of "Jasa tenaga ahli" again, in FY2024; one of 261,182,623,893
+        // in H1 2025; the services subtotal and the total are the four named lines). Not counted; a warning says so.
+        BigDecimal filed = lines.stream().map(SegmentLine::revenue).reduce(ZERO, BigDecimal::add);
+        if (total != null && incomeRevenue != null && total.compareTo(incomeRevenue) == 0 && filed.compareTo(total) != 0) {
+            for (int i = 0; i < lines.size(); i++) {
+                if (lines.get(i).revenue().signum() != 0 && filed.subtract(lines.get(i).revenue()).compareTo(total) == 0) {
+                    SegmentLine extra = lines.remove(i);
+                    String slot = slots.remove(i);
+                    checks.add(Check.warning("segment_line", "'" + (extra.name().equals(slot) ? slot : extra.name() + "' ('" + slot + "')")
+                            + " " + extra.revenue().stripTrailingZeros().toPlainString() + " is not part of the breakdown's total "
+                            + total.stripTrailingZeros().toPlainString() + " in this column (the total and the revenue are the sum "
+                            + "of the other lines); not counted"));
+                    break;
+                }
+            }
+        }
         lines = distinctSegmentNames(lines, slots, checks);
         BigDecimal sum = lines.stream().map(SegmentLine::revenue).reduce(ZERO, BigDecimal::add);
         if (total != null) {
@@ -1700,9 +1964,9 @@ public final class FilingMapper {
 
         // weighted shares only for the period whose EPS gave the count: another period's EPS may use another
         // denominator (INDY's FY2022 EPS implies 5,210,191,995 shares, FY2023's exactly 5,202,692,000)
-        BigDecimal weightedCurrent = epsShares == null ? weighted(currentYear, par)
+        BigDecimal weightedCurrent = epsShares == null ? weighted(currentYear, treasuryStartEnd.get(IdxSheets.EQUITY), par)
                 : epsShares.column() == StatementColumn.CURRENT_PERIOD ? epsShares.shares() : null;
-        BigDecimal weightedPrior = epsShares == null ? weighted(priorYear, par)
+        BigDecimal weightedPrior = epsShares == null ? weighted(priorYear, treasuryStartEnd.get(IdxSheets.EQUITY_PRIOR_YEAR), par)
                 : epsShares.column() == StatementColumn.PRIOR_PERIOD ? epsShares.shares() : null;
         Map<LocalDate, ShareAt> byDate = new LinkedHashMap<>();
         for (Position p : positions) {
@@ -1808,11 +2072,15 @@ public final class FilingMapper {
                 : date.equals(info.current().start().minusDays(1)) ? StatementColumn.CURRENT_PERIOD
                 : date.equals(info.prior().start().minusDays(1)) ? StatementColumn.PRIOR_PERIOD : null;
         int ctx = column == null ? -1 : durationIndex(column);
-        if (income == null || ctx < 0) {
+        StatementTable profitOrLoss = profitOrLossAsFiled();
+        if (ctx < 0) {
             return "no profit or loss period of this filing opens or closes on that date";
         }
-        BigDecimal parent = amount(income.value(PROFIT_PARENT, ctx));
-        BigDecimal eps = sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx));
+        if (profitOrLoss == null) {
+            return "the filing has no profit or loss to check the count against";
+        }
+        BigDecimal parent = amount(profitOrLoss.value(PROFIT_PARENT, ctx));
+        BigDecimal eps = sumNullable(eps(profitOrLoss, EPS_BASIC, ctx), eps(profitOrLoss, EPS_BASIC_DISC, ctx));
         if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
             return "the " + period(column).key() + " profit attributable to the parent and basic EPS do not allow a check";
         }
@@ -1888,10 +2156,19 @@ public final class FilingMapper {
                         + " / basic EPS " + eps.toPlainString() + " = " + shares.toPlainString() + " shares outstanding");
     }
 
-    /** Weighted shares = shares outstanding when share capital did not change during the period. */
-    private static BigDecimal weighted(BigDecimal[] startEnd, BigDecimal par) {
+    /**
+     * Weighted shares = shares outstanding when share capital did not change during the period and the company
+     * held no treasury stock in it. Treasury shares are not outstanding and their count is not in the filing, so
+     * with treasury stock at the start or the end of the period the weighted count is unknown (ULTJ FY2022:
+     * 11,553,520,000 issued shares of which 1,155,352,800 bought back; its EPS 92 is per outstanding share).
+     */
+    private static BigDecimal weighted(BigDecimal[] startEnd, BigDecimal[] treasuryStartEnd, BigDecimal par) {
         if (par == null || startEnd == null || startEnd[0] == null || startEnd[1] == null
                 || startEnd[0].compareTo(startEnd[1]) != 0) {
+            return null;
+        }
+        if (treasuryStartEnd != null && ((treasuryStartEnd[0] != null && treasuryStartEnd[0].signum() != 0)
+                || (treasuryStartEnd[1] != null && treasuryStartEnd[1].signum() != 0))) {
             return null;
         }
         return startEnd[1].divide(par);
@@ -1948,6 +2225,7 @@ public final class FilingMapper {
             case PROPERTY -> "Property and Real Estate Industry";
             case INFRASTRUCTURE -> "Infrastructure Industry";
             case FINANCIAL -> "Financial and Sharia Industry";
+            case FINANCING -> "Financing Industry";
         };
     }
 

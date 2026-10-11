@@ -18,14 +18,17 @@ import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobRepository.Snapshot;
 import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.IngestionJobType;
+import com.neracalab.backend.job.JobProperties;
+import com.neracalab.backend.job.JobWorkerPool;
 import com.neracalab.backend.job.Requester;
-import com.neracalab.backend.job.SerialJobWorker;
 import com.neracalab.backend.price.provider.PriceProviderException;
 
 /**
- * Background runs of the screening data ETL ({@code ingestion_job} type FUNDAMENTALS), one at a
- * time: today's market data of every listing, then the fundamentals that are due (or all with
- * {@code full}). At most one active run per exchange; a second request returns it.
+ * Background runs of the screening data ETL ({@code ingestion_job} type FUNDAMENTALS): today's market
+ * data of every listing, then the fundamentals that are due (or all with {@code full}). At most one
+ * active run per exchange (a second request returns it); runs of different exchanges run at the same
+ * time, up to {@code neracalab.jobs.workers} (5). Their requests to Yahoo Finance stay paced, one at a
+ * time ({@code PacedHttpClient}).
  */
 @Component
 public class FundamentalsQueue implements SmartLifecycle {
@@ -40,13 +43,13 @@ public class FundamentalsQueue implements SmartLifecycle {
 
     private final FundamentalEtlService service;
     private final IngestionJobRepository jobs;
-    private final SerialJobWorker worker;
+    private final JobWorkerPool worker;
     private final Map<UUID, Task> tasks = new ConcurrentHashMap<>();
 
-    public FundamentalsQueue(FundamentalEtlService service, IngestionJobRepository jobs) {
+    public FundamentalsQueue(FundamentalEtlService service, IngestionJobRepository jobs, JobProperties properties) {
         this.service = service;
         this.jobs = jobs;
-        this.worker = new SerialJobWorker("screening-data-etl", jobs, this::process);
+        this.worker = new JobWorkerPool("screening-data-etl", properties.workers(), jobs, this::process);
     }
 
     /**

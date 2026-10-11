@@ -15,8 +15,8 @@ import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobRepository.Snapshot;
 import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.IngestionJobType;
+import com.neracalab.backend.job.JobWorkerPool;
 import com.neracalab.backend.job.Requester;
-import com.neracalab.backend.job.SerialJobWorker;
 import com.neracalab.backend.screening.ScreeningRepository.RunParameters;
 
 /**
@@ -34,7 +34,7 @@ public class ScreeningQueue implements SmartLifecycle {
     private final IngestionJobRepository jobs;
     private final ScreeningProperties properties;
     private final TransactionTemplate transaction;
-    private final SerialJobWorker worker;
+    private final JobWorkerPool worker;
 
     public ScreeningQueue(ScreeningService service, ScreeningRepository repository, IngestionJobRepository jobs,
                           ScreeningProperties properties, TransactionTemplate transaction) {
@@ -42,7 +42,7 @@ public class ScreeningQueue implements SmartLifecycle {
         this.jobs = jobs;
         this.properties = properties;
         this.transaction = transaction;
-        this.worker = new SerialJobWorker("screening", jobs, service::run);
+        this.worker = new JobWorkerPool("screening", 1, jobs, service::run);
     }
 
     /** Queues a screening of a market-cap tier; the parameters are validated by the caller. */

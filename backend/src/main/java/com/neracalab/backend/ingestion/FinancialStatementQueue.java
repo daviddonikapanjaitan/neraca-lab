@@ -1,8 +1,13 @@
 package com.neracalab.backend.ingestion;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -17,6 +22,8 @@ import org.springframework.stereotype.Component;
 import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.ingestion.agent.IngestionSession;
 import com.neracalab.backend.ingestion.agent.JobDeadline;
+import com.neracalab.backend.ingestion.error.IngestionErrorRepository;
+import com.neracalab.backend.ingestion.error.IngestionErrorRepository.NewError;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository;
 import com.neracalab.backend.ingestion.file.IngestionFileRepository.StoredFile;
 import com.neracalab.backend.ingestion.mapping.FilingInfo;
@@ -25,18 +32,31 @@ import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobRepository.NewUpload;
 import com.neracalab.backend.job.IngestionJobStatus;
+import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
+import com.neracalab.backend.job.WorkerThreads;
 
 /**
  * Asynchronous financial statement uploads. {@link #submit} stores the workbook in
  * {@code ingestion_file} (once per checksum: a known file is reused, not saved again), records a
- * QUEUED job in {@code ingestion_job} and returns at once; ONE worker thread then reads the stored
- * workbook and lets the AI agent store it, writing its progress to the job row.
+ * QUEUED job in {@code ingestion_job} and returns at once; a worker thread then reads the stored
+ * workbook and lets the AI agent store it, writing its progress to the job row. When that standard
+ * extraction does not store the workbook (it cannot map it, leaves open items, fails or runs longer than
+ * {@code neracalab.ingestion.fallback.after}), the full-text extraction takes over ({@link IngestionService#run});
+ * every such upload is recorded in {@code ingestion_error}, the work list of Claude Code.
  * <p>
- * One worker: filings are stored one after the other, so two filings of the same company never
- * race on the company row, and the AI provider sees one agent at a time. At most one active job
- * per stored file (an identical upload while it is queued / running returns that job). The queue
- * is in memory: jobs still active when the application stops are failed at the next start
+ * Several workers ({@code neracalab.jobs.workers}, 5): that many filings are stored at the same time,
+ * each by its own agent, also filings of the same company (five years of one company uploaded
+ * together). Their write steps never overlap ({@code IngestionRepository.companyLock}), so the stored
+ * data is what storing them one after the other in some order gives.
+ * <p>
+ * With {@code neracalab.ingestion.same-company-in-order=true} filings of the SAME company are stored
+ * one after the other in upload order instead (other companies still beside them): only the first
+ * waiting filing of a company is offered to the workers, the next one follows when it is done. The
+ * stored data does not depend on it (also a share split restated by a later filing ends the same in
+ * either order); in order, a job never verifies a period another filing is writing. At most one
+ * active job per stored file (an identical upload while it is queued / running returns that job).
+ * The queue is in memory: jobs still active when the application stops are failed at the next start
  * ({@code IngestionJobRecovery}); upload the file again (the stored file is reused).
  */
 @Component
@@ -48,36 +68,71 @@ public class FinancialStatementQueue implements SmartLifecycle {
     public record Submission(IngestionJob job, boolean created) {
     }
 
-    private record Task(UUID jobId, long fileId, String fileName) {
+    /** @param company the filing's company (ticker, upper case; "" when the workbook does not name one) */
+    private record Task(UUID jobId, long fileId, String fileName, String company) {
     }
 
     private final IngestionService service;
     private final IngestionFileRepository files;
     private final IngestionJobRepository jobs;
+    private final IngestionErrorRepository errors;
+    private final IngestionUsageRecorder usage;
     private final Duration jobTimeout;
+    private final boolean sameCompanyInOrder;
+    /** Filings a worker may take; with {@link #sameCompanyInOrder} at most one per company. */
     private final LinkedBlockingQueue<Task> pending = new LinkedBlockingQueue<>();
-    private volatile Thread worker;
+    /**
+     * Only with {@link #sameCompanyInOrder}: companies with a filing in {@link #pending} or being stored, each
+     * with its filings waiting behind that one (upload order); guarded by itself.
+     */
+    private final Map<String, Deque<Task>> companies = new HashMap<>();
+    private final WorkerThreads workers;
 
     /**
-     * @param jobTimeout longest a job may run, from the moment it starts running (time waiting in the queue does
-     *                   not count); a job still running then is stopped and FAILED
+     * @param usage              records the model calls of every job with their tokens and cost ({@code llm_usage})
+     * @param jobTimeout         longest a job may run, from the moment it starts running (time waiting in the queue
+     *                           does not count); a job still running then is stopped and FAILED
+     * @param sameCompanyInOrder store the filings of one company one after the other in upload order instead of
+     *                           at the same time
      */
     public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
-                                   @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout) {
+                                   IngestionErrorRepository errors, IngestionUsageRecorder usage,
+                                   @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout,
+                                   @Value("${neracalab.ingestion.same-company-in-order:false}") boolean sameCompanyInOrder,
+                                   JobProperties properties) {
         this.service = service;
         this.files = files;
         this.jobs = jobs;
+        this.errors = errors;
+        this.usage = usage;
         this.jobTimeout = jobTimeout;
+        this.sameCompanyInOrder = sameCompanyInOrder;
+        this.workers = new WorkerThreads("financial-statement-ingestion", properties.workers(), this::work);
     }
 
     // ------------------------------------------------------------------ API
+
+    /** As {@link #submit(byte[], String, String, String, Requester)}; the company is read from the workbook. */
+    public Submission submit(byte[] content, String fileName, String contentType, Requester requestedBy) {
+        String ticker;
+        try {
+            ticker = service.open(content, fileName).info().ticker();
+        } catch (IdxWorkbookException e) {
+            ticker = null;      // the job reports the invalid workbook
+        }
+        return submit(content, fileName, contentType, ticker, requestedBy);
+    }
 
     /**
      * Stores the file (or reuses the stored one with the same checksum) and queues its ingestion,
      * recorded as started by {@code requestedBy}. When the same file is already queued / running,
      * that job is returned (it keeps its own requester).
+     *
+     * @param ticker the filing's company ({@code IngestionService.open}); with
+     *               {@code same-company-in-order} its filings are stored one after the other, in upload order
      */
-    public synchronized Submission submit(byte[] content, String fileName, String contentType, Requester requestedBy) {
+    public synchronized Submission submit(byte[] content, String fileName, String contentType, String ticker,
+                                          Requester requestedBy) {
         StoredFile file = files.store(content, fileName, contentType);
         Optional<UUID> active = jobs.activeUploadOf(file.fileId());
         if (active.isPresent()) {
@@ -90,15 +145,28 @@ public class FinancialStatementQueue implements SmartLifecycle {
         String name = fileName.length() <= IngestionFileRepository.NAME_LENGTH
                 ? fileName : fileName.substring(0, IngestionFileRepository.NAME_LENGTH);
         jobs.insertUpload(new NewUpload(id, file.fileId(), name, file.reused(), "Waiting in the upload queue", requestedBy));
-        pending.add(new Task(id, file.fileId(), name));
+        Task task = new Task(id, file.fileId(), name, ticker == null ? "" : ticker.trim().toUpperCase(Locale.ROOT));
+        synchronized (companies) {
+            Deque<Task> behind = sameCompanyInOrder ? companies.get(task.company()) : null;
+            if (behind != null) {
+                behind.add(task);       // offered to the workers when the company's filings before it are done
+            } else {
+                if (sameCompanyInOrder) {
+                    companies.put(task.company(), new ArrayDeque<>());
+                }
+                pending.add(task);
+            }
+        }
         log.info("upload job {} queued by {}: {} (file {}{})", id, requestedBy == null ? "-" : requestedBy.username(),
                 name, file.fileId(), file.reused() ? ", reused" : "");
         return new Submission(jobs.find(id).orElseThrow(), true);
     }
 
-    /** Jobs waiting in the queue (excluding the running one). */
+    /** Jobs waiting in the queue (excluding the running ones). */
     public int pendingCount() {
-        return pending.size();
+        synchronized (companies) {
+            return pending.size() + companies.values().stream().mapToInt(Deque::size).sum();
+        }
     }
 
     // ------------------------------------------------------------------ worker
@@ -117,45 +185,137 @@ public class FinancialStatementQueue implements SmartLifecycle {
                 String message = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
                 log.error("upload job {} failed", task.jobId(), e);
                 finish(task.jobId(), IngestionJobStatus.FAILED, "Failed", message, null);
+            } finally {
+                offerNextOf(task.company());
+            }
+        }
+    }
+
+    /** The company's filing is done: its next waiting filing (same-company-in-order) may be taken by a worker. */
+    private void offerNextOf(String company) {
+        synchronized (companies) {
+            Deque<Task> behind = companies.get(company);
+            Task next = behind == null ? null : behind.poll();
+            if (next == null) {
+                companies.remove(company);
+            } else {
+                pending.add(next);
             }
         }
     }
 
     private void process(Task task) {
         UUID id = task.jobId();
-        JobDeadline deadline = JobDeadline.after(jobTimeout);
         jobs.running(id, "Reading the workbook");
         byte[] content = files.content(task.fileId())
                 .orElseThrow(() -> new IllegalStateException("Stored file " + task.fileId() + " not found"));
 
         IngestionSession session;
         try {
-            session = service.prepare(content, task.fileName());
+            session = service.open(content, task.fileName());
         } catch (IdxWorkbookException e) {
             finish(id, IngestionJobStatus.FAILED, "Invalid workbook", e.getMessage(), null);
+            errors.record(new NewError(id, task.fileId(), task.fileName(), Exchange.IDX.code(), null, null,
+                    IngestionErrorRepository.Type.UPLOAD_REJECTED, e.getMessage(), null, false, null, "FAILED",
+                    "Invalid workbook: " + e.getMessage()));
             return;
         }
-        session.deadline(deadline);
+        Duration standardLimit = service.standardLimit(jobTimeout);
+        session.deadline(JobDeadline.after(standardLimit));
         FilingInfo info = session.info();
         String filing = info.ticker() + " " + info.current().key();
         String ticker = info.ticker() != null && info.ticker().length() <= 20 ? info.ticker() : null;
-        jobs.progress(id, "AI agent is storing " + filing + " (usually 1-2 minutes, stopped after "
-                + minutes(jobTimeout) + ")", Exchange.IDX.code(), ticker);
+        if (usage != null) {
+            // every model call of the job (standard and full-text extraction) is recorded with its tokens and cost
+            session.modelCalls(usage.forJob(id, ticker));
+        }
+        jobs.progress(id, "AI agent is storing " + filing + " (usually 1-2 minutes, " + (service.fallbackEnabled()
+                ? "the full-text extraction takes over after " : "stopped after ") + minutes(standardLimit) + ")",
+                Exchange.IDX.code(), ticker);
 
-        IngestionResponse response = service.run(session);
+        IngestionResponse response = service.run(session, stage -> jobs.progress(id, stage, null, null));
         if (Thread.currentThread().isInterrupted()) {
             finish(id, IngestionJobStatus.FAILED, "Interrupted", "Stopped: the application is shutting down", response);
             return;
         }
+        // the full-text extraction took over: say so, with the columns the model mapped
+        String by = response.fallback() == null ? ""
+                : response.fallback().columns().isEmpty() ? "; full-text extraction took over"
+                : "; full-text extraction of " + String.join(", ", response.fallback().columns());
+        IngestionJobStatus status;
+        String stage;
+        String message;
         switch (response.status()) {
-            case COMPLETED -> finish(id, IngestionJobStatus.SUCCEEDED,
-                    "Stored and verified " + filing + summary(response), null, response);
-            case INCOMPLETE -> finish(id, IngestionJobStatus.INCOMPLETE,
-                    "Stored " + filing + " with open items" + summary(response), openItems(response), response);
-            case FAILED -> finish(id, IngestionJobStatus.FAILED, deadline.passed()
-                    ? "Stopped after the " + minutes(jobTimeout) + " limit on " + filing + summary(response)
-                    : "AI agent failed on " + filing, response.error(), response);
+            case COMPLETED -> {
+                status = IngestionJobStatus.SUCCEEDED;
+                stage = "Stored and verified " + filing + summary(response) + by;
+                message = null;
+            }
+            case INCOMPLETE -> {
+                status = IngestionJobStatus.INCOMPLETE;
+                stage = "Stored " + filing + " with open items" + summary(response) + by;
+                message = openItems(response);
+            }
+            default -> {
+                status = IngestionJobStatus.FAILED;
+                stage = session.deadline().passed()
+                        ? "Stopped after the " + minutes(session.deadline().limit()) + " limit on " + filing + summary(response)
+                        : response.fallback() != null ? "Full-text extraction failed on " + filing
+                        : "AI agent failed on " + filing;
+                message = response.error();
+            }
         }
+        finish(id, status, stage, message, response);
+        recordError(task, session, response, status, stage, message);
+    }
+
+    /**
+     * Records an upload the standard extraction did not store cleanly in {@code ingestion_error}: one that the
+     * full-text extraction had to take over (whatever the end), and one that ended INCOMPLETE or FAILED. The row
+     * carries the model of the full-text extraction, why it stopped when it did, and every model call of the job
+     * that failed ({@code details.failedModelCalls}).
+     */
+    private void recordError(Task task, IngestionSession session, IngestionResponse response, IngestionJobStatus status,
+                             String stage, String message) {
+        IngestionResponse.Fallback fallback = response.fallback();
+        if (fallback == null && status == IngestionJobStatus.SUCCEEDED) {
+            return;
+        }
+        if (status == IngestionJobStatus.SUCCEEDED && session.mapper().decidedByModel()) {
+            return;     // a taxonomy the model decides by design, stored and verified: not an error
+        }
+        IngestionErrorRepository.Type type = fallback != null ? IngestionErrorRepository.Type.valueOf(fallback.trigger())
+                : status == IngestionJobStatus.INCOMPLETE ? IngestionErrorRepository.Type.INCOMPLETE
+                : session.deadline().passed() ? IngestionErrorRepository.Type.SLOW_EXTRACTION
+                : IngestionErrorRepository.Type.EXTRACTION_FAILED;
+        String what = fallback != null ? fallback.reason() : message;
+        Map<String, Object> details = new java.util.LinkedHashMap<>();
+        if (response.verification() != null) {
+            details.put("pending", response.verification().pending());
+            details.put("problems", response.verification().problems());
+        }
+        if (response.error() != null) {
+            details.put("error", response.error());
+        }
+        if (fallback != null) {
+            details.put("fullTextExtraction", fallback);
+        }
+        // the model calls that failed (a timeout, a provider error), of the standard extraction and of the
+        // full-text extraction: stage, model and what the provider said
+        try {
+            List<IngestionJob.FailedCall> failedCalls = jobs.failedModelCalls(task.jobId());
+            if (failedCalls != null && !failedCalls.isEmpty()) {
+                details.put("failedModelCalls", failedCalls);
+            }
+        } catch (RuntimeException e) {
+            log.warn("upload job {}: failed model calls not read for the error log: {}", task.jobId(), e.getMessage());
+        }
+        details.put("notes", response.notes());
+        FilingInfo info = session.info();
+        errors.record(new NewError(task.jobId(), task.fileId(), task.fileName(), Exchange.IDX.code(), info.ticker(),
+                info.current().key(), type, what, details, fallback != null,
+                fallback == null || fallback.columns().isEmpty() ? null : String.join(", ", fallback.columns()),
+                status.name(), message == null ? stage : stage + ": " + message));
     }
 
     /** "5 minutes", "1 minute", "90 seconds", "1 second" */
@@ -195,28 +355,16 @@ public class FinancialStatementQueue implements SmartLifecycle {
 
     @Override
     public void start() {
-        Thread thread = new Thread(this::work, "financial-statement-ingestion");
-        thread.setDaemon(true);
-        worker = thread;
-        thread.start();
+        workers.start();
     }
 
     @Override
     public void stop() {
-        Thread thread = worker;
-        worker = null;
-        if (thread != null) {
-            thread.interrupt();
-            try {
-                thread.join(Duration.ofSeconds(10));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        workers.stop();
     }
 
     @Override
     public boolean isRunning() {
-        return worker != null;
+        return workers.isRunning();
     }
 }

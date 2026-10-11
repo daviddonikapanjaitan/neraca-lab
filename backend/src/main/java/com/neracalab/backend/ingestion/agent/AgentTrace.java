@@ -25,6 +25,8 @@ public final class AgentTrace {
     private final AtomicInteger modelRetries = new AtomicInteger();
     private final java.util.Set<String> modelsUsed = new java.util.concurrent.ConcurrentSkipListSet<>();
     private final JobDeadline deadline;
+    private final ModelCallListener listener;
+    private volatile String stage = ModelCallListener.EXECUTE;
 
     public AgentTrace() {
         this(JobDeadline.NONE);
@@ -32,10 +34,29 @@ public final class AgentTrace {
 
     /** @param deadline the time limit of the run: model calls and tools stop at it */
     public AgentTrace(JobDeadline deadline) {
-        this.deadline = deadline;
+        this(deadline, ModelCallListener.NONE);
     }
 
-    JobDeadline deadline() {
+    /** @param listener told every model call of the run (tokens and cost of the job) */
+    public AgentTrace(JobDeadline deadline, ModelCallListener listener) {
+        this.deadline = deadline;
+        this.listener = listener == null ? ModelCallListener.NONE : listener;
+    }
+
+    /** What the next model calls are for ({@link ModelCallListener#PLAN}, ...); the model calls of a run are sequential. */
+    public void stage(String stage) {
+        this.stage = stage;
+    }
+
+    public String stage() {
+        return stage;
+    }
+
+    public ModelCallListener listener() {
+        return listener;
+    }
+
+    public JobDeadline deadline() {
         return deadline;
     }
 

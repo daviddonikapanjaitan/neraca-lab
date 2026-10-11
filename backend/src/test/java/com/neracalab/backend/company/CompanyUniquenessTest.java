@@ -76,7 +76,7 @@ class CompanyUniquenessTest {
 
     @Test
     void ingestionUpsertKeepsOneRowPerCompany() throws Exception {
-        Path file = Path.of("..", "data", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
         assumeTrue(Files.exists(file), "HRTA source data not available: " + file);
         IdxWorkbook workbook;
         try (InputStream in = Files.newInputStream(file)) {

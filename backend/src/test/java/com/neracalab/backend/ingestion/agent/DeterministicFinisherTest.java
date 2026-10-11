@@ -38,7 +38,7 @@ import tools.jackson.databind.json.JsonMapper;
 @Transactional
 class DeterministicFinisherTest {
 
-    private static final Path WORKBOOK = Path.of("..", "data", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
+    private static final Path WORKBOOK = Path.of("..", "data", "IDX_XBRL", "HRTA", "xlsx", "FinancialStatement-2026-II-HRTA.xlsx");
 
     @Autowired
     private IngestionRepository repository;
@@ -71,6 +71,35 @@ class DeterministicFinisherTest {
         assertThat(session.isDerivedCurrent()).isTrue();
         assertThat(outcome.notes()).anyMatch(n -> n.contains("done without it") && n.contains("saveStatements(CURRENT_PERIOD) done"));
         assertThat(outcome.rounds()).singleElement().satisfies(r -> assertThat(r.reflection().complete()).isTrue());
+    }
+
+    /**
+     * Five filings of a new company uploaded together: each looks the company up, finds nothing, and registers it.
+     * The one that comes second gets the company the first one registered - it used to be refused ("already
+     * exists"), and a full-text extraction then stored nothing (MSIN FY2025, 2026-10-11).
+     */
+    @Test
+    void registeringACompanyAnotherFilingJustRegisteredAdoptsIt() throws Exception {
+        assumeTrue(Files.exists(WORKBOOK), "HRTA source data not available");
+        assumeTrue(!jdbc.sql("SELECT company_id FROM company WHERE ticker = 'HRTA'").query(Long.class).list().isEmpty(),
+                "HRTA is not in the database");
+        IngestionSession session;
+        try (InputStream in = Files.newInputStream(WORKBOOK)) {
+            session = new IngestionSession(new FilingMapper(new IdxWorkbookReader().read(in, WORKBOOK.getFileName().toString())));
+        }
+        long id = jdbc.sql("SELECT company_id FROM company WHERE ticker = 'HRTA'").query(Long.class).single();
+        String name = jdbc.sql("SELECT company_name FROM company WHERE ticker = 'HRTA'").query(String.class).single();
+        assertThat(session.company()).isEmpty();
+
+        IngestionTools.CompanyResult result = new IngestionTools(session, repository, verifier).registerCompany("Another Name");
+
+        assertThat(result.registered()).isFalse();
+        assertThat(result.companyId()).isEqualTo(id);
+        assertThat(result.companyName()).isEqualTo(name);        // the stored company is not renamed
+        assertThat(session.company()).isPresent();
+        assertThat(session.company().get().companyId()).isEqualTo(id);
+        assertThat(jdbc.sql("SELECT company_name FROM company WHERE ticker = 'HRTA'").query(String.class).single()).isEqualTo(name);
+        assertThat(session.hasWrites()).isFalse();
     }
 
     @Test

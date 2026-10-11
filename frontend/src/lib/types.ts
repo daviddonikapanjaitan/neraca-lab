@@ -369,6 +369,29 @@ export interface IngestionJob {
   createdBy: IngestionJobCreator | null
   /** only from GET /api/v1/ingestions/{id} */
   result: unknown
+  /**
+   * tokens and cost of the job's model calls so far; null for a job without model calls (prices, PDF, ...)
+   * and for uploads from before the cost was recorded
+   */
+  cost: IngestionJobCost | null
+  /** the model calls per stage and model; only from GET /api/v1/ingestions/{id} */
+  usage: ScreeningUsage[] | null
+}
+
+/** Tokens and cost of all model calls of a job (llm_usage). */
+export interface IngestionJobCost {
+  /** attempts made, failed ones included */
+  modelCalls: number
+  /** attempts that failed (timeout, provider error): no tokens, no cost */
+  failedCalls: number
+  promptTokens: number
+  completionTokens: number
+  reasoningTokens: number
+  cachedTokens: number
+  /** USD, as reported by OpenRouter */
+  costUsd: number
+  /** a call had no reported cost and was priced from the list prices */
+  costEstimated: boolean
 }
 
 export interface IngestionJobCreator {

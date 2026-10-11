@@ -16,10 +16,10 @@ import org.junit.jupiter.api.Test;
 
 import com.neracalab.backend.rag.controller.RagController;
 
-/** Text of the HRTA financial statement PDFs in data/HRTA/pdf. */
+/** Text of the HRTA financial statement PDFs in data/IDX_XBRL/HRTA/pdf. */
 class PdfTextTest {
 
-    static final Path HRTA_PDF = Path.of("..", "data", "HRTA", "pdf", "FinancialStatement-2025-Tahunan-HRTA.pdf");
+    static final Path HRTA_PDF = Path.of("..", "data", "IDX_XBRL", "HRTA", "pdf", "FinancialStatement-2025-Tahunan-HRTA.pdf");
 
     @Test
     void readsTheHrtaAnnualReportPageByPage() throws IOException {

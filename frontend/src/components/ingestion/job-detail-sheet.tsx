@@ -6,6 +6,7 @@ import { ChevronRightIcon, CircleAlertIcon, LoaderIcon } from "lucide-react"
 
 import { DownloadFileButton } from "@/components/ingestion/download-file-button"
 import { JobStatusBadge } from "@/components/ingestion/job-status-badge"
+import { JobUsage } from "@/components/ingestion/job-usage"
 import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
@@ -389,6 +390,14 @@ export function JobDetailSheet({
                 <Field label="Duration">{formatDuration(duration)}</Field>
                 <Field label="Attempts">{shown.attempts}</Field>
               </dl>
+
+              {shown.cost && shown.usage && shown.usage.length > 0 && (
+                <>
+                  <Separator />
+                  <h3 className="text-sm font-semibold">Model cost</h3>
+                  <JobUsage cost={shown.cost} usage={shown.usage} />
+                </>
+              )}
 
               {shown.result != null && (
                 <>

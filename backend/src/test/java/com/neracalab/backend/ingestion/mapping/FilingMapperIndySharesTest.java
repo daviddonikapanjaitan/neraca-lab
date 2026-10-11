@@ -57,7 +57,7 @@ class FilingMapperIndySharesTest {
     }
 
     private static FilingMapper mapper(String filing) throws Exception {
-        Path file = Path.of("..", "data", "INDY", "xlsx", "FinancialStatement-" + filing + "-INDY.xlsx");
+        Path file = Path.of("..", "data", "IDX_XBRL", "INDY", "xlsx", "FinancialStatement-" + filing + "-INDY.xlsx");
         assumeTrue(Files.exists(file), "INDY source data not available: " + file);
         try (InputStream in = Files.newInputStream(file)) {
             return new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString()));

@@ -116,7 +116,7 @@ Follow a job with `GET /api/v1/ingestions/{id}`; its `result` is the `PdfResult`
 text, characters, chunks, model) or the `NewsResult` described above.
 
 ```bash
-curl -H "$AUTH" -F file=@data/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA \
+curl -H "$AUTH" -F file=@data/IDX_XBRL/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA \
      http://localhost:8080/api/v1/rag/pdf
 curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=pendapatan%20penjualan%20emas%202025"
@@ -157,8 +157,8 @@ Changing the embedding model makes old and new vectors incomparable: ingest the 
 
 ## 7. Code and tests
 
-`backend/src/main/java/com/neracalab/backend/rag/`: `RagController` (API), `RagQueue` (one worker
-thread, `SerialJobWorker`), `RagIngestionService`, `PdfText`, `TextChunker`, `EmbeddingClient`,
+`backend/src/main/java/com/neracalab/backend/rag/`: `RagController` (API), `RagQueue` (5 worker
+threads, `neracalab.jobs.workers`: that many PDFs / news ingestions at the same time; `JobWorkerPool`), `RagIngestionService`, `PdfText`, `TextChunker`, `EmbeddingClient`,
 `NewsCollector`, `RagRepository`, `RagProperties`.
 
 | Test | Covers |

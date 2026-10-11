@@ -30,6 +30,9 @@ public class IdxWorkbookReader {
     /** General information sheet; its presence identifies an IDX XBRL workbook. */
     public static final String GENERAL_INFO = "1000000";
 
+    /** Sheets of the IDX template that carry no filing data (XBRL contexts, drop-down lists, a token). */
+    private static final Set<String> TECHNICAL_SHEETS = Set.of("Context", "InlineXBRL", "hidden", "Token");
+
     private static final Set<String> SHEETS = Set.of(
             GENERAL_INFO,
             IdxSheets.BALANCE_SHEET, IdxSheets.BALANCE_SHEET_LIQUIDITY,
@@ -49,9 +52,16 @@ public class IdxWorkbookReader {
 
     public IdxWorkbook read(InputStream in, String fileName) {
         Map<String, RawSheet> sheets = new LinkedHashMap<>();
+        Map<String, RawSheet> allSheets = new LinkedHashMap<>();
         Set<IdxTaxonomy> taxonomies = EnumSet.noneOf(IdxTaxonomy.class);
         try (Workbook wb = new XSSFWorkbook(in)) {
             for (Sheet sheet : wb) {
+                // every sheet of the file under the name it has in the file: the text the full-text extraction
+                // gives to the model (whatever the taxonomy; the mapped sheets below are only what the rules know)
+                String filed = sheet.getSheetName().trim();
+                if (!TECHNICAL_SHEETS.contains(filed)) {
+                    allSheets.put(filed, toRaw(sheet, filed));
+                }
                 String name = canonicalName(sheet.getSheetName());
                 if (SHEETS.contains(name)) {
                     sheets.put(name, toRaw(sheet, name));
@@ -70,7 +80,7 @@ public class IdxWorkbookReader {
         if (taxonomies.size() > 1) {
             throw new IdxWorkbookException("'" + fileName + "' mixes the statement sheets of several IDX taxonomies " + taxonomies);
         }
-        return new IdxWorkbook(fileName, sheets, taxonomies.stream().findFirst().orElse(IdxTaxonomy.GENERAL));
+        return new IdxWorkbook(fileName, sheets, taxonomies.stream().findFirst().orElse(IdxTaxonomy.GENERAL), allSheets);
     }
 
     /**
@@ -87,12 +97,16 @@ public class IdxWorkbookReader {
      *       starting with 4 (4220000 balance sheet by order of liquidity, 4312000 / 4322000 profit or loss
      *       by nature, 4410000 equity, 4510000 / 4520000 cash flow, 4611000 / 4612000 notes) -> 1220000,
      *       1312000, ...; its line items differ, see {@link IdxTaxonomy#FINANCIAL}.</li>
+     *   <li>"Financing Industry" taxonomy (multifinance, e.g. BFIN): codes starting with 8 (8220000, 8312000 /
+     *       8322000, 8410000, 8510000, 8611000 / 8612000 notes) -> 1220000, 1312000, ...; its statements are
+     *       not mapped by rules, see {@link IdxTaxonomy#FINANCING}.</li>
      * </ul>
-     * Sheet 1000000 (general information) is shared by all taxonomies.
+     * Sheet 1000000 (general information) is shared by all taxonomies. Sheets of any other taxonomy keep their
+     * own name and are not mapped; {@link IdxWorkbook#allSheets()} has every sheet of the file.
      */
     static String canonicalName(String sheetName) {
         String name = filedName(sheetName);
-        if (name.matches("[234]\\d{6}(PY)?")) {
+        if (name.matches("[2348]\\d{6}(PY)?")) {
             name = "1" + name.substring(1);
         }
         return name;

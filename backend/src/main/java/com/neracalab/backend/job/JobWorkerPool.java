@@ -1,6 +1,5 @@
 package com.neracalab.backend.job;
 
-import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
@@ -9,36 +8,39 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * One worker thread that processes queued jobs one after the other (the screening data ETL and
- * the screening runs each have one). A job that throws is failed in {@code ingestion_job} with
- * the exception message. The queue lives in memory: jobs still active at shutdown are failed at
- * the next start ({@link IngestionJobRecovery}).
+ * Worker threads that process queued jobs in submission order: with one worker one job after the other (the
+ * screening runs, the analyses), with several that many jobs at the same time (the RAG ingestions, the
+ * screening data ETL). A job that throws is failed in {@code ingestion_job} with the exception message. The
+ * queue lives in memory: jobs still active at shutdown are failed at the next start
+ * ({@link IngestionJobRecovery}).
  */
-public final class SerialJobWorker {
+public final class JobWorkerPool {
 
-    private static final Logger log = LoggerFactory.getLogger(SerialJobWorker.class);
+    private static final Logger log = LoggerFactory.getLogger(JobWorkerPool.class);
 
     private final String name;
     private final IngestionJobRepository jobs;
     private final Consumer<UUID> processor;
     private final LinkedBlockingQueue<UUID> pending = new LinkedBlockingQueue<>();
-    private volatile Thread thread;
+    private final WorkerThreads threads;
 
     /**
+     * @param workers   jobs processed at the same time (1: strictly one after the other)
      * @param processor processes one job (its row exists, status QUEUED); it records RUNNING and the
-     *                  final status itself
+     *                  final status itself. With several workers it is called from several threads at once.
      */
-    public SerialJobWorker(String name, IngestionJobRepository jobs, Consumer<UUID> processor) {
+    public JobWorkerPool(String name, int workers, IngestionJobRepository jobs, Consumer<UUID> processor) {
         this.name = name;
         this.jobs = jobs;
         this.processor = processor;
+        this.threads = new WorkerThreads(name, workers, this::work);
     }
 
     public void enqueue(UUID jobId) {
         pending.add(jobId);
     }
 
-    /** Jobs waiting (excluding the running one). */
+    /** Jobs waiting (excluding the running ones). */
     public int pendingCount() {
         return pending.size();
     }
@@ -66,26 +68,14 @@ public final class SerialJobWorker {
     }
 
     public void start() {
-        Thread t = new Thread(this::work, name);
-        t.setDaemon(true);
-        thread = t;
-        t.start();
+        threads.start();
     }
 
     public void stop() {
-        Thread t = thread;
-        thread = null;
-        if (t != null) {
-            t.interrupt();
-            try {
-                t.join(Duration.ofSeconds(10));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        threads.stop();
     }
 
     public boolean isRunning() {
-        return thread != null;
+        return threads.isRunning();
     }
 }

@@ -32,36 +32,50 @@ Code: `backend/src/main/java/com/neracalab/backend/`
 ## 1. Upload: stored once per checksum
 
 ```bash
-curl -H "$AUTH" -F "file=@data/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
+curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRTA.xlsx" \
      http://localhost:8080/api/v1/financial-statements/upload
 ```
 
 1. The request checks the file (not empty, `.xlsx` name, readable IDX XBRL workbook in a supported
-   template, about a second). A wrong file is rejected with **422** and nothing is stored.
+   template, about a second). A file that is not an IDX XBRL workbook is rejected with **422** and nothing is
+   stored; an IDX workbook the standard extraction cannot map is accepted (the full-text extraction stores it).
 2. The SHA-256 of the bytes is computed. A new checksum stores the file in `ingestion_file`
    (`BYTEA`). A known checksum stores nothing: the existing row is reused (`file.reused = true`).
    The checksum column is unique, so two identical uploads at the same moment also store one row.
 3. If the same stored file is already QUEUED or RUNNING, that job is returned (**200**). Otherwise a
    new job is recorded as QUEUED and returned (**202**, `Location: /api/v1/ingestions/{id}`).
-4. The worker reads the bytes from `ingestion_file`, parses the workbook again and runs the AI agent.
-   Re-uploading a known file therefore extracts the data again from the stored copy.
+4. A worker reads the bytes from `ingestion_file`, parses the workbook again and runs the AI agent.
+   Re-uploading a known file therefore extracts the data again from the stored copy. Several
+   uploads are stored at the same time (section 4).
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|
 | 202  | new job (QUEUED)                                                                |
 | 200  | the same file is already queued / being stored: that job                        |
-| 422  | not an `.xlsx`, not an IDX XBRL workbook, unsupported template (ProblemDetail)  |
+| 422  | not an `.xlsx`, not an IDX XBRL workbook (ProblemDetail; logged in `ingestion_error`) |
 | 413  | larger than 20 MB                                                               |
 
 Upload stages: `Waiting in the upload queue` -> `Reading the workbook` -> `AI agent is storing HRTA 2026 H1`
--> final status:
+(the standard extraction) -> only when that does not store the workbook: `Full-text extraction of HRTA 2026 H1:
+the model maps the text of the whole workbook (...)` -> final status:
 
 | Final status | When                                                                                    |
 |--------------|-----------------------------------------------------------------------------------------|
-| `SUCCEEDED`  | agent `COMPLETED`: everything stored and verified by the database read-back             |
-| `INCOMPLETE` | agent `INCOMPLETE`: stored, the verification lists pending items / problems (`message`) |
-| `FAILED`     | the workbook could not be read, or the agent failed (AI provider unreachable, ...)      |
-| `FAILED`     | the job ran longer than `neracalab.ingestion.job-timeout` (5 minutes, from the start of the run; queue time not counted): stage `Stopped after the 5 minutes limit on <filing> (...)`; what was saved before the limit is kept |
+| `SUCCEEDED`  | everything stored and verified by the database read-back; `...; full-text extraction of PRIOR_PERIOD` in the stage when the full-text extraction mapped a column |
+| `INCOMPLETE` | stored, the verification lists pending items / problems (`message`) - also after the full-text extraction, e.g. a workbook without figures for its current period |
+| `FAILED`     | the workbook could not be read, or both extractions failed (AI provider unreachable, ...) |
+
+**Full-text extraction and error log.** When the standard extraction cannot map the workbook, leaves open
+items, fails or runs longer than 3 minutes, the full-text extraction takes over: the model decides every
+value that is not stored yet from the text of the whole workbook - every sheet of the file, whatever its
+taxonomy (it names the rows, the amounts are read from the cells; no rule of the code overrules it). A
+workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN) goes straight to the model. Every upload that was refused
+(422), taken over, `INCOMPLETE` or `FAILED` is recorded in the table `ingestion_error`, the work list of
+Claude Code (`fixed_by_claude_code`). Details: [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6.
+
+| Final status | When                                                                                    |
+|--------------|-----------------------------------------------------------------------------------------|
+| `FAILED`     | the upload ran out of time: the standard extraction has 3 minutes (`fallback.after`; the whole `job-timeout` of 5 minutes when the full-text extraction is switched off), then the full-text extraction 5 minutes (`fallback.timeout`), from the start of the run (queue time not counted). Stage `Stopped after the 3 minutes limit on <filing> (...)`; what was saved before the limit is kept |
 
 A typical upload job takes 1-2 minutes (the AI model runs without reasoning; a model call stalled for 45 s is
 retried, and a model that keeps failing mid-run no longer fails the job: the remaining standard steps are done
@@ -106,7 +120,10 @@ offset past the last job gives an empty `jobs`; unknown id: 404.
       "fullHistory": null, "attempts": 1, "message": null,
       "requestedAt": "2026-10-03T07:36:09.401Z", "startedAt": "2026-10-03T07:36:09.420Z",
       "finishedAt": null, "resumeAt": null, "updatedAt": "2026-10-03T07:36:10.002Z",
-      "createdBy": { "userId": 3, "username": "budi", "fullName": "Budi Santoso" }, "result": null
+      "createdBy": { "userId": 3, "username": "budi", "fullName": "Budi Santoso" }, "result": null,
+      "cost": { "modelCalls": 4, "failedCalls": 0, "promptTokens": 21480, "completionTokens": 912,
+                "reasoningTokens": 0, "cachedTokens": 9216, "costUsd": 0.00152, "costEstimated": false },
+      "usage": null
     }
   ]
 }
@@ -126,6 +143,8 @@ offset past the last job gives an empty `jobs`; unknown id: 404.
 | `message`     | why the job failed, is waiting (rate limit) or is incomplete                                  |
 | `createdBy`   | who started the job (section 3); `null` for a scheduled price run                             |
 | `result`      | only in `GET /api/v1/ingestions/{id}`: agent audit trail (upload) or price result (prices)    |
+| `cost`        | tokens and cost (USD) of the job's model calls so far, from `llm_usage`: financial statement uploads, screenings and analyses. `failedCalls` are attempts without an answer (no tokens, no cost); `costEstimated` = a call had no reported cost and was priced from the list prices. `null` for a job without model calls (prices, PDF, news) and for uploads from before the cost was recorded |
+| `usage`       | only in `GET /api/v1/ingestions/{id}`: the model calls per stage and model (`stage`, `model`, `calls`, `promptTokens`, `completionTokens`, `reasoningTokens`, `cachedTokens`, `costUsd`, `costEstimated`, `errors`), in the order of the first call; their sum is `cost`. Upload stages: `PLAN`, `EXECUTE`, `REVIEW` (standard extraction), `FULL_TEXT` (full-text extraction) |
 
 The list is read from the database, so it survives restarts and keeps every job;
 `GET /api/v1/prices/ingestions` still reports the in-memory price queue.
@@ -166,7 +185,37 @@ Jobs recorded before this column existed were attributed **once** to the root us
 startup, after the root user is ensured, `IngestionCreatorBackfill` sets their creator and records
 the migration in `app_migration`, so it never runs again (later scheduled runs stay `null`).
 
-## 4. Restarts
+## 4. Workers and restarts
+
+Each ingestion queue has `neracalab.jobs.workers` worker threads (default 5, env `INGESTION_WORKERS`):
+that many of its jobs run at the same time and the others wait as QUEUED. To run 6 at a time, set
+`workers: 6` under `neracalab.jobs` in `application.yaml` (or `INGESTION_WORKERS=6` in `backend/.env`)
+and restart the backend.
+
+| Queue (job type)                              | Runs at the same time                     | Still one after the other                                                                 |
+|-----------------------------------------------|-------------------------------------------|-------------------------------------------------------------------------------------------|
+| Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings, also several of one company | the write steps of filings of one company (never two at the same moment); the recalculation of the derived data |
+| Prices (`PRICE`)                              | different companies (one job per company) | the requests to the provider: one at a time with the 1-2 s pause; an HTTP 429 pauses every worker |
+| RAG (`RAG_PDF`, `RAG_NEWS`)                   | different documents / companies           | the requests to one news site                                                             |
+| Screening data (`FUNDAMENTALS`)               | different exchanges (one run per exchange) | the requests to Yahoo Finance                                                            |
+
+**Filings of one company.** Uploaded together (for example five years of MAPA) they are stored at the
+same time, each by its own agent. Every write step of an agent (save the statements of a column, save
+its revenue segments, save share counts, register the company) holds the company's write lock, so the
+stored data is what storing the filings one after the other in some order gives: the period's own
+filing replaces, comparatives only fill gaps. A share split restated by a later filing ends on the basis
+after the split whatever the order ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 4). One thing can
+differ from storing them one by one: a job may end `INCOMPLETE` because it verified a period while the
+period's own filing was between two of its steps (revenue already replaced, segments not yet): upload
+that file again.
+
+`neracalab.ingestion.same-company-in-order=true` (env `INGESTION_SAME_COMPANY_IN_ORDER`) stores the
+filings of one company one after the other in upload order instead (other companies still run beside
+them); the waiting ones stay `QUEUED`.
+
+More workers therefore store more uploads and documents at the same time; they do not send requests
+to Yahoo Finance or a news site faster. Screening runs and analyses are not ingestion jobs: each of
+those queues keeps one worker.
 
 The queues are in memory. At startup, before the web server accepts requests,
 `IngestionJobRecovery` marks every job still QUEUED / RUNNING / WAITING_RATE_LIMIT as `FAILED`
@@ -174,7 +223,17 @@ The queues are in memory. At startup, before the web server accepts requests,
 for one backend instance: a second instance (or a test run) on the same database also fails the jobs
 the first one is still running.
 
-## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`)
+## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`, `V1.0.18__schema_ingestion_error.sql`, `V1.0.19__schema_ingestion_cost.sql`)
+
+`llm_usage.job_id`: the model calls of an upload job (FK `ingestion_job`, `ON DELETE CASCADE`), one row per
+attempt with `stage`, `ticker`, `model`, tokens, `cost_usd`, `cost_estimated`, `duration_ms`, `error`. Details:
+[AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 7.
+
+`ingestion_error`: the error log of the .xlsx ingestion API - `error_id`, `occurred_at`, `job_id` (FK
+`ingestion_job`, `NULL` for an upload refused with 422), `file_id`, `file_name`, `exchange`, `ticker`, `period`,
+`error_type`, `message`, `details` (`JSONB`), `fallback_used`, `fallback_columns`, `final_status`,
+`final_message`, `fixed_by_claude_code` (default `FALSE`), `fixed_at`, `fix_note`. One row per job (unique
+index on `job_id`). Details and the queries: [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6.
 
 `ingestion_file`: `file_id`, `file_name` (first upload), `content_type`, `size_bytes`,
 `checksum_sha256` (unique, lower-case hex), `content` (`BYTEA`), `created_at`.
@@ -193,7 +252,11 @@ the first one is still running.
 | `FinancialStatementUploadTest` (download) | the downloaded bytes equal the upload, type / size / checksum headers, each job's own file name for one stored file, 404 / 400 |
 | `FinancialStatementUploadTest` (creator) | an upload is recorded as started by the uploading user; after the user is deleted the job keeps the username |
 | `IngestionCreatorBackfillTest`  | existing jobs are attributed to the root user exactly once; later jobs without a user stay unattributed        |
+| `IngestionJobCostTest`          | the model calls recorded for an upload are summed per job (list) and per stage and model (one job), the parts add up to the total, a job without calls has no cost, the calls of one job do not count for another, they are deleted with the job |
 | `PriceIngestionControllerTest`  | a price job is recorded in `ingestion_job` with the same final state and requester as the queue                  |
+| `JobWorkerPoolTest`             | five workers process five jobs at the same time, never more jobs than workers, one worker keeps the order, a failing job does not stop its worker |
+| `FinancialStatementQueueWorkersTest` | five filings of one company and filings of different companies are stored at the same time; with `same-company-in-order` filings of one company one after the other in upload order and a failed filing lets the next one run (scripted agent, no database) |
+| `CompanyWriteLockTest`          | one write lock per company whatever the spelling of the ticker, another lock for another company; a write step waits while another filing of the company holds it |
 
 Both tests delete the rows they create. Because the application startup fails jobs left active,
 run the tests against a separate database when a backend on the same database is processing jobs
