@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { EMPTY, formatTimestamp } from "@/lib/format"
+import { formatUsd } from "@/lib/screening"
 import { requestJson } from "@/lib/client-api"
 import {
   creatorLabel,
@@ -253,8 +254,8 @@ export function JobsTable({
             {loading && <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />}
           </CardTitle>
           <CardDescription>
-            Ingestion jobs with their progress, most recent first, page by page; the tabs show the other
-            job types. Updates automatically. Select a job for details.
+            Ingestion jobs with their progress and the cost of their model calls, most recent first, page by
+            page; the tabs show the other job types. Updates automatically. Select a job for details.
           </CardDescription>
           <CardAction className="hidden sm:block">
             <Badge variant="outline" className="tabular-nums">
@@ -322,6 +323,7 @@ export function JobsTable({
                     <TableHead className="hidden md:table-cell">Progress</TableHead>
                     <TableHead className="hidden lg:table-cell">Requested</TableHead>
                     <TableHead className="hidden sm:table-cell text-right">Duration</TableHead>
+                    <TableHead className="hidden sm:table-cell text-right">Cost</TableHead>
                     <TableHead className="pr-4 text-right">
                       <span className="sr-only">Details</span>
                     </TableHead>
@@ -401,6 +403,23 @@ export function JobsTable({
                         </TableCell>
                         <TableCell className="hidden text-right tabular-nums sm:table-cell">
                           {duration(job, now)}
+                        </TableCell>
+                        <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                          {job.cost ? (
+                            <>
+                              <div
+                                title={`${job.cost.promptTokens.toLocaleString("en-US")} prompt + ${job.cost.completionTokens.toLocaleString("en-US")} completion tokens, as reported by OpenRouter`}
+                              >
+                                {formatUsd(job.cost.costUsd)}
+                                {job.cost.costEstimated && <span title="estimated from list prices">*</span>}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {job.cost.modelCalls} {job.cost.modelCalls === 1 ? "call" : "calls"}
+                              </div>
+                            </>
+                          ) : (
+                            EMPTY
+                          )}
                         </TableCell>
                         <TableCell className="pr-4 text-right whitespace-nowrap">
                           {job.file && (

@@ -38,6 +38,7 @@ public final class IngestionSession {
     private final Map<StatementColumn, List<String>> savedSegments = new ConcurrentHashMap<>();
     private volatile boolean sharesSaved;
     private volatile JobDeadline deadline = JobDeadline.NONE;
+    private volatile ModelCallListener modelCalls = ModelCallListener.NONE;
     private volatile Instant lastWrite;
     private volatile Instant derivedRefreshedAt;
     private final List<String> notes = new CopyOnWriteArrayList<>();
@@ -75,6 +76,15 @@ public final class IngestionSession {
 
     public void deadline(JobDeadline deadline) {
         this.deadline = deadline;
+    }
+
+    /** Told every model call of this ingestion (the upload job records their tokens and cost). */
+    public ModelCallListener modelCalls() {
+        return modelCalls;
+    }
+
+    public void modelCalls(ModelCallListener listener) {
+        this.modelCalls = listener == null ? ModelCallListener.NONE : listener;
     }
 
     /** Replaces the share counts, e.g. with checked counts from a website when the filing gives none. */

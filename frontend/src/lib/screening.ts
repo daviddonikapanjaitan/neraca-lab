@@ -108,6 +108,11 @@ export const STAGE_LABEL: Record<string, string> = {
   AGENT: "Investor agents",
   REFLECTION: "Reflection critic",
   SYNTHESIS: "Synthesis",
+  // financial statement upload: the standard extraction, then the full-text extraction when it took over
+  PLAN: "Plan",
+  EXECUTE: "Tool turns",
+  REVIEW: "Review",
+  FULL_TEXT: "Full-text extraction",
 }
 
 /** Metric keys of the report and how to show them. */

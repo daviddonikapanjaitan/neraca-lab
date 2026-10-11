@@ -9,6 +9,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * The full-text extraction that takes over when the standard extraction cannot store an uploaded workbook
  * ({@code neracalab.ingestion.fallback.*}), see {@link FullTextExtractor}.
  *
+ * @param model            model of the full-text extraction (an OpenRouter id), by default a stronger one than the
+ *                         standard extraction's: it has to keep a whole statement consistent in one answer; blank =
+ *                         the standard extraction's model ({@code spring.ai.openai.chat.model})
  * @param enabled          false: an upload ends where the standard extraction ends (as before)
  * @param after            longest the standard extraction (the AI agent) may run before the full-text
  *                         extraction takes over; never more than {@code neracalab.ingestion.job-timeout}
@@ -21,6 +24,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties("neracalab.ingestion.fallback")
 public record FallbackProperties(
+        @DefaultValue("anthropic/claude-haiku-5.5") String model,
         @DefaultValue("true") boolean enabled,
         @DefaultValue("3m") Duration after,
         @DefaultValue("5m") Duration timeout,

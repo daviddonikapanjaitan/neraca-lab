@@ -127,6 +127,33 @@ class FilingMapperWebSharesTest {
         assertThat(mapper.withWebShareCounts(filing, List.of(count("2025-12-31", 1L, 1L, 0L)), "Yahoo Finance")).isSameAs(filing);
     }
 
+    /**
+     * NSSS files profit or loss by nature (1312000), which the rule-based extraction does not map: the published
+     * count is still checked against the EPS of that sheet (647,824 million / 23,801,568,645 = 27.2177, as filed),
+     * so the filing gets a share count - without one there is no market cap and no valuation. The count is Yahoo
+     * Finance's shares outstanding of October 2026, here given at the filing's dates.
+     */
+    @Test
+    void byNatureFilingIsCheckedAgainstItsOwnEps() throws Exception {
+        List<WebShareCount> nsss = List.of(
+                count("2024-12-31", 23_801_568_645L, null, null),
+                count("2025-12-31", 23_801_568_645L, null, null));
+        FilingMapper mapper = mapper("NSSS", "2025-Tahunan");
+        assertThat(mapper.templateProblems()).anyMatch(p -> p.contains("'by nature' template"));
+
+        ShareCapital shares = mapper.withWebShareCounts(mapper.shareCapital(), nsss, "Yahoo Finance");
+
+        assertThat(shares.resolved()).isTrue();
+        assertThat(outstanding(shares)).containsEntry(LocalDate.parse("2025-12-31"), new BigDecimal("23801568645"))
+                .containsEntry(LocalDate.parse("2024-12-31"), new BigDecimal("23801568645"));
+
+        // a count that does not fit the EPS is still refused
+        ShareCapital wrong = mapper.withWebShareCounts(mapper.shareCapital(),
+                List.of(count("2025-12-31", 20_000_000_000L, null, null)), "Yahoo Finance");
+        assertThat(wrong.resolved()).isFalse();
+        assertThat(wrong.checks()).anyMatch(c -> c.message().contains("basic EPS is"));
+    }
+
     private static Map<LocalDate, BigDecimal> outstanding(ShareCapital shares) {
         return shares.snapshots().stream().filter(s -> s.sharesOutstanding() != null)
                 .collect(java.util.stream.Collectors.toMap(ShareAt::date, ShareAt::sharesOutstanding));

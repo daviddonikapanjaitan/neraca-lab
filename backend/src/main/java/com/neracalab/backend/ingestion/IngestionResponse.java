@@ -41,13 +41,14 @@ public record IngestionResponse(
      *
      * @param trigger    UNSUPPORTED_WORKBOOK, INCOMPLETE, SLOW_EXTRACTION or EXTRACTION_FAILED
      * @param reason     what went wrong in the standard extraction
+     * @param model      the model that mapped the workbook ({@code neracalab.ingestion.fallback.model})
      * @param columns    columns whose statements the model mapped from the text of the workbook
      * @param statements statements it provided, e.g. "PRIOR_PERIOD 2024 FY income_statement"
      * @param problems   what it could not provide
      * @param steps      the saves done after it
      * @param error      why it stopped, when it did not finish
      */
-    public record Fallback(String trigger, String reason, List<String> columns, int modelCalls, List<String> statements,
+    public record Fallback(String trigger, String reason, String model, List<String> columns, int modelCalls, List<String> statements,
                            List<String> problems, List<String> steps, String error) {
     }
 

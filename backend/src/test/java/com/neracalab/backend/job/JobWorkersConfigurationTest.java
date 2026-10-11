@@ -44,7 +44,7 @@ class JobWorkersConfigurationTest {
     void everyIngestionQueueRunsTheConfiguredNumberOfWorkers() {
         JobProperties six = bind(Map.of("neracalab.jobs.workers", "6"));
         Set<Thread> before = Thread.getAllStackTraces().keySet();      // other tests' queues may still run
-        start(new FinancialStatementQueue(null, null, null, null, Duration.ofMinutes(5), false, six));
+        start(new FinancialStatementQueue(null, null, null, null, null, Duration.ofMinutes(5), false, six));
         start(new PriceIngestionQueue(null, TestPriceProperties.defaults(), job -> { }, six));
         start(new RagQueue(null, null, null, six));
         start(new FundamentalsQueue(null, null, six));

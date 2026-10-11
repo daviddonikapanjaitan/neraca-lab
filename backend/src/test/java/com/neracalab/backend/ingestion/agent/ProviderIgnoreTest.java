@@ -27,10 +27,11 @@ class ProviderIgnoreTest {
     }
 
     @Test
-    void withoutExclusionsNothingIsSent() {
+    void withoutExclusionsNoProviderRestrictionIsSent() {
         IngestionAgent agent = new IngestionAgent(null, null, null, new AgentProperties(30, 2, 0.0, 2, Duration.ofMillis(1)), null,
                 "test/model", true, Duration.ofSeconds(45), List.of());
 
-        assertThat(agent.options().build().getExtraBody()).isNullOrEmpty();
+        // only the request for the call's cost (recorded per upload job) is left
+        assertThat(agent.options().build().getExtraBody()).isEqualTo(Map.of("usage", Map.of("include", true)));
     }
 }

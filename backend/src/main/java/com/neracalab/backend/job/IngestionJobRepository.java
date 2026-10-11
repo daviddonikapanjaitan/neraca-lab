@@ -39,10 +39,33 @@ public class IngestionJobRepository {
             SELECT j.job_id, j.job_type, j.status, j.stage, j.exchange, j.ticker, j.file_id, j.file_name,
                    j.file_reused, j.full_history, j.attempts, j.message, j.requested_at, j.started_at,
                    j.finished_at, j.resume_at, j.updated_at, f.size_bytes, f.checksum_sha256,
-                   j.created_by, j.created_by_username, u.full_name AS created_by_full_name%s
+                   j.created_by, j.created_by_username, u.full_name AS created_by_full_name,
+                   c.calls AS cost_calls, c.errors AS cost_errors, c.prompt AS cost_prompt,
+                   c.completion AS cost_completion, c.reasoning AS cost_reasoning, c.cached AS cost_cached,
+                   c.cost AS cost_usd, c.estimated AS cost_estimated%s
             FROM ingestion_job j
             LEFT JOIN ingestion_file f ON f.file_id = j.file_id
-            LEFT JOIN users u ON u.user_id = j.created_by""";
+            LEFT JOIN users u ON u.user_id = j.created_by
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS calls, count(*) FILTER (WHERE x.error IS NOT NULL) AS errors,
+                       COALESCE(sum(x.prompt_tokens), 0) AS prompt, COALESCE(sum(x.completion_tokens), 0) AS completion,
+                       COALESCE(sum(x.reasoning_tokens), 0) AS reasoning, COALESCE(sum(x.cached_tokens), 0) AS cached,
+                       COALESCE(sum(x.cost_usd), 0) AS cost, COALESCE(bool_or(x.cost_estimated), FALSE) AS estimated
+                FROM llm_usage x
+                WHERE x.job_id = j.job_id OR x.run_id = j.job_id OR x.analysis_id = j.job_id) c ON TRUE""";
+
+    /** The model calls of a job per stage and model; the calls of a screening and of an analysis carry the job id too. */
+    private static final String USAGE = """
+            SELECT stage, model, count(*) AS calls, sum(prompt_tokens) AS prompt, sum(completion_tokens) AS completion,
+                   sum(reasoning_tokens) AS reasoning, sum(cached_tokens) AS cached, sum(cost_usd) AS cost,
+                   bool_or(cost_estimated) AS estimated, count(*) FILTER (WHERE error IS NOT NULL) AS errors,
+                   min(usage_id) AS first
+            FROM llm_usage
+            WHERE job_id = :id OR run_id = :id OR analysis_id = :id
+            GROUP BY stage, model ORDER BY first""";
+
+    /** Longest stored error text of a model call (column VARCHAR(500)). */
+    private static final int ERROR_LENGTH = 500;
 
     /**
      * Full state of a job, written by {@link #save}.
@@ -206,14 +229,65 @@ public class IngestionJobRepository {
                 .update();
     }
 
+    /**
+     * One model call of an upload job, with its tokens and cost. Written while the job runs, so the cost of a job
+     * that is stopped or fails is kept as well.
+     */
+    public void recordModelCall(UUID jobId, IngestionJob.ModelCall call) {
+        String error = call.error() == null || call.error().length() <= ERROR_LENGTH ? call.error()
+                : call.error().substring(0, ERROR_LENGTH);
+        jdbc.sql("""
+                        INSERT INTO llm_usage (job_id, stage, ticker, model, prompt_tokens, completion_tokens,
+                            reasoning_tokens, cached_tokens, cost_usd, cost_estimated, duration_ms, error)
+                        VALUES (:job, :stage, :ticker, :model, :prompt, :completion, :reasoning, :cached, :cost,
+                                :estimated, :ms, :error)""")
+                .param("job", jobId)
+                .param("stage", call.stage())
+                .param("ticker", call.ticker(), Types.VARCHAR)
+                .param("model", call.model())
+                .param("prompt", call.promptTokens())
+                .param("completion", call.completionTokens())
+                .param("reasoning", call.reasoningTokens())
+                .param("cached", call.cachedTokens())
+                .param("cost", call.costUsd())
+                .param("estimated", call.costEstimated())
+                .param("ms", (int) Math.min(Integer.MAX_VALUE, call.durationMs()))
+                .param("error", error, Types.VARCHAR)
+                .update();
+    }
+
     // ------------------------------------------------------------------ reads
 
-    /** One job with its result. */
+    /** One job with its result and its model calls per stage and model. */
     public Optional<IngestionJob> find(UUID id) {
         return jdbc.sql(SELECT.formatted(", j.result::text AS result") + " WHERE j.job_id = :id")
                 .param("id", id)
                 .query((rs, i) -> map(rs, true))
-                .optional();
+                .optional()
+                .map(job -> job.cost() == null ? job : withUsage(job));
+    }
+
+    /** The model calls of an upload job that failed, in the order they were made (the error log names them). */
+    public List<IngestionJob.FailedCall> failedModelCalls(UUID jobId) {
+        return jdbc.sql("""
+                        SELECT stage, model, error, duration_ms, created_at FROM llm_usage
+                        WHERE job_id = :id AND error IS NOT NULL ORDER BY usage_id""")
+                .param("id", jobId)
+                .query((rs, i) -> new IngestionJob.FailedCall(rs.getString("stage"), rs.getString("model"),
+                        rs.getString("error"), rs.getLong("duration_ms"), instant(rs, "created_at")))
+                .list();
+    }
+
+    private IngestionJob withUsage(IngestionJob job) {
+        List<IngestionJob.Usage> usage = jdbc.sql(USAGE)
+                .param("id", job.id())
+                .query((rs, i) -> new IngestionJob.Usage(rs.getString("stage"), rs.getString("model"), rs.getInt("calls"),
+                        rs.getLong("prompt"), rs.getLong("completion"), rs.getLong("reasoning"), rs.getLong("cached"),
+                        rs.getDouble("cost"), rs.getBoolean("estimated"), rs.getInt("errors")))
+                .list();
+        return new IngestionJob(job.id(), job.type(), job.status(), job.stage(), job.exchange(), job.ticker(),
+                job.file(), job.fullHistory(), job.attempts(), job.message(), job.requestedAt(), job.startedAt(),
+                job.finishedAt(), job.resumeAt(), job.updatedAt(), job.createdBy(), job.result(), job.cost(), usage);
     }
 
     /**
@@ -358,7 +432,18 @@ public class IngestionJobRepository {
                 rs.getString("stage"), rs.getString("exchange"), rs.getString("ticker"), file, full,
                 rs.getInt("attempts"), rs.getString("message"),
                 instant(rs, "requested_at"), instant(rs, "started_at"), instant(rs, "finished_at"),
-                instant(rs, "resume_at"), instant(rs, "updated_at"), createdBy, result);
+                instant(rs, "resume_at"), instant(rs, "updated_at"), createdBy, result, cost(rs), null);
+    }
+
+    /** The model calls of the job together; {@code null} when it made none. */
+    private static IngestionJob.Cost cost(ResultSet rs) throws SQLException {
+        int calls = rs.getInt("cost_calls");
+        if (calls == 0) {
+            return null;
+        }
+        return new IngestionJob.Cost(calls, rs.getInt("cost_errors"), rs.getLong("cost_prompt"),
+                rs.getLong("cost_completion"), rs.getLong("cost_reasoning"), rs.getLong("cost_cached"),
+                rs.getDouble("cost_usd"), rs.getBoolean("cost_estimated"));
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

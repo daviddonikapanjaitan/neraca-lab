@@ -76,6 +76,7 @@ public class FinancialStatementQueue implements SmartLifecycle {
     private final IngestionFileRepository files;
     private final IngestionJobRepository jobs;
     private final IngestionErrorRepository errors;
+    private final IngestionUsageRecorder usage;
     private final Duration jobTimeout;
     private final boolean sameCompanyInOrder;
     /** Filings a worker may take; with {@link #sameCompanyInOrder} at most one per company. */
@@ -88,13 +89,14 @@ public class FinancialStatementQueue implements SmartLifecycle {
     private final WorkerThreads workers;
 
     /**
+     * @param usage              records the model calls of every job with their tokens and cost ({@code llm_usage})
      * @param jobTimeout         longest a job may run, from the moment it starts running (time waiting in the queue
      *                           does not count); a job still running then is stopped and FAILED
      * @param sameCompanyInOrder store the filings of one company one after the other in upload order instead of
      *                           at the same time
      */
     public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
-                                   IngestionErrorRepository errors,
+                                   IngestionErrorRepository errors, IngestionUsageRecorder usage,
                                    @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout,
                                    @Value("${neracalab.ingestion.same-company-in-order:false}") boolean sameCompanyInOrder,
                                    JobProperties properties) {
@@ -102,6 +104,7 @@ public class FinancialStatementQueue implements SmartLifecycle {
         this.files = files;
         this.jobs = jobs;
         this.errors = errors;
+        this.usage = usage;
         this.jobTimeout = jobTimeout;
         this.sameCompanyInOrder = sameCompanyInOrder;
         this.workers = new WorkerThreads("financial-statement-ingestion", properties.workers(), this::work);
@@ -222,6 +225,10 @@ public class FinancialStatementQueue implements SmartLifecycle {
         FilingInfo info = session.info();
         String filing = info.ticker() + " " + info.current().key();
         String ticker = info.ticker() != null && info.ticker().length() <= 20 ? info.ticker() : null;
+        if (usage != null) {
+            // every model call of the job (standard and full-text extraction) is recorded with its tokens and cost
+            session.modelCalls(usage.forJob(id, ticker));
+        }
         jobs.progress(id, "AI agent is storing " + filing + " (usually 1-2 minutes, " + (service.fallbackEnabled()
                 ? "the full-text extraction takes over after " : "stopped after ") + minutes(standardLimit) + ")",
                 Exchange.IDX.code(), ticker);
@@ -264,7 +271,9 @@ public class FinancialStatementQueue implements SmartLifecycle {
 
     /**
      * Records an upload the standard extraction did not store cleanly in {@code ingestion_error}: one that the
-     * full-text extraction had to take over (whatever the end), and one that ended INCOMPLETE or FAILED.
+     * full-text extraction had to take over (whatever the end), and one that ended INCOMPLETE or FAILED. The row
+     * carries the model of the full-text extraction, why it stopped when it did, and every model call of the job
+     * that failed ({@code details.failedModelCalls}).
      */
     private void recordError(Task task, IngestionSession session, IngestionResponse response, IngestionJobStatus status,
                              String stage, String message) {
@@ -290,6 +299,16 @@ public class FinancialStatementQueue implements SmartLifecycle {
         }
         if (fallback != null) {
             details.put("fullTextExtraction", fallback);
+        }
+        // the model calls that failed (a timeout, a provider error), of the standard extraction and of the
+        // full-text extraction: stage, model and what the provider said
+        try {
+            List<IngestionJob.FailedCall> failedCalls = jobs.failedModelCalls(task.jobId());
+            if (failedCalls != null && !failedCalls.isEmpty()) {
+                details.put("failedModelCalls", failedCalls);
+            }
+        } catch (RuntimeException e) {
+            log.warn("upload job {}: failed model calls not read for the error log: {}", task.jobId(), e.getMessage());
         }
         details.put("notes", response.notes());
         FilingInfo info = session.info();

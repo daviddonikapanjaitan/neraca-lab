@@ -120,7 +120,10 @@ offset past the last job gives an empty `jobs`; unknown id: 404.
       "fullHistory": null, "attempts": 1, "message": null,
       "requestedAt": "2026-10-03T07:36:09.401Z", "startedAt": "2026-10-03T07:36:09.420Z",
       "finishedAt": null, "resumeAt": null, "updatedAt": "2026-10-03T07:36:10.002Z",
-      "createdBy": { "userId": 3, "username": "budi", "fullName": "Budi Santoso" }, "result": null
+      "createdBy": { "userId": 3, "username": "budi", "fullName": "Budi Santoso" }, "result": null,
+      "cost": { "modelCalls": 4, "failedCalls": 0, "promptTokens": 21480, "completionTokens": 912,
+                "reasoningTokens": 0, "cachedTokens": 9216, "costUsd": 0.00152, "costEstimated": false },
+      "usage": null
     }
   ]
 }
@@ -140,6 +143,8 @@ offset past the last job gives an empty `jobs`; unknown id: 404.
 | `message`     | why the job failed, is waiting (rate limit) or is incomplete                                  |
 | `createdBy`   | who started the job (section 3); `null` for a scheduled price run                             |
 | `result`      | only in `GET /api/v1/ingestions/{id}`: agent audit trail (upload) or price result (prices)    |
+| `cost`        | tokens and cost (USD) of the job's model calls so far, from `llm_usage`: financial statement uploads, screenings and analyses. `failedCalls` are attempts without an answer (no tokens, no cost); `costEstimated` = a call had no reported cost and was priced from the list prices. `null` for a job without model calls (prices, PDF, news) and for uploads from before the cost was recorded |
+| `usage`       | only in `GET /api/v1/ingestions/{id}`: the model calls per stage and model (`stage`, `model`, `calls`, `promptTokens`, `completionTokens`, `reasoningTokens`, `cachedTokens`, `costUsd`, `costEstimated`, `errors`), in the order of the first call; their sum is `cost`. Upload stages: `PLAN`, `EXECUTE`, `REVIEW` (standard extraction), `FULL_TEXT` (full-text extraction) |
 
 The list is read from the database, so it survives restarts and keeps every job;
 `GET /api/v1/prices/ingestions` still reports the in-memory price queue.
@@ -218,7 +223,11 @@ The queues are in memory. At startup, before the web server accepts requests,
 for one backend instance: a second instance (or a test run) on the same database also fails the jobs
 the first one is still running.
 
-## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`, `V1.0.18__schema_ingestion_error.sql`)
+## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`, `V1.0.18__schema_ingestion_error.sql`, `V1.0.19__schema_ingestion_cost.sql`)
+
+`llm_usage.job_id`: the model calls of an upload job (FK `ingestion_job`, `ON DELETE CASCADE`), one row per
+attempt with `stage`, `ticker`, `model`, tokens, `cost_usd`, `cost_estimated`, `duration_ms`, `error`. Details:
+[AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 7.
 
 `ingestion_error`: the error log of the .xlsx ingestion API - `error_id`, `occurred_at`, `job_id` (FK
 `ingestion_job`, `NULL` for an upload refused with 422), `file_id`, `file_name`, `exchange`, `ticker`, `period`,
@@ -243,6 +252,7 @@ index on `job_id`). Details and the queries: [AI_INGESTION_DOCS.md](AI_INGESTION
 | `FinancialStatementUploadTest` (download) | the downloaded bytes equal the upload, type / size / checksum headers, each job's own file name for one stored file, 404 / 400 |
 | `FinancialStatementUploadTest` (creator) | an upload is recorded as started by the uploading user; after the user is deleted the job keeps the username |
 | `IngestionCreatorBackfillTest`  | existing jobs are attributed to the root user exactly once; later jobs without a user stay unattributed        |
+| `IngestionJobCostTest`          | the model calls recorded for an upload are summed per job (list) and per stage and model (one job), the parts add up to the total, a job without calls has no cost, the calls of one job do not count for another, they are deleted with the job |
 | `PriceIngestionControllerTest`  | a price job is recorded in `ingestion_job` with the same final state and requester as the queue                  |
 | `JobWorkerPoolTest`             | five workers process five jobs at the same time, never more jobs than workers, one worker keeps the order, a failing job does not stop its worker |
 | `FinancialStatementQueueWorkersTest` | five filings of one company and filings of different companies are stored at the same time; with `same-company-in-order` filings of one company one after the other in upload order and a failed filing lets the next one run (scripted agent, no database) |

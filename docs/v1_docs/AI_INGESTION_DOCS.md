@@ -520,7 +520,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `FilingMapperMikaTest` (unit) | MIKA: the comparative breakdowns of FY2025 and H1 2026 reconcile once the one line outside the filed total is left out (warning `segment_line`); the current columns are stored as filed |
 | `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
-| `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept |
+| `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
@@ -647,6 +647,17 @@ reports what does not add up.
    the upload): an outflow that comes out positive (dividends, repayments, capital expenditure, buybacks) or
    a positive amount that comes out negative; an asset row among the lease liabilities; retained earnings
    without the appropriated part.
+   **A row that cannot be named** - one that is not in the text, or a row of a notes sheet (only the rows of
+   the balance sheet, profit or loss and cash flow sheets can be) - **leaves its whole field empty**: the sum
+   of the field's other rows is not what the model meant. The model is told and asked again; a field still
+   broken in its last answer is an open item (`INCOMPLETE`). Before, the row was dropped and the rest stored:
+   NSSS FY2025 on Haiku took the cost of revenue from a notes sheet (`1670000!R11`), so "revenue less
+   nothing" - 2,013,801 million, the revenue - was stored as gross profit in an upload that ended
+   `SUCCEEDED`.
+   **A profit or loss by nature** (General taxonomies, sheet 1312000 / 1322000, e.g. NSSS: expenses by type,
+   no "Cost of sales and revenue" and no "Total gross profit" row) has no `cost_of_revenue` and no
+   `gross_profit`: the model is told to leave both empty rather than build them from expense rows, and a
+   value an earlier upload stored for them is cleared (`FilingMapper.incomeByNature()`), not kept as a gap.
 5. **Saved by the standard steps.** The model's statements replace the mapper's in the session and are
    saved by the same tools as every upload (`DeterministicFinisher`): the company, the statements (the
    current period replaces, comparatives only fill gaps), revenue segments, share counts, the derived data.
@@ -665,7 +676,8 @@ that gives none - from Yahoo Finance checked against the filing's EPS, as for ev
 For a workbook of a taxonomy the rules do not map, nothing of the rule-based extraction is shown to the
 model and nothing can be adopted.
 
-Measured with the configured model (DeepSeek V4 Flash):
+Measured with DeepSeek V4 Flash, the model of the full-text extraction until it got its own
+(`neracalab.ingestion.fallback.model`, Claude Haiku 5.5; the NSSS row below):
 
 | Workbook | What the model decided | Calls, time | Result |
 |----------|------------------------|-------------|--------|
@@ -673,6 +685,15 @@ Measured with the configured model (DeepSeek V4 Flash):
 | BBRI H1 2026, all six statements (before the mapper could read its comparative) | adopted the four that passed every check; mapped the comparative profit or loss and cash flow | 1 call, 17 s | profit from operation 35,004,968 and profit before tax 34,744,196 as filed; it counted two insurance lines in revenue and cost of revenue that the filing's totals exclude (the mapper now stores 123,348,477 / 33,153,552) |
 | BBRI FY2025, all six statements | adopted five, mapped the comparative cash flow | 1 call, 20 s (after two provider stream resets of 60 s each) | every value as the rule-based extraction |
 | BFIN, five filings (Financing Industry, nothing of the rules) | all 28 statements | 1-2 calls, 10-47 s each | all 93 totals (assets, liabilities, equity, profit before tax, profit, EPS, the cash flow totals, cash) equal the workbook's cells |
+| NSSS, five filings (profit or loss by nature, 1312000), Claude Haiku 5.5 | all statements of every column; `cost_of_revenue` and `gross_profit` left empty | 1-3 calls, 40-136 s each, USD 0.003-0.008 per filing | all five `SUCCEEDED` and verified; on DeepSeek three of them ended `INCOMPLETE` (gross profit != revenue - cost of revenue, the two built from expense rows by nature) |
+
+**Share counts of a filing by nature.** A filing without usable share counts gets Yahoo Finance's, checked
+against the filing's own EPS (section 4). That check read the profit attributable to the parent and the EPS
+from the profit or loss by function only, so every count of NSSS was refused ("no profit or loss period of
+this filing opens or closes on that date") and the company had no market cap and no valuation. It now reads
+them from the profit or loss as filed, by function or by nature (the totals carry the same labels): NSSS
+FY2025, 647,824 million / 23,801,568,645 shares = 27.2177, the EPS filed. A count that does not fit the EPS is
+still refused.
 
 **Providers.** The model calls of the ingestion never go to an OpenRouter provider listed in
 `neracalab.ingestion.provider-ignore` (default `OpenInference`, env `INGESTION_PROVIDER_IGNORE`): its DeepSeek
@@ -690,6 +711,7 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 | Property (`neracalab.ingestion.fallback.*`) | Default | Meaning                                                    |
 |---------------------------------------------|---------|------------------------------------------------------------|
 | `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
+| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-haiku-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash at about the same cost per upload (one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
 | `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
 | `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
 | `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
@@ -723,7 +745,7 @@ WHERE error_id = 26;
 | `exchange`, `ticker`, `period` | the filing, e.g. `IDX`, `TINS`, `2025 FY`                                            |
 | `error_type`            | `UPLOAD_REJECTED`, `UNSUPPORTED_WORKBOOK`, `INCOMPLETE`, `SLOW_EXTRACTION`, `EXTRACTION_FAILED` |
 | `message`               | what went wrong in the standard extraction: the failed checks, the open items, the error    |
-| `details` (JSONB)       | `pending`, `problems`, `error`, `notes` and `fullTextExtraction` (trigger, columns, statements, problems, steps) |
+| `details` (JSONB)       | `pending`, `problems`, `error`, `notes`, `fullTextExtraction` (trigger, reason, `model`, columns, statements, problems, steps, and `error`: why it stopped when it did not finish) and `failedModelCalls`: every model call of the job that failed - a timeout, a stream reset, a provider error - with `stage` (`PLAN`, `EXECUTE`, `REVIEW`, `FULL_TEXT`), `model`, `error` (what the provider said), `durationMs`, `at`; absent when no call failed |
 | `fallback_used`, `fallback_columns` | whether the full-text extraction took over, and for which columns               |
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
@@ -819,3 +841,66 @@ BRI's comparative columns repeat lines.
   judged from the comparative column when the current one contradicts its own profit, and an EPS takes the
   sign of the profit attributable to the parent (warning `eps_sign`): -60.
 
+## 7. Model cost per upload (`llm_usage`)
+
+Every model call of an upload job is recorded with its tokens and cost, as the screening does for a run
+([SCREENING_DOCS.md](SCREENING_DOCS.md)): one row of `llm_usage` per attempt, tied to the job by
+`llm_usage.job_id` (`V1.0.19__schema_ingestion_cost.sql`).
+
+| Column | Content |
+|--------|---------|
+| `job_id` | the upload job (`ingestion_job`); deleted with it |
+| `stage` | `PLAN` (the planner), `EXECUTE` (a tool turn of the agent loop), `REVIEW` (the reviewer) of the standard extraction; `FULL_TEXT` (an answer of the full-text extraction) |
+| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Haiku 5.5) for the full-text extraction |
+| `ticker` | the filing's company |
+| `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens` | as the provider reports them |
+| `cost_usd`, `cost_estimated` | the cost OpenRouter reports for the call (`usage.cost`; every request asks for it with `"usage": {"include": true}`). A call without one is priced from `neracalab.screening.llm.prices` and flagged |
+| `duration_ms`, `error` | how long the attempt took; why it failed (then no tokens and no cost) |
+
+- **Every attempt is a row**, also a failed one (a timeout, a stream reset, HTTP 5xx) and each retry. What the
+  provider billed for a failed or abandoned attempt, if anything, is not known and is recorded as 0.
+- **Written while the job runs**, each call on its own, so the cost of a job that is stopped at its time limit or
+  fails is kept. Recording never fails the ingestion: a row that cannot be written is logged
+  (`IngestionUsageRecorder`).
+- **Read from the same rows everywhere**: `GET /api/v1/ingestions` returns `cost` per job (calls, tokens, USD),
+  `GET /api/v1/ingestions/{id}` also `usage` per stage and model
+  ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 2). The IDX XBRL Ingestion page shows the cost in
+  the jobs table and the breakdown under "Model cost" in the job details.
+- Uploads stored before this was added have no rows, so no cost is shown for them.
+- **Failed calls go to the error log too.** When an upload is recorded in `ingestion_error` (section 6), the
+  row's `details.failedModelCalls` lists the job's failed model calls from these rows, so a full-text
+  extraction whose model (Haiku) timed out or was refused shows what the provider said:
+
+  ```sql
+  SELECT e.error_id, e.ticker, e.period, e.final_status, c->>'model' AS model, c->>'stage' AS stage,
+         c->>'error' AS error
+  FROM ingestion_error e, jsonb_array_elements(e.details->'failedModelCalls') c
+  WHERE NOT e.fixed_by_claude_code ORDER BY e.occurred_at DESC;
+  ```
+
+Cost per model over the last week:
+
+```sql
+SELECT u.model, count(DISTINCT u.job_id) AS uploads, count(*) AS calls,
+       sum(u.prompt_tokens) AS prompt_tokens, sum(u.completion_tokens) AS completion_tokens,
+       round(sum(u.cost_usd), 4) AS cost_usd
+FROM llm_usage u
+WHERE u.job_id IS NOT NULL AND u.created_at > now() - interval '7 days'
+GROUP BY u.model ORDER BY cost_usd DESC;
+```
+
+Cost of each upload, with what the full-text extraction added:
+
+```sql
+SELECT j.requested_at, j.file_name, j.status,
+       round(sum(u.cost_usd), 5) AS cost_usd,
+       round(sum(u.cost_usd) FILTER (WHERE u.stage = 'FULL_TEXT'), 5) AS full_text_usd,
+       count(*) AS calls, count(*) FILTER (WHERE u.error IS NOT NULL) AS failed
+FROM ingestion_job j JOIN llm_usage u ON u.job_id = j.job_id
+GROUP BY j.job_id ORDER BY j.requested_at DESC LIMIT 20;
+```
+
+Tests: `IngestionUsageRecorderTest` (an OpenAI-compatible server on localhost answers the calls: stage, the
+model asked - DeepSeek and Haiku -, tokens and the reported cost; a call without a cost is estimated and
+flagged; a failed attempt and its retry are both recorded; a row that cannot be written does not fail the
+ingestion), `IngestionJobCostTest` (the sums per job and per stage and model, against Postgres).

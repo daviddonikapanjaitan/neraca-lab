@@ -98,6 +98,7 @@ neraca_lab/
 │               ├── V1.0.16__schema_syirkah.sql    (banks: balance_sheet.temporary_syirkah_funds)
 │               ├── V1.0.17__schema_screening_selection.sql (screening of selected stocks: screening_run.tickers)
 │               ├── V1.0.18__schema_ingestion_error.sql (error log of the .xlsx ingestion API: ingestion_error)
+│               ├── V1.0.19__schema_ingestion_cost.sql  (model cost of the .xlsx ingestion: llm_usage.job_id)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -127,6 +128,8 @@ neraca_lab/
 │                                STAA (2022 .. 2025 annual), PWON (2022 .. 2025 annual, 2026-II; cash flow cash
 │                                includes deposits) and CBDK (2024, 2025 annual, 2026-II; Property and Real Estate
 │                                Industry taxonomy)
+│                                NSSS (2022 .. 2025 annual, 2026-II; profit or loss by nature: stored by the
+│                                full-text extraction, share counts from Yahoo Finance checked against its EPS)
 │                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
@@ -215,15 +218,19 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 
 When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
 statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
-extraction** takes over: the model (DeepSeek) gets the text of the whole workbook - every sheet of the file,
-whatever its taxonomy - and **decides every value that is not stored yet** - which rows make up every
-database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
+extraction** takes over: its own model (Claude Haiku 5.5, `neracalab.ingestion.fallback.model` /
+`INGESTION_FALLBACK_MODEL`; the standard extraction stays on `OPENAI_MODEL`, DeepSeek) gets the text of the
+whole workbook - every sheet of the file, whatever its taxonomy - and **decides every value that is not stored
+yet** - which rows make up every database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
 8220000 / 8322000 / 8510000) goes straight to the model. No rule of the Java code decides or
 overrules a value there: the code reads the amounts of the rows the model names from the workbook's cells
 (so a stored figure always exists in the workbook), shows the model where its own mapping contradicts itself
 (assets = liabilities + equity, ...) so it can correct it, and stores its last answer; what still does not
-add up is saved, reported (INCOMPLETE) and logged, never dropped. The result is saved and verified by the
-standard steps (`neracalab.ingestion.fallback.*`). Every upload that was refused, taken
+add up is saved, reported (INCOMPLETE) and logged, never dropped. A field for which the model names a row
+that cannot be used (a row of a notes sheet, a row that does not exist) is left empty instead of being stored
+as the sum of its other rows, and the model is asked again; a profit or loss presented by nature (e.g. NSSS:
+no cost of sales and no gross profit row) gets no `cost_of_revenue` and no `gross_profit`. The result is saved
+and verified by the standard steps (`neracalab.ingestion.fallback.*`). Every upload that was refused, taken
 over, INCOMPLETE or FAILED is recorded in the table **`ingestion_error`** - the work list of Claude Code, with
 `fixed_by_claude_code` set once the cause is fixed:
 
@@ -231,7 +238,23 @@ over, INCOMPLETE or FAILED is recorded in the table **`ingestion_error`** - the 
 SELECT error_id, file_name, ticker, period, error_type, message FROM ingestion_error WHERE NOT fixed_by_claude_code;
 ```
 
-Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), section 6.
+A row of the error log names the model of the full-text extraction and every model call of the job that
+failed, with what the provider said (`details.failedModelCalls`).
+
+**Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
+review (DeepSeek) and the full-text extraction's answers (Haiku) - is a row of `llm_usage` tied to the job
+(`llm_usage.job_id`), with its stage, model, tokens and the cost OpenRouter reports, as for a screening run.
+The IDX XBRL Ingestion page shows the cost of each job in the jobs table and the breakdown per stage and model
+under "Model cost" in the job details; `GET /api/v1/ingestions` returns it as `cost`,
+`GET /api/v1/ingestions/{id}` also as `usage`. A failed call is recorded with its error and no cost (what the
+provider billed for it, if anything, is not known); uploads from before this was added show no cost.
+
+```sql
+SELECT u.model, count(DISTINCT u.job_id) AS uploads, count(*) AS calls, round(sum(u.cost_usd), 4) AS cost_usd
+FROM llm_usage u WHERE u.job_id IS NOT NULL GROUP BY u.model;
+```
+
+Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md), sections 6 and 7.
 
 Ingestion jobs run in parallel: each ingestion queue (uploads, prices, RAG PDF / news, screening data) has
 `neracalab.jobs.workers` worker threads (default 5, env `INGESTION_WORKERS`; set `workers: 6` in
@@ -372,6 +395,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.backoff`                            | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429                    |
 | `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: queues every active company of `IDX`   |
 | `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
+| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 
@@ -540,7 +564,7 @@ inventory, investment properties as capex, a restated FY2024);
 taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps) and the error log; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS);
@@ -612,6 +636,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.16__schema_syirkah.sql`         | banks: `balance_sheet.temporary_syirkah_funds` (sharia depositors; neither liabilities nor equity) |
 | `V1.0.17__schema_screening_selection.sql` | screening of selected stocks: `screening_run.tickers`, `market_cap_tier` NULL for such runs |
 | `V1.0.18__schema_ingestion_error.sql` | `ingestion_error`: every upload that was refused, taken over by the full-text extraction, INCOMPLETE or FAILED; `fixed_by_claude_code` |
+| `V1.0.19__schema_ingestion_cost.sql`  | `llm_usage.job_id`: every model call of a financial statement upload with its model, tokens and cost (per job on the IDX XBRL Ingestion page) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
@@ -647,7 +672,7 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the screening research agent |
 | `screening_run`, `screening_candidate`, `screening_agent_score` | screening reports: parameters, shortlist, scores and reasoning |
 | `analysis_run`, `analysis_agent_score` | analysis reports of one stock: what the agents saw, research brief, synthesis, scores and reasoning |
-| `screening_lesson`, `llm_usage` | Reflexion memory (screening and analysis); tokens and cost of every model call |
+| `screening_lesson`, `llm_usage` | Reflexion memory (screening and analysis); tokens and cost of every model call (screening, analysis and financial statement upload) |
 
 Conventions: amounts in full units of the company currency; income-statement expenses are
 positive; cash-flow outflows are negative; `NULL` = not reported, `0` = reported as zero.

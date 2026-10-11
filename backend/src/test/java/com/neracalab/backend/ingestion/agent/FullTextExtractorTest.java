@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -157,11 +158,79 @@ public class FullTextExtractorTest {
 
         FullTextExtractor.Report report = extractor(1).extract(session, List.of(StatementColumn.PRIOR_PERIOD), "test", new AgentTrace());
 
-        // the unknown row is dropped and its amount ignored: revenue is the real row's cell
-        assertThat(session.income(StatementColumn.PRIOR_PERIOD).orElseThrow().values().get("revenue"))
-                .isEqualByComparingTo("8391907000000");
-        assertThat(report.notes()).anyMatch(n -> n.contains("'1311000!R9999' is not a row reference of the text"));
+        // the amount in the answer is never used; and a field naming a row that does not exist gets no value at all
+        // (the sum of its other rows is not what the model meant), which is an open item of the upload
+        Map<String, BigDecimal> income = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow().values();
+        assertThat(income.get("revenue")).isNull();
+        assertThat(income.get("cost_of_revenue")).isNotNull();        // the other fields are stored as mapped
+        assertThat(report.problems()).singleElement().asString()
+                .contains("income_statement.revenue: '1311000!R9999' is not a row reference of the text")
+                .endsWith("the field is left empty");
+    }
+
+    /**
+     * NSSS FY2025 (profit or loss by nature, 1312000: no cost of sales, no gross profit row). The model's first
+     * answer took the cost of revenue from a notes sheet (1670000!R11), which cannot be named: before, that row was
+     * dropped and "revenue less nothing" was stored as gross profit (2,013,801 million, the revenue) in an upload
+     * that ended SUCCEEDED. Now the two fields get no value, the model is asked again, and leaves them empty.
+     */
+    @Test
+    void aRowOfANotesSheetIsNotUsedAndTheModelIsAskedAgain() throws Exception {
+        IngestionSession session = session("NSSS", "2025-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String revenue = terms(text, "1312000", "+Sales and revenue");
+        String fromTheNotes = nsss(text, "[{\"row\": \"1670000!R11\", \"sign\": 1}]",
+                revenue.replace("]", ", {\"row\": \"1670000!R11\", \"sign\": -1}]"));
+        answers(fromTheNotes, nsss(text, "[]", "[]"));
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature",
+                new AgentTrace());
+
+        assertThat(report.modelCalls()).isEqualTo(2);
+        assertThat(prompts.get(1)).contains("income_statement.cost_of_revenue: '1670000!R11' is not a row reference of the text",
+                "income_statement.gross_profit: '1670000!R11' is not a row reference of the text", "the field is left empty");
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isEqualByComparingTo("2013801000000");
+        assertThat(income.values().get("gross_profit")).isNull();
+        assertThat(income.values().get("cost_of_revenue")).isNull();
+        assertThat(income.values().get("net_income")).isEqualByComparingTo("647822000000");
+        // a gross profit stored by an earlier upload is cleared, not kept as a gap
+        assertThat(income.rejected()).containsExactlyInAnyOrder("cost_of_revenue", "gross_profit");
         assertThat(report.problems()).isEmpty();
+    }
+
+    /** The same answer when it is the last one: nothing invented is stored, and the upload has open items. */
+    @Test
+    void aRowOfANotesSheetInTheLastAnswerLeavesTheFieldsEmptyAndOpen() throws Exception {
+        IngestionSession session = session("NSSS", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String revenue = terms(text, "1312000", "+Sales and revenue");
+        answers(nsss(text, "[{\"row\": \"1670000!R11\", \"sign\": 1}]",
+                revenue.replace("]", ", {\"row\": \"1670000!R11\", \"sign\": -1}]")));
+
+        FullTextExtractor.Report report = extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature",
+                new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("gross_profit")).isNull();       // not the revenue
+        assertThat(income.values().get("revenue")).isEqualByComparingTo("2013801000000");
+        assertThat(report.problems()).hasSize(2).allMatch(p -> p.contains("'1670000!R11' is not a row reference of the text"));
+    }
+
+    /** A profit or loss by function is not touched: its gross profit is never cleared. */
+    @Test
+    void aProfitOrLossByFunctionKeepsItsGrossProfit() throws Exception {
+        IngestionSession session = session("2024-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isFalse();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        answers(mapping(text, "Total assets"));
+
+        extractor(1).extract(session, List.of(StatementColumn.PRIOR_PERIOD), "test", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(income.values().get("gross_profit")).isNotNull();
+        assertThat(income.rejected()).isEmpty();
     }
 
     @Test
@@ -301,11 +370,23 @@ public class FullTextExtractorTest {
                 .allMatch(p -> p.contains("no rows of the statement were named, although the workbook has figures"));
     }
 
+    /** The full-text extraction asks its own model; without one configured, the standard extraction's. */
+    @Test
+    void usesItsOwnModelWhenOneIsConfigured() {
+        when(agent.options()).thenAnswer(call -> OpenAiChatOptions.builder().model("test"));
+        FullTextExtractor own = new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),
+                new FallbackProperties("anthropic/claude-haiku-5.5", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
+                        Duration.ofSeconds(150), 120_000, 3));
+
+        assertThat(own.model()).isEqualTo("anthropic/claude-haiku-5.5");
+        assertThat(extractor(3).model()).isEqualTo("test");
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private FullTextExtractor extractor(int rounds) {
         return new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),
-                new FallbackProperties(true, Duration.ofMinutes(3), Duration.ofMinutes(3), Duration.ofSeconds(150), 120_000, rounds));
+                new FallbackProperties("", true, Duration.ofMinutes(3), Duration.ofMinutes(3), Duration.ofSeconds(150), 120_000, rounds));
     }
 
     private void answers(String... answers) {
@@ -361,6 +442,34 @@ public class FullTextExtractorTest {
                 Map.entry("debt_repaid", terms(text, "1510000", "-Payments of bank loans")),
                 Map.entry("cash_change", terms(text, "1510000", "+Total net increase (decrease) in cash and cash equivalents")),
                 Map.entry("ending_cash", terms(text, "1510000", "+Cash and cash equivalents cash flows, end of the period")));
+        return "{\"income_statement\": " + object(income) + ",\n \"balance_sheet\": " + object(balance)
+                + ",\n \"cash_flow_statement\": " + object(cash) + ",\n \"notes\": [\"scripted\"]}";
+    }
+
+    /** A mapping of the NSSS statements (profit or loss by nature) with the given cost of revenue and gross profit. */
+    private static String nsss(WorkbookText text, String costOfRevenue, String grossProfit) {
+        Map<String, String> income = Map.ofEntries(
+                Map.entry("revenue", terms(text, "1312000", "+Sales and revenue")),
+                Map.entry("cost_of_revenue", costOfRevenue),
+                Map.entry("gross_profit", grossProfit),
+                Map.entry("interest_income", terms(text, "1312000", "+Finance income")),
+                Map.entry("interest_expense", terms(text, "1312000", "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, "1312000", "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, "1312000", "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, "1312000", "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, "1312000", "+Profit (loss) attributable to parent entity")),
+                Map.entry("basic_eps", terms(text, "1312000", "+Basic earnings (loss) per share from continuing operations")));
+        Map<String, String> balance = Map.ofEntries(
+                Map.entry("total_assets", terms(text, "1210000", "+Total assets")),
+                Map.entry("total_liabilities", terms(text, "1210000", "+Total liabilities")),
+                Map.entry("shareholders_equity", terms(text, "1210000", "+Total equity attributable to equity owners of parent entity")),
+                Map.entry("non_controlling_interest", terms(text, "1210000", "+Non-controlling interests")),
+                Map.entry("total_equity", terms(text, "1210000", "+Total equity")));
+        Map<String, String> cash = Map.ofEntries(
+                Map.entry("operating_cash_flow", terms(text, "1510000", "+Total net cash flows received from (used in) operating activities")),
+                Map.entry("investing_cash_flow", terms(text, "1510000", "+Total net cash flows received from (used in) investing activities")),
+                Map.entry("financing_cash_flow", terms(text, "1510000", "+Total net cash flows received from (used in) financing activities")),
+                Map.entry("cash_change", terms(text, "1510000", "+Total net increase (decrease) in cash and cash equivalents")));
         return "{\"income_statement\": " + object(income) + ",\n \"balance_sheet\": " + object(balance)
                 + ",\n \"cash_flow_statement\": " + object(cash) + ",\n \"notes\": [\"scripted\"]}";
     }

@@ -22,6 +22,7 @@ foreign key.
 | `V1.0.16__schema_syirkah.sql`             | `balance_sheet.temporary_syirkah_funds`: banks' sharia depositor funds, neither liabilities nor equity (section 3) |
 | `V1.0.17__schema_screening_selection.sql` | `screening_run.tickers`: screening of selected stocks; `market_cap_tier` NULL for those runs (section 4.11) |
 | `V1.0.18__schema_ingestion_error.sql`     | `ingestion_error`: error log of the .xlsx ingestion API, work list of Claude Code (`fixed_by_claude_code`); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 6 |
+| `V1.0.19__schema_ingestion_cost.sql`      | `llm_usage.job_id`: the model calls of a financial statement upload (tokens and cost per job); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 7 |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -630,7 +631,7 @@ Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)
 | `screening_candidate`   | Stage 1 shortlist of a run: metrics, quantitative score, news, overall score, rank, selected, thesis |
 | `screening_agent_score` | per candidate and agent: quantitative / AI / final score, verdict, reasoning, reflection         |
 | `screening_lesson`      | Reflexion memory: lessons per agent with their occurrence count                                  |
-| `llm_usage`             | every model call of a run (`run_id`) or an analysis (`analysis_id`, section 4.13): tokens, cost, duration, error |
+| `llm_usage`             | every model call of a run (`run_id`), an analysis (`analysis_id`, section 4.13) or a financial statement upload (`job_id`): tokens, cost, duration, error |
 
 The script also widens `ck_role_permissions_permission` (`SCREENING`) and `ck_ingestion_job_type`
 (`FUNDAMENTALS`, `SCREENING`). Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
@@ -691,6 +692,7 @@ One analysis of one company (Screening > Analysis). Full description: [ANALYSIS_
 |                        | `verdict`, `thesis`, `strengths`, `concerns`, `reflection` | | the agent's view and its Reflection review               |
 |                        | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `QUANT_ONLY`, `NO_SCORE` (check)                  |
 | `llm_usage`            | `analysis_id`                  | UUID FK       | the analysis of a model call (`run_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_analysis` |
+| `llm_usage`            | `job_id`                       | UUID FK       | the financial statement upload job of a model call (`ingestion_job`; `run_id` and `analysis_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_job`. `stage`: `PLAN`, `EXECUTE`, `REVIEW` (standard extraction), `FULL_TEXT` (full-text extraction) |
 
 Index `ix_analysis_run_company`. Lessons learned by the analyses go to `screening_lesson` (Reflexion memory
 shared with the screening).

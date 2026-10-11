@@ -15,6 +15,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.ingestion.agent.WorkbookText.Kind;
@@ -74,11 +75,11 @@ public class FullTextExtractor {
 
     private static final List<Field> INCOME_FIELDS = List.of(
             new Field("revenue", "total sales and revenue. A financing company has no such row either: income from consumer financing, finance lease, factoring, murabahah / ijarah and other sharia financing + administration income + interest and finance income + other income. A bank has no such row: interest income + sharia income + insurance premium and other insurance income + fees and commissions + gains on trading, on marketable securities and on foreign exchange + other operating income; NOT recoveries of written-off assets and reversals of impairment (those are other operating income below it)"),
-            new Field("cost_of_revenue", "cost of sales and revenue, POSITIVE (a bank or financing company: interest and finance costs + the syirkah fund holders' share + insurance claims)"),
-            new Field("gross_profit", "total gross profit (a bank or financing company: the rows of revenue with sign 1 and the rows of cost_of_revenue with sign -1)"),
+            new Field("cost_of_revenue", "cost of sales and revenue, POSITIVE (a bank or financing company: interest and finance costs + the syirkah fund holders' share + insurance claims). A profit or loss presented BY NATURE - expenses by type (raw materials and consumables, employee benefits, depreciation, other expenses) and no 'Cost of sales and revenue' row - has no cost of revenue: []. Never build it from expense rows by nature, and never from a notes sheet"),
+            new Field("gross_profit", "total gross profit (a bank or financing company: the rows of revenue with sign 1 and the rows of cost_of_revenue with sign -1). A profit or loss presented BY NATURE has no 'Total gross profit' row and no gross profit: []"),
             new Field("sga_expense", "selling expenses + general and administrative expenses (+ salaries and employee benefits where they are a row of their own), POSITIVE"),
             new Field("operating_expenses", "every operating expense below gross profit: selling, general and administrative, salaries and employee benefits, depreciation, other operating expenses (a bank or financing company: also impairment charges / provision for impairment losses), POSITIVE"),
-            new Field("operating_income", "profit from operations. Use the filing's own 'profit from operation' row when it has one; otherwise ALWAYS give the terms that compute it: the gross profit row with sign 1, every operating expense row (selling, general and administrative, other operating expenses) with sign -1, other operating income rows with sign 1. Without finance income and costs, share of associates, foreign exchange and other non-operating gains and losses"),
+            new Field("operating_income", "profit from operations. Use the filing's own 'profit from operation' row when it has one; otherwise ALWAYS give the terms that compute it: the gross profit row with sign 1, every operating expense row (selling, general and administrative, other operating expenses) with sign -1, other operating income rows with sign 1 (a profit or loss BY NATURE: the revenue and other income rows with sign 1 and every operating expense row by nature with sign -1). Without finance income and costs, share of associates, foreign exchange and other non-operating gains and losses"),
             new Field("depreciation", "depreciation EXPENSE of the period, POSITIVE - only when profit or loss or the cash flow statement shows it as a row of its own (a financing company's 'Depreciation of ... property and equipment'); never accumulated depreciation of the balance sheet; else []"),
             new Field("amortization", "amortization expense of intangible assets of the period, POSITIVE - only when shown as a row of its own; else []"),
             new Field("interest_income", "finance / interest income, POSITIVE"),
@@ -141,6 +142,15 @@ public class FullTextExtractor {
 
     private static final Set<String> PER_SHARE = Set.of("basic_eps", "diluted_eps");
 
+    /**
+     * End of the message about a field whose answer named a row that cannot be used. Such a field gets no value;
+     * the model is asked again, and a field still broken in its last answer is an open item of the upload.
+     */
+    private static final String LEFT_EMPTY = "; the field is left empty";
+
+    /** Fields a profit or loss by nature does not have; left empty by the model, a value stored before is cleared. */
+    private static final List<String> BY_FUNCTION_ONLY = List.of("cost_of_revenue", "gross_profit");
+
     /** Fields defined as an outflow (negative) or as a positive amount: a value of the other sign is pointed out to the model. */
     private static final Set<String> NEGATIVE = Set.of("capital_expenditure", "acquisitions", "share_buybacks", "dividends_paid",
             "debt_repaid", "lease_payments");
@@ -170,6 +180,20 @@ public class FullTextExtractor {
         return properties;
     }
 
+    /** The agent's request options with the full-text extraction's own model, when one is configured. */
+    private OpenAiChatOptions options() {
+        OpenAiChatOptions.Builder builder = agent.options();
+        if (properties.model() != null && !properties.model().isBlank()) {
+            builder.model(properties.model().trim());
+        }
+        return builder.build();
+    }
+
+    /** The model that maps the workbook: its own, or the standard extraction's when none is configured. */
+    public String model() {
+        return options().getModel();
+    }
+
     /**
      * Outcome of {@link #run}.
      *
@@ -191,7 +215,8 @@ public class FullTextExtractor {
      * @param reason why the standard extraction did not store the workbook
      */
     public Result run(IngestionSession session, String reason) {
-        AgentTrace trace = new AgentTrace(session.deadline());
+        AgentTrace trace = new AgentTrace(session.deadline(), session.modelCalls());
+        trace.stage(ModelCallListener.FULL_TEXT);
         List<StatementColumn> columns = columnsToExtract(session);
         Report report = columns.isEmpty() ? new Report(List.of(), 0, List.of(), List.of(), List.of())
                 : extract(session, columns, reason, trace);
@@ -349,7 +374,7 @@ public class FullTextExtractor {
             trace.deadline().check("the full-text extraction's model call");
             String answer;
             try {
-                answer = agent.call(new Prompt(history, agent.options().build()), trace, properties.modelCallTimeout())
+                answer = agent.call(new Prompt(history, options()), trace, properties.modelCallTimeout())
                         .getResult().getOutput().getText();
             } catch (JobDeadline.JobTimeoutException e) {
                 throw e;
@@ -408,11 +433,12 @@ public class FullTextExtractor {
             }
             log.info("full-text extraction round {}: {} of {} statements mapped, {} with open checks, {} unusable references",
                     round, statements.size(), targets.size(), open.size(), errors.size());
-            if ((open.isEmpty() && hints.isEmpty()) || round == properties.rounds()) {
+            boolean broken = errors.stream().anyMatch(e -> e.endsWith(LEFT_EMPTY));
+            if ((open.isEmpty() && hints.isEmpty() && !broken) || round == properties.rounds()) {
                 break;
             }
             // a sign that looks wrong is pointed out once; the model's second answer stands
-            if (open.isEmpty() && round > 1) {
+            if (open.isEmpty() && !broken && round > 1) {
                 break;
             }
             Map<Target, List<String>> points = new LinkedHashMap<>(open);
@@ -424,7 +450,8 @@ public class FullTextExtractor {
             history.add(new AssistantMessage(answer));
             history.add(new UserMessage(feedback(mapper, points, errors)));
         }
-        errors.forEach(e -> notes.add("Full-text extraction: " + e));
+        // a field left empty because its rows cannot be read is an open item; the rest is for the audit trail
+        errors.forEach(e -> (e.endsWith(LEFT_EMPTY) ? problems : notes).add("Full-text extraction: " + e));
         // the model's last answer is stored as it is; what does not add up is reported, not dropped
         open.forEach((target, issues) -> problems.add("Full-text extraction of " + target.name(mapper) + ": "
                 + (statements.containsKey(target) ? "stored as the model mapped it, although " : "not stored, ")
@@ -676,12 +703,16 @@ public class FullTextExtractor {
                 continue;
             }
             List<Term> list = new ArrayList<>();
+            boolean broken = false;
             if (terms.isArray()) {
                 for (JsonNode term : terms) {
                     String ref = term.path("row").asString("");
                     Optional<WorkbookText.Row> row = text.row(ref);
                     if (row.isEmpty()) {
-                        errors.add(where + "." + field.name() + ": '" + ref + "' is not a row reference of the text");
+                        errors.add(where + "." + field.name() + ": '" + ref + "' is not a row reference of the text"
+                                + " (only the rows of the balance sheet, profit or loss and cash flow sheets can be named)"
+                                + LEFT_EMPTY);
+                        broken = true;
                         continue;
                     }
                     if (list.stream().anyMatch(t -> t.row().ref().equals(row.get().ref()))) {
@@ -690,6 +721,11 @@ public class FullTextExtractor {
                     }
                     list.add(new Term(row.get(), sign(term.path("sign"))));
                 }
+            }
+            if (broken) {
+                // the rest of its rows is not what the model meant: revenue less a row that cannot be read is not
+                // a gross profit. The field has no value until the model names rows that exist.
+                list.clear();
             }
             fields.put(field.name(), list);
         }
@@ -842,8 +878,18 @@ public class FullTextExtractor {
                     + String.join(", ", differences)));
         }
         checks.add(Check.ok("full_text", "Every value decided by the model from the text of the workbook; amounts read from its cells"));
+        Set<String> cleared = new java.util.LinkedHashSet<>();
+        if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
+            for (String field : BY_FUNCTION_ONLY) {
+                if (values.get(field) == null) {
+                    // not a gap to fill: the filing has no such figure, so one stored by an earlier upload goes
+                    cleared.add(field);
+                    how.put(field, "full-text extraction: not reported (profit or loss by nature has no such row)");
+                }
+            }
+        }
         return new MappedStatement(table, target.column(), mapper.period(target.column()),
-                sheet == null ? target.kind().table() : sheet, values, how, checks, List.of());
+                sheet == null ? target.kind().table() : sheet, values, how, checks, List.of(), cleared);
     }
 
     /**

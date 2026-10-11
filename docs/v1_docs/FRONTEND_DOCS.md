@@ -150,6 +150,14 @@ the tabs show the other types or "All". Server side: `components/ingestion/inges
 (permission check, the page's data plus the first page of its jobs, error state); client side:
 `ingestion-page-client.tsx`.
 
+The jobs table has a "Cost" column: the USD cost and the number of model calls of a job (`cost` of
+`GET /api/v1/ingestions`; financial statement uploads, screenings and analyses), `*` when a call had to be
+priced from the list prices, a dash for a job without model calls. The job details show "Model cost"
+(`components/ingestion/job-usage.tsx`): the calls per stage and model with prompt, cached and completion
+tokens and the cost, and their total - for an upload the standard extraction (plan, tool turns, review;
+DeepSeek) and the full-text extraction (Haiku) side by side
+([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 7).
+
 | Element                    | Content                                                                                                                         |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
 | Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 20 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |

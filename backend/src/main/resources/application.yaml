@@ -50,6 +50,7 @@ spring:
         - classpath:db/V1.0.16__schema_syirkah.sql  # banks: temporary syirkah funds beside liabilities
         - classpath:db/V1.0.17__schema_screening_selection.sql # screening of selected stocks
         - classpath:db/V1.0.18__schema_ingestion_error.sql     # error log of the .xlsx ingestion API
+        - classpath:db/V1.0.19__schema_ingestion_cost.sql      # model cost of the .xlsx ingestion (llm_usage.job_id)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -94,6 +95,8 @@ neracalab:
     # the amounts are read from the cells); no rule of the Java code overrules it.
     # Every such upload is recorded in the table ingestion_error (fixed_by_claude_code).
     fallback:
+      # its own model (OpenRouter id), stronger than the standard extraction's; empty = spring.ai.openai.chat.model
+      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-haiku-5.5}
       enabled: ${INGESTION_FALLBACK_ENABLED:true}
       after: ${INGESTION_FALLBACK_AFTER:3m}       # longest the standard extraction runs before the full-text one takes over
       timeout: ${INGESTION_FALLBACK_TIMEOUT:5m}   # longest the full-text extraction runs (room for two provider retries); then FAILED

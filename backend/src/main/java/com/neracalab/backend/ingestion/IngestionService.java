@@ -188,7 +188,7 @@ public class IngestionService {
                 status = verification.complete() ? Status.COMPLETED : Status.INCOMPLETE;
                 error = null;
                 fallbackModelCalls = result.report().modelCalls();
-                fallback = new Fallback(trigger.name(), reason, result.report().columns(), result.report().modelCalls(),
+                fallback = new Fallback(trigger.name(), reason, fullText.model(), result.report().columns(), result.report().modelCalls(),
                         result.report().mapped(), result.report().problems(), result.steps(), null);
                 log.info("ingestion {}: full-text extraction finished: {} (columns {}, statements {})", session.id(), status,
                         result.report().columns(), result.report().mapped());
@@ -196,7 +196,7 @@ public class IngestionService {
                 log.warn("ingestion {}: full-text extraction stopped: {}", session.id(), e.getMessage());
                 status = Status.FAILED;
                 error = e.getMessage();
-                fallback = new Fallback(trigger.name(), reason, List.of(), 0, List.of(), List.of(), List.of(), e.getMessage());
+                fallback = new Fallback(trigger.name(), reason, fullText.model(), List.of(), 0, List.of(), List.of(), List.of(), e.getMessage());
             } catch (RuntimeException e) {
                 log.error("ingestion {}: full-text extraction failed", session.id(), e);
                 // what the standard extraction reached stays: an INCOMPLETE upload remains INCOMPLETE
@@ -205,7 +205,7 @@ public class IngestionService {
                     status = Status.FAILED;
                     error = error == null ? failure : error;
                 }
-                fallback = new Fallback(trigger.name(), reason, List.of(), 0, List.of(), List.of(), List.of(), failure);
+                fallback = new Fallback(trigger.name(), reason, fullText.model(), List.of(), 0, List.of(), List.of(), List.of(), failure);
             }
         }
         if (status == Status.FAILED) {

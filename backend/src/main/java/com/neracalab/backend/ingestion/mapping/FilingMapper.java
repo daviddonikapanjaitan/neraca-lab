@@ -204,6 +204,29 @@ public final class FilingMapper {
         }
     }
 
+    /**
+     * Profit or loss as filed, whatever its template: the sheet the rule-based extraction maps, else the other
+     * presentation (by nature for the General taxonomies, e.g. NSSS). Its totals - profit attributable to the
+     * parent, EPS - carry the same labels in both, so a published share count can be checked against either.
+     */
+    private StatementTable profitOrLossAsFiled() {
+        if (income != null) {
+            return income;
+        }
+        List<String> other = financial
+                ? List.of(IdxSheets.INCOME_BY_FUNCTION, IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX)
+                : List.of(IdxSheets.INCOME_BY_NATURE, IdxSheets.INCOME_BY_NATURE_BEFORE_TAX);
+        return other.stream().map(this::data).flatMap(Optional::stream).findFirst().orElse(null);
+    }
+
+    /**
+     * Whether profit or loss is presented by nature in a taxonomy whose rule-based extraction reads it by function
+     * (e.g. NSSS): expenses by type, no 'Cost of sales and revenue' and no 'Total gross profit' row.
+     */
+    public boolean incomeByNature() {
+        return !financial && income == null && profitOrLossAsFiled() != null;
+    }
+
     /** The workbook as read (every sheet), for the full-text extraction. */
     public IdxWorkbook workbook() {
         return workbook;
@@ -290,7 +313,11 @@ public final class FilingMapper {
 
     /** A per-share figure as filed, scaled to currency units per share. */
     private BigDecimal eps(String label, int ctx) {
-        BigDecimal raw = income.value(label, ctx);
+        return eps(income, label, ctx);
+    }
+
+    private BigDecimal eps(StatementTable profitOrLoss, String label, int ctx) {
+        BigDecimal raw = profitOrLoss.value(label, ctx);
         if (raw == null || epsScale.compareTo(BigDecimal.ONE) == 0) {
             return raw;
         }
@@ -2005,11 +2032,15 @@ public final class FilingMapper {
                 : date.equals(info.current().start().minusDays(1)) ? StatementColumn.CURRENT_PERIOD
                 : date.equals(info.prior().start().minusDays(1)) ? StatementColumn.PRIOR_PERIOD : null;
         int ctx = column == null ? -1 : durationIndex(column);
-        if (income == null || ctx < 0) {
+        StatementTable profitOrLoss = profitOrLossAsFiled();
+        if (ctx < 0) {
             return "no profit or loss period of this filing opens or closes on that date";
         }
-        BigDecimal parent = amount(income.value(PROFIT_PARENT, ctx));
-        BigDecimal eps = sumNullable(eps(EPS_BASIC, ctx), eps(EPS_BASIC_DISC, ctx));
+        if (profitOrLoss == null) {
+            return "the filing has no profit or loss to check the count against";
+        }
+        BigDecimal parent = amount(profitOrLoss.value(PROFIT_PARENT, ctx));
+        BigDecimal eps = sumNullable(eps(profitOrLoss, EPS_BASIC, ctx), eps(profitOrLoss, EPS_BASIC_DISC, ctx));
         if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
             return "the " + period(column).key() + " profit attributable to the parent and basic EPS do not allow a check";
         }

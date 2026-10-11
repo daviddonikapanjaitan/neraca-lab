@@ -125,9 +125,9 @@ public class IngestionAgent {
         if (!providerIgnore.isEmpty()) {
             extra.put("provider", Map.of("ignore", providerIgnore));
         }
-        if (!extra.isEmpty()) {
-            builder.extraBody(extra);
-        }
+        // OpenRouter then reports the cost of the call (usage.cost), recorded per upload job
+        extra.put("usage", Map.of("include", true));
+        builder.extraBody(extra);
         return builder;
     }
 
@@ -153,7 +153,7 @@ public class IngestionAgent {
     // ------------------------------------------------------------------ run
 
     public Outcome run(IngestionSession session) {
-        AgentTrace trace = new AgentTrace(session.deadline());
+        AgentTrace trace = new AgentTrace(session.deadline(), session.modelCalls());
         IngestionTools tools = new IngestionTools(session, repository, verifier);
         Map<String, ToolCallback> catalog = new LinkedHashMap<>();
         for (ToolCallback cb : ToolCallbacks.from(tools)) {
@@ -259,6 +259,7 @@ public class IngestionAgent {
                 new UserMessage("Filing overview:\n" + overview + "\n\nTool catalog:\n" + tools
                         + "\n" + converter.getFormat())),
                 options().build());
+        trace.stage(ModelCallListener.PLAN);
         String text = call(prompt, trace).getResult().getOutput().getText();
         IngestionPlan plan = converter.convert(text);
         if (plan == null || plan.steps() == null || plan.steps().isEmpty()) {
@@ -299,6 +300,7 @@ public class IngestionAgent {
                     .toolCallbacks(new ArrayList<>(offered.values()))
                     .parallelToolCalls(true)
                     .build();
+            trace.stage(ModelCallListener.EXECUTE);
             ChatResponse response = call(new Prompt(history, options), trace);
             AssistantMessage message = response.getResult().getOutput();
             history.add(message);
@@ -365,6 +367,7 @@ public class IngestionAgent {
                         toJson(verification), converter.getFormat()))),
                 options().build());
         try {
+            trace.stage(ModelCallListener.REVIEW);
             Reflection reflection = converter.convert(call(prompt, trace).getResult().getOutput().getText());
             if (reflection == null) {
                 throw new IllegalStateException("empty reflection");
@@ -401,14 +404,17 @@ public class IngestionAgent {
         for (int attempt = 0; ; attempt++) {
             deadline.check("a model call");
             trace.modelCall();
+            long started = System.nanoTime();
             try {
                 ChatResponse response = deadline.isNone() && !positive(callTimeout) ? chatModel.call(prompt)
                         : callWithin(prompt, deadline, callTimeout);
+                told(trace, prompt, response, started, null);
                 if (response != null && response.getMetadata() != null) {
                     trace.modelUsed(response.getMetadata().getModel());
                 }
                 return response;
             } catch (RuntimeException e) {
+                told(trace, prompt, null, started, ToolExecutor.rootMessage(e));
                 if (attempt >= properties.modelRetries() || !isTransient(e)) {
                     throw e;
                 }
@@ -431,6 +437,20 @@ public class IngestionAgent {
                     throw e;
                 }
             }
+        }
+    }
+
+    /**
+     * Tells the run's listener one attempt of a model call (its tokens and cost are recorded for the job). The
+     * model is the one of the request - the full-text extraction asks its own. Never throws.
+     */
+    private void told(AgentTrace trace, Prompt prompt, ChatResponse response, long startedNanos, String error) {
+        try {
+            String asked = prompt.getOptions() == null ? null : prompt.getOptions().getModel();
+            trace.listener().called(trace.stage(), asked == null || asked.isBlank() ? model : asked, response,
+                    (System.nanoTime() - startedNanos) / 1_000_000, error);
+        } catch (RuntimeException e) {
+            log.warn("model call not recorded: {}", e.getMessage());
         }
     }
 
