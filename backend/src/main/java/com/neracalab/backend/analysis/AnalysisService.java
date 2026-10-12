@@ -1,6 +1,7 @@
 package com.neracalab.backend.analysis;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -158,7 +159,8 @@ public class AnalysisService {
         // ---- company data from the database
         jobs.running(id, "Reading " + ticker + "'s statements, metrics and prices from the database");
         CompanyDetailResponse detail = companies.detail(p.exchange(), ticker);
-        FactSheet facts = FactSheet.of(detail, properties.annualPeriods());
+        Exchange exchange = Exchange.of(p.exchange());
+        FactSheet facts = FactSheet.of(detail, properties.annualPeriods(), conversion(exchange, detail, notes));
         if (detail.periods().isEmpty()) {
             notes.add("No financial statements are stored for " + ticker
                     + "; upload its IDX XBRL filings (Ingestion > IDX XBRL) for a full analysis.");
@@ -167,9 +169,9 @@ public class AnalysisService {
 
         // ---- market data and quantitative scorecards (Yahoo Finance, as the screening)
         jobs.progress(id, "Loading " + ticker + "'s market data (Yahoo Finance)", null, null);
-        Market market = market(Exchange.of(p.exchange()), ticker, p.agents(), notes);
+        Market market = market(exchange, ticker, p.agents(), notes);
         StoredDocuments documents = repository.storedDocuments(p.companyId(), DOCUMENT_TITLES);
-        Map<String, Object> marketData = marketData(market);
+        Map<String, Object> marketData = marketData(market, exchange.currency());
         repository.saveContext(id, context(facts, marketData, documents, market),
                 market == null ? null : market.snapshot().snapshotDate());
         checkInterrupted();
@@ -364,6 +366,35 @@ public class AnalysisService {
     // ------------------------------------------------------------------ data
 
     /**
+     * The translation of the company data into the currency its shares trade in, for a company that reports in
+     * another one (INDY on IDX: USD statements, and prices stored in USD by the price ingestion): the rate the
+     * latest stored price was converted with, so that price is the listing price again. Null when the company
+     * reports in the listing currency, or when no rate of the pair is stored (the data then stays as reported).
+     */
+    private FactSheet.Conversion conversion(Exchange exchange, CompanyDetailResponse detail, Notes notes) {
+        String listing = exchange.currency();
+        if (detail.company().currency() == null || detail.company().currency().equalsIgnoreCase(listing)) {
+            return null;
+        }
+        String reporting = detail.company().currency().toUpperCase(Locale.ROOT);
+        LocalDate priceDate = detail.latestPrice() == null ? null : detail.latestPrice().tradingDate();
+        FactSheet.Conversion conversion = repository.fxRate(reporting, listing, priceDate)
+                .or(() -> repository.fxRate(reporting, listing, null))
+                .orElse(null);
+        if (conversion == null) {
+            notes.add(detail.company().ticker() + " reports in " + reporting + " and no " + reporting + "/" + listing
+                    + " exchange rate is stored (Ingestion > Price Ingestion loads it): the company data is shown in "
+                    + reporting + ", the market data in " + listing + ".");
+            return null;
+        }
+        notes.add(detail.company().ticker() + " reports in " + reporting + ": the company data is shown in " + listing
+                + ", converted at " + conversion.rate().stripTrailingZeros().toPlainString() + " " + listing + " per "
+                + reporting + " (" + conversion.rateDate() + "); ratios and growth rates are those of the " + reporting
+                + " statements.");
+        return conversion;
+    }
+
+    /**
      * The stock's Yahoo Finance data: its fundamentals are refreshed when older than the screening's maximum age
      * (two requests), then the latest snapshot is scored. Null when the stock is not in the screening data.
      */
@@ -412,12 +443,13 @@ public class AnalysisService {
         return market == null ? null : market.score(agent);
     }
 
-    private static Map<String, Object> marketData(Market market) {
+    private static Map<String, Object> marketData(Market market, String listingCurrency) {
         if (market == null) {
             return null;
         }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("source", "Yahoo Finance");
+        m.put("currency", listingCurrency + " (marketCap, price, avgDailyValue and eps, unscaled)");
         m.put("date", market.snapshot().snapshotDate() == null ? null : market.snapshot().snapshotDate().toString());
         m.put("metrics", market.profile().asMap());
         return m;

@@ -99,10 +99,12 @@ neraca_lab/
 │               ├── V1.0.17__schema_screening_selection.sql (screening of selected stocks: screening_run.tickers)
 │               ├── V1.0.18__schema_ingestion_error.sql (error log of the .xlsx ingestion API: ingestion_error)
 │               ├── V1.0.19__schema_ingestion_cost.sql  (model cost of the .xlsx ingestion: llm_usage.job_id)
+│               ├── V1.0.20__schema_screening_currency.sql (fundamental_snapshot.financial_currency: USD reporters)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
 │               ├── V1.0.13__data_BNGA_shares.sql  (BNGA audited share counts from its annual reports)
+│               ├── V1.0.21__data_RAJA_shares.sql  (RAJA share counts and its 1:5 stock split of 2026-07-16)
 │               └── V1.0.6__data_metrics_valuation.sql
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
@@ -300,7 +302,7 @@ equity' row of a restated comparative (IMPC FY2023, MSIN FY2021) is counted with
 without revenue, which a later filing's comparative fills (comparatives fill empty fields, never change
 stored values; an EPS and its share count always come from one filing, and a share split a later filing
 restates - BMRI 2:1, MAPA 1:10 in 2023 - adjusts the per-share figures and share counts of that and earlier
-periods, whatever the upload order, and is recorded in `corporate_action`; a year with treasury stock gets no
+periods, whatever the upload order, and is recorded in `corporate_action`; a split after a company's latest filing, which no filing restates yet, is recorded by a data script and treated the same - RAJA 1:5 on 2026-07-16; a year with treasury stock gets no
 weighted share count - ULTJ FY2022 - and a line filed as 0 needs no classification). A bank's temporary
 syirkah funds are stored beside its liabilities (`temporary_syirkah_funds`), not in them. A filed EPS is checked against the filing's share count: a workbook whose two EPS columns
 contradict each other (NCKL FY2024) gives no share counts and its EPS is cleared, and an EPS off by a power of
@@ -469,6 +471,14 @@ table (searchable multi-select, up to 100) with the same steps and report; a cho
 check (liquidity, price below Rp 50, no recent trade, watchlist board) is kept and flagged instead of dropped, while
 one without the data the scorecards need is left out and named in the notes. Details: [`docs/v1_docs/SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md).
 
+**Companies that report in USD** (about 88 IDX listings: ADRO, BYAN, INDY, ITMG, MEDC, PGAS, RAJA, ...): Yahoo gives
+price, market cap, EPS and P/E in IDR but book value per share, free cash flow, EBITDA, cash, debt and the fiscal
+years in USD, and its own P/B and EV / EBITDA mix the two (INDY: 2,610 IDR / 0.231 USD = P/B 11,298.7). The
+screening stores the currency of the fundamentals (`fundamental_snapshot.financial_currency`, `V1.0.20`) and
+converts with the stored USD/IDR rate (`fx_rate_daily`): P/B, FCF yield, EV / EBITDA and Altman Z compare like with
+like (INDY P/B 0.63), and the agents get the fiscal years in IDR billions. Without a stored rate those four metrics
+are unknown rather than wrong. The same metrics feed Screening Stocks, Selected Stocks and the Analysis scorecards.
+
 ## AI analysis of one stock
 
 **Screening > Analysis** in the sidebar (the Screening entry is a dropdown with Screening Stocks, Selected
@@ -498,7 +508,10 @@ research agent is skipped (no call). The DeepSeek calls of the screening and the
 cheapest OpenRouter provider except `neracalab.screening.llm.provider-ignore` (`SCREENING_PROVIDER_IGNORE`,
 default `OpenInference`, whose fp4 endpoint looped past OpenRouter's 60 s limit and ignored the answer
 format); a call that fails transiently (stream reset, timeout, 408 / 429 / 5xx) is retried twice, and
-an agent answer without strengths and concerns is asked again. Details: [`docs/v1_docs/ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md).
+an agent answer without strengths and concerns is asked again. The fact sheet of a company that reports in USD
+(INDY, SMDR, RAJA, PTSN) is translated into IDR at one rate - the rate its latest stored price was converted with,
+so the price is the IDX quote again (INDY: Rp 2,790) - and the report and PDF name the rate; ratios, margins and
+growth rates stay those of the USD statements. Details: [`docs/v1_docs/ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md).
 
 ## Frontend
 
@@ -575,7 +588,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
-`SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `SameAsStoredTest` that filing values are compared at the stored column scale
+`SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `ShareSplitTest` the share splits (also that a split-adjusted USD EPS keeps its decimals: RAJA 0.0054 / 5 = 0.00108); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
 second, lower-case, padded or exchange-less company row is rejected and that the ingestion upsert
@@ -594,8 +607,8 @@ files rejected without storing, the job list filters and pages (`limit` / `offse
 name of each upload). `PriceIngestionControllerTest` also checks that price jobs are recorded in
 `ingestion_job`. The tests delete the job rows they create.
 Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), `YahooFundamentalsClientTest`
-(saved Yahoo responses), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist; selected stocks:
-flagged and excluded stocks),
+(saved Yahoo responses, the currency of the fundamentals), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist; selected stocks:
+flagged and excluded stocks; a company reporting in USD: converted metrics, fiscal years in IDR, unknown without a rate),
 `ScreeningAgentsTest` (scripted model: options, cost metering and budget, ReAct with a tool call,
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
 (pipeline mocked: validation, job, report, PDF; selectable companies, selection validation, runs by scope); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
@@ -604,7 +617,7 @@ RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PD
 and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
 permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
-search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet) and
+search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
 by role: report, usage per stage, paging, PDF, validation); see `docs/v1_docs/ANALYSIS_DOCS.md`, section 8.
 `ScreeningAgentsTest` also covers the shared gateway: OpenInference ignored in the provider routing, a stream
@@ -644,10 +657,12 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.17__schema_screening_selection.sql` | screening of selected stocks: `screening_run.tickers`, `market_cap_tier` NULL for such runs |
 | `V1.0.18__schema_ingestion_error.sql` | `ingestion_error`: every upload that was refused, taken over by the full-text extraction, INCOMPLETE or FAILED; `fixed_by_claude_code` |
 | `V1.0.19__schema_ingestion_cost.sql`  | `llm_usage.job_id`: every model call of a financial statement upload with its model, tokens and cost (per job on the IDX XBRL Ingestion page) |
+| `V1.0.20__schema_screening_currency.sql` | `fundamental_snapshot.financial_currency`: the currency Yahoo reports a listing's fundamentals in (USD for INDY, ADRO, ...); the screening metrics convert with `fx_rate_daily` |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
 | `V1.0.13__data_BNGA_shares.sql`       | BNGA audited year-end share counts 2021 .. 2025 (note 33 of the annual reports; two share classes and treasury shares) |
+| `V1.0.21__data_RAJA_shares.sql`       | RAJA share counts (21,135,412,500 split-adjusted, from 2021-12-31), its 1:5 stock split of 2026-07-16 and the EPS of the periods before it (/ 5) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).

@@ -12,7 +12,10 @@ import com.neracalab.backend.screening.data.YahooFundamentalsClient.Fundamentals
 /**
  * The metrics of one stock that Stage 1 scores and the agents see, derived from its latest
  * snapshot. Ratios are fractions; null = not known (the criterion is then skipped). Multi-year
- * metrics use the four fiscal years of {@code fundamental_snapshot.annual}.
+ * metrics use the four fiscal years of {@code fundamental_snapshot.annual}. Market cap, price, traded value
+ * and EPS are in the listing currency; of a company that reports in another currency (INDY: USD) the metrics
+ * that set market data against the statements (P/B, FCF yield, EV / EBITDA, Altman Z) are converted with
+ * {@code StockSnapshot.fundamentalsFx} and unknown without a rate.
  *
  * @param financial         bank / insurer / financial services: leverage, margin and cash-flow ratios
  *                          of industrial companies do not apply
@@ -69,7 +72,10 @@ public record StockProfile(boolean financial, Double marketCap, Double price, Do
         Double fcf = f == null ? null : f.freeCashFlow();
         Double netIncomeTtm = f == null ? null : f.netIncomeTtm();
         Double fcfConversion = financial || fcf == null || netIncomeTtm == null || netIncomeTtm <= 0 ? null : fcf / netIncomeTtm;
-        Double fcfYield = financial || fcf == null || s.marketCap() == null || s.marketCap() <= 0 ? null : fcf / s.marketCap();
+        // market cap in the currency of the fundamentals (INDY: IDR market cap, USD statements)
+        Double fx = s.fundamentalsFx();
+        Double marketCap = s.marketCap() == null || fx == null || fx <= 0 ? null : s.marketCap() / fx;
+        Double fcfYield = financial || fcf == null || marketCap == null || marketCap <= 0 ? null : fcf / marketCap;
 
         Double pe = positive(s.trailingPe());
         Double peg = null;
@@ -89,18 +95,40 @@ public record StockProfile(boolean financial, Double marketCap, Double price, Do
         if (!financial && ebit != null && interest != null && Math.abs(interest) > 0) {
             interestCoverage = Math.min(100, ebit / Math.abs(interest));
         }
-        Double altmanZ = financial ? null : altmanZ(a, s.marketCap());
+        Double altmanZ = financial ? null : altmanZ(a, marketCap);
         Double equityToAssets = ratio(a.latest("equity"), a.latest("totalAssets"));
+        // Yahoo's P/B divides the listing price by the book value per share in the currency of the fundamentals
+        Double pb = fx == null || fx <= 0 || positive(s.priceToBook()) == null ? null : s.priceToBook() / fx;
+        Double evToEbitda = financial || f == null ? null : evToEbitda(f, marketCap, fx);
 
-        return new StockProfile(financial, s.marketCap(), s.price(), s.avgDailyValue3m(), pe, positive(s.priceToBook()),
+        return new StockProfile(financial, s.marketCap(), s.price(), s.avgDailyValue3m(), pe, pb,
                 s.epsTtm(), f == null ? null : f.returnOnEquity(), f == null ? null : f.returnOnAssets(),
                 financial || f == null ? null : f.grossMargin(), f == null ? null : f.operatingMargin(),
                 f == null ? null : f.profitMargin(), financial || f == null ? null : f.debtToEquity(),
                 financial || f == null ? null : f.currentRatio(), f == null ? null : f.revenueGrowth(),
-                f == null ? null : f.earningsGrowth(), financial || f == null ? null : positive(f.evToEbitda()),
+                f == null ? null : f.earningsGrowth(), evToEbitda,
                 s.dividendYield(), f == null ? null : f.beta(), f == null ? null : f.insiderOwnership(), roeAverage,
                 positiveYears, revenueCagr, netIncomeCagr, opMarginTrend, capexIntensity, fcfConversion, fcfYield, peg,
                 drawdown, range52w, interestCoverage, altmanZ, equityToAssets, a.years().size());
+    }
+
+    /**
+     * Yahoo's EV / EBITDA when the listing trades in the currency of the fundamentals; otherwise Yahoo's enterprise
+     * value adds debt and cash in one currency to a market cap in the other, and the multiple is rebuilt from
+     * {@code marketCap} (in the currency of the fundamentals) + total debt - total cash.
+     */
+    static Double evToEbitda(Fundamentals f, Double marketCap, Double fx) {
+        if (fx == null || fx <= 0) {
+            return null;
+        }
+        if (fx == 1d) {
+            return positive(f.evToEbitda());
+        }
+        if (marketCap == null || f.totalDebt() == null || f.totalCash() == null || f.ebitdaTtm() == null
+                || f.ebitdaTtm() <= 0) {
+            return null;
+        }
+        return positive((marketCap + f.totalDebt() - f.totalCash()) / f.ebitdaTtm());
     }
 
     /** Banks, insurers and other financial services (Yahoo sector "Financial Services"). */

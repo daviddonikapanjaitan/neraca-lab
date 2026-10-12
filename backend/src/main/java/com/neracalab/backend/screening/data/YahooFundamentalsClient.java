@@ -212,14 +212,21 @@ public class YahooFundamentalsClient {
         }
     }
 
-    /** Fundamentals of one stock. Ratios are fractions (0.25 = 25%), debt / equity included. */
+    /**
+     * Fundamentals of one stock. Ratios are fractions (0.25 = 25%), debt / equity included. Amounts and the
+     * annual figures are in {@code financialCurrency}, which is not always the currency the listing trades in
+     * (INDY: USD); {@code enterpriseValue}, {@code evToEbitda} and {@code evToRevenue} then mix the two.
+     *
+     * @param financialCurrency ISO 4217 currency of the amounts (null: Yahoo did not say)
+     */
     public record Fundamentals(String sector, String industry, Double revenueTtm, Double netIncomeTtm, Double ebitdaTtm,
                                Double grossMargin, Double operatingMargin, Double profitMargin, Double ebitdaMargin,
                                Double returnOnEquity, Double returnOnAssets, Double debtToEquity, Double currentRatio,
                                Double quickRatio, Double totalCash, Double totalDebt, Double freeCashFlow,
                                Double operatingCashFlow, Double revenueGrowth, Double earningsGrowth,
                                Double enterpriseValue, Double evToEbitda, Double evToRevenue, Double pegRatio,
-                               Double beta, Double insiderOwnership, Double institutionOwnership, AnnualFigures annual) {
+                               Double beta, Double insiderOwnership, Double institutionOwnership, AnnualFigures annual,
+                               String financialCurrency) {
     }
 
     /**
@@ -252,6 +259,7 @@ public class YahooFundamentalsClient {
         if (beta == null) {
             beta = number(ks, "beta");
         }
+        String currency = text(fd, "financialCurrency");
         return new Fundamentals(text(ap, "sector"), text(ap, "industry"),
                 number(fd, "totalRevenue"), number(ks, "netIncomeToCommon"), number(fd, "ebitda"),
                 nonZero(number(fd, "grossMargins")), nonZero(number(fd, "operatingMargins")),
@@ -262,7 +270,8 @@ public class YahooFundamentalsClient {
                 number(fd, "freeCashflow"), number(fd, "operatingCashflow"), number(fd, "revenueGrowth"),
                 number(fd, "earningsGrowth"), number(ks, "enterpriseValue"), number(ks, "enterpriseToEbitda"),
                 number(ks, "enterpriseToRevenue"), number(ks, "pegRatio"), beta, number(ks, "heldPercentInsiders"),
-                number(ks, "heldPercentInstitutions"), annual);
+                number(ks, "heldPercentInstitutions"), annual,
+                currency != null && currency.matches("[A-Z]{3}") ? currency : null);
     }
 
     private AnnualFigures annual(String symbol) {

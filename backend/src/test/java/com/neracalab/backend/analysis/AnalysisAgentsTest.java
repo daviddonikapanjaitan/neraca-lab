@@ -252,5 +252,33 @@ class AnalysisAgentsTest {
                 .getFirst().get("income");
         assertThat(income).containsEntry("revenue", 1234.6).containsEntry("basicEps", 85.5);
         assertThat(FactSheet.of(TestFacts.detail("USD"), 4).amountUnit()).isEqualTo("USD millions");
+        assertThat(idrOverview).doesNotContainKey("currencyNote");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void factSheetOfACompanyReportingInAnotherCurrencyIsTranslated() {
+        FactSheet.Conversion rate = new FactSheet.Conversion("IDR", new java.math.BigDecimal("17920.00000000"),
+                java.time.LocalDate.of(2026, 10, 8));
+        FactSheet sheet = FactSheet.of(TestFacts.detail("USD"), 4, rate);
+        Map<String, Object> overview = sheet.overview();
+        assertThat(sheet.converted()).isTrue();
+        assertThat(sheet.currency()).isEqualTo("IDR");
+        // the report page cuts the unit at the first ";" and " (": the note must not move them
+        assertThat(overview.get("amountUnit")).isEqualTo("IDR billions (per-share amounts in IDR, converted from USD at "
+                + "17920 IDR per USD of 2026-10-08); ratios as fractions; H1 / 9M are year-to-date");
+        assertThat(overview.get("currencyNote").toString()).contains("reports in USD").contains("17920 IDR per USD");
+        assertThat((Map<String, Object>) overview.get("company")).containsEntry("reportingCurrency", "USD");
+        Map<String, Object> period = ((List<Map<String, Object>>) overview.get("periods")).getFirst();
+        // 1,234,567,000,000 USD x 17,920 / 1e9 and EPS 85.5 USD x 17,920; ratios untouched
+        assertThat((Map<String, Object>) period.get("income")).containsEntry("revenue", 22123440.6)
+                .containsEntry("basicEps", 1532160.0);
+        assertThat((Map<String, Object>) period.get("metrics")).containsEntry("roe_annualized", 0.1834);
+
+        // a rate into the reporting currency itself, or none: as reported
+        assertThat(FactSheet.of(TestFacts.detail("USD"), 4, new FactSheet.Conversion("USD", java.math.BigDecimal.ONE, null))
+                .converted()).isFalse();
+        assertThat(FactSheet.of(TestFacts.detail(), 4, rate).overview()).doesNotContainKey("currencyNote");
+        assertThat(FactSheet.of(TestFacts.detail("USD"), 4, null).amountUnit()).isEqualTo("USD millions");
     }
 }

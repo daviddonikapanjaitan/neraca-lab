@@ -105,10 +105,22 @@ per share); the latest valuation (price, market cap, P/E, P/B, P/S, EV/EBITDA, F
 yield) and price. Amounts are in the reporting currency, IDR in billions, other currencies (USD) in
 millions; per-share amounts unscaled; ratios as fractions.
 
+A company that reports in another currency than its shares trade in (INDY, SMDR, RAJA, PTSN: USD statements,
+IDR quote, and prices stored in USD by the price ingestion) gets its fact sheet translated into the listing
+currency (`FactSheet.Conversion`): every amount and per-share amount x one rate, IDR in billions. The rate is the
+last `fx_rate_daily` rate before the latest stored price date - the rate the price ingestion converted that price
+with, so the price is the IDX quote again (INDY 2026-10-09: USD 0.15569196 x 17,920 = Rp 2,790; market cap
+Rp 14,515.5 billion, as Yahoo's). One rate for all periods keeps ratios, margins and growth rates exactly those
+of the statements. `amountUnit` names the conversion (`IDR billions (per-share amounts in IDR, converted from USD
+at 17920 IDR per USD of 2026-10-08)`, shown by the report page and the PDF), `currencyNote` tells the agents that
+the filings and the research brief still quote the reporting currency, `company.reportingCurrency` stays USD and
+a note of the report states the rate. Without a stored rate the fact sheet stays in the reporting currency and a
+note says so.
+
 Market data: the stock's Yahoo Finance fundamentals are refreshed when older than the screening's
 `etl.fundamentals-max-age` (two requests, nothing when the stock is not listed in the screening
 data), then the latest snapshot gives the metrics (`StockProfile`) and each agent's quantitative
-scorecard. A scorecard with fewer than `min-fundamentals-coverage` (50%) of its metrics known is no
+scorecard; `marketData.currency` names the listing currency of its market cap, price, traded value and EPS, and for a company reporting in another currency P/B, FCF yield, EV / EBITDA and Altman Z are converted ([SCREENING_DOCS.md](SCREENING_DOCS.md) section 3). A scorecard with fewer than `min-fundamentals-coverage` (50%) of its metrics known is no
 prior: the agent judges without it.
 
 ## 4. Agents and patterns
@@ -179,7 +191,7 @@ and `V1.0.14`. Details in [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md).
 
 | Test | What it proves |
 |------|----------------|
-| `AnalysisAgentsTest` | no documents: no research call; ReAct with a `searchFilings` call: only useful tools offered, excerpt refs and pages, whitespace collapsed, invented refs dropped, retrieval metered as estimated; tool limits (repeated query, unknown period, no documents); synthesis bounds (adjustment +-5, conviction filled in, none without score) and fallback; an agent without a quantitative prior; fact-sheet period selection and currency scaling |
+| `AnalysisAgentsTest` | no documents: no research call; ReAct with a `searchFilings` call: only useful tools offered, excerpt refs and pages, whitespace collapsed, invented refs dropped, retrieval metered as estimated; tool limits (repeated query, unknown period, no documents); synthesis bounds (adjustment +-5, conviction filled in, none without score) and fallback; an agent without a quantitative prior; fact-sheet period selection and currency scaling; the fact sheet of a USD reporter translated into IDR (amounts, per-share amounts, the unit text the report page cuts, ratios untouched) and left as reported without a rate |
 | `AnalysisControllerTest` | HRTA end to end against the Docker Postgres (its stored statements and PDF chunks; model answering by role, stub embeddings, no Yahoo request): report, fact sheet periods, retrieved excerpts, six agents, capped adjustment, usage per stage, Opus for the synthesis, list paging, PDF; an active analysis returned instead of queued again; validation |
 | `AccessControlTest` | the analysis APIs need SCREENING |
 

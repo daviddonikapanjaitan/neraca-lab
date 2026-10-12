@@ -430,6 +430,11 @@ public class IngestionRepository {
 
     /** Start of the description of a corporate_action row written by {@link #recordSplit}. */
     static final String DETECTED_SPLIT = "Restated in the filings: ";
+    /**
+     * Start of the description of a split a data script records with its real date, for a split no stored filing
+     * restates yet (RAJA split 1:5 on 2026-07-16, after its latest filing: V1.0.21). Read like a detected one.
+     */
+    static final String SEEDED_SPLIT = "Recorded from public sources: ";
     /** A stored share count within this share of the count before a split is on the old basis. */
     private static final BigDecimal OLD_BASIS_TOLERANCE = new BigDecimal("0.10");
 
@@ -463,9 +468,10 @@ public class IngestionRepository {
         int moved = jdbc.sql("""
                         UPDATE corporate_action SET action_date = GREATEST(action_date, :d)
                         WHERE company_id = :c AND action_type = :type AND ratio_from = :rf AND ratio_to = :rt
-                          AND description LIKE :marker AND action_date BETWEEN :lo AND :hi""")
+                          AND (description LIKE :marker OR description LIKE :seeded) AND action_date BETWEEN :lo AND :hi""")
                 .param("d", from).param("c", companyId).param("type", split ? "STOCK_SPLIT" : "REVERSE_SPLIT")
                 .param("rf", ratioFrom).param("rt", ratioTo).param("marker", DETECTED_SPLIT + "%")
+                .param("seeded", SEEDED_SPLIT + "%")
                 .param("lo", from.minusYears(1)).param("hi", from.plusYears(1)).update();
         if (moved > 0) {
             return;
@@ -485,15 +491,16 @@ public class IngestionRepository {
                 .update();
     }
 
-    /** The splits recorded by {@link #recordSplit}, oldest first. */
+    /** The splits recorded by {@link #recordSplit} or by a data script ({@link #SEEDED_SPLIT}), oldest first. */
     public List<DetectedSplit> detectedSplits(long companyId) {
         return jdbc.sql("""
                         SELECT action_date, ratio_from, ratio_to, shares_issued FROM corporate_action
                         WHERE company_id = :c AND action_type IN ('STOCK_SPLIT', 'REVERSE_SPLIT')
-                          AND description LIKE :marker AND ratio_from > 0 AND ratio_to > 0 AND ratio_from <> ratio_to
+                          AND (description LIKE :marker OR description LIKE :seeded)
+                          AND ratio_from > 0 AND ratio_to > 0 AND ratio_from <> ratio_to
                           AND shares_issued IS NOT NULL
                         ORDER BY action_date, corporate_action_id""")
-                .param("c", companyId).param("marker", DETECTED_SPLIT + "%")
+                .param("c", companyId).param("marker", DETECTED_SPLIT + "%").param("seeded", SEEDED_SPLIT + "%")
                 .query((rs, i) -> {
                     BigDecimal factor = rs.getBigDecimal(3).compareTo(rs.getBigDecimal(2)) > 0
                             ? rs.getBigDecimal(3).divide(rs.getBigDecimal(2), 0, RoundingMode.HALF_UP)
@@ -618,13 +625,20 @@ public class IngestionRepository {
         return reverse ? BigDecimal.ONE.divide(BigDecimal.valueOf(k), 12, RoundingMode.HALF_UP) : BigDecimal.valueOf(k);
     }
 
-    /** A per-share value after a split with {@code factor} (EPS / factor; share count x factor); null stays null. */
-    private static BigDecimal scaled(BigDecimal value, BigDecimal factor, boolean shareCount) {
+    /**
+     * A per-share value after a split with {@code factor} (EPS / factor; share count x factor); null stays null.
+     * An EPS keeps two decimals more than it has (at least 2, at most the 8 of the column): 882.52 / 2 = 441.26,
+     * and the EPS of a company reporting in USD does not round to nothing (RAJA: 0.0054 / 5 = 0.00108, not 0.00).
+     */
+    static BigDecimal scaled(BigDecimal value, BigDecimal factor, boolean shareCount) {
         if (value == null) {
             return null;
         }
-        return shareCount ? value.multiply(factor).setScale(0, RoundingMode.HALF_UP)
-                : value.divide(factor, 2, RoundingMode.HALF_UP);
+        if (shareCount) {
+            return value.multiply(factor).setScale(0, RoundingMode.HALF_UP);
+        }
+        int decimals = Math.min(8, Math.max(2, value.stripTrailingZeros().scale() + 2));
+        return value.divide(factor, decimals, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal decimal(Object value) {

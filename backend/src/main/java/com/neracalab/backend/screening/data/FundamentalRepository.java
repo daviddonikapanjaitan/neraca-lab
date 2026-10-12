@@ -44,15 +44,25 @@ public class FundamentalRepository {
             "debt_to_equity", "current_ratio", "quick_ratio", "total_cash", "total_debt", "free_cash_flow",
             "operating_cash_flow", "revenue_growth", "earnings_growth", "enterprise_value", "ev_to_ebitda",
             "ev_to_revenue", "peg_ratio", "beta", "insider_ownership", "institution_ownership", "annual",
-            "fundamentals_fetched_at");
+            "financial_currency", "fundamentals_fetched_at");
 
-    /** One listing with its latest snapshot (market data and, when loaded, fundamentals). */
+    /**
+     * One listing with its latest snapshot (market data and, when loaded, fundamentals). Price, market cap, EPS
+     * and P/E are in the listing currency; book value per share and the amounts of the fundamentals in the
+     * currency the company reports in, so {@code priceToBook} mixes the two when they differ.
+     *
+     * @param fundamentalsFx       listing currency units per unit of the currency of the fundamentals: 1 when they
+     *                             are the same, the last stored rate up to the snapshot date otherwise (INDY: IDR
+     *                             per USD); null when no rate of the pair is stored
+     * @param fundamentalsCurrency currency of the fundamentals (null: not known, taken to be the listing currency)
+     */
     public record StockSnapshot(long listingId, long snapshotId, String exchange, String ticker, String companyName,
                                 String sector, String industry, String board, LocalDate snapshotDate, Double price,
                                 Double marketCap, Double sharesOutstanding, Double avgVolume3m, Double avgDailyValue3m,
                                 Double fiftyTwoWeekHigh, Double fiftyTwoWeekLow, Double trailingPe, Double forwardPe,
                                 Double priceToBook, Double epsTtm, Double bookValuePerShare, Double dividendYield,
-                                Instant lastTradeAt, Fundamentals fundamentals, Instant fundamentalsFetchedAt) {
+                                Instant lastTradeAt, Fundamentals fundamentals, Instant fundamentalsFetchedAt,
+                                Double fundamentalsFx, String fundamentalsCurrency) {
 
         public boolean hasFundamentals() {
             return fundamentals != null;
@@ -209,8 +219,15 @@ public class FundamentalRepository {
     }
 
     /**
-     * Latest snapshots of active listings whose fundamentals are missing or older than
-     * {@code fetchedBefore}, largest market cap first. {@code tickers} null = all.
+     * Fundamentals fetched before this instant have no {@code financial_currency} (the column is newer): they are
+     * stale whatever their age, so that every listing gets its currency with the next refresh instead of within
+     * {@code fundamentals-max-age}. A listing Yahoo names no currency for is not fetched again for this reason.
+     */
+    static final Instant CURRENCY_SINCE = Instant.parse("2026-10-13T00:00:00Z");
+
+    /**
+     * Latest snapshots of active listings whose fundamentals are missing, older than {@code fetchedBefore} or
+     * without a currency (see {@link #CURRENCY_SINCE}), largest market cap first. {@code tickers} null = all.
      */
     public List<StaleListing> staleFundamentals(Exchange exchange, Instant fetchedBefore, List<String> tickers) {
         String filter = tickers == null ? "" : " AND l.ticker IN (:tickers)";
@@ -220,16 +237,18 @@ public class FundamentalRepository {
         JdbcClient.StatementSpec spec = jdbc.sql("""
                         SELECT * FROM (
                             SELECT DISTINCT ON (l.listing_id) l.listing_id, s.snapshot_id, l.ticker, s.market_cap,
-                                   s.fundamentals_fetched_at
+                                   s.fundamentals_fetched_at, s.financial_currency
                             FROM stock_listing l
                             JOIN fundamental_snapshot s ON s.listing_id = l.listing_id
                             WHERE l.exchange = :exchange AND l.active%s
                             ORDER BY l.listing_id, s.snapshot_date DESC
                         ) latest
                         WHERE fundamentals_fetched_at IS NULL OR fundamentals_fetched_at < :before
+                           OR (financial_currency IS NULL AND fundamentals_fetched_at < :currencySince)
                         ORDER BY market_cap DESC NULLS LAST, ticker""".formatted(filter))
                 .param("exchange", exchange.code())
-                .param("before", timestamp(fetchedBefore), Types.TIMESTAMP_WITH_TIMEZONE);
+                .param("before", timestamp(fetchedBefore), Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("currencySince", timestamp(CURRENCY_SINCE), Types.TIMESTAMP_WITH_TIMEZONE);
         if (tickers != null) {
             spec = spec.param("tickers", tickers);
         }
@@ -250,7 +269,8 @@ public class FundamentalRepository {
                                 earnings_growth = :eg, enterprise_value = :ev, ev_to_ebitda = :evEbitda,
                                 ev_to_revenue = :evRevenue, peg_ratio = :peg, beta = :beta,
                                 insider_ownership = :insiders, institution_ownership = :institutions,
-                                annual = CAST(:annual AS jsonb), fundamentals_fetched_at = now(),
+                                annual = CAST(:annual AS jsonb), financial_currency = :currency,
+                                fundamentals_fetched_at = now(),
                                 fundamentals_error = NULL, updated_at = now()
                             WHERE snapshot_id = :id""")
                     .param("id", listing.snapshotId())
@@ -280,6 +300,7 @@ public class FundamentalRepository {
                     .param("insiders", f.insiderOwnership(), Types.NUMERIC)
                     .param("institutions", f.institutionOwnership(), Types.NUMERIC)
                     .param("annual", toJson(f.annual()), Types.VARCHAR)
+                    .param("currency", f.financialCurrency(), Types.CHAR)
                     .update();
             jdbc.sql("""
                             UPDATE stock_listing SET sector = COALESCE(:sector, sector),
@@ -302,11 +323,24 @@ public class FundamentalRepository {
 
     // ------------------------------------------------------------------ reads
 
+    /**
+     * fundamentals_fx: the rate from the currency of the fundamentals (of a row fetched before the column existed:
+     * the company's reporting currency) to the listing currency, 1 when they are the same or unknown.
+     */
     private static final String LATEST = """
             SELECT DISTINCT ON (l.listing_id) l.listing_id, l.exchange, l.ticker, l.company_name, l.sector, l.industry,
-                   l.board, s.*
+                   l.board, s.*,
+                   CASE WHEN l.currency IS NULL OR COALESCE(s.financial_currency, c.currency) IS NULL
+                             OR COALESCE(s.financial_currency, c.currency) = l.currency THEN 1
+                        ELSE (SELECT r.rate FROM fx_rate_daily r
+                              WHERE r.base_currency = COALESCE(s.financial_currency, c.currency)
+                                AND r.quote_currency = l.currency AND r.rate_date <= s.snapshot_date
+                              ORDER BY r.rate_date DESC LIMIT 1)
+                   END AS fundamentals_fx,
+                   COALESCE(s.financial_currency, c.currency) AS fundamentals_currency
             FROM stock_listing l
             JOIN fundamental_snapshot s ON s.listing_id = l.listing_id
+            LEFT JOIN company c ON c.exchange = l.exchange AND c.ticker = l.ticker
             WHERE l.exchange = :exchange AND l.active%s
             ORDER BY l.listing_id, s.snapshot_date DESC""";
 
@@ -368,7 +402,7 @@ public class FundamentalRepository {
                 dbl(rs, "free_cash_flow"), dbl(rs, "operating_cash_flow"), dbl(rs, "revenue_growth"),
                 dbl(rs, "earnings_growth"), dbl(rs, "enterprise_value"), dbl(rs, "ev_to_ebitda"),
                 dbl(rs, "ev_to_revenue"), dbl(rs, "peg_ratio"), dbl(rs, "beta"), dbl(rs, "insider_ownership"),
-                dbl(rs, "institution_ownership"), annual(rs.getString("annual")));
+                dbl(rs, "institution_ownership"), annual(rs.getString("annual")), rs.getString("financial_currency"));
         return new StockSnapshot(rs.getLong("listing_id"), rs.getLong("snapshot_id"), rs.getString("exchange"),
                 rs.getString("ticker"), rs.getString("company_name"), rs.getString("sector"), rs.getString("industry"),
                 rs.getString("board"), rs.getObject("snapshot_date", LocalDate.class), dbl(rs, "price"),
@@ -376,7 +410,7 @@ public class FundamentalRepository {
                 dbl(rs, "avg_daily_value_3m"), dbl(rs, "fifty_two_week_high"), dbl(rs, "fifty_two_week_low"),
                 dbl(rs, "trailing_pe"), dbl(rs, "forward_pe"), dbl(rs, "price_to_book"), dbl(rs, "eps_ttm"),
                 dbl(rs, "book_value_per_share"), dbl(rs, "dividend_yield"), instant(rs, "last_trade_at"),
-                fundamentals, fetchedAt);
+                fundamentals, fetchedAt, dbl(rs, "fundamentals_fx"), rs.getString("fundamentals_currency"));
     }
 
     private AnnualFigures annual(String text) {

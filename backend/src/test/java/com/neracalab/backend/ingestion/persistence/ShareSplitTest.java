@@ -42,6 +42,19 @@ class ShareSplitTest {
     private JdbcClient jdbc;
 
     @Test
+    void aSplitAdjustedEpsKeepsItsPrecision() {
+        BigDecimal five = BigDecimal.valueOf(5);
+        // a company reporting in USD (RAJA, split 1:5 in 2026): two decimals would leave 0.00
+        assertThat(IngestionRepository.scaled(new BigDecimal("0.00540000"), five, false)).isEqualByComparingTo("0.00108");
+        assertThat(IngestionRepository.scaled(new BigDecimal("0.00644"), five, false)).isEqualByComparingTo("0.001288");
+        // rupiah figures as before
+        assertThat(IngestionRepository.scaled(new BigDecimal("882.52"), BigDecimal.valueOf(2), false)).isEqualByComparingTo("441.26");
+        assertThat(IngestionRepository.scaled(new BigDecimal("412"), BigDecimal.TEN, false)).isEqualByComparingTo("41.2");
+        assertThat(IngestionRepository.scaled(new BigDecimal("4227082500"), five, true)).isEqualByComparingTo("21135412500");
+        assertThat(IngestionRepository.scaled(null, five, false)).isNull();
+    }
+
+    @Test
     void aSplitRestatedByAComparativeAdjustsThePeriodAndEarlierPeriodsOnTheOldBasisOnce() {
         long company = company();
         long fy2096 = repository.upsertPeriod(company, FY2096, "test-2096.xlsx", true, true);

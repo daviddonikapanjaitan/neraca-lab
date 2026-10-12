@@ -23,10 +23,12 @@ foreign key.
 | `V1.0.17__schema_screening_selection.sql` | `screening_run.tickers`: screening of selected stocks; `market_cap_tier` NULL for those runs (section 4.11) |
 | `V1.0.18__schema_ingestion_error.sql`     | `ingestion_error`: error log of the .xlsx ingestion API, work list of Claude Code (`fixed_by_claude_code`); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 6 |
 | `V1.0.19__schema_ingestion_cost.sql`      | `llm_usage.job_id`: the model calls of a financial statement upload (tokens and cost per job); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 7 |
+| `V1.0.20__schema_screening_currency.sql`  | `fundamental_snapshot.financial_currency`: currency of a listing's Yahoo fundamentals, for companies that report in another currency than they trade in (section 4.11) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
 | `V1.0.13__data_BNGA_shares.sql`           | BNGA audited year-end share counts 2021 .. 2025 from its annual reports (not derivable from its filings: two share classes, treasury shares); no-op until BNGA is uploaded; also run after every upload |
+| `V1.0.21__data_RAJA_shares.sql`           | RAJA share counts from public sources (not derivable from its USD filings), its 1:5 stock split of 2026-07-16 (after its latest filing, so the published counts did not fit the filed EPS) and the EPS of the earlier periods on the basis after it; no-op until RAJA is uploaded |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 
 New filings can also be loaded at runtime through the upload endpoint, which writes the same
@@ -635,6 +637,13 @@ Constraints: `uq_fx_rate_daily UNIQUE (base_currency, quote_currency, rate_date)
 
 The script also widens `ck_role_permissions_permission` (`SCREENING`) and `ck_ingestion_job_type`
 (`FUNDAMENTALS`, `SCREENING`). Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
+
+`fundamental_snapshot.financial_currency` (`V1.0.20__schema_screening_currency.sql`, `CHAR(3)`, nullable) is the
+currency Yahoo reports the fundamentals of the row in. `price`, `market_cap`, `eps_ttm` and `trailing_pe` are in
+`stock_listing.currency`; `book_value_per_share`, the TTM amounts, `total_cash`, `total_debt` and `annual` are in
+`financial_currency`, and Yahoo's `price_to_book`, `enterprise_value` and `ev_to_ebitda` mix the two when they
+differ (INDY: 2,610 IDR / 0.231 USD = 11,298.7). NULL on rows fetched before the column existed: the reading
+query then takes `company.currency`, and those rows count as stale once so the next refresh fills them.
 
 ### 4.12 RAG vector store (`V1.0.14__schema_rag.sql`)
 

@@ -51,11 +51,13 @@ spring:
         - classpath:db/V1.0.17__schema_screening_selection.sql # screening of selected stocks
         - classpath:db/V1.0.18__schema_ingestion_error.sql     # error log of the .xlsx ingestion API
         - classpath:db/V1.0.19__schema_ingestion_cost.sql      # model cost of the .xlsx ingestion (llm_usage.job_id)
+        - classpath:db/V1.0.20__schema_screening_currency.sql  # currency of the screening fundamentals (USD reporters)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
         - classpath:db/V1.0.12__data_SMDR_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.13__data_BNGA_shares.sql      # share counts not derivable from the filings
+        - classpath:db/V1.0.21__data_RAJA_shares.sql      # share counts and the 1:5 split of 2026-07-16
         - classpath:db/V1.0.6__data_metrics_valuation.sql
       continue-on-error: false
   jpa:

@@ -309,6 +309,25 @@ public class AnalysisRepository {
                 .list();
     }
 
+    /**
+     * The last stored exchange rate of a pair ({@code quote} units per {@code base} unit, fx_rate_daily) dated
+     * before {@code before} - the rate the price ingestion converted the listing price of that day with - or the
+     * last one at all when {@code before} is null.
+     */
+    public Optional<FactSheet.Conversion> fxRate(String base, String quote, LocalDate before) {
+        return jdbc.sql("""
+                        SELECT rate, rate_date FROM fx_rate_daily
+                        WHERE base_currency = :base AND quote_currency = :quote
+                          AND (CAST(:before AS date) IS NULL OR rate_date < :before)
+                        ORDER BY rate_date DESC, updated_at DESC LIMIT 1""")
+                .param("base", base, Types.CHAR)
+                .param("quote", quote, Types.CHAR)
+                .param("before", before, Types.DATE)
+                .query((rs, i) -> new FactSheet.Conversion(quote, rs.getBigDecimal("rate"),
+                        rs.getObject("rate_date", LocalDate.class)))
+                .optional();
+    }
+
     /** PDF and news documents of a company in the vector store. */
     public record StoredDocuments(long filings, long news, List<String> filingTitles, List<String> newsTitles) {
     }

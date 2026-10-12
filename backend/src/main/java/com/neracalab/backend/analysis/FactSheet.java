@@ -27,8 +27,23 @@ import com.neracalab.backend.company.CompanyDetailResponse.Valuation;
  * millions (per-share amounts unscaled); ratios are fractions (0.25 = 25%). H1 and 9M periods are year-to-date.
  * The overview holds the latest {@code annualPeriods} fiscal years and, when newer, the latest interim period with
  * its prior-year comparative.
+ * <p>
+ * With a {@link Conversion} (a company that reports in another currency than its listing trades in, INDY: USD
+ * statements, IDR quote) every amount and per-share amount is translated into the listing currency at that one
+ * rate: prices, market cap and statements are then in the currency of the exchange, and ratios, margins and growth
+ * rates stay exactly those of the statements.
  */
 public final class FactSheet {
+
+    /**
+     * Translation of the stored amounts into another currency.
+     *
+     * @param currency the currency the fact sheet shows (the listing currency, IDR)
+     * @param rate     {@code currency} units per unit of the reporting currency
+     * @param rateDate day of the rate
+     */
+    public record Conversion(String currency, BigDecimal rate, LocalDate rateDate) {
+    }
 
     /** Metrics of a period shown in the overview (financial_metric names). */
     static final List<String> OVERVIEW_METRICS = List.of("gross_margin", "operating_margin", "net_margin",
@@ -37,21 +52,41 @@ public final class FactSheet {
             "ocf_to_net_income", "capex_to_revenue", "free_cash_flow", "net_debt", "eps", "book_value_per_share");
 
     private final CompanyDetailResponse detail;
+    /** Currency of the stored amounts (company.currency). */
+    private final String reportingCurrency;
+    /** Currency of the amounts shown: the reporting currency, or that of the conversion. */
     private final String currency;
+    /** {@code currency} units per unit of the reporting currency (1 without conversion). */
+    private final double fx;
+    private final String conversionNote;
     private final double scale;
     private final String amountUnit;
     private final List<Period> overviewPeriods;
 
-    private FactSheet(CompanyDetailResponse detail, int annualPeriods) {
+    private FactSheet(CompanyDetailResponse detail, int annualPeriods, Conversion conversion) {
         this.detail = detail;
-        this.currency = detail.company().currency() == null ? "IDR" : detail.company().currency().toUpperCase(Locale.ROOT);
+        this.reportingCurrency = detail.company().currency() == null ? "IDR"
+                : detail.company().currency().toUpperCase(Locale.ROOT);
+        boolean converted = conversion != null && conversion.currency() != null && conversion.rate() != null
+                && conversion.rate().signum() > 0 && !conversion.currency().equalsIgnoreCase(reportingCurrency);
+        this.currency = converted ? conversion.currency().toUpperCase(Locale.ROOT) : reportingCurrency;
+        this.fx = converted ? conversion.rate().doubleValue() : 1;
+        this.conversionNote = !converted ? null : "converted from " + reportingCurrency + " at "
+                + conversion.rate().stripTrailingZeros().toPlainString() + " " + currency + " per " + reportingCurrency
+                + (conversion.rateDate() == null ? "" : " of " + conversion.rateDate());
         this.scale = currency.equals("IDR") ? 1e9 : 1e6;
         this.amountUnit = currency + (currency.equals("IDR") ? " billions" : " millions");
         this.overviewPeriods = select(detail.periods(), annualPeriods);
     }
 
+    /** The fact sheet in the reporting currency. */
     public static FactSheet of(CompanyDetailResponse detail, int annualPeriods) {
-        return new FactSheet(detail, annualPeriods);
+        return new FactSheet(detail, annualPeriods, null);
+    }
+
+    /** The fact sheet translated with {@code conversion} (null, or the reporting currency itself: as reported). */
+    public static FactSheet of(CompanyDetailResponse detail, int annualPeriods, Conversion conversion) {
+        return new FactSheet(detail, annualPeriods, conversion);
     }
 
     /** Fiscal years (most recent first, at most {@code annual}), preceded by a newer interim period and its comparative. */
@@ -72,8 +107,14 @@ public final class FactSheet {
         return out;
     }
 
+    /** Currency of the amounts shown. */
     public String currency() {
         return currency;
+    }
+
+    /** Whether the amounts are translated from the reporting currency. */
+    public boolean converted() {
+        return conversionNote != null;
     }
 
     public String amountUnit() {
@@ -98,9 +139,17 @@ public final class FactSheet {
         company.put("name", c.companyName());
         put(company, "sector", c.sector());
         put(company, "industry", c.industry());
-        company.put("reportingCurrency", currency);
+        company.put("reportingCurrency", reportingCurrency);
         m.put("company", company);
-        m.put("amountUnit", amountUnit + " (per-share amounts in " + currency + "); ratios as fractions; H1 / 9M are year-to-date");
+        // the report page and the PDF cut this text at the first ";" and " (": keep both out of the note
+        m.put("amountUnit", amountUnit + " (per-share amounts in " + currency
+                + (conversionNote == null ? "" : ", " + conversionNote) + "); ratios as fractions; H1 / 9M are year-to-date");
+        if (conversionNote != null) {
+            m.put("currencyNote", "The company reports in " + reportingCurrency + " and its shares trade in " + currency
+                    + ". Every amount and per-share amount here is " + conversionNote + " (one rate for all periods, so "
+                    + "ratios, margins and growth rates are those of the " + reportingCurrency + " statements). Its "
+                    + "filings, and figures quoted from them in the research brief, are in " + reportingCurrency + ".");
+        }
         List<Map<String, Object>> periods = new ArrayList<>();
         for (Period p : overviewPeriods) {
             periods.add(period(p, false));
@@ -110,7 +159,7 @@ public final class FactSheet {
         if (detail.latestPrice() != null) {
             Map<String, Object> price = new LinkedHashMap<>();
             price.put("date", detail.latestPrice().tradingDate().toString());
-            put(price, "close", plain(detail.latestPrice().closePrice(), 4));
+            put(price, "close", perShare(detail.latestPrice().closePrice()));
             if (detail.coverage() != null && detail.coverage().firstPriceDate() != null) {
                 price.put("historyFrom", detail.coverage().firstPriceDate().toString());
             }
@@ -183,7 +232,7 @@ public final class FactSheet {
         put(m, "pretaxIncome", amount(s.pretaxIncome()));
         put(m, "netIncome", amount(s.netIncome()));
         put(m, "netIncomeToParent", amount(s.netIncomeToParent()));
-        put(m, "basicEps", plain(s.basicEps(), 4));
+        put(m, "basicEps", perShare(s.basicEps()));
         if (full) {
             put(m, "sgaExpense", amount(s.sgaExpense()));
             put(m, "rdExpense", amount(s.rdExpense()));
@@ -192,7 +241,7 @@ public final class FactSheet {
             put(m, "ebit", amount(s.ebit()));
             put(m, "interestIncome", amount(s.interestIncome()));
             put(m, "incomeTax", amount(s.incomeTax()));
-            put(m, "dilutedEps", plain(s.dilutedEps(), 4));
+            put(m, "dilutedEps", perShare(s.dilutedEps()));
             put(m, "basicSharesMillions", millions(s.basicShares()));
         }
         return m;
@@ -254,10 +303,10 @@ public final class FactSheet {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("date", v.valuationDate().toString());
         put(m, "basedOnPeriod", v.period());
-        put(m, "sharePrice", plain(v.sharePrice(), 4));
+        put(m, "sharePrice", perShare(v.sharePrice()));
         put(m, "marketCap", amount(v.marketCap()));
         put(m, "enterpriseValue", amount(v.enterpriseValue()));
-        put(m, "epsTtm", plain(v.epsTtm(), 4));
+        put(m, "epsTtm", perShare(v.epsTtm()));
         put(m, "pe", plain(v.peRatio(), 2));
         put(m, "pb", plain(v.pbRatio(), 2));
         put(m, "ps", plain(v.psRatio(), 2));
@@ -274,17 +323,23 @@ public final class FactSheet {
             return null;
         }
         String unit = metric.unit() == null ? "" : metric.unit();
-        if (unit.equals(currency)) {
+        if (unit.equals(reportingCurrency)) {
             return amount(metric.value());
         }
         if (unit.endsWith("/share")) {
-            return plain(metric.value(), 4);
+            return perShare(metric.value());
         }
         return plain(metric.value(), unit.equals("days") ? 1 : 4);
     }
 
+    /** A stored amount in the currency shown, scaled (billions or millions). */
     private Double amount(BigDecimal value) {
-        return scaled(value, v -> v / scale);
+        return scaled(value, v -> v * fx / scale);
+    }
+
+    /** A stored per-share amount (price, EPS, book value per share) in the currency shown, unscaled. */
+    private Double perShare(BigDecimal value) {
+        return value == null || fx == 1 ? plain(value, 4) : plain(value.multiply(BigDecimal.valueOf(fx)), 4);
     }
 
     private static Double millions(BigDecimal value) {

@@ -118,6 +118,7 @@ class YahooFundamentalsClientTest {
         assertThat(f.insiderOwnership()).isCloseTo(0.768, within(0.001));
         assertThat(f.netIncomeTtm()).isPositive();
         assertThat(f.beta()).isNotNull();
+        assertThat(f.financialCurrency()).isEqualTo("IDR");
     }
 
     @Test
