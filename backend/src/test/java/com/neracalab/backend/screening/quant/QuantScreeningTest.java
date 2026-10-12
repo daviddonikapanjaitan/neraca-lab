@@ -18,10 +18,15 @@ import com.neracalab.backend.screening.InvestorAgent;
 import com.neracalab.backend.screening.MarketCapTier;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.TestScreeningProperties;
+import com.neracalab.backend.screening.agent.Dossier;
+import com.neracalab.backend.screening.agent.JsonReplies;
 import com.neracalab.backend.screening.data.FundamentalRepository.StockSnapshot;
 import com.neracalab.backend.screening.data.YahooFundamentalsClient.AnnualFigures;
 import com.neracalab.backend.screening.data.YahooFundamentalsClient.Fundamentals;
 import com.neracalab.backend.screening.quant.QuantScorer.AgentScore;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /** Stage 1 without database or model: metrics, scorecards, filters and shortlist. */
 class QuantScreeningTest {
@@ -53,7 +58,7 @@ class QuantScreeningTest {
     static Fundamentals fundamentals(String sector, double roe, double debtToEquity, AnnualFigures annual) {
         return new Fundamentals(sector, "Industry", 1331e9, 140e9, 250e9, 0.35, 0.16, 0.105, 0.19, roe, 0.12,
                 debtToEquity, 1.8, 1.2, 100e9, 200e9, 120e9, 180e9, 0.10, 0.12, 2500e9, 8.0, 1.6, 0.9, 0.8, 0.55,
-                0.10, annual);
+                0.10, annual, "IDR");
     }
 
     static StockSnapshot stock(String ticker, double marketCap, double price, double avgValue, Double eps,
@@ -61,7 +66,74 @@ class QuantScreeningTest {
         return new StockSnapshot(1, 1, "IDX", ticker, "PT " + ticker + " Tbk", f == null ? null : f.sector(), "Industry",
                 null, DAY, price, marketCap, marketCap / price, avgValue / price, avgValue, price * 1.3, price * 0.8,
                 12.0, 11.0, 1.8, eps, price / 1.8, 0.03, DAY.atTime(16, 0).atZone(JAKARTA).toInstant(), f,
-                f == null ? null : Instant.parse("2026-10-01T00:00:00Z"));
+                f == null ? null : Instant.parse("2026-10-01T00:00:00Z"), 1.0, "IDR");
+    }
+
+    /** INDY on 2026-10-12: quoted in IDR, statements in USD (Yahoo's P/B and EV / EBITDA mix the two). */
+    static StockSnapshot usdReporter(Double fx) {
+        Map<String, List<Double>> v = new LinkedHashMap<>();
+        v.put("revenue", List.of(4334910725d, 3026839190d, 2446679750d, 2030903015d));
+        v.put("totalAssets", List.of(3442981776d, 2968807324d, 2813089597d, 2783009481d));
+        v.put("totalLiabilities", List.of(2253698079d, 1735964940d, 1607576874d, 1588252699d));
+        v.put("workingCapital", List.of(500e6, 450e6, 400e6, 380e6));
+        v.put("retainedEarnings", List.of(700e6, 750e6, 740e6, 735e6));
+        v.put("ebit", List.of(900e6, 400e6, 200e6, 150e6));
+        Fundamentals f = new Fundamentals("Energy", "Thermal Coal", 2221029120d, 13978666d, 190215e3, 0.12, 0.05, 0.006,
+                0.086, 0.012, 0.02, 1.06, 1.5, 1.2, 649958016d, 1274259328d, 19446804d, 150e6, -0.1, -0.5,
+                14516283768832d, 76315.234, 6535.8, null, 0.5, 0.6, 0.1,
+                new AnnualFigures(List.of("2022-12-31", "2023-12-31", "2024-12-31", "2025-12-31"), v), "USD");
+        return new StockSnapshot(1, 1, "IDX", "INDY", "PT Indika Energy Tbk", "Energy", "Thermal Coal", null, DAY, 2610.0,
+                13579026694144d, 5202692000d, 2e7, 5.2e10, 3200.0, 1200.0, 56.924755, null, 11298.701, 45.85, 0.231, 0.0,
+                DAY.atTime(16, 0).atZone(JAKARTA).toInstant(), f, Instant.parse("2026-10-01T00:00:00Z"), fx, "USD");
+    }
+
+    @Test
+    void metricsOfACompanyReportingInAnotherCurrencyAreConverted() {
+        StockProfile p = StockProfile.of(usdReporter(17920.0));
+        double marketCapUsd = 13579026694144d / 17920;
+        assertThat(p.pb()).isCloseTo(0.6305, within(1e-4));                      // 2,610 IDR / (0.231 USD x 17,920)
+        assertThat(p.fcfYield()).isCloseTo(19446804d / marketCapUsd, within(1e-9));
+        assertThat(p.evToEbitda()).isCloseTo((marketCapUsd + 1274259328d - 649958016d) / 190215e3, within(1e-9));
+        assertThat(p.altmanZ()).isBetween(0.0, 10.0);
+        // listing currency figures stay as Yahoo reports them
+        assertThat(p.marketCap()).isEqualTo(13579026694144d);
+        assertThat(p.pe()).isEqualTo(56.924755);
+        assertThat(p.eps()).isEqualTo(45.85);
+
+        StockProfile noRate = StockProfile.of(usdReporter(null));
+        assertThat(noRate.pb()).isNull();
+        assertThat(noRate.fcfYield()).isNull();
+        assertThat(noRate.evToEbitda()).isNull();
+        assertThat(noRate.altmanZ()).isNull();
+        assertThat(noRate.pe()).isEqualTo(56.924755);
+    }
+
+    @Test
+    void dossierGivesTheFiscalYearsInIdr() {
+        JsonReplies json = new JsonReplies(JsonMapper.builder().build());
+        QuantScreener screener = new QuantScreener(properties());
+        List<InvestorAgent> agents = List.of(InvestorAgent.GILL);
+
+        // USD statements: every year at the rate of the snapshot (2,030,903,015 USD x 17,920 = 36,393.8 IDR billions)
+        JsonNode usd = json.tree(Dossier.of(json, screener.candidate(usdReporter(17920.0), agents), MarketCapTier.LARGE,
+                List.of(), null).substring("STOCK DATA\n".length()));
+        assertThat(usd.path("annualIdrBillions").path("revenue").path(3).asDouble()).isCloseTo(36393.8, within(0.05));
+        assertThat(usd.path("annualNote").asString()).isEqualTo("reported in USD, every year converted at 17920 IDR per USD");
+        assertThat(usd.path("metrics").path("pb").asDouble()).isCloseTo(0.63, within(0.005));
+
+        // no rate stored: as reported, and not called IDR
+        JsonNode noRate = json.tree(Dossier.of(json, screener.candidate(usdReporter(null), agents), MarketCapTier.LARGE,
+                List.of(), null).substring("STOCK DATA\n".length()));
+        assertThat(noRate.has("annualIdrBillions")).isFalse();
+        assertThat(noRate.path("annualBillions").path("revenue").path(3).asDouble()).isCloseTo(2.0, within(0.05));
+        assertThat(noRate.path("annualCurrency").asString()).isEqualTo("USD");
+
+        // IDR statements: unchanged, no note
+        JsonNode idr = json.tree(Dossier.of(json, screener.candidate(stock("GOOD", 2e12, 1000, 5e9, 50.0,
+                fundamentals("Industrials", 0.2, 0.3, healthyAnnual())), agents), MarketCapTier.MID, List.of(), null)
+                .substring("STOCK DATA\n".length()));
+        assertThat(idr.has("annualIdrBillions")).isTrue();
+        assertThat(idr.has("annualNote")).isFalse();
     }
 
     @Test
@@ -133,7 +205,7 @@ class QuantScreeningTest {
         StockSnapshot stale = stock("SUSP", 2e12, 1000, 5e9, 50.0, f);
         universe.add(new StockSnapshot(1, 1, "IDX", "SUSP", "PT SUSP Tbk", "Industrials", "Industry", null, DAY, 1000.0,
                 2e12, 2e9, 5e6, 5e9, 1300.0, 800.0, 12.0, 11.0, 1.8, 50.0, 555.0, 0.03,
-                Instant.parse("2026-08-01T09:00:00Z"), stale.fundamentals(), stale.fundamentalsFetchedAt()));  // suspended
+                Instant.parse("2026-08-01T09:00:00Z"), stale.fundamentals(), stale.fundamentalsFetchedAt(), 1.0, "IDR"));  // suspended
 
         QuantScreener screener = new QuantScreener(properties());
         List<InvestorAgent> agents = List.of(InvestorAgent.BUFFETT, InvestorAgent.LYNCH, InvestorAgent.RISK);

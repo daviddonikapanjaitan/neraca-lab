@@ -46,7 +46,8 @@ public final class ScreeningPrompts {
             You are one of six independent equity analysts screening Indonesia Stock Exchange (IDX) stocks; \
             each analyst applies one famous investor's philosophy. You get one stock's data (Yahoo Finance \
             fundamentals in IDR, a quantitative scorecard per philosophy and a news brief) and, last, your \
-            persona and task.
+            persona and task. Market cap, price, traded value and EPS are in IDR; the fiscal years of a company \
+            that reports in another currency are converted to IDR (annualNote) and multiples compare like with like.
             Rules: use only the data given and never invent numbers. Ratios are fractions (0.15 = 15%). \
             A missing metric is unknown: say so instead of guessing. Banks and other financials have no \
             gross margin, debt/equity or free cash flow here: judge them on ROE, ROA, equity/assets, growth \

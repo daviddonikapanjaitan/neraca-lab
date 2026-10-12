@@ -338,6 +338,18 @@ Rules:
   the 10,599,000-share issue of 2024-01-31), which matches the filed share capital exactly
   (71,853,936 x 5,000 + 25,059,752,907 x 50 = Rp 1,612,257 million). Same rules as SMDR's script.
   BNGA on 2026-10-06: Rp 1,700 x 25,140,519,043 = Rp 42.7 trillion, P/E 6.23, P/B 0.76.
+  RAJA (USD reporter, EPS 0.0054) split 1:5 on 2026-07-16, after its latest filing (H1 2026): every filing states
+  the EPS of before the split (profit / EPS = about 4.23 billion shares) while the published counts are those of
+  after it (21,135,412,500), so the web counts below were rejected at every date (5 x) and RAJA had no market cap
+  and no valuation. `V1.0.21__data_RAJA_shares.sql` fills 21,135,412,500 (split-adjusted, like the prices; no
+  treasury stock) at the seven period ends from 2021-12-31, records the split with its real date in
+  `corporate_action` and divides the EPS of the periods before it by 5 (only an EPS still on the old count: profit
+  / EPS within 10% of 4,227,082,500). Its description starts with `Recorded from public sources: `, which
+  `IngestionRepository.detectedSplits` reads like a split restated in the filings, so a filing of before the split
+  that is uploaded later, or again, ends on the same basis. A split-adjusted EPS keeps two decimals more than it
+  has (at most 8): 0.0054 / 5 = 0.00108, where two decimals left 0.00. RAJA on 2026-10-09: USD 0.03710938 x
+  21,135,412,500 = USD 784.3 million, P/E 20.3, P/B 3.58. A company without share counts in its filings that splits
+  after its latest filing needs such a script until a filing restates the split.
 - **Share counts from the web** (`WebShareCounts`, before the agent runs): when the filing gives no share
   count, the ingestion reads Yahoo Finance's published year-end and quarter-end shares outstanding,
   issued and treasury shares (`/ws/fundamentals-timeseries`, `annual|quarterlyOrdinarySharesNumber`,
@@ -524,6 +536,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `IngestionAgentModelTest` (unit) | Spring AI fills a missing model with `gpt-5-mini`; the agent's options name the configured model and the model a response reports is recorded in `metrics.models` |
 | `ConfiguredChatModel` (test helper) | the model the agent tests use, never written in Java: `spring.ai.openai.chat.model` from `application.yaml` (`${OPENAI_MODEL:<default>}`), with `OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default (the application's own precedence) |
 | `BngaShareSeedTest`              | the BNGA share-count script fills the five audited year-end counts (2021 .. 2025), outstanding + treasury = issued at every date, runs idempotently and never replaces a count already stored (rolled back) |
+| `ShareSplitTest`                 | a split restated by a comparative adjusts the period and the earlier periods on the old basis once, in either upload order; a split-adjusted EPS keeps its precision (USD 0.0054 / 5 = 0.00108, rupiah figures as before) |
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
 | `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; all five BMRI filings map without errors; BMRI FY2025's FY2024 column ignores "Claim expenses" shown for information (operating income 76,059,595 million, revenue 186,767,596), never against an agent classification; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |

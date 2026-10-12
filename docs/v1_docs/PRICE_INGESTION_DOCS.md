@@ -165,7 +165,13 @@ SMDR (also IDR on IDX, USD reports) is converted the same way: 5,403 days, none 
 (2026-10-05: IDR 398 / 17,950 = USD 0.02217270). Its share counts come from public sources
 (`V1.0.12__data_SMDR_shares.sql`, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so it has
 market caps from 2021-01-04. BNGA's audited share counts come from its annual reports
-(`V1.0.13__data_BNGA_shares.sql`), so it has market caps from 2021-12-31.
+(`V1.0.13__data_BNGA_shares.sql`), so it has market caps from 2021-12-31. RAJA (USD reports, 1:5 split on
+2026-07-16) gets its split-adjusted counts from `V1.0.21__data_RAJA_shares.sql`: market caps from 2021-12-31.
+
+The stored rates are also what the screening and the analysis convert with for companies that report in another
+currency: the screening metrics and fiscal years ([SCREENING_DOCS.md](SCREENING_DOCS.md) section 3) and the
+analysis fact sheet ([ANALYSIS_DOCS.md](ANALYSIS_DOCS.md) section 3). They are only as recent as the last price
+ingestion of such a company.
 
 Market snapshots need share counts. INDY's come from its FY2023 filing (5,202,692,000, derived from
 the exact EPS denominator, [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4), so its market

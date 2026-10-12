@@ -134,6 +134,33 @@ time. Every screening also refreshes today's market data if missing and the fund
 stocks that pass the market-data filters of its tier, so it works on an empty database (the first
 run loads the universe; a large-cap run then refreshes about 100 stocks, a few minutes).
 
+**Currency.** A listing's market data (price, market cap, traded value, EPS, P/E) is in the currency it trades
+in (IDR); its fundamentals (book value per share, TTM amounts, cash, debt, the four fiscal years) are in the
+currency the company reports in, which Yahoo names in `financialData.financialCurrency` and the ETL stores in
+`fundamental_snapshot.financial_currency` (`V1.0.20__schema_screening_currency.sql`). About 88 IDX listings
+report in USD (ADRO, BYAN, INDY, ITMG, MEDC, PGAS, RAJA, ...), and for them Yahoo's own `priceToBook`,
+`enterpriseValue` and `enterpriseToEbitda` mix the two currencies (INDY 2026-10-12: 2,610 IDR / 0.231 USD =
+P/B 11,298.7, EV / EBITDA 76,315). `FundamentalRepository` therefore reads every snapshot with
+`fundamentalsFx`: 1 when both currencies are the same, otherwise the last `fx_rate_daily` rate (base = the
+currency of the fundamentals, quote = the listing currency) up to the snapshot date, NULL when no rate of the
+pair is stored. `StockProfile` uses it for the four metrics that set market data against the statements:
+
+| Metric | With another currency |
+|--------|-----------------------|
+| `pb` | Yahoo's P/B / rate (INDY: 11,298.7 / 17,920 = 0.63) |
+| `fcfYield` | free cash flow / (market cap / rate) |
+| `evToEbitda` | rebuilt: (market cap / rate + total debt - total cash) / EBITDA (INDY: 7.3) |
+| `altmanZ` | market value of equity = market cap / rate |
+
+Without a rate these four are unknown (the criterion is skipped), never mixed. P/E, EPS, PEG, the tier, price and
+liquidity filters and every ratio of the statements need no conversion. The dossier of the agents gives the fiscal
+years as `annualIdrBillions` converted at the same rate, with an `annualNote` naming the currency and rate (one rate
+for every year, so growth rates stay those of the statements); without a rate they are `annualBillions` with
+`annualCurrency`. The rates are those the price ingestion stores for the companies that report in another currency
+([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)). Rows fetched before `financial_currency` existed take
+`company.currency` (companies of the companies table) and count as stale once, so the next refresh - of a
+screening's candidates, or the scheduled ETL - names the currency of every listing.
+
 Not available from public data: the IDX **listing board** (idx.co.id blocks automated clients).
 Stage 1 therefore uses proxies: price at least Rp 50 (the special-monitoring board trades below),
 a trade in the last 10 days (no suspension), liquidity, and `excluded-tickers` for known
@@ -234,7 +261,7 @@ OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 
 ## 8. Tables (`V1.0.10__schema_screening.sql`)
 
-`stock_listing`, `fundamental_snapshot` (daily snapshot, `annual` JSONB), `news_article`,
+`stock_listing`, `fundamental_snapshot` (daily snapshot, `annual` JSONB, `financial_currency` from `V1.0.20`), `news_article`,
 `news_article_ticker`, `news_source_fetch`, `news_brief`, `screening_run` (`run_id` = the
 `ingestion_job` id, cascade delete), `screening_candidate`, `screening_agent_score`,
 `screening_lesson`, `llm_usage` (also the rows of the analyses, `llm_usage.analysis_id` of
@@ -248,10 +275,10 @@ permission and the `FUNDAMENTALS` / `SCREENING` job types. Details in the column
 | Test                          | What it proves                                                                      |
 |-------------------------------|-------------------------------------------------------------------------------------|
 | `NewsParsersTest`             | excerpts of the four sites' pages (headline lists, `src/test/resources/screening`) give the right headlines and dates (Jakarta time); a synthetic article page gives title, date and text; relevance matching |
-| `YahooFundamentalsClientTest` | screener, quoteSummary and time series responses are read correctly (banks too)     |
-| `QuantScreeningTest`          | metrics, scorecards, renormalization, overall blending, the funnel in order, shortlist = 3 x top N; selected stocks: same steps, tradability failures kept and flagged (liquidity of each stock's tier), data failures excluded and named, every eligible one shortlisted |
+| `YahooFundamentalsClientTest` | screener, quoteSummary and time series responses are read correctly (banks too), the currency of the fundamentals |
+| `QuantScreeningTest`          | metrics, scorecards, renormalization, overall blending, the funnel in order, shortlist = 3 x top N; selected stocks: same steps, tradability failures kept and flagged (liquidity of each stock's tier), data failures excluded and named, every eligible one shortlisted; a company reporting in USD (INDY's figures): P/B, FCF yield, EV / EBITDA and Altman Z converted, P/E and EPS untouched, all four unknown without a rate; the dossier's fiscal years in IDR with a note, as reported and not called IDR without a rate |
 | `ScreeningAgentsTest`         | model options (reasoning off, Opus effort low), cost metering and budget, ReAct with a tool call, Reflection critic, JSON retry (cut off at the limit, no strengths and concerns), provider routing without OpenInference, transient-failure retries and their limit, synthesis rules and fallback (scripted model) |
-| `FundamentalRepositoryTest`   | daily snapshots, fundamentals carried forward, stale detection (Docker Postgres)    |
+| `FundamentalRepositoryTest`   | daily snapshots, fundamentals and their currency carried forward, stale detection (Docker Postgres) |
 | `ScreeningControllerTest`     | options, validation, a run end to end with the pipeline mocked, report JSON and PDF, 409 for an active run; selectable companies, selection validation, a selection run listed by scope, its PDF name, the tier-or-tickers constraint |
 | `AccessControlTest`           | the screening APIs need SCREENING                                                   |
 

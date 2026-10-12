@@ -54,7 +54,9 @@ final class AnalysisPrompts {
             the latest valuation and price, market data and a quantitative scorecard per philosophy from Yahoo \
             Finance when available, and a research brief built from the company's own filings and news with \
             references (F1 = filing excerpt, N1 = news). Last come your persona and task.
-            Rules: use only the data given and never invent numbers. Ratios are fractions (0.15 = 15%). H1 and 9M \
+            Rules: use only the data given and never invent numbers. Ratios are fractions (0.15 = 15%). Amounts \
+            are in the unit of amountUnit; a currencyNote, when present, says they were converted from the \
+            currency the company reports in, which its filings and the research brief still quote. H1 and 9M \
             figures are year-to-date: compare them with the same period of the prior year, not with a full year. \
             A missing figure is unknown: say so instead of guessing. Banks and other financials have no gross \
             margin, debt/equity or free cash flow here: judge them on ROE, ROA, equity/assets, growth and \
