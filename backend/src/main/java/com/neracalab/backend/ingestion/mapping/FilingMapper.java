@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 import com.neracalab.backend.ingestion.mapping.MappedStatement.UnclassifiedLine;
 import com.neracalab.backend.ingestion.mapping.SegmentExtraction.SegmentLine;
@@ -1372,11 +1373,23 @@ public final class FilingMapper {
                     operating.add(investing).add(financing), change));
         }
         if (beginning != null && change != null && ending != null) {
+            String deconsolidatedLine = "Cash and cash equivalent of deconsolidated subsidiaries";
+            BigDecimal deconsolidated = sum(c, List.of(deconsolidatedLine), ctx);
             BigDecimal other = sum(c, List.of("Effect of exchange rate changes on cash and cash equivalents",
-                    "Cash and cash equivalent of deconsolidated subsidiaries",
                     "Other increase (decrease) in cash and cash equivalents"), ctx);
+            // The cash of a deconsolidated subsidiary is a step of the roll-forward - unless the filing shows it for
+            // information only: MIDI's H1 2025 comparative lists -79,630 million although the proceeds from the
+            // disposal are already in investing, and its ending cash is beginning + net change exactly (298,489 +
+            // 238,397 = 536,886). Proven by the filing's own figures: the roll-forward holds without the line and
+            // not with it. Then the line is not counted; a warning says so.
+            if (deconsolidated.signum() != 0 && beginning.add(change).add(other).compareTo(ending) == 0) {
+                checks.add(Check.warning("cash_rollforward", "'" + deconsolidatedLine + "' "
+                        + deconsolidated.stripTrailingZeros().toPlainString() + " is not part of the roll-forward as filed "
+                        + "(beginning cash + net change + FX / other effects = ending cash without it); not counted"));
+                deconsolidated = ZERO;
+            }
             checks.add(equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
-                    beginning.add(change).add(other), ending));
+                    beginning.add(change).add(other).add(deconsolidated), ending));
         }
         if (investing != null) {
             checks.addAll(section(c, ctx, "Cash flows from investing activities",
@@ -1811,12 +1824,54 @@ public final class FilingMapper {
     }
 
     /**
-     * Segments are stored by name, so one name on two lines of a breakdown would store only one of them. CEKA files
-     * "Produk Palm Kernel" both as domestic revenue 2 (3,391,840,269,264) and as export revenue 1 (210,909,304,151):
-     * such names get their slot as a qualifier, "Produk Palm Kernel (domestik)" / "Produk Palm Kernel (ekspor)";
-     * names that occur once are kept as filed. A name that still repeats is an error (nothing is saved).
+     * Segments are stored by name, so one name on two lines of a breakdown would store only one of them.
+     * <ul>
+     *   <li>One name on several lines of the same kind is one segment filed in parts: TOTL files "Jasa Konstruksi"
+     *       as service revenue 1 .. 4 (331,002,951 + 306,031,443 + 451,135 + 1,410,223,936 thousand in H1 2026) and
+     *       as domestic revenue 1 .. 5 in FY2023, where its later filings show the one line "Jasa Konstruksi"
+     *       (3,006,816,008 for FY2023, the sum of the five). The lines are added up; a warning says so.</li>
+     *   <li>One name on lines of different kinds is two segments: CEKA files "Produk Palm Kernel" both as domestic
+     *       revenue 2 (3,391,840,269,264) and as export revenue 1 (210,909,304,151). Such names get their slot as a
+     *       qualifier, "Produk Palm Kernel (domestik)" / "Produk Palm Kernel (ekspor)"; names that occur once are
+     *       kept as filed.</li>
+     * </ul>
+     * A name that still repeats is an error (nothing is saved).
      */
-    static List<SegmentLine> distinctSegmentNames(List<SegmentLine> lines, List<String> slots, List<Check> checks) {
+    static List<SegmentLine> distinctSegmentNames(List<SegmentLine> filedLines, List<String> filedSlots, List<Check> checks) {
+        Map<String, Integer> filed = new LinkedHashMap<>();
+        filedLines.forEach(l -> filed.merge(l.name(), 1, Integer::sum));
+        if (filed.values().stream().allMatch(n -> n == 1)) {
+            return filedLines;
+        }
+        // the same name, kind of slot and type: one segment, its lines added up (at the place of the first)
+        List<SegmentLine> lines = new ArrayList<>();
+        List<String> slots = new ArrayList<>();
+        Map<String, Integer> parts = new LinkedHashMap<>();
+        for (int i = 0; i < filedLines.size(); i++) {
+            SegmentLine l = filedLines.get(i);
+            String qualifier = slotQualifier(filedSlots.get(i));
+            int same = -1;
+            for (int j = 0; j < lines.size() && same < 0; j++) {
+                SegmentLine m = lines.get(j);
+                if (m.name().equals(l.name()) && m.filingType().equals(l.filingType()) && m.residualSlot() == l.residualSlot()
+                        && slotQualifier(slots.get(j)).equals(qualifier)) {
+                    same = j;
+                }
+            }
+            if (same < 0) {
+                lines.add(l);
+                slots.add(filedSlots.get(i));
+            } else {
+                SegmentLine m = lines.get(same);
+                lines.set(same, new SegmentLine(m.name(), m.filingType(), m.revenue().add(l.revenue()), m.residualSlot()));
+                parts.merge(m.name() + " (" + qualifier + ")", 1, Integer::sum);
+            }
+        }
+        if (!parts.isEmpty()) {
+            checks.add(Check.warning("segment_names", "Names filed on several lines of the same kind are one segment, "
+                    + "its lines added up: " + parts.entrySet().stream()
+                    .map(e -> e.getKey() + " on " + (e.getValue() + 1) + " lines").toList()));
+        }
         Map<String, Integer> occurrences = new LinkedHashMap<>();
         lines.forEach(l -> occurrences.merge(l.name(), 1, Integer::sum));
         if (occurrences.values().stream().allMatch(n -> n == 1)) {
@@ -2010,6 +2065,13 @@ public final class FilingMapper {
      *       share, so a period-end count differs slightly (BNGA FY2022: 0.2%); a wrong company, unit or a stock
      *       split not reflected in this filing is off by far more and is rejected.</li>
      * </ul>
+     * A website publishes only a few year ends (Yahoo Finance: four), so the opening dates of an older filing have
+     * no count of their own (BBCA's FY2022 filing: 2022-12-31 published, 2021-12-31 and 2020-12-31 not) and the
+     * periods ending there had no market cap and no valuation. An accepted count is therefore carried to another
+     * date of the filing when share capital is the same at both dates, neither has treasury stock, and the count
+     * passes the same EPS check at that date: with share capital unchanged and no treasury stock only a split
+     * changes the number of shares, and a split the filing does not restate fails the EPS check.
+     * <p>
      * The result keeps the filing's share capital; weighted shares stay unknown. Without an accepted count the
      * filing's own (unresolved) share capital is returned with the reasons.
      */
@@ -2038,6 +2100,7 @@ public final class FilingMapper {
                     source + " count at " + p.date() + ", checked against the filing's EPS"));
             accepted.add(p.date() + ": " + c.outstanding().toPlainString());
         }
+        accepted.addAll(carryWebShareCounts(filing.snapshots(), snapshots, byDate.keySet(), source));
         if (accepted.isEmpty()) {
             List<Check> unresolved = new ArrayList<>(filing.checks());
             unresolved.addAll(checks);
@@ -2053,6 +2116,54 @@ public final class FilingMapper {
         String basis = "shares outstanding from " + source + " (checked against the filing's EPS): " + String.join(", ", accepted);
         checks.add(Check.ok("web_shares", basis));
         return new ShareCapital(null, basis, List.copyOf(snapshots), null, null, checks, source);
+    }
+
+    /**
+     * Fills the dates the website has no count for from an accepted count of the same filing: same share capital,
+     * no treasury stock at either date, and the EPS of the period that date opens or closes reproduced
+     * ({@link #withWebShareCounts}). Two accepted counts that differ for the same share capital carry nothing.
+     *
+     * @param filed     the filing's dates as {@link #shareCapital} read them (a treasury share count of zero: the
+     *                  statement of changes in equity shows no treasury stock at that date)
+     * @param snapshots the same dates in the same order, with the accepted counts; completed in place
+     * @param published dates the website has a figure for (accepted or rejected: never carried over)
+     * @return what was carried, e.g. "2021-12-31: 123275050000 (as at 2022-12-31)"
+     */
+    private List<String> carryWebShareCounts(List<ShareAt> filed, List<ShareAt> snapshots, Set<LocalDate> published,
+                                             String source) {
+        List<String> carried = new ArrayList<>();
+        List<ShareAt> accepted = new ArrayList<>();
+        for (int i = 0; i < snapshots.size(); i++) {
+            ShareAt a = snapshots.get(i);
+            // accepted from the website, and neither the filing nor the website shows treasury shares there
+            if (a.sharesOutstanding() != null && noTreasuryStock(filed.get(i))
+                    && (a.treasuryShares() == null || a.treasuryShares().signum() == 0)) {
+                accepted.add(a);
+            }
+        }
+        for (int i = 0; i < snapshots.size(); i++) {
+            ShareAt p = snapshots.get(i);
+            if (p.sharesOutstanding() != null || published.contains(p.date()) || !noTreasuryStock(filed.get(i))) {
+                continue;
+            }
+            List<ShareAt> same = accepted.stream().filter(a -> a.commonStock().compareTo(p.commonStock()) == 0).toList();
+            if (same.isEmpty() || same.stream().anyMatch(a -> a.sharesOutstanding().compareTo(same.getFirst().sharesOutstanding()) != 0)) {
+                continue;
+            }
+            ShareAt from = same.getFirst();
+            if (webShareCountProblem(new WebShareCount(p.date(), from.sharesOutstanding(), null, null), p.date()) != null) {
+                continue;
+            }
+            snapshots.set(i, new ShareAt(p.date(), p.commonStock(), from.sharesOutstanding(), ZERO, null,
+                    source + " count at " + from.date() + ", carried to " + p.date()
+                            + " (share capital unchanged, no treasury stock), checked against the filing's EPS"));
+            carried.add(p.date() + ": " + from.sharesOutstanding().toPlainString() + " (as at " + from.date() + ")");
+        }
+        return carried;
+    }
+
+    private static boolean noTreasuryStock(ShareAt filed) {
+        return filed.treasuryShares() != null && filed.treasuryShares().signum() == 0;
     }
 
     /** Why a published count does not fit this filing, {@code null} when it does. */

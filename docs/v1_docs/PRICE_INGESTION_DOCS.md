@@ -15,6 +15,7 @@ Code: `backend/src/main/java/com/neracalab/backend/price/`
 | `PriceDailyRepository`     | company lookup, latest stored day, `price_daily` upsert                                                  |
 | `ValuationRepository`      | company-scoped recalculation with the formulas of `V1.0.6__data_metrics_valuation.sql`                   |
 | `PriceIngestionSchedule`   | optional evening run over all active companies (off by default)                                          |
+| `PricesAfterUpload`        | queues the prices of a company whose financial statement filing was just stored                          |
 | `PriceProperties`          | configuration `neracalab.prices.*`                                                                       |
 | `provider/PriceProvider`   | provider interface; `YahooPriceProvider` / `EodhdPriceProvider`, one active by configuration             |
 | `provider/PacedHttpClient` | the one HTTP client of the providers: cookie store, browser User-Agent, one request at a time, pause     |
@@ -43,6 +44,14 @@ by the financial statement upload or a seed script); the ingestion never creates
 
 The POST only queues: the provider is called by the background worker, never inside a web request,
 and the frontend reads prices from the database only.
+
+**After a financial statement upload** the same job is queued without a request: when a filing was stored
+(`SUCCEEDED` or `INCOMPLETE`), `PricesAfterUpload` submits `full=false` for its company, recorded for the
+user who uploaded the file - unless the stored prices already reach the last completed trading day
+(`PriceIngestionService.upToDate`) or the company already has an active price job. A company uploaded for
+the first time therefore gets its whole price history, its market caps and its valuations by itself
+(`neracalab.ingestion.prices-after-upload`, default `true`;
+[AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4).
 
 Every state change of a job is also recorded in the `ingestion_job` table (type `PRICE`,
 `PriceIngestionTracker`), so `GET /api/v1/ingestions` lists price jobs next to the uploads and keeps
@@ -267,6 +276,7 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 | `PriceIngestionQueueTest`     | 429 back-off and retry of the same job, run stop and failed queued jobs, back-off reset after a success, other failures, one active job per company; five workers ingest five companies at the same time, 429 of jobs running together counts as one pause, the run stop fails them all, a queued job stays QUEUED during a pause |
 | `PriceIngestionControllerTest`| the endpoints over MockMvc: 202 + `Location`, job polling, queue listing, 400 / 404                                                           |
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
+| `PricesAfterUploadTest`       | prices of a stored filing's company: queued when missing or behind, for the uploader, never `full`; the active job is reused; nothing when up to date, for an unknown company or when switched off (`PriceIngestionServiceTest`: up to date only when the last completed trading day is stored) |
 | `YahooPriceProviderTest`      | parsing of a real Yahoo response (HRTA.JK around the Rp40 dividend and a holiday), symbol mapping, `Retry-After`                              |
 
 Run with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432).

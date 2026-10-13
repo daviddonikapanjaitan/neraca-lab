@@ -135,7 +135,9 @@ public class IngestionVerifier {
         Map<String, Long> rows = repository.derivedCounts(companyId);
         if (rows.getOrDefault("price_daily", 0L) == 0) {
             notes.add("No daily prices are stored for this company, so market_snapshot and valuation_snapshot are "
-                    + "empty by design: prices are not part of a financial statement filing and are loaded separately.");
+                    + "empty until its prices are loaded: prices are not part of a financial statement filing. The price "
+                    + "ingestion of the company is queued when this filing is stored "
+                    + "(neracalab.ingestion.prices-after-upload).");
         }
         return new Verification(pending.isEmpty() && problems.isEmpty(), pending, problems, expected, periods, rows, notes);
     }

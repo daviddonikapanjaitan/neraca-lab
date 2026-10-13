@@ -15,6 +15,7 @@ import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
@@ -35,6 +36,7 @@ import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.job.WorkerThreads;
+import com.neracalab.backend.price.PricesAfterUpload;
 
 /**
  * Asynchronous financial statement uploads. {@link #submit} stores the workbook in
@@ -44,6 +46,9 @@ import com.neracalab.backend.job.WorkerThreads;
  * extraction does not store the workbook (it cannot map it, leaves open items, fails or runs longer than
  * {@code neracalab.ingestion.fallback.after}), the full-text extraction takes over ({@link IngestionService#run});
  * every such upload is recorded in {@code ingestion_error}, the work list of Claude Code.
+ * <p>
+ * A filing holds no prices, and a company without prices has no valuation: when a filing was stored, the
+ * company's daily prices are queued too ({@link PricesAfterUpload}), unless they are already up to date.
  * <p>
  * Several workers ({@code neracalab.jobs.workers}, 5): that many filings are stored at the same time,
  * each by its own agent, also filings of the same company (five years of one company uploaded
@@ -68,8 +73,11 @@ public class FinancialStatementQueue implements SmartLifecycle {
     public record Submission(IngestionJob job, boolean created) {
     }
 
-    /** @param company the filing's company (ticker, upper case; "" when the workbook does not name one) */
-    private record Task(UUID jobId, long fileId, String fileName, String company) {
+    /**
+     * @param company     the filing's company (ticker, upper case; "" when the workbook does not name one)
+     * @param requestedBy the user who uploaded the file ({@code null}: none)
+     */
+    private record Task(UUID jobId, long fileId, String fileName, String company, Requester requestedBy) {
     }
 
     private final IngestionService service;
@@ -77,6 +85,8 @@ public class FinancialStatementQueue implements SmartLifecycle {
     private final IngestionJobRepository jobs;
     private final IngestionErrorRepository errors;
     private final IngestionUsageRecorder usage;
+    /** Queues the company's prices after a stored filing; {@code null}: not queued. */
+    private final PricesAfterUpload pricesAfterUpload;
     private final Duration jobTimeout;
     private final boolean sameCompanyInOrder;
     /** Filings a worker may take; with {@link #sameCompanyInOrder} at most one per company. */
@@ -94,20 +104,30 @@ public class FinancialStatementQueue implements SmartLifecycle {
      *                           does not count); a job still running then is stopped and FAILED
      * @param sameCompanyInOrder store the filings of one company one after the other in upload order instead of
      *                           at the same time
+     * @param pricesAfterUpload  queues the daily prices of a company whose filing was stored
      */
+    @Autowired
     public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
                                    IngestionErrorRepository errors, IngestionUsageRecorder usage,
                                    @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout,
                                    @Value("${neracalab.ingestion.same-company-in-order:false}") boolean sameCompanyInOrder,
-                                   JobProperties properties) {
+                                   JobProperties properties, PricesAfterUpload pricesAfterUpload) {
         this.service = service;
         this.files = files;
         this.jobs = jobs;
         this.errors = errors;
         this.usage = usage;
+        this.pricesAfterUpload = pricesAfterUpload;
         this.jobTimeout = jobTimeout;
         this.sameCompanyInOrder = sameCompanyInOrder;
         this.workers = new WorkerThreads("financial-statement-ingestion", properties.workers(), this::work);
+    }
+
+    /** Without the prices of a stored filing's company (tests). */
+    public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
+                                   IngestionErrorRepository errors, IngestionUsageRecorder usage, Duration jobTimeout,
+                                   boolean sameCompanyInOrder, JobProperties properties) {
+        this(service, files, jobs, errors, usage, jobTimeout, sameCompanyInOrder, properties, null);
     }
 
     // ------------------------------------------------------------------ API
@@ -145,7 +165,8 @@ public class FinancialStatementQueue implements SmartLifecycle {
         String name = fileName.length() <= IngestionFileRepository.NAME_LENGTH
                 ? fileName : fileName.substring(0, IngestionFileRepository.NAME_LENGTH);
         jobs.insertUpload(new NewUpload(id, file.fileId(), name, file.reused(), "Waiting in the upload queue", requestedBy));
-        Task task = new Task(id, file.fileId(), name, ticker == null ? "" : ticker.trim().toUpperCase(Locale.ROOT));
+        Task task = new Task(id, file.fileId(), name, ticker == null ? "" : ticker.trim().toUpperCase(Locale.ROOT),
+                requestedBy);
         synchronized (companies) {
             Deque<Task> behind = sameCompanyInOrder ? companies.get(task.company()) : null;
             if (behind != null) {
@@ -267,6 +288,24 @@ public class FinancialStatementQueue implements SmartLifecycle {
         }
         finish(id, status, stage, message, response);
         recordError(task, session, response, status, stage, message);
+        if (status != IngestionJobStatus.FAILED) {
+            queuePrices(task, ticker);
+        }
+    }
+
+    /**
+     * The filing is stored: the company's daily prices are queued, so that it gets its market caps and
+     * valuations without a second request. A failure here never changes the upload's outcome.
+     */
+    private void queuePrices(Task task, String ticker) {
+        if (pricesAfterUpload == null || ticker == null) {
+            return;
+        }
+        try {
+            pricesAfterUpload.queue(Exchange.IDX, ticker, task.requestedBy());
+        } catch (RuntimeException e) {
+            log.warn("upload job {}: prices of {} not queued: {}", task.jobId(), ticker, e.getMessage());
+        }
     }
 
     /**

@@ -186,6 +186,17 @@ class PriceIngestionServiceTest {
         assertThat(result.latestTradingDate()).isEqualTo(SEED_END);
     }
 
+    /** What decides whether a stored filing queues the company's prices ({@link PricesAfterUpload}). */
+    @Test
+    void pricesAreUpToDateOnlyWhenTheLatestCompletedDayIsStored() {
+        Clock wednesdayEvening = Clock.fixed(Instant.parse("2026-09-30T12:00:00Z"), ZoneOffset.UTC);   // 19:00 WIB
+
+        assertThat(service(wednesdayEvening).upToDate(hrta)).isTrue();      // 2026-09-30 is stored
+        assertThat(service(SATURDAY).upToDate(hrta)).isFalse();             // 2026-10-01 and 10-02 are missing
+        assertThat(service(wednesdayEvening).upToDate(companyWithoutPrices())).isFalse();
+        assertThat(provider.requests).isEmpty();
+    }
+
     @Test
     void refetchesTheFullHistoryWhenTheProviderReAdjustedIt() {
         // a dividend after 2026-09-30 lowers the adjusted close of every earlier day

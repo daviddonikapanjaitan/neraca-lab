@@ -64,15 +64,21 @@ class FilingMapperCekaTest {
         assertThat(seg.checks()).anyMatch(c -> c.rule().equals("segment_names") && c.severity() == Check.Severity.WARNING);
     }
 
+    /** One name on two lines of the same kind is one segment filed in parts (TOTL, FilingMapperTotlMidiTest). */
     @Test
-    void namesThatStillRepeatBlockTheBreakdown() {
+    void aNameOnTwoLinesOfTheSameKindIsAddedUp() {
         List<SegmentLine> lines = List.of(new SegmentLine("A", "GEOGRAPHY", BigDecimal.ONE, false),
                 new SegmentLine("A", "GEOGRAPHY", BigDecimal.TEN, false));
         List<Check> checks = new ArrayList<>();
 
-        FilingMapper.distinctSegmentNames(lines, List.of("Pendapatan dari ekspor 1", "Pendapatan dari ekspor 2"), checks);
+        List<SegmentLine> named = FilingMapper.distinctSegmentNames(lines,
+                List.of("Pendapatan dari ekspor 1", "Pendapatan dari ekspor 2"), checks);
 
-        assertThat(checks).singleElement().satisfies(c -> assertThat(c.isError()).isTrue());
+        assertThat(named).containsExactly(new SegmentLine("A", "GEOGRAPHY", new BigDecimal("11"), false));
+        assertThat(checks).singleElement().satisfies(c -> {
+            assertThat(c.isError()).isFalse();
+            assertThat(c.message()).contains("A (ekspor) on 2 lines");
+        });
         assertThat(FilingMapper.slotQualifier("Pendapatan dari ekspor 1")).isEqualTo("ekspor");
         assertThat(FilingMapper.slotQualifier("Pendapatan domestik lainnya")).isEqualTo("domestik lainnya");
         assertThat(FilingMapper.slotQualifier("Export revenue 1")).isEqualTo("export");

@@ -276,6 +276,17 @@ public class PriceIngestionService {
     }
 
     /**
+     * Whether the stored prices already reach the last completed trading day: an ingestion would make no
+     * request ({@code full=false}). False for a company without prices.
+     */
+    public boolean upToDate(CompanyRef company) {
+        ZonedDateTime now = ZonedDateTime.now(clock.withZone(company.exchange().zone()));
+        return prices.latestTradingDate(company.companyId())
+                .map(latest -> !latest.isBefore(lastCompletedTradingDay(now)))
+                .orElse(false);
+    }
+
+    /**
      * Today when the session has closed (exchange-local time at or after the cutoff), otherwise the
      * previous day; weekends step back to Friday. Exchange holidays are not known here: a holiday
      * simply returns no bar.

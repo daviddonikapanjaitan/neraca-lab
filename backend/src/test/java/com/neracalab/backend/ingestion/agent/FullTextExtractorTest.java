@@ -247,6 +247,46 @@ public class FullTextExtractorTest {
         assertThat(income.values().get("basic_eps")).isEqualByComparingTo("6.55");
     }
 
+    /**
+     * MSIN FY2025 (by nature, no 'profit from operation' row): the model's answer left operating_income empty, the
+     * upload ended SUCCEEDED, and the company had no EV / operating profit from then on. Profit from operations is
+     * a total a profit or loss cannot do without: the model is asked again and gives the rows that compute it.
+     */
+    @Test
+    void aProfitOrLossWithoutOperatingIncomeIsAskedForAgain() throws Exception {
+        IngestionSession session = session("MSIN", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        answers(byNature(text, "1322000", "Interest income", "[]", "[]", "[]"),
+                byNature(text, "1322000", "Interest income", "[]", "[]"));
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature",
+                new AgentTrace());
+
+        assertThat(report.modelCalls()).isEqualTo(2);
+        assertThat(prompts.get(1)).contains("income_statement: operating_income has no amount");
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        // profit before tax 1,049,325 + finance costs 6,633 - interest income 30,276 (million)
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("1025682000000");
+        assertThat(report.problems()).isEmpty();
+    }
+
+    /** Left empty in the last answer too: nothing is invented, and the upload has an open item that says so. */
+    @Test
+    void operatingIncomeLeftEmptyInTheLastAnswerIsAnOpenItem() throws Exception {
+        IngestionSession session = session("MSIN", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        answers(byNature(text, "1322000", "Interest income", "[]", "[]", "[]"));
+
+        FullTextExtractor.Report report = extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature",
+                new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("operating_income")).isNull();
+        assertThat(income.values().get("pretax_income")).isEqualByComparingTo("1049325000000");
+        assertThat(report.problems()).singleElement().asString()
+                .contains("2025 FY income_statement", "stored as the model mapped it", "operating_income has no amount");
+    }
+
     /** A profit or loss by function is not touched: its gross profit is never cleared. */
     @Test
     void aProfitOrLossByFunctionKeepsItsGrossProfit() throws Exception {
@@ -337,6 +377,7 @@ public class FullTextExtractorTest {
                 + ", \"total_equity\": " + terms(text, "8220000", "+Total equity")
                 + ", \"long_term_debt\": " + terms(text, "8220000", "+Borrowings third parties", "+Bonds payable") + "},"
                 + " \"income_statement\": {\"revenue\": " + terms(text, "8322000", "+Income from finance lease", "+Income from consumer financing")
+                + ", \"operating_income\": " + terms(text, "8322000", "+Total profit (loss) before tax")
                 + ", \"pretax_income\": " + terms(text, "8322000", "+Total profit (loss) before tax")
                 + ", \"income_tax\": " + terms(text, "8322000", "-Tax benefit (expenses)")
                 + ", \"net_income\": " + terms(text, "8322000", "+Total profit (loss)")
@@ -482,10 +523,18 @@ public class FullTextExtractorTest {
 
     /** A mapping of a filing by nature whose profit or loss is {@code sheet} (1312000, or 1322000 for MSIN). */
     private static String byNature(WorkbookText text, String sheet, String financeIncome, String costOfRevenue, String grossProfit) {
+        // no 'profit from operation' row by nature: the terms that compute it
+        return byNature(text, sheet, financeIncome, costOfRevenue, grossProfit, terms(text, sheet,
+                "+Total profit (loss) before tax", "+Interest and finance costs", "-" + financeIncome));
+    }
+
+    private static String byNature(WorkbookText text, String sheet, String financeIncome, String costOfRevenue, String grossProfit,
+                                   String operatingIncome) {
         Map<String, String> income = Map.ofEntries(
                 Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
                 Map.entry("cost_of_revenue", costOfRevenue),
                 Map.entry("gross_profit", grossProfit),
+                Map.entry("operating_income", operatingIncome),
                 Map.entry("interest_income", terms(text, sheet, "+" + financeIncome)),
                 Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
                 Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
