@@ -33,6 +33,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.ingestion.IngestionResponse.Status;
 import com.neracalab.backend.ingestion.agent.IngestionSession;
 import com.neracalab.backend.ingestion.error.IngestionErrorRepository;
@@ -43,6 +44,8 @@ import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.JobProperties;
+import com.neracalab.backend.job.Requester;
+import com.neracalab.backend.price.PricesAfterUpload;
 
 /**
  * The upload workers, with a scripted agent and no database: filings are stored at the same time, also several
@@ -62,6 +65,7 @@ class FinancialStatementQueueWorkersTest {
     private volatile IngestionResponse outcome = response(Status.COMPLETED, null);
     private final IngestionErrorRepository errors = mock(IngestionErrorRepository.class);
     private final IngestionUsageRecorder usage = mock(IngestionUsageRecorder.class);
+    private final PricesAfterUpload prices = mock(PricesAfterUpload.class);
     private FinancialStatementQueue queue;
 
     @BeforeEach
@@ -340,6 +344,64 @@ class FinancialStatementQueueWorkersTest {
         assertThat(error.getValue().type()).isEqualTo(IngestionErrorRepository.Type.EXTRACTION_FAILED);
         assertThat(error.getValue().message()).isEqualTo("model offline");
         assertThat(error.getValue().finalStatus()).isEqualTo("FAILED");
+    }
+
+    /** A filing holds no prices: once it is stored, the company's prices are queued for the user who uploaded it. */
+    @Test
+    void aStoredFilingQueuesThePricesOfItsCompany() {
+        Requester uploader = new Requester(7, "analyst");
+        queue = queueWithPrices();
+        assertThat(queue.submit("DSNG-2025.xlsx".getBytes(StandardCharsets.UTF_8), "DSNG-2025.xlsx", "application/test",
+                "DSNG", uploader).created()).isTrue();
+
+        queue.start();
+
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), any(), any(), any());
+        verify(prices, timeout(10_000)).queue(Exchange.IDX, "DSNG", uploader);
+    }
+
+    /** Open items do not stand in the way: what was stored is valued as well. */
+    @Test
+    void anIncompleteUploadQueuesThePricesToo() {
+        outcome = response(Status.INCOMPLETE, null);
+        queue = queueWithPrices();
+        submit("TINS-2025.xlsx");
+
+        queue.start();
+
+        verify(prices, timeout(10_000)).queue(Exchange.IDX, "TINS", null);
+    }
+
+    @Test
+    void aFailedUploadQueuesNoPrices() {
+        outcome = response(Status.FAILED, null);
+        queue = queueWithPrices();
+        submit("HRTA-1.xlsx");
+
+        queue.start();
+
+        verify(errors, timeout(10_000)).record(any());
+        verify(prices, org.mockito.Mockito.after(200).never()).queue(any(), any(), any());
+    }
+
+    /** The upload's outcome never depends on the price queue. */
+    @Test
+    void aPriceQueueFailureLeavesTheUploadAsItEnded() {
+        when(prices.queue(any(), any(), any())).thenThrow(new IllegalStateException("price queue stopped"));
+        queue = queueWithPrices();
+        submit("HRTA-1.xlsx");
+        submit("INDF-1.xlsx");
+
+        queue.start();
+
+        // the worker survives: both uploads end SUCCEEDED and none is failed afterwards
+        verify(jobs, timeout(10_000).times(2)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), any(), any(), any());
+        verify(jobs, org.mockito.Mockito.after(200).never()).finish(any(), eq(IngestionJobStatus.FAILED), any(), any(), any());
+    }
+
+    private FinancialStatementQueue queueWithPrices() {
+        return new FinancialStatementQueue(service, files, jobs, errors, usage, Duration.ofMinutes(5), false,
+                new JobProperties(1), prices);
     }
 
     private FinancialStatementQueue queue(int workers) {

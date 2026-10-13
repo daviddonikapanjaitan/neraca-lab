@@ -47,6 +47,10 @@ curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRT
 4. A worker reads the bytes from `ingestion_file`, parses the workbook again and runs the AI agent.
    Re-uploading a known file therefore extracts the data again from the stored copy. Several
    uploads are stored at the same time (section 4).
+5. When the filing is stored (`SUCCEEDED` or `INCOMPLETE`), a `PRICE` job of its company is queued for
+   the same user, unless its prices already reach the last completed trading day or a price job of the
+   company is active (`PricesAfterUpload`; [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md), section 1).
+   It appears in the job list like a requested one.
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|
@@ -255,7 +259,7 @@ index on `job_id`). Details and the queries: [AI_INGESTION_DOCS.md](AI_INGESTION
 | `IngestionJobCostTest`          | the model calls recorded for an upload are summed per job (list) and per stage and model (one job), the parts add up to the total, a job without calls has no cost, the calls of one job do not count for another, they are deleted with the job |
 | `PriceIngestionControllerTest`  | a price job is recorded in `ingestion_job` with the same final state and requester as the queue                  |
 | `JobWorkerPoolTest`             | five workers process five jobs at the same time, never more jobs than workers, one worker keeps the order, a failing job does not stop its worker |
-| `FinancialStatementQueueWorkersTest` | five filings of one company and filings of different companies are stored at the same time; with `same-company-in-order` filings of one company one after the other in upload order and a failed filing lets the next one run (scripted agent, no database) |
+| `FinancialStatementQueueWorkersTest` | five filings of one company and filings of different companies are stored at the same time; with `same-company-in-order` filings of one company one after the other in upload order and a failed filing lets the next one run (scripted agent, no database); a stored filing (also one with open items) queues the prices of its company for the user who uploaded it, a failed one does not, and a failure of the price queue leaves the upload as it ended |
 | `CompanyWriteLockTest`          | one write lock per company whatever the spelling of the ticker, another lock for another company; a write step waits while another filing of the company holds it |
 
 Both tests delete the rows they create. Because the application startup fails jobs left active,

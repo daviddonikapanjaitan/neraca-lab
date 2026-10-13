@@ -154,6 +154,71 @@ class FilingMapperWebSharesTest {
         assertThat(wrong.checks()).anyMatch(c -> c.message().contains("basic EPS is"));
     }
 
+    /**
+     * Yahoo Finance publishes four year ends, so BBCA's FY2022 filing gets a count only at 2022-12-31 and FY2021
+     * had no market cap and no valuation. Share capital is the same at all three dates of the filing and there is
+     * no treasury stock, so the count holds at 2021-12-31 and 2020-12-31 too; the FY2021 EPS confirms it
+     * (31,422,660 million / 123,275,050,000 = 254.90, filed 255 after the 1:5 split of October 2021).
+     */
+    @Test
+    void acceptedCountIsCarriedToDatesWithTheSameShareCapital() throws Exception {
+        FilingMapper mapper = mapper("BBCA", "2022-Tahunan");
+        ShareCapital shares = mapper.withWebShareCounts(mapper.shareCapital(),
+                List.of(count("2022-12-31", 123_275_050_000L, 123_275_050_000L, 0L)), "Yahoo Finance");
+
+        assertThat(shares.resolved()).isTrue();
+        assertThat(outstanding(shares)).containsExactlyInAnyOrderEntriesOf(Map.of(
+                LocalDate.parse("2020-12-31"), new BigDecimal("123275050000"),
+                LocalDate.parse("2021-12-31"), new BigDecimal("123275050000"),
+                LocalDate.parse("2022-12-31"), new BigDecimal("123275050000")));
+        ShareAt carried = shares.snapshots().stream().filter(s -> s.date().equals(LocalDate.parse("2021-12-31")))
+                .findFirst().orElseThrow();
+        assertThat(carried.source()).contains("count at 2022-12-31, carried to 2021-12-31");
+        assertThat(carried.treasuryShares()).isEqualByComparingTo("0");
+        assertThat(carried.basicShares()).isNull();
+        assertThat(shares.basis()).contains("2021-12-31: 123275050000 (as at 2022-12-31)");
+        // the comparative column gets its count as well: FY2021 can be valued
+        assertThat(mapper.balanceSheet(StatementColumn.PRIOR_PERIOD, shares).orElseThrow().values()
+                .get("shares_outstanding")).isEqualByComparingTo("123275050000");
+    }
+
+    /** A count the EPS of the other date contradicts is not carried there (here: twice the shares). */
+    @Test
+    void countIsNotCarriedWhereTheEpsContradictsIt() throws Exception {
+        FilingMapper mapper = mapper("BBCA", "2022-Tahunan");
+        // 2022's EPS (330) would accept neither; so nothing is accepted and nothing is carried
+        ShareCapital shares = mapper.withWebShareCounts(mapper.shareCapital(),
+                List.of(count("2022-12-31", 246_550_100_000L, null, null)), "Yahoo Finance");
+
+        assertThat(shares.resolved()).isFalse();
+        assertThat(shares.snapshots()).allSatisfy(s -> assertThat(s.sharesOutstanding()).isNull());
+    }
+
+    /** A date the website has its own figure for is never filled from another date, even when that figure is refused. */
+    @Test
+    void publishedDateIsNeverCarriedOver() throws Exception {
+        FilingMapper mapper = mapper("BBCA", "2022-Tahunan");
+        ShareCapital shares = mapper.withWebShareCounts(mapper.shareCapital(), List.of(
+                count("2022-12-31", 123_275_050_000L, 123_275_050_000L, 0L),
+                count("2021-12-31", 24_655_010_000L, null, null)), "Yahoo Finance");     // pre-split: refused by the EPS
+
+        assertThat(outstanding(shares)).containsOnlyKeys(LocalDate.parse("2020-12-31"), LocalDate.parse("2022-12-31"));
+        assertThat(shares.checks()).anyMatch(c -> c.rule().equals("web_shares") && c.message().contains("2021-12-31"));
+    }
+
+    /**
+     * Treasury stock: BFIN holds treasury shares, whose count the filing does not give, so the shares outstanding
+     * of 2022-12-31 say nothing about another date - nothing is carried.
+     */
+    @Test
+    void countIsNotCarriedWithTreasuryStock() throws Exception {
+        FilingMapper mapper = mapper("BFIN", "2023-Tahunan");
+        ShareCapital shares = mapper.withWebShareCounts(mapper.shareCapital(), List.of(
+                count("2023-12-31", 15_039_383_620L, 15_967_115_620L, 927_732_000L)), "Yahoo Finance");
+
+        assertThat(outstanding(shares)).containsOnlyKeys(LocalDate.parse("2023-12-31"));
+    }
+
     private static Map<LocalDate, BigDecimal> outstanding(ShareCapital shares) {
         return shares.snapshots().stream().filter(s -> s.sharesOutstanding() != null)
                 .collect(java.util.stream.Collectors.toMap(ShareAt::date, ShareAt::sharesOutstanding));

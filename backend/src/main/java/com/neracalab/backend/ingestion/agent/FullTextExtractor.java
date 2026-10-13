@@ -134,9 +134,13 @@ public class FullTextExtractor {
             "balance_sheet", List.of("shares_outstanding"),
             "cash_flow_statement", List.of());
 
-    /** Totals a statement cannot do without: the model is asked again when it names no rows for one. */
+    /**
+     * Totals a statement cannot do without: the model is asked again when it names no rows for one. Profit from
+     * operations is one of them: every profit or loss has it or the rows that compute it, and without it the
+     * company has no EV / operating profit (MSIN FY2025, by nature: left empty in the model's only answer).
+     */
     private static final Map<String, List<String>> REQUIRED = Map.of(
-            "income_statement", List.of("pretax_income", "net_income"),
+            "income_statement", List.of("operating_income", "pretax_income", "net_income"),
             "balance_sheet", List.of("total_assets", "total_liabilities", "total_equity"),
             "cash_flow_statement", List.of("operating_cash_flow", "investing_cash_flow", "financing_cash_flow"));
 

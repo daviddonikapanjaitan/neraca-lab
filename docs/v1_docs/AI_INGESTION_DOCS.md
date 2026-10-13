@@ -120,6 +120,7 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.model-reasoning`   | false   | let a reasoning model think before answering; off sends `"reasoning": {"enabled": false}` (env `INGESTION_MODEL_REASONING`) |
 | `neracalab.ingestion.model-call-timeout`| 45s     | a model call taking longer counts as a stalled response and is retried (env `INGESTION_MODEL_CALL_TIMEOUT`) |
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
+| `neracalab.ingestion.prices-after-upload` | true  | queue the company's daily prices when a filing was stored, so that it gets its market caps and valuations (env `INGESTION_PRICES_AFTER_UPLOAD`), section 4 |
 | `neracalab.jobs.workers`                | 5       | uploads stored at the same time, each by its own agent (env `INGESTION_WORKERS`), also several filings of one company ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
 | `neracalab.ingestion.same-company-in-order` | false | true: filings of one company are stored one after the other in upload order instead (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
 | `neracalab.ingestion.provider-ignore`   | OpenInference | OpenRouter providers the ingestion's model calls never use (env `INGESTION_PROVIDER_IGNORE`), section 6 |
@@ -365,6 +366,18 @@ Rules:
   point (outstanding = issued although 336,000 treasury shares are published). A failed fetch (network,
   HTTP 429) leaves the counts empty with a note; the ingestion itself continues. Switch off with
   `neracalab.ingestion.web-share-counts: false`.
+  **Dates the website does not publish.** Yahoo Finance publishes four year ends, so the opening dates of an
+  older filing have no count of their own: BBCA's FY2022 filing got 123,275,050,000 at 2022-12-31 and nothing
+  at 2021-12-31 and 2020-12-31, and FY2021 had no market cap and no valuation. An accepted count is carried
+  to another date of the same filing when (1) share capital is the same at both dates, (2) the statement of
+  changes in equity shows no treasury stock at either date and the website none at the accepted one, (3) the
+  website has no figure of its own for that date (a published figure that was refused is never replaced), and
+  (4) the count passes the same EPS check at that date (BBCA FY2021: 31,422,660 million / 123,275,050,000 =
+  254.90, filed 255). With share capital unchanged and no treasury stock only a split changes the number of
+  shares, and a split the filing does not restate fails the EPS check; the carried count is split-adjusted,
+  like the prices. On the stored filings this fills 2020-12-31 and 2021-12-31 of ASGR (1,348,780,500), BBCA,
+  HMSP (116,318,076,900) and PTSN (5,314,344,000); a company with treasury stock (BFIN, BBRI) or a changed
+  share capital gets nothing carried.
 - Stored values are compared with the filing at the column's scale (amounts 4 decimals, EPS and share
   counts 8), with the half-up rounding Postgres applies on insert: INDY's USD EPS 0.0868828938473089
   is stored and verified as 0.08688289.
@@ -515,9 +528,17 @@ the sheets contain the template labels without names or amounts); the upload the
 segments for the filing, by design, and every other table as usual.
 
 Prices are not part of a filing; `market_snapshot` and `valuation_snapshot` need `price_daily`
-rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?exchange=IDX&ticker=...`,
-[PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)), or load a seed script such as
-`V1.0.5__data_HRTA_market.sql`.
+rows. **A stored filing queues the price ingestion of its company** (`PricesAfterUpload`, called by
+`FinancialStatementQueue` when an upload ends `SUCCEEDED` or `INCOMPLETE`): the job is recorded for the
+user who uploaded the file, loads the whole history of a company without prices and only the missing days
+otherwise, and ends with the valuation refresh of the company
+([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)). Nothing is queued when the stored prices already
+reach the last completed trading day, and a company with an active price job keeps that job, so five
+filings of one company uploaded together fetch its prices once. A failed upload queues nothing, and a
+failure to queue never changes the upload's outcome. Before, the prices had to be requested by hand
+(`POST /api/v1/prices/ingestions?exchange=IDX&ticker=...`): DSNG, ELSA, ICBP, JPFA and SIDO had five
+years of statements and share counts and an empty valuation history. Switch off with
+`neracalab.ingestion.prices-after-upload: false`.
 
 ## 5. Tests
 
@@ -531,7 +552,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `JobDeadlineTest` (unit) | the time limit inside the agent: a slow model call stops at it, no retry pause past it, no model call and no tool after it, the planner's fallback does not swallow it |
 | `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit |
 | `FilingMapperEpsTest` (unit) | NCKL FY2024: contradicting EPS columns give no share counts, EPS and share counts rejected (cleared), FY2025's comparative gives 101.1 at par 100; all MYOR, NCKL and PTSN filings map without errors |
-| `FilingMapperCekaTest` (unit) | all five CEKA filings without errors; "Produk Palm Kernel" domestic and export kept as two segments (FY2025 total = revenue 9,733,304,188,977); a repeated name blocks the breakdown; H1 2026 financing 0 without lines or total; H1 2025 interest also filed as "Other expenses" counted once |
+| `FilingMapperCekaTest` (unit) | all five CEKA filings without errors; "Produk Palm Kernel" domestic and export kept as two segments (FY2025 total = revenue 9,733,304,188,977); a repeated name blocks the breakdown; H1 2026 financing 0 without lines or total; H1 2025 interest also filed as "Other expenses" counted once; a name on two lines of the same kind is one segment, added up |
 | `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
 | `IngestionAgentModelTest` (unit) | Spring AI fills a missing model with `gpt-5-mini`; the agent's options name the configured model and the model a response reports is recorded in `metrics.models` |
 | `ConfiguredChatModel` (test helper) | the model the agent tests use, never written in Java: `spring.ai.openai.chat.model` from `application.yaml` (`${OPENAI_MODEL:<default>}`), with `OPENAI_MODEL` from the environment, else `backend/.env`, else the `application.yaml` default (the application's own precedence) |
@@ -542,7 +563,7 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
 | `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; the other upload order (comparative first, then the period's own filing: MAPA 1:10) ends the same, with balance sheet shares and share snapshots adjusted, the split recorded once and the own filing uploaded again changing nothing; a restatement that is no split is replaced by the own filing; split factors |
 | `FilingMapperTinsTest` (unit) | the TINS filings: FY2025's comparative counts its residual profit or loss lines once and its cash flow's residual investing line not at all, the current year still counts every line, every statement of FY2025 is storable; FY2024 as published has no current-year figures; FY2023's loss per share is scaled and gets its sign (-60) |
-| `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned |
+| `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned; MSIN FY2025 (by nature): profit from operations left empty is asked for again and stored from the rows that compute it, and is an open item of the upload when the last answer leaves it empty too |
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
 | `IngestionServiceFallbackTest` (unit, scripted stages) | when the full-text extraction takes over: unsupported workbook (agent not started), INCOMPLETE, past the 3 minutes, failed; never after a clean result; its own failure leaves what the standard extraction reached, its own timeout fails the upload; switched off; the upload endpoint accepts an unsupported workbook and refuses an unreadable one |
@@ -550,8 +571,9 @@ rows: run the price ingestion after the upload (`POST /api/v1/prices/ingestions?
 | `FilingMapperMikaTest` (unit) | MIKA: the comparative breakdowns of FY2025 and H1 2026 reconcile once the one line outside the filed total is left out (warning `segment_line`); the current columns are stored as filed |
 | `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
-| `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not |
+| `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not; BBCA FY2022: the count accepted at 2022-12-31 is carried to 2021-12-31 and 2020-12-31 (share capital unchanged, no treasury stock, the FY2021 EPS confirms it), never to a date the website publishes itself, never with treasury stock (BFIN), never where the EPS contradicts it |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
+| `FilingMapperTotlMidiTest` (unit) | the filings behind the error rows of 2026-10-13: TOTL's breakdowns with "Jasa Konstruksi" on several lines of one kind are one segment equal to the line its FY2024 filing shows (lines of different kinds stay apart); MIDI's H1 2025 cash roll-forward holds without the deconsolidation line its ending cash excludes |
 | `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |
@@ -671,7 +693,9 @@ reports what does not add up.
      as it is, instead of mapping it again. A statement that failed cannot be adopted.
 4. **The model sees where its own mapping contradicts itself** - total assets != liabilities (+ temporary
    syirkah funds) + equity, equity != parent + non-controlling interests, gross profit != revenue - cost of
-   revenue, a required total without rows - and may answer again, up to `rounds` (3) times ("if the filing
+   revenue, a required total without rows (profit from operations, profit before tax and profit of the
+   period; total assets, liabilities and equity; the three cash flow totals) - and may answer again, up to
+   `rounds` (3) times ("if the filing
    itself is inconsistent, keep your mapping and say so"). **Its last answer is what is stored.** A
    contradiction that remains does not drop the statement: it is saved as mapped (with a warning), the
    upload ends `INCOMPLETE` and the contradiction is in `ingestion_error`. Three slips are pointed out to
@@ -793,6 +817,24 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The uploads of 2026-10-13 (errors 321 - 323): a memo line in the cash roll-forward, one name on several lines
+
+Three rows from the filings of MIDI and TOTL; nothing is wrong with the workbooks. Fixed in the rule-based
+extraction, both filings uploaded again: `SUCCEEDED` on the standard extraction, no row.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **The cash of a deconsolidated subsidiary listed, not counted.** MIDI's H1 2026 filing shows, in its H1 2025 column, 'Cash and cash equivalent of deconsolidated subsidiaries' -79,630 million between beginning and ending cash, but its ending cash is beginning + net increase exactly (298,489 + 238,397 = 536,886; the proceeds from the disposal, 200,455, are in investing). The roll-forward check counted the line and failed by 79,630; the column went to the full-text extraction. | 321 (`SUCCEEDED`, rescued) | The line is a step of the roll-forward unless the filing's own figures prove otherwise: when the roll-forward holds exactly without it and not with it, it is not counted (warning `cash_rollforward`). A filing that does count the line is checked as before. The stored H1 2025 cash flow statement (the model's) equals what the rules now read. |
+| **One segment filed on several lines.** TOTL names service revenue 1 .. 4 "Jasa Konstruksi" (H1 2026: 331,002,951 + 306,031,443 + 451,135 + 1,410,223,936 thousand; H1 2025 likewise, plus an unnamed "Service revenue 5" its total leaves out) and domestic revenue 1 .. 5 in FY2023. A name that repeats within one kind of slot was refused ("Segment names repeat within the breakdown even with their slots"), so both breakdowns of both filings stayed open - although they add up to the filed total and the revenue. The full-text extraction cannot help: a breakdown is not one of its statements. | 322, 323 (`INCOMPLETE`) | Lines with the same name, the same kind of slot and the same type are one segment, added up (warning `segment_names`); the reconciliation with the breakdown's total and the revenue still decides. A name on lines of different kinds stays two segments with their slot as qualifier (CEKA). Proof on the filings: the five FY2023 lines sum to 3,006,816,008, the single "Jasa Konstruksi" line TOTL's FY2024 filing shows for FY2023. Stored: "Jasa Konstruksi" + "Lainnya" for FY2022, FY2023, H1 2025 and H1 2026, each equal to the revenue. |
+
+Row 243 (`FinancialStatement-2024-Tahunan-MSTI.xlsx`, 2026-10-11) is closed without a change: the uploaded
+file was not an .xlsx workbook, was refused with 422 and is not stored (below). FY2024 of MSTI is stored from
+the comparative column of its FY2025 filing; uploading a good copy of the FY2024 filing replaces it.
+
+Tests: `FilingMapperTotlMidiTest` (the TOTL breakdowns of H1 2026, H1 2025, FY2023 and FY2022 on the real
+filings, the sum against the FY2024 filing, lines of different kinds kept apart; MIDI's H1 2025 roll-forward
+and its untouched current column), `FilingMapperCekaTest` (a name on two lines of the same kind is added up).
 
 ### The BFIN uploads (errors 64 - 68): "no figures" for a complete workbook
 

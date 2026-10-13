@@ -91,6 +91,9 @@ neracalab:
     provider-ignore: ${INGESTION_PROVIDER_IGNORE:OpenInference}   # OpenRouter providers never used (OpenInference's DeepSeek loops for 60 s)
     web-share-counts: ${INGESTION_WEB_SHARE_COUNTS:true}   # Yahoo Finance share counts when a filing gives none
     job-timeout: ${INGESTION_JOB_TIMEOUT:5m}   # an upload job running longer is stopped and FAILED (queue time not counted)
+    # A filing holds no prices, and without prices a company has no market cap and no valuation: when a filing was
+    # stored, the company's daily prices are queued too (nothing when they already reach the last completed trading day).
+    prices-after-upload: ${INGESTION_PRICES_AFTER_UPLOAD:true}
     # Full-text extraction: takes over when the standard extraction (the AI agent above) does not store a workbook -
     # it cannot map it ("No balance sheet data"), leaves open items (INCOMPLETE), fails, or runs longer than `after`.
     # The model then decides every value that is not stored yet from the text of the whole workbook (it names the rows,
