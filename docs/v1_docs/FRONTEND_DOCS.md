@@ -13,7 +13,8 @@ exchange, and everything stored for one company. It reads the company APIs
 | Theme      | [shadcn-fintech](https://github.com/abderrahimghazali/shadcn-fintech) (MIT): `components.json`, `globals.css`, ui components, inset sidebar shell, empty states, theme toggle |
 | Components | shadcn/ui `base-nova` style on Base UI (`@base-ui/react`)                                                                                                                     |
 | Styling    | Tailwind CSS 4, `tw-animate-css`, Geist fonts, light / dark mode (`next-themes`)                                                                                              |
-| Charts     | Recharts 3 through the shadcn `ChartContainer`                                                                                                                                |
+| Charts     | Recharts 3 through the shadcn `ChartContainer`; the candlestick chart of Technicals: TradingView Lightweight Charts 5.2.1 (Apache-2.0, attribution kept) |
+| Client data | TanStack Query 5.104.0 and zod 4.6.5 on the Technicals page (requests through the route handlers, responses validated before charting) |
 | Icons      | lucide-react                                                                                                                                                                  |
 
 ## 2. Data flow
@@ -127,6 +128,25 @@ Statement tables:
   comparative) is left out of that table instead of showing zeros.
 
 Unknown company: not-found page. Invalid ticker or unsupported exchange: the backend's 400 message.
+
+### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
+
+The Companies entry of the sidebar is a dropdown: **Fundamentals** (`/companies` and the company pages) and
+**Technicals**. The chart page is a client component (`components/technical/technicals-page-client.tsx`); the chart
+(`price-chart.tsx`) is a small wrapper around Lightweight Charts loaded with `next/dynamic` (`ssr: false`), rebuilt when
+its data, indicators or the theme change, removed on unmount. The browser computes no indicator: every series comes
+from `/api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events}`, `/api/technical/market`,
+`/api/technical/tickers` and `/api/technical/settings` (route handlers forwarding to `/api/v1/technical/**`).
+
+| Element | Content |
+|---|---|
+| Controls | exchange, ticker search (code or name, arrows / Enter / Escape), Daily / Weekly / Monthly, 3M .. Max, Split-adjusted / Total return, presets (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller: they only toggle indicators), indicator checkboxes (side column; a sheet on a phone), PNG export |
+| Main chart | candles, moving averages, Bollinger, channels, ATR bands, IHSG rebased; zones and the base as shaded bands (series primitive); retracement, 52-week and all-time-high lines; event and ARA / ARB markers; lower panes for volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, RS vs IHSG, 12-1 month momentum |
+| Panels | key levels (CSV), snapshot "data, not signals" (CSV), volume by price, IHSG regime, macro |
+| Settings | saved per user (`PUT /api/technical/settings`, debounced), localStorage as fallback, and in the URL; the URL wins |
+| Other | limited-history warning, disclaimer "For information only. Not investment advice.", TradingView notice in the footer and on `/credits`; usable at phone width; colors from the theme's CSS variables |
+
+Details: [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md).
 
 ### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news` (`INGESTION`)
 

@@ -32,6 +32,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { COMPANIES_SECTIONS } from "@/lib/companies-sections"
 import { INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { SCREENING_SECTIONS } from "@/lib/screening-sections"
 import { hasPermission, homePath } from "@/lib/permissions"
@@ -53,7 +54,13 @@ interface NavItem {
 }
 
 const navMarket: NavItem[] = [
-  { title: "Companies", url: "/companies", icon: <Building2Icon />, permission: "COMPANIES" },
+  {
+    title: "Companies",
+    url: "/companies",
+    icon: <Building2Icon />,
+    permission: "COMPANIES",
+    pages: COMPANIES_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
+  },
   {
     title: "Screening",
     url: "/screening",
@@ -86,7 +93,7 @@ function activePage(pathname: string, pages: NavPage[]): string | null {
 }
 
 /**
- * A sidebar entry with sub-pages (Admin Center, Ingestion, Screening): a dropdown, open while one of its pages is
+ * A sidebar entry with sub-pages (Companies, Admin Center, Ingestion, Screening): a dropdown, open while one of its pages is
  * shown. In the collapsed sidebar there is no room for the sub-menu: the icon opens the first page.
  */
 function NavDropdown({
@@ -168,7 +175,7 @@ export function AppSidebar({ user, ...props }: React.ComponentProps<typeof Sideb
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">Neraca Lab</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  Fundamental Analysis
+                  Fundamental &amp; Technical Analysis
                 </span>
               </div>
             </SidebarMenuButton>

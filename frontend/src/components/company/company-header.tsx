@@ -1,4 +1,8 @@
+import Link from "next/link"
+import { LineChartIcon } from "lucide-react"
+
 import { Badge } from "@/components/ui/badge"
+import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { EMPTY, formatCompact, formatDate, formatPrice } from "@/lib/format"
 import type { CompanyDetail } from "@/lib/types"
@@ -20,6 +24,12 @@ export function CompanyHeader({ detail }: { detail: CompanyDetail }) {
                 {company.exchange}: {company.ticker}
               </Badge>
               {!company.active && <Badge variant="destructive">Inactive</Badge>}
+              <Link
+                href={`/companies/technicals?exchange=${encodeURIComponent(company.exchange)}&ticker=${encodeURIComponent(company.ticker)}`}
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                <LineChartIcon /> Technicals
+              </Link>
             </div>
             <p className="truncate text-sm text-muted-foreground">
               {company.legalName ?? company.companyName} · {company.exchangeName}

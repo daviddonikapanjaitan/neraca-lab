@@ -55,6 +55,8 @@ start), then change its password in Admin Center > User Management.
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
 | [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion, chunking, embeddings, search API |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
+| [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
+| [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 1) the future technical agents read |
 
 ## Project structure
 
@@ -72,6 +74,7 @@ neraca_lab/
 │       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository,
 │       │                        stored files (checksum), background upload queue
 │       ├── java/.../price/      daily price ingestion: queue, providers, valuation refresh
+│       ├── java/.../technical/  technical analysis: indicator engine (ta4j + custom), IDX rules, APIs, refresh
 │       ├── java/.../job/        ingestion job progress (ingestion_job): list / detail / file download APIs
 │       ├── java/.../auth/       login, sessions, access check of every API, root user bootstrap
 │       ├── java/.../user/       user management, role management, profile (avatar)
@@ -100,6 +103,7 @@ neraca_lab/
 │               ├── V1.0.18__schema_ingestion_error.sql (error log of the .xlsx ingestion API: ingestion_error)
 │               ├── V1.0.19__schema_ingestion_cost.sql  (model cost of the .xlsx ingestion: llm_usage.job_id)
 │               ├── V1.0.20__schema_screening_currency.sql (fundamental_snapshot.financial_currency: USD reporters)
+│               ├── V1.0.23__schema_technical.sql  (technical analysis: IHSG, events, macro, snapshots, chart settings)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -147,8 +151,8 @@ neraca_lab/
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
                                  INGESTION_JOBS_DOCS.md, AUTH_DOCS.md, DB_SCHEMA_DOCS.md,
-                                 SCREENING_DOCS.md, ANALYSIS_DOCS.md, RAG_DOCS.md
-                                 (see Documentation)
+                                 SCREENING_DOCS.md, ANALYSIS_DOCS.md, RAG_DOCS.md, TECHNICAL_DOCS.md
+                                 (see Documentation); docs/indicator-snapshot.md
 ```
 
 ## Running the backend only
@@ -525,6 +529,41 @@ an agent answer without strengths and concerns is asked again. The fact sheet of
 so the price is the IDX quote again (INDY: Rp 2,790) - and the report and PDF name the rate; ratios, margins and
 growth rates stay those of the USD statements. Details: [`docs/v1_docs/ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md).
 
+## Technical analysis
+
+**Companies › Technicals** charts every stored listing: candles with moving averages, Bollinger Bands, channels, ATR
+bands, support / resistance zones, retracements, 52-week and all-time levels, a base range, corporate events and ARA / ARB
+days, lower panes (volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, relative strength vs IHSG, 12-1 month momentum), key
+levels, volume by price, IHSG regime and macro panels. No model is called and no score or signal is given: the backend
+computes every indicator deterministically (ta4j 0.22.6 and custom code), rounds every level to a valid IDX price (tick
+sizes, lot 100) and detects auto-rejection days with the limits in force on each day. The latest **IndicatorSnapshot** of
+every listing (versioned JSON, [`docs/indicator-snapshot.md`](docs/indicator-snapshot.md)) is the input of the
+technical agents planned next.
+
+The page and its APIs read only the database: daily prices from `price_daily` (filled by the price ingestion), IHSG from
+`index_daily` and dividends / splits from `corporate_event` (filled by the technical refresh). Both jobs call the Yahoo
+Finance chart API directly from Java (no `yfinance` package, no API key); USD/IDR comes from the ECB rates in
+`fx_rate_daily`. TradingView only supplies the open-source chart library (Lightweight Charts™) that draws in the
+browser - no data comes from TradingView.
+
+| Endpoint (permission COMPANIES) | Content |
+|---|---|
+| `GET /api/v1/technical/tickers?exchange=IDX&query=` | ticker search |
+| `GET /api/v1/technical/{exchange}/{ticker}/ohlcv?interval=D\|W\|M&range=1Y&adjustment=split\|total` | bars and ARA / ARB days |
+| `GET /api/v1/technical/{exchange}/{ticker}/indicators?set=sma50,sma200,rsi14,...` | indicator series (`[time, value]`) |
+| `GET /api/v1/technical/{exchange}/{ticker}/levels` | zones, retracements, swings, volume profile, 52-week / all-time levels, key levels table |
+| `GET /api/v1/technical/{exchange}/{ticker}/snapshot` | the agent-ready snapshot |
+| `GET /api/v1/technical/{exchange}/{ticker}/events` | dividends and splits for chart markers |
+| `GET /api/v1/technical/market?exchange=IDX` | IHSG regime, breadth, USD/IDR |
+| `POST /api/v1/technical/refresh` (INGESTION) | load IHSG and corporate events from Yahoo Finance, recompute every snapshot (also nightly, 19:00 WIB) |
+
+```bash
+curl -X POST -H "$AUTH" "http://localhost:8080/api/v1/technical/refresh?exchange=IDX"   # first run: IHSG since 1990, events of every listing
+curl -H "$AUTH" "http://localhost:8080/api/v1/technical/IDX/HRTA/snapshot"
+```
+
+Details: [`docs/v1_docs/TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md).
+
 ## Frontend
 
 Next.js web app in `frontend/` with the
@@ -540,7 +579,9 @@ npm run dev                   # http://localhost:3000
 
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/companies?exchange=IDX`        | companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles                                                                    |
+| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
+| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts) with overlays, levels, events, ARA / ARB days and lower panes; ticker search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller - toggles only); key levels, snapshot, volume profile, IHSG regime and macro panels; PNG / CSV export. Settings saved per user and in the URL |
+| `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
 | `/screening/selected`            | Selected Stocks: stocks chosen from the companies table (search, multi-select), top N, investor agents; saved screenings of selected stocks |
@@ -597,6 +638,7 @@ taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah s
 classification while the column still fails;
 `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+`IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
@@ -670,6 +712,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.18__schema_ingestion_error.sql` | `ingestion_error`: every upload that was refused, taken over by the full-text extraction, INCOMPLETE or FAILED; `fixed_by_claude_code` |
 | `V1.0.19__schema_ingestion_cost.sql`  | `llm_usage.job_id`: every model call of a financial statement upload with its model, tokens and cost (per job on the IDX XBRL Ingestion page) |
 | `V1.0.20__schema_screening_currency.sql` | `fundamental_snapshot.financial_currency`: the currency Yahoo reports a listing's fundamentals in (USD for INDY, ADRO, ...); the screening metrics convert with `fx_rate_daily` |
+| `V1.0.23__schema_technical.sql`       | technical analysis: `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series`, `indicator_snapshot`, `chart_setting` (new tables only) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
@@ -704,6 +747,8 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
+| `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series` | technical analysis inputs: IHSG daily bars, dividends / splits (Yahoo), macro observations |
+| `indicator_snapshot`, `chart_setting` | the latest technical snapshot per company (versioned JSON); a user's last chart settings |
 | `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the screening research agent |
 | `screening_run`, `screening_candidate`, `screening_agent_score` | screening reports: parameters, shortlist, scores and reasoning |
 | `analysis_run`, `analysis_agent_score` | analysis reports of one stock: what the agents saw, research brief, synthesis, scores and reasoning |
