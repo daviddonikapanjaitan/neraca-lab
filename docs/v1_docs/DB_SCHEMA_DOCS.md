@@ -29,6 +29,7 @@ foreign key.
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
 | `V1.0.13__data_BNGA_shares.sql`           | BNGA audited year-end share counts 2021 .. 2025 from its annual reports (not derivable from its filings: two share classes, treasury shares); no-op until BNGA is uploaded; also run after every upload |
 | `V1.0.21__data_RAJA_shares.sql`           | RAJA share counts from public sources (not derivable from its USD filings), its 1:5 stock split of 2026-07-16 (after its latest filing, so the published counts did not fit the filed EPS) and the EPS of the earlier periods on the basis after it; no-op until RAJA is uploaded |
+| `V1.0.22__data_TUGU_shares.sql`           | TUGU's 1:2 stock split of 2023-05-24 from public sources (the FY2023 filing does not restate its FY2022 comparative, so the split is never detected from the filings), split-adjusted share counts 3,555,575,600 where empty and the per-share figures of the dates before it on the basis after it; no-op until TUGU is uploaded |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 
 New filings can also be loaded at runtime through the upload endpoint, which writes the same

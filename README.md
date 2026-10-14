@@ -105,6 +105,7 @@ neraca_lab/
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
 │               ├── V1.0.13__data_BNGA_shares.sql  (BNGA audited share counts from its annual reports)
 │               ├── V1.0.21__data_RAJA_shares.sql  (RAJA share counts and its 1:5 stock split of 2026-07-16)
+│               ├── V1.0.22__data_TUGU_shares.sql  (TUGU's 1:2 stock split of 2023-05-24, no filing restates it)
 │               └── V1.0.6__data_metrics_valuation.sql
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
@@ -134,9 +135,14 @@ neraca_lab/
 │                                full-text extraction, share counts from Yahoo Finance checked against its EPS)
 │                                AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM, WIIM (2022 .. 2025 annual, 2026-II),
 │                                MSIN (the same; profit or loss by nature, 1322000) and MSTI (2023, 2025 annual,
-│                                2026-II) - RAJA: no share count yet (Yahoo Finance's counts are adjusted for a
-│                                1:5 split no filing reflects), so no valuation
+│                                2026-II) - RAJA: share counts and its 1:5 split of 2026-07-16 from V1.0.21
 │                                (NCKL FY2024: EPS one decimal place off, see AI_INGESTION_DOCS)
+│                                TUGU (2022 .. 2025 annual, 2026-II; insurer, Insurance Industry taxonomy 6xxxxxx,
+│                                decided by the full-text extraction; 2:1 split of 2023-05-24 from V1.0.22),
+│                                MOLI (the same years; EPS filed in other units per filing), CNMA (2023 .. 2025
+│                                annual, 2026-II; balance sheet by order of liquidity)
+│                                BBYB, BTPS, NOBU (banks), MARK, NRCA, GOTO (also pdf/) (2022 .. 2025 annual,
+│                                2026-II), BLES (2024, 2025 annual, 2026-II), DWGL (2022, 2024, 2025 annual, 2026-II)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -231,7 +237,8 @@ extraction** takes over: its own model (Claude Haiku 5.5, `neracalab.ingestion.f
 `INGESTION_FALLBACK_MODEL`; the standard extraction stays on `OPENAI_MODEL`, DeepSeek) gets the text of the
 whole workbook - every sheet of the file, whatever its taxonomy - and **decides every value that is not stored
 yet** - which rows make up every database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
-8220000 / 8322000 / 8510000) goes straight to the model. No rule of the Java code decides or
+8220000 / 8322000 / 8510000; Insurance Industry, e.g. TUGU: 6220000 / 6312000 / 6510000) goes straight to the model; its share
+capital, per-share unit and notes are still read by the rules, so its share counts come from the filing. No rule of the Java code decides or
 overrules a value there: the code reads the amounts of the rows the model names from the workbook's cells
 (so a stored figure always exists in the workbook), shows the model where its own mapping contradicts itself
 (assets = liabilities + equity, ...) so it can correct it, and stores its last answer; what still does not
@@ -247,8 +254,9 @@ over, INCOMPLETE or FAILED is recorded in the table **`ingestion_error`** - the 
 SELECT error_id, file_name, ticker, period, error_type, message FROM ingestion_error WHERE NOT fixed_by_claude_code;
 ```
 
-A workbook the model decides by design - the Financing Industry taxonomy, a profit or loss presented by nature
-(NSSS, MSIN) - that is stored and verified is not an error and leaves no row. A row of the error log names the model of the full-text extraction and every model call of the job that
+A workbook the model decides by design - the Financing or Insurance Industry taxonomy, a profit or loss presented by
+nature (NSSS, MSIN), a General Industry balance sheet by order of liquidity (CNMA) - that is stored and verified is not
+an error and leaves no row. A row of the error log names the model of the full-text extraction and every model call of the job that
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
@@ -591,7 +599,7 @@ classification while the column still fails;
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
-`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
+`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `ShareSplitTest` the share splits (also that a split-adjusted USD EPS keeps its decimals: RAJA 0.0054 / 5 = 0.00108); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
@@ -667,6 +675,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
 | `V1.0.13__data_BNGA_shares.sql`       | BNGA audited year-end share counts 2021 .. 2025 (note 33 of the annual reports; two share classes and treasury shares) |
 | `V1.0.21__data_RAJA_shares.sql`       | RAJA share counts (21,135,412,500 split-adjusted, from 2021-12-31), its 1:5 stock split of 2026-07-16 and the EPS of the periods before it (/ 5) |
+| `V1.0.22__data_TUGU_shares.sql`       | TUGU's 1:2 stock split of 2023-05-24 (par Rp 100 -> Rp 50), which no filing restates: counts 3,555,575,600 split-adjusted from 2021-12-31, the per-share figures before it (/ 2) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).

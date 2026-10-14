@@ -158,8 +158,9 @@ public final class FilingMapper {
         this.workbook = workbook;
         this.info = FilingInfo.from(workbook);
         this.taxonomy = workbook.taxonomy();
-        // the Financing Industry taxonomy has the Financial one's sheets (by order of liquidity, by nature)
-        this.financial = taxonomy == IdxTaxonomy.FINANCIAL || taxonomy == IdxTaxonomy.FINANCING;
+        // the Financing and the Insurance Industry taxonomies have the Financial one's sheets (by order of
+        // liquidity, by nature)
+        this.financial = taxonomy == IdxTaxonomy.FINANCIAL || modelTaxonomy();
         if (financial) {
             this.balanceSheet = data(IdxSheets.BALANCE_SHEET_LIQUIDITY).orElse(null);
             this.income = data(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX).or(() -> data(IdxSheets.INCOME_BY_NATURE)).orElse(null);
@@ -197,9 +198,9 @@ public final class FilingMapper {
             templateProblems.add("No cash flow data (" + code(IdxSheets.CASH_FLOW_DIRECT) + " / "
                     + code(IdxSheets.CASH_FLOW_INDIRECT) + ")");
         }
-        if (taxonomy == IdxTaxonomy.FINANCING) {
+        if (modelTaxonomy()) {
             // its line items are not the bank template's: no rule here decides them
-            templateProblems.add("The line items of the Financing Industry taxonomy (" + code(IdxSheets.BALANCE_SHEET_LIQUIDITY)
+            templateProblems.add("The line items of the " + taxonomyName() + " taxonomy (" + code(IdxSheets.BALANCE_SHEET_LIQUIDITY)
                     + ", " + code(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX) + ", " + code(IdxSheets.CASH_FLOW_DIRECT)
                     + ") are not mapped by the rule-based extraction; the model decides them from the text of the workbook");
         }
@@ -221,6 +222,18 @@ public final class FilingMapper {
     }
 
     /**
+     * Balance sheet as filed, whatever its template: the sheet the rule-based extraction maps, else the other
+     * presentation (CNMA files the General Industry balance sheet by order of liquidity, 1220000). Both carry the same
+     * line items, e.g. 'Right of use assets'.
+     */
+    private StatementTable balanceSheetAsFiled() {
+        if (balanceSheet != null) {
+            return balanceSheet;
+        }
+        return data(financial ? IdxSheets.BALANCE_SHEET : IdxSheets.BALANCE_SHEET_LIQUIDITY).orElse(null);
+    }
+
+    /**
      * Whether profit or loss is presented by nature in a taxonomy whose rule-based extraction reads it by function
      * (e.g. NSSS): expenses by type, no 'Cost of sales and revenue' and no 'Total gross profit' row.
      */
@@ -235,12 +248,36 @@ public final class FilingMapper {
 
     /**
      * Whether the statements of this workbook are the model's to decide by design: a taxonomy the rule-based
-     * extraction does not map (Financing Industry), or a profit or loss presented by nature where the rule-based
-     * extraction reads it by function (NSSS, MSIN), and nothing else wrong with the workbook. Such an upload goes
+     * extraction does not map (Financing Industry, Insurance Industry), a profit or loss presented by nature where
+     * the rule-based extraction reads it by function (NSSS, MSIN), or a balance sheet by order of liquidity where it
+     * reads the current / non-current one (CNMA), and nothing else wrong with the workbook. Such an upload goes
      * straight to the full-text extraction; when that stores it, nothing went wrong.
      */
     public boolean decidedByModel() {
-        return templateProblems.size() == 1 && (taxonomy == IdxTaxonomy.FINANCING || incomeByNature());
+        int byDesign = (modelTaxonomy() ? 1 : 0) + (incomeByNature() ? 1 : 0) + (balanceByLiquidity() ? 1 : 0);
+        return byDesign > 0 && templateProblems.size() == byDesign;
+    }
+
+    /**
+     * Whether the balance sheet is presented by order of liquidity (1220000) in a taxonomy whose rule-based extraction
+     * reads the current / non-current one (CNMA, General Industry): no current assets or liabilities.
+     */
+    public boolean balanceByLiquidity() {
+        return !financial && balanceSheet == null && balanceSheetAsFiled() != null;
+    }
+
+    /**
+     * A taxonomy whose line items the rule-based extraction does not map: Financing Industry (multifinance, BFIN) and
+     * Insurance Industry (insurers, TUGU). Its sheets are read under the General codes (share capital, per-share unit,
+     * notes); its statements are the full-text extraction's.
+     */
+    private boolean modelTaxonomy() {
+        return taxonomy == IdxTaxonomy.FINANCING || taxonomy == IdxTaxonomy.INSURANCE;
+    }
+
+    /** Whether the workbook uses the Insurance Industry taxonomy (an insurer). */
+    public boolean insurance() {
+        return taxonomy == IdxTaxonomy.INSURANCE;
     }
 
     /** Whether the workbook uses the Financial and Sharia Industry taxonomy (a bank). */
@@ -297,18 +334,32 @@ public final class FilingMapper {
      * figures, the declared unit an impossible one, but the amounts are not whole multiples of the unit. The
      * per-share figures are then scaled by the unit. A unit that leaves the EPS-implied share count impossible
      * either way is a template problem.
+     * <p>
+     * Where both share counts are possible, the share capital decides ({@link #epsScaleFromShareCapital}): MOLI's H1
+     * 2026 workbook files 0.02321 for Rp 23.21 (thousands), TUGU's FY2024 workbook 0.0002 for Rp 197 (millions, in a
+     * workbook in thousands).
      */
     private Units resolveUnits(BigDecimal declared) {
         BigDecimal impliedFull = impliedSharesPerUnit();   // shares if amounts and EPS were in the same unit
-        if (declared.compareTo(BigDecimal.ONE) > 0 && impliedFull != null && plausibleShares(impliedFull)
-                && !plausibleShares(impliedFull.multiply(declared))) {
+        boolean impossibleWithDeclared = declared.compareTo(BigDecimal.ONE) > 0 && impliedFull != null
+                && plausibleShares(impliedFull) && !plausibleShares(impliedFull.multiply(declared));
+        if (impossibleWithDeclared && allAmountsMultipleOf(declared)) {
+            warnings.add("The workbook declares '" + info.rounding() + "' but its amounts are full amounts (every amount is a "
+                    + "multiple of " + declared.toPlainString() + " and the EPS implies "
+                    + impliedFull.setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares); amounts are read as full amounts");
+            return new Units(BigDecimal.ONE, BigDecimal.ONE);
+        }
+        BigDecimal fromCapital = epsScaleFromShareCapital(declared);
+        if (fromCapital != null) {
+            warnings.add("The workbook's EPS is filed in " + (fromCapital.compareTo(declared) == 0 ? "its rounding unit ('"
+                    + info.rounding() + "')" : "units of " + fromCapital.toPlainString()) + ": basic EPS "
+                    + profitOrLossAsFiled().value(EPS_BASIC, 0).toPlainString() + " reproduces profit attributable to the parent / "
+                    + "(share capital / a standard par value) only when multiplied by " + fromCapital.toPlainString()
+                    + "; per-share figures are multiplied by " + fromCapital.toPlainString());
+            return new Units(declared, fromCapital);
+        }
+        if (impossibleWithDeclared) {
             String shares = impliedFull.setScale(0, RoundingMode.HALF_UP).toPlainString();
-            if (allAmountsMultipleOf(declared)) {
-                warnings.add("The workbook declares '" + info.rounding() + "' but its amounts are full amounts (every amount is a "
-                        + "multiple of " + declared.toPlainString() + " and the EPS implies " + shares + " shares); amounts are "
-                        + "read as full amounts");
-                return new Units(BigDecimal.ONE, BigDecimal.ONE);
-            }
             warnings.add("The workbook's EPS is filed in its rounding unit ('" + info.rounding() + "': basic EPS "
                     + profitOrLossAsFiled().value(EPS_BASIC, 0).toPlainString() + " implies " + shares + " shares only when multiplied by "
                     + declared.toPlainString() + "); per-share figures are multiplied by " + declared.toPlainString());
@@ -319,6 +370,100 @@ public final class FilingMapper {
                     + impliedFull.multiply(declared).setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares");
         }
         return new Units(declared, BigDecimal.ONE);
+    }
+
+    /** Multipliers an EPS may be filed off by: as filed, in thousands, in millions. */
+    private static final List<BigDecimal> EPS_SCALES = List.of(BigDecimal.ONE, new BigDecimal("1000"), new BigDecimal("1000000"));
+
+    /**
+     * The multiplier of the filed EPS, judged by the share capital of the current period end: profit attributable to
+     * the parent / (share capital / par value) must reproduce the basic EPS within its rounding for a standard par
+     * value. The EPS of a workbook in thousands can be filed in rupiah (as it should), in thousands (MOLI H1 2026:
+     * 0.02321 for 63,221,614 thousand / 2,724,036,580 shares = Rp 23.21, par 100; TUGU FY2023: 0.372 for Rp 371.92,
+     * par 50) or even in millions (TUGU FY2024: 0.0002 for Rp 197.1, par 50, one digit left). Where profit / EPS
+     * gives a plausible share count either way, only the share capital tells them apart.
+     *
+     * @return the multiplier (1000 or 1,000,000) when exactly that one fits; {@code null} when the EPS fits as filed,
+     *         when two multipliers fit (MOLI FY2025: 0.277 is Rp 0.277 at par 1 or Rp 277 at par 1000; neither is the
+     *         Rp 27.70 of par 100), or when there is no evidence (no profit or EPS, treasury stock, no share capital)
+     */
+    private BigDecimal epsScaleFromShareCapital(BigDecimal declared) {
+        StatementTable income = profitOrLossAsFiled();
+        if (income == null) {
+            return null;
+        }
+        BigDecimal parent = income.value(PROFIT_PARENT, 0);
+        BigDecimal eps = income.value(EPS_BASIC, 0);
+        BigDecimal[] position = equityPosition(IdxSheets.EQUITY, "Equity position, end of the period");
+        if (parent == null || eps == null || position == null || position[0] == null || position[0].signum() <= 0
+                || parent.signum() == 0 || eps.signum() != parent.signum()
+                || (position[1] != null && position[1].signum() != 0)) {
+            return null;
+        }
+        BigDecimal parentFull = parent.multiply(declared).abs();
+        BigDecimal common = position[0].multiply(declared);
+        BigDecimal halfUlp = halfUlp(eps);
+        List<BigDecimal> fitting = new ArrayList<>();
+        for (BigDecimal scale : EPS_SCALES) {
+            BigDecimal scaled = eps.abs().multiply(scale);
+            BigDecimal tolerance = halfUlp.multiply(scale).add(new BigDecimal("1e-9"));
+            for (BigDecimal par : STANDARD_PAR_VALUES) {
+                BigDecimal shares = common.divide(par, 10, RoundingMode.HALF_UP).stripTrailingZeros();
+                if (shares.scale() > 0 || shares.signum() <= 0) {
+                    continue;
+                }
+                if (parentFull.divide(shares, 12, RoundingMode.HALF_UP).subtract(scaled).abs().compareTo(tolerance) <= 0) {
+                    fitting.add(scale);
+                    break;
+                }
+            }
+        }
+        return fitting.size() == 1 && fitting.getFirst().compareTo(BigDecimal.ONE) != 0 ? fitting.getFirst() : null;
+    }
+
+    /** Half a unit of the last decimal place of a filed figure (0.0002 -> 0.00005, 135 -> 0.5). */
+    private static BigDecimal halfUlp(BigDecimal filed) {
+        return BigDecimal.ONE.movePointLeft(Math.max(0, filed.stripTrailingZeros().scale())).divide(BigDecimal.valueOf(2));
+    }
+
+    /** Half a unit of the last decimal place of the filed EPS, in currency units per share (scaled like the EPS). */
+    private BigDecimal epsHalfUlp(StatementTable profitOrLoss, String label, int ctx) {
+        BigDecimal raw = profitOrLoss.value(label, ctx);
+        return raw == null ? null : halfUlp(raw).multiply(epsScale);
+    }
+
+    /**
+     * Common stock and treasury stock (as filed, unscaled) of a statement of changes in equity on its row with the
+     * given English label, e.g. "Equity position, end of the period"; {@code null} when the sheet has no such row.
+     */
+    private BigDecimal[] equityPosition(String sheetName, String english) {
+        RawSheet sheet = workbook.sheet(sheetName).orElse(null);
+        if (sheet == null) {
+            return null;
+        }
+        int commonCol = -1;
+        int treasuryCol = -1;
+        int headerRow = -1;
+        for (int r = 0; r < sheet.rowCount() && headerRow < 0; r++) {
+            for (int c = 0; c < sheet.width(r); c++) {
+                if ("Common stocks".equals(sheet.text(r, c))) {
+                    headerRow = r;
+                    commonCol = c;
+                }
+                if ("Treasury stocks".equals(sheet.text(r, c))) {
+                    treasuryCol = c;
+                }
+            }
+        }
+        if (commonCol < 0) {
+            return null;
+        }
+        for (int r = headerRow + 1; r < sheet.rowCount(); r++) {
+            if (english.equals(sheet.text(r, sheet.width(r) - 1))) {
+                return new BigDecimal[] {sheet.number(r, commonCol), treasuryCol < 0 ? null : sheet.number(r, treasuryCol)};
+            }
+        }
+        return null;
     }
 
     /** A per-share figure as filed, scaled to currency units per share. */
@@ -975,7 +1120,7 @@ public final class FilingMapper {
     }
 
     /** Why the two columns' EPS contradict each other ({@link #epsColumnsContradict}), {@code null} when they do not. */
-    String epsContradiction() {
+    public String epsContradiction() {
         if (!epsChecked) {
             shareCapital();
         }
@@ -993,24 +1138,47 @@ public final class FilingMapper {
      * agree and supply them. {@code null} when the columns do not contradict (or cannot be checked).
      */
     private String epsColumnsContradict(BigDecimal[] currentStartEnd, BigDecimal[] priorStartEnd) {
-        List<BigDecimal> current = supportedPars(StatementColumn.CURRENT_PERIOD, currentStartEnd);
-        List<BigDecimal> prior = supportedPars(StatementColumn.PRIOR_PERIOD, priorStartEnd);
-        if (current == null || prior == null || current.isEmpty() || prior.isEmpty()
-                || current.stream().anyMatch(p -> prior.stream().anyMatch(q -> q.compareTo(p) == 0))) {
+        List<BigDecimal> current = supportedPars(StatementColumn.CURRENT_PERIOD, currentStartEnd, BigDecimal.ONE);
+        List<BigDecimal> prior = supportedPars(StatementColumn.PRIOR_PERIOD, priorStartEnd, BigDecimal.ONE);
+        if (current == null || prior == null) {
+            return null;
+        }
+        // A column that fits no par value as filed may have its EPS in the rounding unit (INDF's H1 2025 workbook files
+        // the H1 2024 EPS 439 as 0.000439 in millions): it is corrected within the column once the par value is known,
+        // and is judged at that unit here. It must then fit the other column's par value. MOLI's FY2025 workbook files
+        // 0.277 (Rp 27.70) and 0.00475 (Rp 4.75): the current EPS fits only par 1, the prior one only par 100 in
+        // thousands - par 1 gave 272,403,658,000 shares (100 times too many) and a share split 1:100 that never was.
+        String inUnit = "";
+        if (current.isEmpty() != prior.isEmpty() && unit.compareTo(BigDecimal.ONE) > 0) {
+            if (prior.isEmpty()) {
+                prior = supportedPars(StatementColumn.PRIOR_PERIOD, priorStartEnd, unit);
+                inUnit = " (" + period(StatementColumn.PRIOR_PERIOD).key();
+            } else {
+                current = supportedPars(StatementColumn.CURRENT_PERIOD, currentStartEnd, unit);
+                inUnit = " (" + period(StatementColumn.CURRENT_PERIOD).key();
+            }
+            inUnit += ": fits no par value as filed, only multiplied by the rounding unit " + unit.toPlainString() + ")";
+        }
+        List<BigDecimal> priorPars = prior;
+        if (current.isEmpty() || prior.isEmpty() || current.stream().anyMatch(p -> priorPars.stream().anyMatch(q -> q.compareTo(p) == 0))) {
             return null;
         }
         return "The two columns' EPS contradict each other: " + period(StatementColumn.CURRENT_PERIOD).key() + " basic EPS "
                 + eps(EPS_BASIC, 0).toPlainString() + " fits par value " + plain(current) + ", "
                 + period(StatementColumn.PRIOR_PERIOD).key() + " basic EPS " + eps(EPS_BASIC, 1).toPlainString()
-                + " fits par value " + plain(prior) + "; no share counts are derived from this filing";
+                + " fits par value " + plain(prior) + inUnit + "; no share counts are derived from this filing";
     }
 
     private static String plain(List<BigDecimal> values) {
         return values.stream().map(BigDecimal::toPlainString).toList().toString();
     }
 
-    /** Standard par values the column's EPS fits, {@code null} without evidence (no EPS, profit or share capital). */
-    private List<BigDecimal> supportedPars(StatementColumn column, BigDecimal[] startEnd) {
+    /**
+     * Standard par values the column's EPS fits, {@code null} without evidence (no EPS, profit or share capital).
+     *
+     * @param factor 1 for the EPS as filed (scaled), the rounding unit for an EPS filed in it
+     */
+    private List<BigDecimal> supportedPars(StatementColumn column, BigDecimal[] startEnd, BigDecimal factor) {
         int ctx = durationIndex(column);
         if (income == null || ctx < 0 || startEnd == null || startEnd[0] == null || startEnd[1] == null) {
             return null;
@@ -1020,7 +1188,8 @@ public final class FilingMapper {
         if (parent == null || eps == null || parent.signum() <= 0 || eps.signum() <= 0) {
             return null;
         }
-        BigDecimal halfUlp = BigDecimal.ONE.movePointLeft(Math.max(0, eps.stripTrailingZeros().scale())).divide(BigDecimal.valueOf(2));
+        eps = eps.multiply(factor);
+        BigDecimal halfUlp = epsHalfUlp(income, EPS_BASIC, ctx).multiply(factor);
         BigDecimal low = parent.divide(eps.add(halfUlp), MathContext.DECIMAL64);
         BigDecimal high = eps.subtract(halfUlp).signum() > 0 ? parent.divide(eps.subtract(halfUlp), MathContext.DECIMAL64) : null;
         BigDecimal min = startEnd[0].min(startEnd[1]);
@@ -1632,12 +1801,13 @@ public final class FilingMapper {
     }
 
     private boolean hasRightOfUseAssets(StatementColumn column) {
-        if (balanceSheet == null) {
+        StatementTable balance = balanceSheetAsFiled();
+        if (balance == null) {
             return true;
         }
         int ctx = instantIndex(column) < 0 ? 0 : instantIndex(column);
-        BigDecimal closing = balanceSheet.value("Right of use assets", ctx);
-        BigDecimal opening = balanceSheet.value("Right of use assets", 1);
+        BigDecimal closing = balance.value("Right of use assets", ctx);
+        BigDecimal opening = balance.value("Right of use assets", 1);
         return (closing != null && closing.signum() != 0) || (opening != null && opening.signum() != 0);
     }
 
@@ -2296,7 +2466,8 @@ public final class FilingMapper {
             return null;
         }
         int decimals = Math.max(0, eps.stripTrailingZeros().scale());
-        BigDecimal tolerance = BigDecimal.ONE.movePointLeft(decimals).divide(BigDecimal.valueOf(2)).add(new BigDecimal("1e-9"));
+        // the rounding of the figure as filed: TUGU FY2024's 0.0002 (millions) is 150 .. 250 rupiah, not 199.5 .. 200.5
+        BigDecimal tolerance = epsHalfUlp(income, EPS_BASIC, ctx).add(new BigDecimal("1e-9"));
         List<BigDecimal> matches = new ArrayList<>();
         for (BigDecimal par : STANDARD_PAR_VALUES) {
             BigDecimal shares = commonStock.divide(par, 10, RoundingMode.UNNECESSARY).stripTrailingZeros();
@@ -2337,6 +2508,7 @@ public final class FilingMapper {
             case INFRASTRUCTURE -> "Infrastructure Industry";
             case FINANCIAL -> "Financial and Sharia Industry";
             case FINANCING -> "Financing Industry";
+            case INSURANCE -> "Insurance Industry";
         };
     }
 
