@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 
 import { IngestionPage } from "@/components/ingestion/ingestion-page"
 import type { IngestionSectionData } from "@/components/ingestion/ingestion-page-client"
-import { getCompanies, getExchanges, getPriceQueue, getPriceStatus } from "@/lib/api"
+import { getCompanies, getExchanges, getMarkets, getPriceQueue, getPriceStatus } from "@/lib/api"
 import { ingestionSection } from "@/lib/ingestion-sections"
 import type { CompanySummary, PriceStatus } from "@/lib/types"
 
@@ -12,10 +12,10 @@ export const metadata: Metadata = {
 
 /**
  * Exchanges with their stored companies (the ticker dropdown), how far their prices and index reach (the cards on the
- * right) and the configured price provider.
+ * right), the Forex and Commodities markets with their instruments, and the configured price provider.
  */
 async function section(): Promise<IngestionSectionData> {
-  const [exchanges, priceQueue] = await Promise.all([getExchanges(), getPriceQueue()])
+  const [exchanges, priceQueue, markets] = await Promise.all([getExchanges(), getPriceQueue(), getMarkets()])
   const [lists, statuses] = await Promise.all([
     Promise.all(exchanges.map((e) => getCompanies(e.code))),
     Promise.all(exchanges.map((e) => getPriceStatus(e.code))),
@@ -26,7 +26,7 @@ async function section(): Promise<IngestionSectionData> {
     companiesByExchange[e.code] = lists[i].companies
     statusByExchange[e.code] = statuses[i]
   })
-  return { section: "prices", exchanges, companiesByExchange, statusByExchange, provider: priceQueue.provider }
+  return { section: "prices", exchanges, companiesByExchange, statusByExchange, markets, provider: priceQueue.provider }
 }
 
 export default function Page() {

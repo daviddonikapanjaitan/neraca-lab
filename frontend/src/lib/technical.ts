@@ -11,9 +11,15 @@ const nullableNum = z.number().nullable()
 /** [time (seconds, 00:00 UTC of the day), value] */
 const point = z.tuple([num, num])
 
-/** STOCK: a listed company; INDEX: the exchange's index (IHSG), charted in index points */
-const listingType = z.enum(["STOCK", "INDEX"]).catch("STOCK")
+/**
+ * STOCK: a listed company; INDEX: the exchange's index (IHSG), charted in index points; FOREX / COMMODITY: a currency
+ * pair or commodity (Price Ingestion with the market Forex or Commodities), in its quote currency and unit
+ */
+const listingType = z.enum(["STOCK", "INDEX", "FOREX", "COMMODITY"]).catch("STOCK")
 export type ListingType = z.infer<typeof listingType>
+
+/** DAILY bars, or MONTHLY (coal: the World Bank monthly average; charted on the monthly interval only) */
+const frequency = z.enum(["DAILY", "MONTHLY"]).catch("DAILY")
 
 export const tickerSchema = z.object({
   type: listingType,
@@ -27,6 +33,9 @@ export const tickerSchema = z.object({
   firstDate: z.string().nullable(),
   lastDate: z.string().nullable(),
   limitedHistory: z.boolean(),
+  /** a currency pair or commodity: "IDR per USD", DAILY / MONTHLY */
+  unit: z.string().nullable().optional(),
+  frequency: frequency.optional(),
 })
 export type TickerInfo = z.infer<typeof tickerSchema>
 
@@ -42,8 +51,13 @@ const header = {
   lastDate: z.string(),
   limitedHistory: z.boolean(),
   minHistoryDays: num,
-  /** shares per lot; null for an index */
+  /** shares per lot; null for an index, a currency pair or commodity */
   lotSize: nullableNum,
+  /** a currency pair or commodity: its unit ("USD per barrel"); null for a stock or index */
+  unit: z.string().nullable().optional(),
+  frequency: frequency.optional(),
+  /** a currency pair or commodity: "Yahoo Finance IDR=X", "World Bank Pink Sheet, Coal, Australian" */
+  source: z.string().nullable().optional(),
 }
 
 export const ohlcvSchema = z.object({
@@ -162,7 +176,8 @@ export type Events = z.infer<typeof eventsSchema>
 /** The agent-ready snapshot (docs/indicator-snapshot.md); groups are kept loose: the panel shows them as data. */
 export const snapshotSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    /** 2: the macro section has series, signals and regimes (docs/indicator-snapshot.md) */
+    schemaVersion: z.number().int().min(1),
     exchange: z.string(),
     ticker: z.string(),
     asOfDate: z.string(),
@@ -222,6 +237,10 @@ export const summarySchema = z.object({
   currency: z.string(),
   close: num,
   type: listingType,
+  /** decimals of the prices: 0 for an IDX price, 2 for an index, 3 for USD/JPY */
+  priceDecimals: num.optional(),
+  /** a currency pair or commodity: its unit */
+  unit: z.string().nullable().optional(),
   method: z.string(),
   rulesVersion: z.string(),
   summaries: z.array(presetSummarySchema),
@@ -246,9 +265,37 @@ export const marketSchema = z.object({
     })
     .partial(),
   breadth: z.object({ above200Pct: nullableNum, counted: num, universe: num, note: z.string() }),
-  macro: z.record(z.string(), z.object({ points: z.array(point), source: z.string() })),
+  macro: z.record(
+    z.string(),
+    z.object({
+      points: z.array(point),
+      source: z.string(),
+      name: z.string().optional(),
+      unit: z.string().nullable().optional(),
+      country: z.string().nullable().optional(),
+      frequency: z.string().nullable().optional(),
+    })
+  ),
+  /** the macro signals and the liquidity / risk regimes as of the latest market day (kept loose: shown as data) */
+  macroSignals: z
+    .object({
+      signals: z.record(z.string(), z.unknown()),
+      regimes: z.record(z.string(), z.unknown()),
+      notes: z.array(z.string()),
+    })
+    .partial()
+    .optional(),
 })
 export type Market = z.infer<typeof marketSchema>
+
+/** A macro regime: its state, score and the signals that voted */
+export interface MacroRegime {
+  state: string | null
+  score: number | null
+  signals: number
+  components: { signal: string; vote: number; text: string }[]
+  note?: string
+}
 
 // ------------------------------------------------------------------ fetching
 
@@ -333,7 +380,7 @@ export const INDICATORS: IndicatorDef[] = [
   { id: "mom", label: "12-1 month momentum", series: ["mom12_1"], kind: "pane" },
   { id: "profile", label: "Volume-by-price profile", kind: "panel" },
   { id: "regime", label: "IHSG regime panel", kind: "panel" },
-  { id: "macro", label: "Macro panel (BI rate, SBN 10Y, USD/IDR)", kind: "panel" },
+  { id: "macro", label: "Macro panel (liquidity and risk regimes, rates, dollar)", kind: "panel" },
 ]
 
 export const INDICATOR_GROUPS: { title: string; ids: IndicatorId[] }[] = [
@@ -377,8 +424,22 @@ export const PRESETS: { id: PresetId; label: string; description: string; indica
 
 export const DEFAULT_INDICATORS: IndicatorId[] = ["sma50", "sma200", "volume", "events", "autoRejection"]
 
-/** What an index (IHSG) cannot show: a comparison with itself, corporate events, auto-rejection limits. */
+/**
+ * What an index (IHSG), a currency pair or a commodity cannot show: a comparison with IHSG (itself), corporate events,
+ * auto-rejection limits.
+ */
 export const NOT_FOR_INDEX: IndicatorId[] = ["rs", "ihsg", "events", "autoRejection"]
+
+/** What a monthly series (coal) cannot show besides: the levels, the volume profile (they need daily bars). */
+export const NOT_FOR_MONTHLY: IndicatorId[] = [...NOT_FOR_INDEX, "zones", "retracements", "extremes", "base", "profile"]
+
+/** Decimals of a tick size: 25 -> 0, 0.01 -> 2, 0.001 -> 3, 0.25 -> 2 */
+export function decimalsOf(tick: number | null | undefined): number {
+  if (tick === null || tick === undefined || !Number.isFinite(tick) || tick <= 0) return 2
+  const text = String(tick)
+  const dot = text.indexOf(".")
+  return dot < 0 ? 0 : Math.min(8, text.length - dot - 1)
+}
 
 export interface ChartSettings {
   exchange: string
@@ -426,10 +487,16 @@ export function seriesFor(ids: IndicatorId[]): string[] {
 
 export const DISCLAIMER = "For information only. Not investment advice."
 
-/** A level: an index in points with 2 decimals; an IDX price in whole rupiah (decimals only where it has them) */
-export function formatLevel(value: number | null | undefined, index: boolean): string {
+/**
+ * A level: an index in points with 2 decimals; an IDX price in whole rupiah (decimals only where it has them); with a
+ * number, exactly that many decimals (USD/JPY: 3)
+ */
+export function formatLevel(value: number | null | undefined, decimals: boolean | number): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—"
-  return value.toLocaleString("en-US", { minimumFractionDigits: index ? 2 : 0, maximumFractionDigits: 2 })
+  if (typeof decimals === "number") {
+    return value.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+  }
+  return value.toLocaleString("en-US", { minimumFractionDigits: decimals ? 2 : 0, maximumFractionDigits: 2 })
 }
 
 export const TRADINGVIEW_NOTICE = "TradingView Lightweight Charts™ Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/"

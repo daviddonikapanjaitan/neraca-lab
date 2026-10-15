@@ -22,6 +22,9 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.company.Tickers;
+import com.neracalab.backend.market.InstrumentRepository;
+import com.neracalab.backend.market.InstrumentRepository.Instrument;
+import com.neracalab.backend.market.Market;
 import com.neracalab.backend.price.provider.PriceProviderException;
 import com.neracalab.backend.price.provider.RateLimitedException;
 import com.neracalab.backend.technical.TechnicalRepository.Event;
@@ -31,6 +34,7 @@ import com.neracalab.backend.technical.engine.Candle;
 import com.neracalab.backend.technical.engine.IndicatorEngine;
 import com.neracalab.backend.technical.engine.IndicatorSet;
 import com.neracalab.backend.technical.engine.Interval;
+import com.neracalab.backend.technical.engine.MacroSignals;
 import com.neracalab.backend.technical.engine.MarketContext;
 import com.neracalab.backend.technical.engine.PresetSummaries;
 import com.neracalab.backend.technical.engine.RelativeStrength;
@@ -52,6 +56,12 @@ import tools.jackson.databind.json.JsonMapper;
  * The exchange's index (IHSG) is a listing too ({@link #INDEX_ID}): its bars come from {@code index_daily}, its levels
  * are rounded to 0.01 index points instead of IDX price ticks, and it has no corporate events, no auto-rejection limits
  * and no stored snapshot (the snapshot table belongs to companies).
+ * <p>
+ * So are the Forex pairs and commodities ({@link Market}: the "exchange" FOREX or COMMODITY, the ticker the instrument
+ * code, e.g. USDIDR, GOLD): bars from {@code instrument_daily} in their quote currency, levels rounded to the
+ * instrument's tick size, no events, no auto-rejection, no lot, no comparison with IHSG, a snapshot kept in memory and
+ * summaries read through their macro drivers. A monthly instrument (coal, World Bank) is charted on the monthly
+ * interval only; levels, snapshot and summaries need daily bars and are refused for it.
  * <p>
  * Daily bars, indicator series and the market context are cached in memory (Caffeine). A cache key carries a
  * fingerprint of the stored prices (count, last date and the sums of close, adjusted close and volume), so new prices
@@ -76,16 +86,36 @@ public class TechnicalService {
         }
     }
 
-    /** The listing does not exist on the exchange. */
+    /** The listing does not exist on the exchange (the instrument in the market). */
     public static class ListingNotFoundException extends RuntimeException {
+
+        private final String title;
+
         public ListingNotFoundException(String message) {
+            this("Company not found", message);
+        }
+
+        public ListingNotFoundException(String title, String message) {
             super(message);
+            this.title = title;
+        }
+
+        /** "Company not found", "Instrument not found" */
+        public String title() {
+            return title;
         }
     }
 
     /** The listing exists but has no stored prices. */
     public static class NoPricesException extends RuntimeException {
         public NoPricesException(String message) {
+            super(message);
+        }
+    }
+
+    /** A monthly series (coal): levels, the snapshot and the preset summaries need daily bars. */
+    public static class MonthlySeriesException extends RuntimeException {
+        public MonthlySeriesException(String message) {
             super(message);
         }
     }
@@ -109,15 +139,20 @@ public class TechnicalService {
             new TechnicalProperties.TickBand(null, new java.math.BigDecimal("0.01"))));
     private final SnapshotCalculator indexCalculator;
     private final com.neracalab.backend.price.IndexIngestion indexIngestion;
+    private final InstrumentRepository instruments;
+    /** tick size -> its rounding and snapshot calculator (a Forex pair or commodity) */
+    private final Map<java.math.BigDecimal, IdxTickSize> instrumentTicks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<java.math.BigDecimal, SnapshotCalculator> instrumentCalculators = new java.util.concurrent.ConcurrentHashMap<>();
     private final Cache<String, Object> cache;
     private final AtomicReference<RefreshStatus> refresh = new AtomicReference<>(
             new RefreshStatus(false, null, null, null, null, null, null, null, null, List.of()));
 
     public TechnicalService(TechnicalRepository repository, TechnicalProperties properties, YahooChartClient yahoo,
                             JsonMapper json, JdbcClient jdbc, com.neracalab.backend.price.PriceProperties prices,
-                            com.neracalab.backend.price.IndexIngestion indexIngestion) {
+                            com.neracalab.backend.price.IndexIngestion indexIngestion, InstrumentRepository instruments) {
         this.repository = repository;
         this.indexIngestion = indexIngestion;
+        this.instruments = instruments;
         this.prices = prices;
         this.properties = properties;
         this.yahoo = yahoo;
@@ -145,6 +180,68 @@ public class TechnicalService {
         return listing.companyId() == INDEX_ID;
     }
 
+    /** A Forex pair or commodity: its exchange is a market code (FOREX, COMMODITY). */
+    static boolean isInstrument(Listing listing) {
+        return Market.isMarket(listing.exchange());
+    }
+
+    /** A listed company (not the index, not an instrument). */
+    static boolean isStock(Listing listing) {
+        return !isIndex(listing) && !isInstrument(listing);
+    }
+
+    /** STOCK, INDEX, FOREX or COMMODITY. */
+    static String type(Listing listing) {
+        return isIndex(listing) ? "INDEX" : isInstrument(listing) ? Market.of(listing.exchange()).code() : "STOCK";
+    }
+
+    /** The listing id of an instrument: below the index's -1, one per instrument (cache keys). */
+    static long instrumentListingId(int instrumentId) {
+        return -1000L - instrumentId;
+    }
+
+    private Listing instrumentListing(Instrument i) {
+        return new Listing(instrumentListingId(i.id()), i.market().code(), i.code(), i.name(), null, null,
+                i.quoteCurrency(), true, i.rows(), i.firstDate(), i.lastDate());
+    }
+
+    private Instrument instrument(Listing listing) {
+        Market market = Market.of(listing.exchange());
+        return instruments.instrument(market, listing.ticker()).orElseThrow(() -> new ListingNotFoundException(
+                "Instrument not found", "No " + market.itemLabel().toLowerCase(Locale.ROOT) + " " + listing.ticker()
+                + " in " + market.displayName()));
+    }
+
+    /** The exchange whose market context (IHSG, breadth, macro) a listing is read with: an instrument uses the index's. */
+    private Exchange contextExchange(Listing listing) {
+        return isInstrument(listing) ? Exchange.of(properties.index().exchange()) : Exchange.of(listing.exchange());
+    }
+
+    /** Levels, the snapshot and the summaries need daily bars: refused for a monthly instrument. */
+    private void requireDaily(Listing listing) {
+        if (isInstrument(listing)) {
+            Instrument i = instrument(listing);
+            if (i.monthly()) {
+                throw new MonthlySeriesException(i.name() + " is a monthly series (" + sourceLabel(i)
+                        + "): levels, the snapshot and the preset summaries need daily bars. The chart shows its monthly "
+                        + "averages.");
+            }
+        }
+    }
+
+    /** A monthly instrument is charted on the monthly interval whatever was asked. */
+    private Interval interval(Listing listing, Interval requested) {
+        return isInstrument(listing) && instrument(listing).monthly() ? Interval.M : requested;
+    }
+
+    private static String sourceLabel(Instrument i) {
+        return switch (i.source()) {
+            case "yahoo" -> "Yahoo Finance " + i.symbol();
+            case "worldbank" -> "World Bank Pink Sheet, " + i.symbol();
+            default -> i.source();
+        };
+    }
+
     /** The exchange's index as a listing (empty: the exchange has no index configured). */
     java.util.Optional<Listing> indexListing(Exchange exchange) {
         TechnicalProperties.Index index = properties.index();
@@ -165,16 +262,28 @@ public class TechnicalService {
     }
 
     private SnapshotCalculator calculator(Listing listing) {
+        if (isInstrument(listing)) {
+            java.math.BigDecimal tick = instrument(listing).tickSize();
+            return instrumentCalculators.computeIfAbsent(tick, t -> new SnapshotCalculator(properties, ticks(listing)));
+        }
         return isIndex(listing) ? indexCalculator : calculator;
     }
 
     private IdxTickSize ticks(Listing listing) {
+        if (isInstrument(listing)) {
+            return instrumentTicks.computeIfAbsent(instrument(listing).tickSize(),
+                    t -> new IdxTickSize(List.of(new TechnicalProperties.TickBand(null, t))));
+        }
         return isIndex(listing) ? indexTicks : ticks;
     }
 
     // ------------------------------------------------------------------ listings
 
     public List<Map<String, Object>> tickers(String exchangeCode, String query, int limit) {
+        java.util.Optional<Market> market = Market.find(exchangeCode);
+        if (market.isPresent()) {
+            return instrumentTickers(market.get(), query, Math.max(1, Math.min(limit, 200)));
+        }
         Exchange exchange = Exchange.of(exchangeCode);
         int max = Math.max(1, Math.min(limit, 200));
         List<Listing> listings = new ArrayList<>();
@@ -200,7 +309,67 @@ public class TechnicalService {
         return out;
     }
 
+    /** The Forex pairs or commodities whose code, name or source symbol contains {@code query} (all when blank). */
+    private List<Map<String, Object>> instrumentTickers(Market market, String query, int max) {
+        String q = query == null ? "" : query.trim().toUpperCase(Locale.ROOT).replace("/", "");
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Instrument i : instruments.instruments(market)) {
+            boolean matches = q.isEmpty() || i.code().contains(q)
+                    || i.name().toUpperCase(Locale.ROOT).replace("/", "").contains(q)
+                    || i.symbol().toUpperCase(Locale.ROOT).contains(q);
+            if (!matches || out.size() >= max) {
+                continue;
+            }
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("type", market.code());
+            m.put("exchange", market.code());
+            m.put("ticker", i.code());
+            m.put("companyName", i.name());
+            m.put("sector", null);
+            m.put("industry", null);
+            m.put("active", true);
+            m.put("tradingDays", i.rows());
+            m.put("firstDate", i.firstDate() == null ? null : i.firstDate().toString());
+            m.put("lastDate", i.lastDate() == null ? null : i.lastDate().toString());
+            m.put("limitedHistory", !i.monthly() && i.rows() < properties.minHistoryDays());
+            m.put("unit", i.unit());
+            m.put("frequency", i.frequency());
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** The markets of the Technicals page: the exchanges, then Forex and Commodities. */
+    public List<Map<String, Object>> markets() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Exchange e : Exchange.values()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("code", e.code());
+            m.put("name", e.displayName());
+            m.put("kind", "EXCHANGE");
+            m.put("itemLabel", "Ticker");
+            out.add(m);
+        }
+        for (Market market : Market.values()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("code", market.code());
+            m.put("name", market.displayName());
+            m.put("kind", "MARKET");
+            m.put("itemLabel", market.itemLabel());
+            out.add(m);
+        }
+        return out;
+    }
+
     Listing listing(String exchangeCode, String ticker) {
+        java.util.Optional<Market> market = Market.find(exchangeCode);
+        if (market.isPresent()) {
+            String code = ticker == null ? "" : ticker.trim().toUpperCase(Locale.ROOT).replace("/", "");
+            return instruments.instrument(market.get(), code).map(this::instrumentListing)
+                    .orElseThrow(() -> new ListingNotFoundException("Instrument not found", "No "
+                            + market.get().itemLabel().toLowerCase(Locale.ROOT) + " " + code + " in "
+                            + market.get().displayName()));
+        }
         Exchange exchange = Exchange.of(exchangeCode);
         if (ticker != null && (ticker.trim().equalsIgnoreCase(properties.index().code())
                 || ticker.trim().equalsIgnoreCase(properties.index().yahooSymbol()))) {
@@ -216,6 +385,16 @@ public class TechnicalService {
 
     /** Daily split-adjusted bars of a listing in the exchange currency (cached by price fingerprint). */
     List<Candle> dailyBars(Listing listing) {
+        if (isInstrument(listing)) {
+            String key = "inst:" + listing.ticker() + ":" + instruments.fingerprint(listing.ticker());
+            @SuppressWarnings("unchecked")
+            List<Candle> bars = (List<Candle>) cache.get(key, k -> instruments.bars(listing.ticker()));
+            if (bars.isEmpty()) {
+                throw new NoPricesException("No " + listing.companyName() + " prices stored (run the "
+                        + Market.of(listing.exchange()).displayName() + " price ingestion on Ingestion > Price Ingestion first)");
+            }
+            return bars;
+        }
         if (isIndex(listing)) {
             List<Candle> bars = indexBars();
             if (bars.isEmpty()) {
@@ -257,8 +436,10 @@ public class TechnicalService {
                 .param("exchange", exchange.code()).query(String.class).single()
                 + ":" + jdbc.sql("SELECT count(*) || ':' || coalesce(max(rate_date)::text, '') FROM fx_rate_daily")
                 .query(String.class).single()
-                + ":" + jdbc.sql("SELECT count(*) || ':' || coalesce(max(obs_date)::text, '') FROM macro_series")
-                .query(String.class).single();
+                + ":" + jdbc.sql("""
+                        SELECT count(*) || ':' || coalesce(max(obs_date)::text, '') || ':' || coalesce(max(updated_at)::text, '')
+                        FROM macro_series""").query(String.class).single()
+                + ":" + instruments.fingerprint("USDIDR");
     }
 
     List<Candle> indexBars() {
@@ -285,7 +466,7 @@ public class TechnicalService {
     public Map<String, Object> ohlcv(String exchange, String ticker, String intervalCode, LocalDate from, LocalDate to,
                                      String adjustmentCode) {
         Listing listing = listing(exchange, ticker);
-        Interval interval = Interval.of(intervalCode);
+        Interval interval = interval(listing, Interval.of(intervalCode));
         Adjustment adjustment = Adjustment.of(adjustmentCode);
         List<Candle> daily = dailyBars(listing);
         List<Candle> bars = indicatorSet(listing, interval, adjustment).bars();
@@ -299,7 +480,7 @@ public class TechnicalService {
         // auto-rejection hits are detected on the daily bars as traded; on a weekly / monthly chart they mark the bar
         // of the week / month they fall in
         List<List<Object>> hits = new ArrayList<>();
-        for (AutoRejection.Hit hit : isIndex(listing) ? List.<AutoRejection.Hit>of() : calculator.autoRejection().hits(daily)) {
+        for (AutoRejection.Hit hit : isStock(listing) ? calculator.autoRejection().hits(daily) : List.<AutoRejection.Hit>of()) {
             LocalDate barDate = barDate(bars, hit.date(), interval);
             if (barDate != null && in(barDate, from, to, interval)) {
                 hits.add(List.of(time(barDate), hit.type().name(), r4(hit.changePct()), hit.date().toString()));
@@ -307,7 +488,8 @@ public class TechnicalService {
         }
         Map<String, Object> out = header(listing, interval, daily);
         out.put("adjustment", adjustment.name().toLowerCase(Locale.ROOT));
-        out.put("priceBasis", isIndex(listing) ? "index points (Yahoo Finance " + properties.index().yahooSymbol() + ")"
+        out.put("priceBasis", isInstrument(listing) ? instrumentBasis(instrument(listing))
+                : isIndex(listing) ? "index points (Yahoo Finance " + properties.index().yahooSymbol() + ")"
                 : adjustment == Adjustment.SPLIT
                 ? "split-adjusted, as traded since the last split (raw prices before a split are not stored)"
                 : "adjusted for splits and cash dividends (total return); not tradable prices");
@@ -321,7 +503,7 @@ public class TechnicalService {
     public Map<String, Object> indicators(String exchange, String ticker, String intervalCode, LocalDate from, LocalDate to,
                                           String set, String adjustmentCode) {
         Listing listing = listing(exchange, ticker);
-        Interval interval = Interval.of(intervalCode);
+        Interval interval = interval(listing, Interval.of(intervalCode));
         Adjustment adjustment = Adjustment.of(adjustmentCode);
         IndicatorSet ind = indicatorSet(listing, interval, adjustment);
         List<Candle> bars = ind.bars();
@@ -428,6 +610,7 @@ public class TechnicalService {
     @SuppressWarnings("unchecked")
     public Map<String, Object> levels(String exchange, String ticker) {
         Listing listing = listing(exchange, ticker);
+        requireDaily(listing);
         Map<String, Object> snapshot = snapshotDocument(listing);
         Map<String, Object> structure = (Map<String, Object>) snapshot.get("structure");
         List<Candle> daily = dailyBars(listing);
@@ -520,7 +703,7 @@ public class TechnicalService {
     public Map<String, Object> events(String exchange, String ticker) {
         Listing listing = listing(exchange, ticker);
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (Event e : isIndex(listing) ? List.<Event>of() : repository.events(listing.companyId())) {
+        for (Event e : isStock(listing) ? repository.events(listing.companyId()) : List.<Event>of()) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("date", e.date().toString());
             m.put("time", time(e.date()));
@@ -540,6 +723,11 @@ public class TechnicalService {
             out.put("note", "An index has no corporate events.");
             return out;
         }
+        if (isInstrument(listing)) {
+            out.put("eventsFetchedAt", null);
+            out.put("note", "A currency pair or commodity has no corporate events.");
+            return out;
+        }
         out.put("eventsFetchedAt", repository.eventsFetchedAt(listing.companyId(), YahooChartClient.SOURCE)
                 .map(OffsetDateTime::toString).orElse(null));
         out.put("note", "Dividends and splits from Yahoo Finance and the splits recorded from the filings. Earnings dates, "
@@ -549,7 +737,9 @@ public class TechnicalService {
 
     /** IHSG regime, breadth and macro series for the market panel. */
     public Map<String, Object> market(String exchangeCode, LocalDate from) {
-        Exchange exchange = Exchange.of(exchangeCode);
+        // Forex and Commodities are read with the IDX context (IHSG regime, the macro data)
+        Exchange exchange = Market.isMarket(exchangeCode) ? Exchange.of(properties.index().exchange())
+                : Exchange.of(exchangeCode);
         MarketContext context = marketContext(exchange);
         List<Candle> index = context.indexBars();
         Map<String, Object> out = new LinkedHashMap<>();
@@ -587,19 +777,38 @@ public class TechnicalService {
         breadth.put("note", "share of the stored active listings of " + exchange.code() + " above their SMA 200 (not the whole exchange)");
         out.put("breadth", breadth);
         Map<String, Object> macro = new LinkedHashMap<>();
-        for (String code : List.of("BI_RATE", "SBN_10Y", "USD_IDR")) {
+        Map<String, TechnicalRepository.MacroDef> defs = new LinkedHashMap<>();
+        for (TechnicalRepository.MacroDef def : repository.macroDefs()) {
+            defs.put(def.code(), def);
+        }
+        List<String> codes = new ArrayList<>(List.of("BI_RATE", "SBN_10Y", "USD_IDR"));
+        defs.keySet().stream().filter(c -> !codes.contains(c)).forEach(codes::add);
+        for (String code : codes) {
             List<List<Object>> points = new ArrayList<>();
             for (MarketContext.Observation o : context.macro().getOrDefault(code, List.of())) {
                 if (from == null || !o.date().isBefore(from)) {
                     points.add(List.of(time(o.date()), r6(o.value())));
                 }
             }
+            TechnicalRepository.MacroDef def = defs.get(code);
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("points", points);
-            m.put("source", code.equals("USD_IDR") ? "ECB reference rates (fx_rate_daily)" : "macro_series (no source connected)");
+            m.put("source", code.equals("USD_IDR") ? repository.usdIdrSource()
+                    : def == null ? "macro_series" : def.source());
+            m.put("name", code.equals("USD_IDR") ? "USD/IDR" : def == null ? code : def.name());
+            m.put("unit", code.equals("USD_IDR") ? "IDR per USD" : def == null ? null : def.unit());
+            m.put("country", code.equals("USD_IDR") ? "ID" : def == null ? null : def.country());
+            m.put("frequency", code.equals("USD_IDR") ? "DAILY" : def == null ? null : def.frequency());
             macro.put(code, m);
         }
         out.put("macro", macro);
+        // the signals and regimes as of the latest market day (or today, before any price is stored)
+        List<String> notes = new ArrayList<>();
+        Map<String, Object> signals = MacroSignals.compute(context.macro(),
+                context.asOfDate() == null ? LocalDate.now(exchange.zone()) : context.asOfDate(), notes);
+        signals.remove("series");
+        signals.put("notes", notes);
+        out.put("macroSignals", signals);
         return out;
     }
 
@@ -650,8 +859,12 @@ public class TechnicalService {
                     r6, r12, above));
         }
         Map<String, List<MarketContext.Observation>> macro = new LinkedHashMap<>();
-        for (String code : List.of("BI_RATE", "SBN_10Y", "USD_IDR")) {
-            macro.put(code, repository.macro(code).stream().map(o -> new MarketContext.Observation(o.date(), o.value())).toList());
+        List<String> codes = new ArrayList<>(List.of("BI_RATE", "SBN_10Y", "USD_IDR"));
+        repository.macroDefs().stream().map(TechnicalRepository.MacroDef::code).filter(c -> !codes.contains(c))
+                .forEach(codes::add);
+        for (String code : codes) {
+            macro.put(code, repository.macro(code).stream()
+                    .map(o -> new MarketContext.Observation(o.date(), o.value(), o.released())).toList());
         }
         return new MarketContext(exchange.code(), asOf, properties.index().code(), index, members, macro);
     }
@@ -671,6 +884,10 @@ public class TechnicalService {
     private String snapshotJson(Listing listing) {
         if (isIndex(listing)) {
             return indexSnapshotJson(listing);
+        }
+        if (isInstrument(listing)) {
+            requireDaily(listing);
+            return instrumentSnapshotJson(listing);
         }
         List<Candle> daily = dailyBars(listing);
         MarketContext market = marketContext(Exchange.of(listing.exchange()));
@@ -724,6 +941,57 @@ public class TechnicalService {
                     + "with the stored listings");
             return json.writeValueAsString(doc);
         });
+    }
+
+    /**
+     * The snapshot of a Forex pair or commodity: the same groups on its daily bars (levels at its tick size), kept in
+     * memory only. What does not apply is null, with a note: relative strength against IHSG and the percentiles among the
+     * listed stocks, auto-rejection limits, lot size, value traded and the IDX session checks (it trades on its own
+     * calendar).
+     */
+    @SuppressWarnings("unchecked")
+    private String instrumentSnapshotJson(Listing listing) {
+        Instrument instrument = instrument(listing);
+        List<Candle> daily = dailyBars(listing);
+        MarketContext market = marketContext(contextExchange(listing));
+        String key = "instrumentSnapshot:" + listing.ticker() + ":"
+                + SnapshotCalculator.inputHash(daily, List.of(), market, properties);
+        return (String) cache.get(key, unused -> {
+            Map<String, Object> doc = calculator(listing).snapshot(listing.exchange(), listing.ticker(),
+                    listing.companyName(), null, listing.currency(), daily, List.of(), market);
+            doc.put("priceBasis", instrumentBasis(instrument) + "; levels rounded to " + instrument.tickSize().toPlainString());
+            Map<String, Object> price = (Map<String, Object>) doc.get("price");
+            price.put("valueTraded", null);
+            price.put("tickSize", instrument.tickSize().doubleValue());
+            price.put("lotSize", null);
+            Map<String, Object> rs = (Map<String, Object>) doc.get("relativeStrength");
+            for (String k : List.of("ratio", "ratioChange50Pct", "percentile6m", "percentile12m", "universe6m",
+                    "universe12m", "sector")) {
+                rs.put(k, null);
+            }
+            Map<String, Object> risk = (Map<String, Object>) doc.get("risk");
+            for (String k : List.of("avgValueTraded20", "araCount60", "arbCount60", "lastAra", "lastArb",
+                    "sessionsAfterLastBar", "missingSessions60", "possiblySuspended")) {
+                risk.put(k, null);
+            }
+            Map<String, Object> volume = (Map<String, Object>) doc.get("volume");
+            volume.put("avgValue20", null);
+            volume.put("avgValue50", null);
+            List<String> notes = (List<String>) doc.get("notes");
+            notes.add("A " + Market.of(listing.exchange()).itemLabel().toLowerCase(Locale.ROOT) + " (" + instrument.unit()
+                    + "): relative strength vs " + properties.index().code() + ", the percentiles among the listed stocks, "
+                    + "auto-rejection limits, lot size, value traded and the IDX session checks do not apply and are null; "
+                    + "the market regime and the macro groups are those of " + properties.index().exchange());
+            if (daily.stream().allMatch(c -> c.volume() == 0)) {
+                notes.add("No traded volume (an over-the-counter market): the volume indicators are empty");
+            }
+            return json.writeValueAsString(doc);
+        });
+    }
+
+    private static String instrumentBasis(Instrument i) {
+        return i.unit() + " (" + sourceLabel(i) + "), " + (i.monthly() ? "monthly averages, one bar per month"
+                : "daily bars as traded, nothing to adjust");
     }
 
     @SuppressWarnings("unchecked")
@@ -835,11 +1103,17 @@ public class TechnicalService {
      */
     public Map<String, Object> summary(String exchange, String ticker) {
         Listing listing = listing(exchange, ticker);
+        requireDaily(listing);
         Map<String, Object> snapshot = snapshotDocument(listing);
         IndicatorSet daily = indicatorSet(listing, Interval.D, Adjustment.SPLIT);
-        Map<String, Object> out = PresetSummaries.summarize(new PresetSummaries.Input(snapshot, daily, ticks(listing),
-                isIndex(listing)));
+        IdxTickSize t = ticks(listing);
+        Map<String, Object> out = PresetSummaries.summarize(new PresetSummaries.Input(snapshot, daily, t, type(listing)));
         out.put("companyName", listing.companyName());
+        // decimals of the prices: an IDX price in whole rupiah, an index 2, USD/JPY 3
+        double close = ((Number) ((Map<?, ?>) snapshot.get("price")).get("close")).doubleValue();
+        int decimals = Math.max(0, java.math.BigDecimal.valueOf(t.tick(close)).stripTrailingZeros().scale());
+        out.put("priceDecimals", isIndex(listing) ? Math.max(2, decimals) : decimals);
+        out.put("unit", isInstrument(listing) ? instrument(listing).unit() : null);
         return out;
     }
 
@@ -867,16 +1141,20 @@ public class TechnicalService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("exchange", listing.exchange());
         out.put("ticker", listing.ticker());
-        out.put("type", isIndex(listing) ? "INDEX" : "STOCK");
+        out.put("type", type(listing));
         out.put("companyName", listing.companyName());
-        out.put("currency", Exchange.of(listing.exchange()).currency());
+        out.put("currency", isInstrument(listing) ? listing.currency() : Exchange.of(listing.exchange()).currency());
         out.put("interval", interval.name());
         out.put("tradingDays", daily.size());
         out.put("firstDate", daily.getFirst().date().toString());
         out.put("lastDate", daily.getLast().date().toString());
         out.put("limitedHistory", daily.size() < properties.minHistoryDays());
         out.put("minHistoryDays", properties.minHistoryDays());
-        out.put("lotSize", isIndex(listing) ? null : properties.lotSize());
+        out.put("lotSize", isStock(listing) ? properties.lotSize() : null);
+        Instrument instrument = isInstrument(listing) ? instrument(listing) : null;
+        out.put("unit", instrument == null ? null : instrument.unit());
+        out.put("frequency", instrument == null ? "DAILY" : instrument.frequency());
+        out.put("source", instrument == null ? null : sourceLabel(instrument));
         return out;
     }
 

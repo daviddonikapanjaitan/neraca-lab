@@ -24,14 +24,18 @@ import com.neracalab.backend.technical.idx.IdxTickSize;
  */
 public final class SnapshotCalculator {
 
-    /** Version of the snapshot JSON; raise it on any incompatible change and document it. */
-    public static final int SCHEMA_VERSION = 1;
+    /**
+     * Version of the snapshot JSON; raise it on any incompatible change and document it. 2: the macro section gained
+     * {@code series}, {@code signals} and {@code regimes} (macro.md), and macro values are point in time (only those
+     * released by the as-of date).
+     */
+    public static final int SCHEMA_VERSION = 2;
 
     /**
      * Revision of the computation (part of the input hash): change it when a value is computed differently without a
      * schema change, so that every stored snapshot is recomputed at its next request or refresh.
      */
-    public static final String ENGINE_REVISION = "2026-10-14.3";
+    public static final String ENGINE_REVISION = "2026-10-16.1";
 
     /** A corporate event as the snapshot and the chart markers see it. */
     public record EventInfo(LocalDate date, String type, BigDecimal value, String description, String source) {
@@ -476,12 +480,17 @@ public final class SnapshotCalculator {
         return r;
     }
 
+    /**
+     * The macro section: the BI rate, SBN 10Y and USD/IDR with their change (as in schema 1), then every stored series,
+     * the signals and the liquidity / risk regimes ({@link MacroSignals}). Only observations released by {@code asOf}.
+     */
     private Map<String, Object> macro(MarketContext market, LocalDate asOf, List<String> notes) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("biRate", macroChange(market.macro().get("BI_RATE"), asOf, 6, false, "%", "BI_RATE", notes));
         m.put("sbn10y", macroChange(market.macro().get("SBN_10Y"), asOf, 3, false, "%", "SBN_10Y", notes));
         m.put("usdIdr", macroChange(market.macro().get("USD_IDR"), asOf, 3, true, "IDR per USD", "USD_IDR", notes));
-        m.put("usedBy", List.of("druckenmiller"));
+        m.putAll(MacroSignals.compute(market.macro(), asOf, notes));
+        m.put("usedBy", List.of("druckenmiller", "ptj"));
         return m;
     }
 
@@ -507,6 +516,7 @@ public final class SnapshotCalculator {
         return m;
     }
 
+    /** The latest observation dated on or before {@code onOrBefore} that was released by then (point in time). */
     private static MarketContext.Observation latest(List<MarketContext.Observation> obs, LocalDate onOrBefore) {
         if (obs == null) {
             return null;
@@ -516,7 +526,9 @@ public final class SnapshotCalculator {
             if (o.date().isAfter(onOrBefore)) {
                 break;
             }
-            found = o;
+            if (!o.released().isAfter(onOrBefore)) {
+                found = o;
+            }
         }
         return found;
     }

@@ -132,7 +132,7 @@ class TechnicalControllerTest {
     void snapshotIsVersionedAndComplete() throws Exception {
         mvc.perform(get("/api/v1/technical/IDX/HRTA/snapshot"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.schemaVersion").value(1))
+                .andExpect(jsonPath("$.schemaVersion").value(2))
                 .andExpect(jsonPath("$.ticker").value("HRTA"))
                 .andExpect(jsonPath("$.trend.sma200").isNumber())
                 .andExpect(jsonPath("$.momentum.macd.histogram").isNumber())
@@ -252,6 +252,113 @@ class TechnicalControllerTest {
         Map<String, Object> summary = getJson("/api/v1/technical/IDX/IHSG/summary");
         assertThat(summary.get("type")).isEqualTo("INDEX");
         assertSummaries(summary, null);
+    }
+
+    /**
+     * A synthetic currency pair ZZFX (FOREX, tick 0.001, no volume, 300 weekday bars) and a monthly commodity ZZMON (40
+     * months), rolled back.
+     */
+    private void syntheticInstruments() {
+        jdbc.sql("""
+                        INSERT INTO market_instrument (instrument_code, market, name, source, source_symbol, quote_currency,
+                                                       unit, frequency, tick_size, history_from, sort_order)
+                        VALUES ('ZZFX', 'FOREX', 'ZZZ/FX', 'yahoo', 'ZZFX=X', 'JPY', 'JPY per ZZZ', 'DAILY', 0.001,
+                                DATE '2020-01-01', 99),
+                               ('ZZMON', 'COMMODITY', 'Monthly Test', 'worldbank', 'Test, monthly', 'USD', 'USD per ton',
+                                'MONTHLY', 0.01, DATE '2020-01-01', 99)""").update();
+        LocalDate d = LocalDate.of(2026, 10, 14);
+        for (int i = 0; i < 300; i++) {
+            while (d.getDayOfWeek().getValue() > 5) {
+                d = d.minusDays(1);
+            }
+            double close = 140 + (299 - i) * 0.0617 + (i % 7) * 0.2113;
+            jdbc.sql("""
+                            INSERT INTO instrument_daily (instrument_code, trading_date, open_price, high_price, low_price,
+                                                          close_price, volume, source)
+                            VALUES ('ZZFX', :d, :p - 0.05, :p + 0.311, :p - 0.311, :p, 0, 'test')""")
+                    .param("d", d).param("p", BigDecimal.valueOf(close).setScale(3, java.math.RoundingMode.HALF_UP)).update();
+            d = d.minusDays(1);
+        }
+        LocalDate month = LocalDate.of(2026, 9, 1);
+        for (int i = 0; i < 40; i++) {
+            jdbc.sql("""
+                            INSERT INTO instrument_daily (instrument_code, trading_date, open_price, high_price, low_price,
+                                                          close_price, volume, source)
+                            VALUES ('ZZMON', :d, :p, :p, :p, :p, 0, 'test')""")
+                    .param("d", month).param("p", BigDecimal.valueOf(100 + i * 1.5)).update();
+            month = month.minusMonths(1);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aCurrencyPairIsAListingInItsUnit() throws Exception {
+        syntheticInstruments();
+        mvc.perform(get("/api/v1/technical/markets"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].code").value("IDX"))
+                .andExpect(jsonPath("$[1].code").value("FOREX"))
+                .andExpect(jsonPath("$[1].itemLabel").value("Currency"))
+                .andExpect(jsonPath("$[2].code").value("COMMODITY"));
+        mvc.perform(get("/api/v1/technical/tickers?exchange=forex&query=zz"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].ticker").value("ZZFX"))
+                .andExpect(jsonPath("$[0].type").value("FOREX"))
+                .andExpect(jsonPath("$[0].tradingDays").value(300))
+                .andExpect(jsonPath("$[0].unit").value("JPY per ZZZ"));
+
+        Map<String, Object> bars = getJson("/api/v1/technical/FOREX/ZZFX/ohlcv?interval=D&range=1Y");
+        assertThat(bars.get("type")).isEqualTo("FOREX");
+        assertThat(bars.get("currency")).isEqualTo("JPY");
+        assertThat(bars.get("unit")).isEqualTo("JPY per ZZZ");
+        assertThat(bars.get("lotSize")).isNull();
+        assertThat((List<?>) bars.get("autoRejection")).isEmpty();
+        assertThat((String) bars.get("priceBasis")).contains("JPY per ZZZ");
+
+        Map<String, Object> levels = getJson("/api/v1/technical/FOREX/ZZFX/levels");
+        assertThat(((Number) levels.get("tickSize")).doubleValue()).isEqualTo(0.001);
+        for (Map<String, Object> level : (List<Map<String, Object>>) levels.get("keyLevels")) {
+            BigDecimal price = new BigDecimal(String.valueOf(level.get("price")));
+            assertThat(price.stripTrailingZeros().scale()).as(level.toString()).isLessThanOrEqualTo(3);
+        }
+        // no volume: no volume node
+        assertThat((List<?>) ((Map<String, Object>) levels.get("volumeProfile")).get("topNodes")).isEmpty();
+
+        Map<String, Object> snapshot = getJson("/api/v1/technical/FOREX/ZZFX/snapshot");
+        assertThat(snapshot.get("schemaVersion")).isEqualTo(2);
+        assertThat(((Map<String, Object>) snapshot.get("relativeStrength")).get("ratio")).isNull();
+        assertThat(((Map<String, Object>) snapshot.get("relativeStrength")).get("percentile6m")).isNull();
+        assertThat(((Map<String, Object>) snapshot.get("risk")).get("araCount60")).isNull();
+        assertThat(((Map<String, Object>) snapshot.get("macro")).get("regimes")).isNotNull();
+        assertThat((List<String>) snapshot.get("notes")).anyMatch(n -> n.contains("No traded volume"));
+        Map<String, Object> events = getJson("/api/v1/technical/FOREX/ZZFX/events");
+        assertThat((List<?>) events.get("events")).isEmpty();
+
+        Map<String, Object> summary = getJson("/api/v1/technical/FOREX/ZZFX/summary");
+        assertThat(summary.get("type")).isEqualTo("FOREX");
+        assertThat(summary.get("priceDecimals")).isEqualTo(3);
+        assertThat(summary.get("unit")).isEqualTo("JPY per ZZZ");
+        assertSummaries(summary, new IdxTickSize(List.of(new TechnicalProperties.TickBand(null, new BigDecimal("0.001")))));
+
+        mvc.perform(get("/api/v1/technical/FOREX/EURUSD/ohlcv")).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Instrument not found"));
+    }
+
+    @Test
+    void aMonthlySeriesIsChartedMonthlyOnly() throws Exception {
+        syntheticInstruments();
+        Map<String, Object> bars = getJson("/api/v1/technical/COMMODITY/ZZMON/ohlcv?interval=D&range=MAX");
+        assertThat(bars.get("interval")).isEqualTo("M");
+        assertThat(bars.get("frequency")).isEqualTo("MONTHLY");
+        assertThat((List<?>) bars.get("bars")).hasSize(40);
+        for (String resource : List.of("levels", "snapshot", "summary")) {
+            mvc.perform(get("/api/v1/technical/COMMODITY/ZZMON/" + resource))
+                    .andExpect(status().isUnprocessableContent())
+                    .andExpect(jsonPath("$.title").value("Monthly series"));
+        }
+        mvc.perform(get("/api/v1/technical/COMMODITY/ZZMON/indicators?interval=W&set=sma20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.interval").value("M"));
     }
 
     @Test

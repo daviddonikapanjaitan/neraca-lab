@@ -11,7 +11,7 @@ import java.util.Map;
  * @param asOfDate          the latest index day (else the latest price day of the universe)
  * @param indexBars         daily bars of the benchmark index (IHSG), oldest first; empty when not loaded yet
  * @param universe          listing id -> its returns and trend at its latest bar on or before {@code asOfDate}
- * @param macro             series code -> observations, oldest first (BI_RATE, SBN_10Y, USD_IDR)
+ * @param macro             series code -> observations, oldest first (USD_IDR and the series of macro_series_def)
  */
 public record MarketContext(String exchange, LocalDate asOfDate, String indexCode, List<Candle> indexBars,
                             Map<Long, Member> universe, Map<String, List<Observation>> macro) {
@@ -27,7 +27,18 @@ public record MarketContext(String exchange, LocalDate asOfDate, String indexCod
                          double return12m, Boolean above200) {
     }
 
-    public record Observation(LocalDate date, double value) {
+    /**
+     * A macro observation.
+     *
+     * @param date     the observation date (the 1st of the month for a monthly series)
+     * @param released the day it became public; a snapshot as of an earlier day does not use it
+     */
+    public record Observation(LocalDate date, double value, LocalDate released) {
+
+        /** An observation public on its own date (a market close). */
+        public Observation(LocalDate date, double value) {
+            this(date, value, date);
+        }
     }
 
     /** % of the universe above its 200-day SMA (members without a verdict are not counted), NaN when none qualifies. */

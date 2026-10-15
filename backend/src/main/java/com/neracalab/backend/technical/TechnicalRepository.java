@@ -41,8 +41,13 @@ public class TechnicalRepository {
                         String sourceUrl) {
     }
 
-    /** A macro observation. */
-    public record Observation(LocalDate date, double value) {
+    /** A macro observation: its date, its value and the day it became public. */
+    public record Observation(LocalDate date, double value, LocalDate released) {
+    }
+
+    /** A macro series of the catalog ({@code macro_series_def}). */
+    public record MacroDef(String code, String name, String country, String category, String unit, String frequency,
+                           String source) {
     }
 
     /** The stored snapshot of a company. */
@@ -292,18 +297,55 @@ public class TechnicalRepository {
 
     // ------------------------------------------------------------------ macro
 
-    /** Observations of a macro series, oldest first ({@code USD_IDR} reads fx_rate_daily). */
+    /**
+     * Observations of a macro series, oldest first, with the day each became public (a series without a stored
+     * release date: its observation date). {@code USD_IDR} reads the USD/IDR pair of the Forex price ingestion (Yahoo
+     * Finance, London close) when it is stored, else the ECB reference rates of fx_rate_daily (16:00 CET); both close
+     * after the IDX session, so a rate is public in Jakarta the day after.
+     */
     public List<Observation> macro(String seriesCode) {
         if ("USD_IDR".equals(seriesCode)) {
+            List<Observation> pair = jdbc.sql("""
+                            SELECT trading_date, close_price FROM instrument_daily
+                            WHERE instrument_code = 'USDIDR' ORDER BY trading_date""")
+                    .query((rs, i) -> nextDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                    .list();
+            if (!pair.isEmpty()) {
+                return pair;
+            }
             return jdbc.sql("""
                             SELECT rate_date, rate FROM fx_rate_daily
                             WHERE base_currency = 'USD' AND quote_currency = 'IDR' ORDER BY rate_date""")
-                    .query((rs, i) -> new Observation(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                    .query((rs, i) -> nextDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
                     .list();
         }
-        return jdbc.sql("SELECT obs_date, value FROM macro_series WHERE series_code = :code ORDER BY obs_date")
+        return jdbc.sql("""
+                        SELECT obs_date, value, coalesce(release_date, obs_date) AS released
+                        FROM macro_series WHERE series_code = :code ORDER BY obs_date""")
                 .param("code", seriesCode)
-                .query((rs, i) -> new Observation(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                .query((rs, i) -> new Observation(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue(),
+                        rs.getObject(3, LocalDate.class)))
+                .list();
+    }
+
+    /** Where USD_IDR comes from: the Forex pair when stored, else the ECB reference rates. */
+    public String usdIdrSource() {
+        Integer rows = jdbc.sql("SELECT count(*) FROM instrument_daily WHERE instrument_code = 'USDIDR'")
+                .query(Integer.class).single();
+        return rows != null && rows > 0 ? "Yahoo Finance IDR=X (Forex price ingestion)" : "ECB reference rates (fx_rate_daily)";
+    }
+
+    private static Observation nextDay(LocalDate date, double value) {
+        return new Observation(date, value, date.plusDays(1));
+    }
+
+    /** The active macro series of the catalog, in display order. */
+    public List<MacroDef> macroDefs() {
+        return jdbc.sql("""
+                        SELECT series_code, name, country, category, unit, frequency, source
+                        FROM macro_series_def WHERE active ORDER BY sort_order, series_code""")
+                .query((rs, i) -> new MacroDef(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                        rs.getString(5), rs.getString(6), rs.getString(7)))
                 .list();
     }
 

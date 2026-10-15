@@ -12,9 +12,17 @@ import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { EMPTY, formatDate, formatNumber, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
-import { creatorLabel, formatBytes, formatDuration, isActive, providerLabel, TYPE_LABEL } from "@/lib/ingestion"
-import { companyHref, INDEX_TICKERS, technicalsHref } from "@/lib/links"
-import type { IngestionJob } from "@/lib/types"
+import {
+  creatorLabel,
+  formatBytes,
+  formatDuration,
+  isActive,
+  macroSourceLabel,
+  providerLabel,
+  TYPE_LABEL,
+} from "@/lib/ingestion"
+import { companyHref, INDEX_TICKERS, MARKET_CODES, technicalsHref } from "@/lib/links"
+import type { IngestionJob, MacroResult } from "@/lib/types"
 
 /** Fields of the financial statement upload result (IngestionResponse) shown here. */
 interface FilingResult {
@@ -217,6 +225,29 @@ function PriceSummary({ result }: { result: PriceResult }) {
   )
 }
 
+function MacroSummary({ result }: { result: MacroResult }) {
+  return (
+    <dl className="flex flex-col gap-2">
+      <Field label="Source">{macroSourceLabel(result.source)}</Field>
+      <Field label="Requested">
+        {result.requests === 0
+          ? "No request: a CSV upload"
+          : `From ${formatDate(result.requestedFrom)}${result.fullHistory ? " (full history)" : ""}`}
+      </Field>
+      <Field label="Observations">
+        {count(result.inserted)} new · {count(result.revised)} revised · {count(result.unchanged)} unchanged
+        {result.received !== result.kept ? ` · ${count(result.received - result.kept)} older ones not used` : ""}
+      </Field>
+      <Field label="Latest">
+        {formatDate(result.latestDate)}
+        {result.latestRelease ? ` (public on ${formatDate(result.latestRelease)})` : ""}
+      </Field>
+      {result.revisions.length > 0 && <Field label="Revisions">{result.revisions.join("; ")}</Field>}
+      {result.warnings.length > 0 && <Field label="Large moves">{result.warnings.join("; ")}</Field>}
+    </dl>
+  )
+}
+
 function RagPdfSummary({ result }: { result: RagPdfResult }) {
   return (
     <dl className="flex flex-col gap-2">
@@ -382,6 +413,9 @@ export function JobDetailSheet({
                 {shown.type === "FUNDAMENTALS" && (
                   <Field label="Mode">{shown.fullHistory ? "Every fundamental" : "Fundamentals due"}</Field>
                 )}
+                {shown.type === "MACRO" && (
+                  <Field label="Mode">{shown.fullHistory ? "Full history" : "Latest observations"}</Field>
+                )}
                 <Field label="Started by">{creatorLabel(shown.createdBy)}</Field>
                 <Field label="Requested">{formatTimestamp(shown.requestedAt)}</Field>
                 <Field label="Started">{formatTimestamp(shown.startedAt)}</Field>
@@ -405,6 +439,7 @@ export function JobDetailSheet({
                   <h3 className="text-sm font-semibold">Result</h3>
                   {shown.type === "FINANCIAL_STATEMENT" && <FilingSummary result={shown.result as FilingResult} />}
                   {shown.type === "PRICE" && <PriceSummary result={shown.result as PriceResult} />}
+                  {shown.type === "MACRO" && <MacroSummary result={shown.result as MacroResult} />}
                   {shown.type === "RAG_PDF" && <RagPdfSummary result={shown.result as RagPdfResult} />}
                   {shown.type === "RAG_NEWS" && <RagNewsSummary result={shown.result as RagNewsResult} />}
                   <details className="rounded-lg border">
@@ -437,19 +472,33 @@ export function JobDetailSheet({
                 </Link>
               )}
 
-              {shown.ticker && shown.exchange && !isActive(shown.status) && shown.status !== "FAILED" && (
+              {shown.type === "MACRO" && (
                 <Link
-                  href={
-                    INDEX_TICKERS.has(shown.ticker)
-                      ? technicalsHref(shown.exchange, shown.ticker)
-                      : companyHref(shown.exchange, shown.ticker)
-                  }
+                  href="/ingestion/macro"
                   className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
                 >
-                  {INDEX_TICKERS.has(shown.ticker) ? `Open the ${shown.ticker} chart` : `Open ${shown.ticker}`}{" "}
-                  <ChevronRightIcon />
+                  Open the macro series <ChevronRightIcon />
                 </Link>
               )}
+              {shown.type !== "MACRO" &&
+                shown.ticker &&
+                shown.exchange &&
+                !isActive(shown.status) &&
+                shown.status !== "FAILED" && (
+                  <Link
+                    href={
+                      INDEX_TICKERS.has(shown.ticker) || MARKET_CODES.has(shown.exchange)
+                        ? technicalsHref(shown.exchange, shown.ticker)
+                        : companyHref(shown.exchange, shown.ticker)
+                    }
+                    className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
+                  >
+                    {INDEX_TICKERS.has(shown.ticker) || MARKET_CODES.has(shown.exchange)
+                      ? `Open the ${shown.ticker} chart`
+                      : `Open ${shown.ticker}`}{" "}
+                    <ChevronRightIcon />
+                  </Link>
+                )}
             </>
           )}
         </div>

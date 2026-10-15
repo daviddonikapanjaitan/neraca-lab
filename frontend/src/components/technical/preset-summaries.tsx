@@ -38,6 +38,8 @@ export function PresetSummariesCard({
   onShowPreset: (preset: PresetId) => void
 }) {
   const index = summary.type === "INDEX"
+  // decimals of the prices (backend): an IDX price 0, an index 2, USD/JPY 3; older answers: by the listing type
+  const decimals: boolean | number = summary.priceDecimals ?? index
   const ordered = [...summary.summaries].sort(
     (a, b) => Number(b.preset === activePreset) - Number(a.preset === activePreset)
   )
@@ -47,9 +49,9 @@ export function PresetSummariesCard({
         <CardTitle>Preset summaries</CardTitle>
         <CardDescription>
           A quick read of the chart in the style of each preset: when to buy, where to sell, where the idea is wrong,
-          and why. {summary.ticker} closed at {summary.currency === "IDR" && !index ? "Rp " : ""}
-          {formatLevel(summary.close, index)}
-          {index ? " points" : ""} on {formatDate(summary.asOfDate)}.
+          and why. {summary.ticker} closed at {summary.type === "STOCK" && summary.currency === "IDR" ? "Rp " : ""}
+          {formatLevel(summary.close, decimals)}
+          {index ? " points" : summary.unit ? ` ${summary.unit}` : ""} on {formatDate(summary.asOfDate)}.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -68,7 +70,7 @@ export function PresetSummariesCard({
             <PresetCard
               key={s.preset}
               summary={s}
-              index={index}
+              decimals={decimals}
               active={s.preset === activePreset}
               onShow={() => onShowPreset(s.preset)}
             />
@@ -82,12 +84,12 @@ export function PresetSummariesCard({
 
 function PresetCard({
   summary: s,
-  index,
+  decimals,
   active,
   onShow,
 }: {
   summary: PresetSummary
-  index: boolean
+  decimals: boolean | number
   active: boolean
   onShow: () => void
 }) {
@@ -113,9 +115,9 @@ function PresetCard({
 
       {s.buy ? (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <PriceTile label={s.buy.type === "STOP" ? "Buy at or above" : "Buy at or below"} level={s.buy} index={index} tone="buy" />
-          <PriceTile label="Sell (target)" level={s.sell} index={index} tone="sell" />
-          <PriceTile label="Stop loss" level={s.stopLoss} index={index} tone="stop" />
+          <PriceTile label={s.buy.type === "STOP" ? "Buy at or above" : "Buy at or below"} level={s.buy} decimals={decimals} tone="buy" />
+          <PriceTile label="Sell (target)" level={s.sell} decimals={decimals} tone="sell" />
+          <PriceTile label="Stop loss" level={s.stopLoss} decimals={decimals} tone="stop" />
         </div>
       ) : (
         <p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
@@ -163,12 +165,12 @@ function PresetCard({
 function PriceTile({
   label,
   level,
-  index,
+  decimals,
   tone,
 }: {
   label: string
   level: PriceLevel | null
-  index: boolean
+  decimals: boolean | number
   tone: "buy" | "sell" | "stop"
 }) {
   return (
@@ -181,7 +183,7 @@ function PriceTile({
           tone === "stop" && "text-rose-700 dark:text-rose-400"
         )}
       >
-        {level ? formatLevel(level.price, index) : "—"}
+        {level ? formatLevel(level.price, decimals) : "—"}
       </span>
       {level && (
         <>

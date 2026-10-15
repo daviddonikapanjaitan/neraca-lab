@@ -32,6 +32,7 @@ import {
   levelsSchema,
   marketSchema,
   NOT_FOR_INDEX,
+  NOT_FOR_MONTHLY,
   ohlcvSchema,
   parseSettings,
   PRESETS,
@@ -44,7 +45,7 @@ import {
   type ChartSettings,
   type IndicatorId,
 } from "@/lib/technical"
-import type { Exchange } from "@/lib/types"
+import type { TechnicalMarket } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const PriceChart = dynamic(() => import("@/components/technical/price-chart"), {
@@ -112,7 +113,8 @@ function Toggle<T extends string>({ label, value, options, onChange }: {
 }
 
 export function TechnicalsPageClient(props: {
-  exchanges: Exchange[]
+  /** the exchanges (IDX), then Forex and Commodities */
+  markets: TechnicalMarket[]
   /** the settings the URL names; the others come from the user's saved settings */
   initial: Partial<ChartSettings>
 }) {
@@ -125,8 +127,8 @@ export function TechnicalsPageClient(props: {
 }
 
 /** Loads the user's saved settings (server; else this browser's), then opens the page with them and the URL's. */
-function Technicals({ exchanges, initial }: {
-  exchanges: Exchange[]
+function Technicals({ markets, initial }: {
+  markets: TechnicalMarket[]
   initial: Partial<ChartSettings>
 }) {
   const saved = useQuery({
@@ -146,10 +148,10 @@ function Technicals({ exchanges, initial }: {
   const stored = value && typeof value === "object" ? (value as Partial<ChartSettings>) : {}
   // another exchange in the URL than in the saved settings: the saved ticker does not apply
   const ticker = initial.ticker ?? (initial.exchange && initial.exchange !== stored.exchange ? null : stored.ticker ?? null)
-  return <TechnicalsView exchanges={exchanges} start={parseSettings({ ...stored, ...initial, ticker })} />
+  return <TechnicalsView markets={markets} start={parseSettings({ ...stored, ...initial, ticker })} />
 }
 
-function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: ChartSettings }) {
+function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start: ChartSettings }) {
   const router = useRouter()
   const { resolvedTheme } = useTheme()
   const dark = resolvedTheme === "dark"
@@ -174,8 +176,17 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
       indicators: on ? Array.from(new Set([...s.indicators, id])) : s.indicators.filter((x) => x !== id),
     }))
 
-  const { exchange, ticker, interval, range, adjustment, indicators } = settings
+  const { exchange, ticker, range, indicators } = settings
+  const selected = markets.find((m) => m.code === exchange) ?? null
+  const isMarket = selected?.kind === "MARKET"
+  // a currency pair or commodity has no dividends: always the price as traded
+  const adjustment = isMarket ? "split" : settings.adjustment
   const has = (id: IndicatorId) => indicators.includes(id)
+
+  // the frequency of the series once known (coal is monthly: charted on the monthly interval only)
+  const [monthlyTicker, setMonthlyTicker] = useState<string | null>(null)
+  const monthly = !!ticker && monthlyTicker === `${exchange}:${ticker}`
+  const interval = monthly ? "M" : settings.interval
   const params = { interval, range, adjustment }
 
   const ohlcv = useQuery({
@@ -183,12 +194,22 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "ohlcv", params), ohlcvSchema, signal),
     enabled: !!ticker,
   })
-  // the index (IHSG) is charted in points: no comparison with itself, no events, no auto-rejection
-  const isIndex = ohlcv.data ? ohlcv.data.type === "INDEX" : ticker === "IHSG"
+  const type = ohlcv.data ? ohlcv.data.type : isMarket ? (exchange === "FOREX" ? "FOREX" : "COMMODITY") : ticker === "IHSG" ? "INDEX" : "STOCK"
+  if (ohlcv.data && ticker && ohlcv.data.ticker === ticker && (ohlcv.data.frequency === "MONTHLY") !== monthly) {
+    // learnt from the answer: a monthly series re-queries on the monthly interval
+    setMonthlyTicker(ohlcv.data.frequency === "MONTHLY" ? `${exchange}:${ticker}` : null)
+  }
+  // the index (IHSG) is charted in points, a currency pair or commodity in its unit: no comparison with IHSG, no events,
+  // no auto-rejection
+  const isIndex = type !== "STOCK"
+  const isInstrument = type === "FOREX" || type === "COMMODITY"
   const shown = useMemo(
-    () => (isIndex ? indicators.filter((id) => !NOT_FOR_INDEX.includes(id)) : indicators),
-    [indicators, isIndex]
+    () => (monthly ? indicators.filter((id) => !NOT_FOR_MONTHLY.includes(id))
+      : isIndex ? indicators.filter((id) => !NOT_FOR_INDEX.includes(id)) : indicators),
+    [indicators, isIndex, monthly]
   )
+  // levels, the snapshot and the summaries need daily bars: not asked for a monthly series
+  const daily = !!ticker && ohlcv.isSuccess && !monthly
   const set = useMemo(() => seriesFor(shown), [shown])
 
   const series = useQuery({
@@ -199,7 +220,7 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
   const levels = useQuery({
     queryKey: ["technical", "levels", exchange, ticker],
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "levels"), levelsSchema, signal),
-    enabled: !!ticker,
+    enabled: daily,
   })
   const events = useQuery({
     queryKey: ["technical", "events", exchange, ticker],
@@ -209,12 +230,12 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
   const snapshot = useQuery({
     queryKey: ["technical", "snapshot", exchange, ticker],
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "snapshot"), snapshotSchema, signal),
-    enabled: !!ticker,
+    enabled: daily,
   })
   const summary = useQuery({
     queryKey: ["technical", "summary", exchange, ticker],
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "summary"), summarySchema, signal),
-    enabled: !!ticker,
+    enabled: daily,
   })
   const showMarket = has("regime") || has("macro")
   const market = useQuery({
@@ -243,7 +264,14 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
   const change = last && prev ? (last[4] / prev[4] - 1) * 100 : null
   const levelsDisabled = adjustment === "total"
 
-  const picker = <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} index={isIndex} />
+  const picker = (
+    <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} index={isIndex} monthly={monthly} />
+  )
+  // decimals of the header price: an index 2, an instrument by its size (USD/JPY 3), a stock as the price formatter
+  const priceText = (value: number) =>
+    isIndex && !isInstrument ? `${formatPrice(value)} points`
+      : isInstrument ? `${formatNumber(value, value < 1000 ? 3 : 2)} ${data?.unit ?? ""}`.trim()
+        : `${data!.currency} ${formatPrice(value)}`
 
   return (
     <div className="flex flex-col gap-4">
@@ -251,22 +279,30 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Select
-            items={exchanges.map((e) => ({ value: e.code, label: `${e.code} · ${e.name}` }))}
+            items={markets.map((m) => ({ value: m.code, label: m.kind === "EXCHANGE" ? `${m.code} · ${m.name}` : m.name }))}
             value={exchange}
             onValueChange={(v) => v && v !== exchange && update({ exchange: v, ticker: null })}
           >
-            <SelectTrigger aria-label="Exchange" className="w-full sm:w-[240px]">
-              <SelectValue placeholder="Exchange" />
+            <SelectTrigger aria-label="Exchange or market" className="w-full sm:w-[240px]">
+              <SelectValue placeholder="Exchange or market" />
             </SelectTrigger>
             <SelectContent>
-              {exchanges.map((e) => (
-                <SelectItem key={e.code} value={e.code}>
-                  {e.code} · {e.name}
+              {markets.map((m) => (
+                <SelectItem key={m.code} value={m.code}>
+                  {m.kind === "EXCHANGE" ? `${m.code} · ${m.name}` : m.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <TickerSearch exchange={exchange} value={ticker} onSelect={(t) => update({ ticker: t.ticker })} />
+          <TickerSearch
+            exchange={exchange}
+            value={ticker}
+            itemLabel={selected?.itemLabel ?? "Ticker"}
+            onSelect={(t) => {
+              if (t.frequency === "MONTHLY") setMonthlyTicker(`${exchange}:${t.ticker}`)
+              update({ ticker: t.ticker })
+            }}
+          />
           <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
             <Sheet>
               <SheetTrigger render={<Button variant="outline" size="sm" className="lg:hidden" />}>
@@ -286,14 +322,20 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Toggle label="Interval" value={interval} options={INTERVALS} onChange={(v) => update({ interval: v })} />
+          {monthly ? (
+            <span className="rounded-lg border px-2.5 py-1 text-xs text-muted-foreground">Monthly series: monthly bars only</span>
+          ) : (
+            <Toggle label="Interval" value={interval} options={INTERVALS} onChange={(v) => update({ interval: v })} />
+          )}
           <Toggle label="Range" value={range} options={RANGES.map((r) => ({ value: r, label: r }))} onChange={(v) => update({ range: v })} />
-          <Toggle
-            label="Price basis"
-            value={adjustment}
-            options={[{ value: "split", label: "Split-adjusted" }, { value: "total", label: "Total return" }]}
-            onChange={(v) => update({ adjustment: v })}
-          />
+          {!isMarket && (
+            <Toggle
+              label="Price basis"
+              value={adjustment}
+              options={[{ value: "split", label: "Split-adjusted" }, { value: "total", label: "Total return" }]}
+              onChange={(v) => update({ adjustment: v })}
+            />
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">Presets:</span>
@@ -317,8 +359,12 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
           <CardContent className="py-10">
             <EmptyState
               variant="search"
-              title="Choose a company or the index"
-              description={`Search a ticker or company name of ${exchange}, or IHSG for the composite index, to open its chart.`}
+              title={isMarket ? `Choose a ${selected!.itemLabel.toLowerCase()}` : "Choose a company or the index"}
+              description={
+                isMarket
+                  ? `Search a ${selected!.itemLabel.toLowerCase()} of ${selected!.name} to open its chart (its prices come from Ingestion › Price Ingestion).`
+                  : `Search a ticker or company name of ${exchange}, or IHSG for the composite index, to open its chart.`
+              }
             />
           </CardContent>
         </Card>
@@ -331,7 +377,10 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
                   <span className="font-mono">{ticker}</span>
                   <span className="font-normal text-muted-foreground">{data?.companyName ?? ""}</span>
                   {data && data.type === "INDEX" && <Badge variant="secondary">Index</Badge>}
-                  {data && data.type !== "INDEX" && (
+                  {data && data.type === "FOREX" && <Badge variant="secondary">Forex</Badge>}
+                  {data && data.type === "COMMODITY" && <Badge variant="secondary">Commodity</Badge>}
+                  {data && data.frequency === "MONTHLY" && <Badge variant="outline">Monthly</Badge>}
+                  {data && data.type === "STOCK" && (
                     <Link href={companyHref(data.exchange, data.ticker)} className="text-xs font-normal text-primary underline-offset-4 hover:underline">
                       Fundamentals
                     </Link>
@@ -341,16 +390,16 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
                   {last ? (
                     <>
                       <span className="font-mono text-base font-semibold text-foreground tabular-nums">
-                        {isIndex ? `${formatPrice(last[4])} points` : `${data!.currency} ${formatPrice(last[4])}`}
+                        {priceText(last[4])}
                       </span>
                       <span className={cn("font-mono tabular-nums", change !== null && change > 0 && "text-emerald-600 dark:text-emerald-400",
                         change !== null && change < 0 && "text-rose-600 dark:text-rose-400")}>
                         {change === null ? EMPTY : `${change > 0 ? "+" : ""}${formatNumber(change, 2)}%`}
                       </span>
                       <span>
-                        {formatDate(data!.lastDate)} · {data!.tradingDays.toLocaleString("en-US")} trading days since{" "}
-                        {formatDate(data!.firstDate)}
-                        {data!.lotSize !== null ? ` · lot ${data!.lotSize} shares` : " · Yahoo Finance ^JKSE"}
+                        {formatDate(data!.lastDate)} · {data!.tradingDays.toLocaleString("en-US")}{" "}
+                        {data!.frequency === "MONTHLY" ? "months" : "trading days"} since {formatDate(data!.firstDate)}
+                        {data!.lotSize !== null ? ` · lot ${data!.lotSize} shares` : ` · ${data!.source ?? "Yahoo Finance ^JKSE"}`}
                       </span>
                     </>
                   ) : (
@@ -390,7 +439,18 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
               </CardContent>
             </Card>
 
-            {summary.data ? (
+            {monthly ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Preset summaries</CardTitle>
+                  <CardDescription>
+                    {data?.companyName ?? ticker} is a monthly series (the World Bank monthly average): the key levels, the
+                    snapshot and the preset summaries need daily bars, so only the chart and its indicators on monthly bars
+                    are shown.
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            ) : summary.data ? (
               <PresetSummariesCard
                 summary={summary.data}
                 activePreset={settings.preset}
@@ -418,11 +478,13 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
               )
             )}
 
-            <div className="grid gap-4 xl:grid-cols-2">
-              {levels.data ? <KeyLevelsCard levels={levels.data} /> : levels.isError ? <ErrorNote error={levels.error} onRetry={() => levels.refetch()} /> : <Skeleton className="h-[300px]" />}
-              {has("profile") && levels.data && <VolumeProfileCard levels={levels.data} />}
-              {snapshot.data ? <SnapshotCard snapshot={snapshot.data} /> : snapshot.isError ? <ErrorNote error={snapshot.error} onRetry={() => snapshot.refetch()} /> : <Skeleton className="h-[300px]" />}
-            </div>
+            {!monthly && (
+              <div className="grid gap-4 xl:grid-cols-2">
+                {levels.data ? <KeyLevelsCard levels={levels.data} /> : levels.isError ? <ErrorNote error={levels.error} onRetry={() => levels.refetch()} /> : <Skeleton className="h-[300px]" />}
+                {has("profile") && levels.data && levels.data.volumeProfile.topNodes.length > 0 && <VolumeProfileCard levels={levels.data} />}
+                {snapshot.data ? <SnapshotCard snapshot={snapshot.data} /> : snapshot.isError ? <ErrorNote error={snapshot.error} onRetry={() => snapshot.refetch()} /> : <Skeleton className="h-[300px]" />}
+              </div>
+            )}
           </div>
 
           <Card className="hidden h-fit lg:block">
@@ -439,7 +501,9 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
         <p className="font-medium text-foreground">{DISCLAIMER}</p>
         <p>
           Indicators are computed by Neraca Lab from stored daily prices (split-adjusted; IDX tick sizes and auto-rejection
-          limits applied). Events: Yahoo Finance dividends and splits, and splits recorded from the filings.
+          limits applied). Events: Yahoo Finance dividends and splits, and splits recorded from the filings. Currency pairs
+          and commodities: Yahoo Finance daily bars (coal: the World Bank monthly average), levels at their own tick size.
+          Macro: FRED, Bank Indonesia, CNBC, the CFTC and Yahoo Finance (Ingestion › Macro).
         </p>
         <p>
           Charts: {TRADINGVIEW_NOTICE.replace(" https://www.tradingview.com/", "")}{" "}

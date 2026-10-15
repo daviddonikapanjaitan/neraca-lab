@@ -23,6 +23,7 @@ import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.job.WorkerThreads;
 import com.neracalab.backend.price.IndexIngestion.IndexRef;
+import com.neracalab.backend.price.InstrumentIngestion.InstrumentRef;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.provider.RateLimitedException;
 
@@ -38,9 +39,10 @@ import com.neracalab.backend.price.provider.RateLimitedException;
  * stops the run: the job, every job answered 429 with it and every queued job fail, and the next
  * submission starts fresh.
  * <p>
- * An exchange's index (IHSG) is ingested by the same queue ({@link #submitIndex}), through {@link IndexIngestion}.
+ * An exchange's index (IHSG) is ingested by the same queue ({@link #submitIndex}), through {@link IndexIngestion}, and
+ * so are the Forex pairs and commodities ({@link #submitInstrument}, through {@link InstrumentIngestion}).
  * <p>
- * At most one active job per company (per index); jobs are lost on restart (re-submit; nothing is fetched twice).
+ * At most one active job per company (per index, per instrument); jobs are lost on restart (re-submit; nothing is fetched twice).
  * Every state change is also reported to the {@link Listener} ({@link PriceIngestionTracker} records
  * it in {@code ingestion_job}); a listener failure never affects the job.
  */
@@ -63,6 +65,8 @@ public class PriceIngestionQueue implements SmartLifecycle {
     private final PriceIngestionService service;
     /** {@code null} in tests without an index */
     private final IndexIngestion indexIngestion;
+    /** {@code null} in tests without instruments */
+    private final InstrumentIngestion instrumentIngestion;
     private final PriceProperties properties;
     private final Listener listener;
     private final LinkedBlockingQueue<PriceIngestionJob> pending = new LinkedBlockingQueue<>();
@@ -84,9 +88,10 @@ public class PriceIngestionQueue implements SmartLifecycle {
     private String pauseReason;
 
     @Autowired
-    public PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion, PriceProperties properties,
-                               Listener listener, JobProperties jobProperties) {
-        this(service, indexIngestion, properties, listener, jobProperties.workers());
+    public PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion,
+                               InstrumentIngestion instrumentIngestion, PriceProperties properties, Listener listener,
+                               JobProperties jobProperties) {
+        this(service, indexIngestion, instrumentIngestion, properties, listener, jobProperties.workers());
     }
 
     /** One worker, no listener, no index (tests). */
@@ -100,8 +105,15 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion, PriceProperties properties,
                         Listener listener, int workers) {
+        this(service, indexIngestion, null, properties, listener, workers);
+    }
+
+    PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion,
+                        InstrumentIngestion instrumentIngestion, PriceProperties properties, Listener listener,
+                        int workers) {
         this.service = service;
         this.indexIngestion = indexIngestion;
+        this.instrumentIngestion = instrumentIngestion;
         this.properties = properties;
         this.listener = listener;
         this.workers = new WorkerThreads("price-ingestion", workers, this::work);
@@ -131,6 +143,17 @@ public class PriceIngestionQueue implements SmartLifecycle {
             throw new IllegalStateException("No index ingestion configured");
         }
         return submit(new PriceIngestionJob(index, full, requestedBy));
+    }
+
+    /**
+     * Queues an ingestion of a Forex pair or commodity requested by a user ({@code null}: scheduled run). When the
+     * instrument already has an active job, that job is returned.
+     */
+    public Submission submitInstrument(InstrumentRef instrument, boolean full, Requester requestedBy) {
+        if (instrumentIngestion == null) {
+            throw new IllegalStateException("No instrument ingestion configured");
+        }
+        return submit(new PriceIngestionJob(instrument, full, requestedBy));
     }
 
     private synchronized Submission submit(PriceIngestionJob job) {
@@ -201,7 +224,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     private void process(PriceIngestionJob job) {
         CompanyRef company = job.company();
-        String exchange = company != null ? company.exchange().code() : job.index().exchange().code();
+        String exchange = job.exchange();
         boolean attempted = false;
         while (true) {
             long eventsBefore = awaitResume(job, attempted);
@@ -215,7 +238,8 @@ public class PriceIngestionQueue implements SmartLifecycle {
             report(job);
             try {
                 job.succeeded(company != null ? service.ingest(company, job.full())
-                        : indexIngestion.ingest(job.index(), job.full()));
+                        : job.index() != null ? indexIngestion.ingest(job.index(), job.full())
+                        : instrumentIngestion.ingest(job.instrument(), job.full()));
                 report(job);
                 synchronized (rateLimit) {
                     if (rateLimitEvents == eventsBefore) {

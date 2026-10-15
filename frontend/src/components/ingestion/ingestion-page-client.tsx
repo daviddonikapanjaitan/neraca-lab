@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { FundamentalsCard } from "@/components/ingestion/fundamentals-card"
 import { IndexPriceCard } from "@/components/ingestion/index-price-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
+import { MacroCard } from "@/components/ingestion/macro-card"
 import { PriceCard } from "@/components/ingestion/price-card"
 import { PriceUpdateCard } from "@/components/ingestion/price-update-card"
 import { RagDocumentsCard } from "@/components/ingestion/rag-documents-card"
@@ -19,6 +20,8 @@ import type {
   FundamentalsStatus,
   IngestionJob,
   IngestionJobList,
+  MacroStatus,
+  MarketStatus,
   PriceStatus,
   RagDocumentPage,
   RagStatus,
@@ -33,8 +36,11 @@ export type IngestionSectionData =
       companiesByExchange: Record<string, CompanySummary[]>
       /** how far the prices and the index of each exchange reach */
       statusByExchange: Record<string, PriceStatus>
+      /** Forex and Commodities with their instruments */
+      markets: MarketStatus[]
       provider: string
     }
+  | { section: "macro"; macro: MacroStatus }
   | { section: "screening-data"; fundamentals: FundamentalsStatus }
   | {
       section: "rag-pdf"
@@ -54,7 +60,7 @@ export type IngestionSectionData =
     }
 
 /**
- * One Ingestion page (IDX XBRL, Price Ingestion, Screening Data IDX, PDF Documents (RAG) or News (RAG)): its card,
+ * One Ingestion page (IDX XBRL, Price Ingestion, Screening Data IDX, PDF Documents (RAG), News (RAG) or Macro): its card,
  * the stored documents on the RAG pages, then the jobs table, which opens on the page's own job type (tabs for
  * the other types and all jobs, a status filter, page by page).
  */
@@ -82,22 +88,30 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
       </div>
 
       {data.section === "prices" && (
-        // one company on the left; the whole exchange and its index (IHSG) on the right
+        // one company / instrument on the left; the whole exchange or market and the index (IHSG) on the right
         <div className="grid w-full items-start gap-4 lg:grid-cols-2">
           <PriceCard
             exchanges={data.exchanges}
             companiesByExchange={data.companiesByExchange}
+            markets={data.markets}
             provider={data.provider}
             onSubmitted={submitted}
           />
           <div className="flex min-w-0 flex-col gap-4">
-            <PriceUpdateCard exchanges={data.exchanges} statusByExchange={data.statusByExchange} onSubmitted={submitted} />
+            <PriceUpdateCard
+              exchanges={data.exchanges}
+              statusByExchange={data.statusByExchange}
+              markets={data.markets}
+              onSubmitted={submitted}
+            />
             <IndexPriceCard exchanges={data.exchanges} statusByExchange={data.statusByExchange} onSubmitted={submitted} />
           </div>
         </div>
       )}
 
-      {data.section !== "prices" && (
+      {data.section === "macro" && <MacroCard status={data.macro} onSubmitted={submitted} />}
+
+      {data.section !== "prices" && data.section !== "macro" && (
         <div className="w-full max-w-3xl">
           {data.section === "xbrl" && <UploadCard onSubmitted={submitted} />}
           {data.section === "screening-data" && <FundamentalsCard status={data.fundamentals} onSubmitted={submitted} />}

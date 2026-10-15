@@ -188,7 +188,9 @@ public final class Structure {
             double hi = b == count - 1 ? max : lo + size;
             buckets.add(new ProfileBucket(lo, hi, ticks.round((lo + hi) / 2), volume[b], total > 0 ? volume[b] / total * 100 : 0));
         }
-        List<ProfileBucket> top = buckets.stream().sorted(Comparator.comparingDouble(ProfileBucket::volume).reversed())
+        // without volume (a currency pair) there is no node: every bucket is empty
+        List<ProfileBucket> top = total <= 0 ? List.of() : buckets.stream()
+                .sorted(Comparator.comparingDouble(ProfileBucket::volume).reversed())
                 .limit(cfg.topNodes()).toList();
         return new VolumeProfile(window.size(), window.getFirst().date(), window.getLast().date(), buckets, top);
     }

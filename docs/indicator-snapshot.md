@@ -1,4 +1,4 @@
-# IndicatorSnapshot JSON (schemaVersion 1)
+# IndicatorSnapshot JSON (schemaVersion 2)
 
 The latest technical snapshot of a listing: every indicator the future technical agents (Murphy, Keith Gill, Paul
 Tudor Jones, Stanley Druckenmiller, and the risk overlay) will read, as one versioned JSON document. It is data, not a
@@ -20,6 +20,24 @@ The IHSG index has a snapshot too (`.../IHSG/snapshot`): the same groups on its 
 0.01), computed on request and not stored; `relativeStrength.ratio` / `ratioChange50Pct` (vs itself), the auto-rejection
 counts, `price.lotSize`, `price.valueTraded` and the value averages are null, with a note.
 
+So does every daily **Forex pair or commodity** (`.../FOREX/USDIDR/snapshot`, `.../COMMODITY/GOLD/snapshot`).
+- **Bars:** its own, in its quote currency (`currency` JPY for USD/JPY), with levels rounded to its tick (`price.tickSize`).
+- **Stored:** no; it is computed on request.
+- **Null, with a note:**
+  - `relativeStrength.ratio`, `ratioChange50Pct`, the percentiles and the sector comparison;
+  - the auto-rejection fields;
+  - `risk.sessionsAfterLastBar`, `missingSessions60`, `possiblySuspended`;
+  - `price.lotSize`, `price.valueTraded` and the value averages.
+- **Volume:** a currency pair has none, so its volume indicators are 0 or null.
+- **Shared groups:** `marketRegime` and `macro` are those of IDX.
+
+Coal (monthly) has no snapshot (422).
+
+**Version history.**
+- **2** (2026-10-16): `macro` gained `series`, `signals` and `regimes`, and every macro value is point in time
+  (section macro).
+- **1:** the first version.
+
 ## Conventions
 
 | Rule | |
@@ -36,7 +54,7 @@ counts, `price.lotSize`, `price.valueTraded` and the value averages are null, wi
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schemaVersion` | int | 1 |
+| `schemaVersion` | int | 2 |
 | `exchange`, `ticker`, `companyName`, `sector` | string | the listing (`sector` may be null) |
 | `currency` | string | currency of every price (the exchange's: IDR) |
 | `asOfDate` | date | the listing's last stored trading day |
@@ -120,17 +138,24 @@ counts, `price.lotSize`, `price.valueTraded` and the value averages are null, wi
 | `indexSma200`, `indexAboveSma200`, `indexVsSma200Pct`, `indexSma200Slope20dPct` | IHSG against its 200-day SMA |
 | `breadthAbove200Pct`, `breadthCounted`, `breadthUniverse` | share of the stored active listings (with 200 bars and a bar in the last 10 days) closing above their own SMA 200 |
 
-## macro (Druckenmiller)
+## macro (Druckenmiller, PTJ)
+
+The macro series of Ingestion › Macro ([v1_docs/MACRO_DOCS.md](v1_docs/MACRO_DOCS.md)), **point in time**: only
+observations whose release date (the end of their period plus the publication lag) is on or before `asOfDate` are used.
+September CPI, public on 15 October, is unknown to a snapshot of 14 October.
 
 | Field | Meaning |
 |---|---|
 | `biRate` | Bank Indonesia rate: `value` (%), `asOf`, `changePoints` over `changeMonths` (6) |
 | `sbn10y` | 10-year government bond yield: `value` (%), `asOf`, `changePoints` over 3 months |
-| `usdIdr` | USD/IDR (ECB reference rate, `fx_rate_daily`): `value`, `asOf`, `changePct` over 3 months |
+| `usdIdr` | USD/IDR (the Forex pair `USDIDR` when stored, else the ECB reference rate of `fx_rate_daily`): `value`, `asOf`, `changePct` over 3 months |
+| `series` | every stored series by code (`BI_RATE`, `US_10Y`, `DXY`, ...): its latest known `value`, `date`, `released`, `stale` |
+| `signals` | the signals of the presets, each null when an input is missing or stale. Signals and their fields:<br>• `biPolicy` / `fedPolicy`: `value`, `change6mPoints`, `state` CUTTING / HOLDING / HIKING<br>• `idRealRate`: BI rate - CPI, `state` RESTRICTIVE / NEUTRAL / ACCOMMODATIVE<br>• `sbn10y`: `change3mPoints`, `trend`, `spreadVsUs10y`<br>• `usCurve`: 10Y - 2Y, `state` INVERTED / FLAT / NORMAL, `trend`, `us10yChange3mPoints`<br>• `usNetLiquidity`: USD bn, `change3mPct`, `direction` GROWING / SHRINKING, `basis`<br>• `creditStress`: HY spread, `percentile1y`, `change1mPoints`, `state` STRESSED / NORMAL / CALM<br>• `dollar`: `dxyChange3mPct`, `dxyTrend`, `usdIdrChange3mPct`, `rupiahTrend`<br>• `inflation`: Indonesian and US CPI YoY and their trend, `usBreakeven10y`, `usRealYield10y` and its 3-month change<br>• `riskAppetite`: VIX, `percentile1y`, `state` FEAR / NORMAL / CALM<br>• `foreignFlows`: IDX net buying over 20 sessions, foreign SBN holdings<br>• `idLiquidity`: reserves, M2 YoY<br>• `china`: PMI<br>• `positioning`: gold / crude / usd, net and `percentile3y`, `state` CROWDED_LONG / NEUTRAL / CROWDED_SHORT |
+| `regimes` | `liquidity` (Druckenmiller: EASING / NEUTRAL / TIGHTENING) and `risk` (PTJ: RISK_ON / NEUTRAL / RISK_OFF): `state` (null with fewer than 3 signals, and a `note`), `score`, `signals`, `components` (each `signal`, `vote` +1 / 0 / -1, `text`) |
 
-The latest observation on or before the as-of date, compared with the latest on or before the date `changeMonths`
-earlier. BI rate and SBN 10Y have no source yet (`macro_series` rows `BI_RATE` / `SBN_10Y` can be inserted); they are
-null until then.
+`biRate`, `sbn10y` and `usdIdr` keep their schema-1 meaning: the latest observation released on or before the as-of
+date, compared with the one known `changeMonths` earlier. The thresholds of the signals and regimes:
+[v1_docs/MACRO_DOCS.md](v1_docs/MACRO_DOCS.md), section 5.
 
 ## events (Gill, Druckenmiller)
 
@@ -157,11 +182,11 @@ and the splits recorded from the filings (`corporate_action`).
 | `possiblySuspended` | 3 or more consecutive missing sessions within the last 60 bars, or no volume on the last 3 bars |
 | `specialMonitoringBoard`, `suspended` | null: no source of the special monitoring board (Papan Pemantauan Khusus) or of suspensions yet |
 
-## Example (MOLI, 2026-10-14, arrays shortened)
+## Example (MOLI, arrays shortened; the macro section of 2026-10-15)
 
 ```json
 {
-  "schemaVersion": 1, "exchange": "IDX", "ticker": "MOLI", "companyName": "Madusari Murni Indah",
+  "schemaVersion": 2, "exchange": "IDX", "ticker": "MOLI", "companyName": "Madusari Murni Indah",
   "sector": "Basic Materials", "currency": "IDR", "asOfDate": "2026-10-14",
   "history": { "tradingDays": 1858, "firstDate": "2018-08-31", "lastDate": "2026-10-14", "limited": false, "minHistoryDays": 250 },
   "price": { "open": 400.0, "high": 406.0, "low": 392.0, "close": 398.0, "changePct": -0.5, "volume": 1910000.0,
@@ -180,10 +205,20 @@ and the splits recorded from the filings (`corporate_action`).
     "allTimeHigh": { "price": 1160.0, "date": "2018-09-03", "drawdownPct": -65.6897, "since": "2018-08-31" },
     "base": { "detected": false }
   },
-  "macro": { "usdIdr": { "value": 17920.0, "asOf": "2026-10-08", "changePct": -0.7752, "changeMonths": 3 },
-             "biRate": { "value": null, "changePoints": null } },
+  "macro": { "biRate": { "value": 5.75, "asOf": "2026-09-23", "changePoints": 1.0, "changeMonths": 6, "unit": "%" },
+             "sbn10y": { "value": 7.169, "asOf": "2026-10-14", "changePoints": -0.067, "changeMonths": 3, "unit": "%" },
+             "usdIdr": { "value": 17866.5, "asOf": "2026-10-14", "changePct": -1.35, "changeMonths": 3 },
+             "series": { "US_10Y": { "value": 5.21, "date": "2026-10-13", "released": "2026-10-14", "stale": false }, "...": {} },
+             "signals": { "fedPolicy": { "value": 3.88, "change6mPoints": 0.24, "state": "HIKING" },
+                          "usNetLiquidity": { "value": 5867.106, "change3mPct": -1.997, "direction": "SHRINKING" },
+                          "creditStress": { "value": 3.25, "percentile1y": 97.619, "change1mPoints": 0.54, "state": "STRESSED" },
+                          "...": {} },
+             "regimes": { "liquidity": { "state": "TIGHTENING", "score": -3.0, "signals": 6,
+                                         "components": [ { "signal": "fedPolicy", "vote": -1.0,
+                                                           "text": "Fed hiking rates (+0.24 points in 6 months)" }, "..." ] },
+                          "risk": { "state": "NEUTRAL", "score": -1.0, "signals": 6, "components": [ "..." ] } } },
   "risk": { "araCount60": 0, "arbCount60": 0, "missingSessions60": 0, "possiblySuspended": false,
             "specialMonitoringBoard": null, "suspended": null },
-  "notes": [ "No BI_RATE observations stored: macro.BI_RATE is null", "..." ]
+  "notes": [ "No earnings dates stored (the filings do not carry their publication date yet): events.lastEarnings is null", "..." ]
 }
 ```

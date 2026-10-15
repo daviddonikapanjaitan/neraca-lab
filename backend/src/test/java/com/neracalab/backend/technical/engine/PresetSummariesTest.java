@@ -161,6 +161,118 @@ class PresetSummariesTest {
         return (List<String>) out.get("caveats");
     }
 
+    /** A currency pair: 300 weekday bars without volume, rounded to {@code decimals}, ending on the IHSG fixture's day. */
+    private List<Candle> pair(double start, double factor, int decimals) {
+        List<Candle> bars = new ArrayList<>();
+        double scale = Math.pow(10, decimals);
+        LocalDate date = ihsg.getLast().date();
+        double close = start;
+        List<Candle> reversed = new ArrayList<>();
+        for (int i = 0; i < 300; i++) {
+            while (date.getDayOfWeek().getValue() > 5) {
+                date = date.minusDays(1);
+            }
+            double wiggle = (i % 6 < 3 ? 1.002 : 0.998);
+            double c = Math.round(close * wiggle * scale) / scale;
+            reversed.add(Candle.daily(date, c, c * 1.003, c * 0.997, c, c, 0));
+            close /= factor;
+            date = date.minusDays(1);
+        }
+        for (int i = reversed.size() - 1; i >= 0; i--) {
+            bars.add(reversed.get(i));
+        }
+        return bars;
+    }
+
+    /** Daily observations over 400 days to the IHSG fixture's last day, moving linearly from {@code from} to {@code to}. */
+    private List<MarketContext.Observation> line(double from, double to) {
+        List<MarketContext.Observation> obs = new ArrayList<>();
+        LocalDate end = ihsg.getLast().date();
+        for (int i = 0; i <= 400; i++) {
+            obs.add(new MarketContext.Observation(end.minusDays(400 - i), from + (to - from) * i / 400.0));
+        }
+        return obs;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aCurrencyPairIsReadThroughItsMacroDrivers() {
+        IdxTickSize thousandths = new IdxTickSize(List.of(new TechnicalProperties.TickBand(null, new BigDecimal("0.001"))));
+        Map<String, List<MarketContext.Observation>> macro = new LinkedHashMap<>();
+        macro.put("US_FED_FUNDS", line(3.6, 4.1));
+        macro.put("US_FED_ASSETS", line(7_000_000, 6_600_000));
+        macro.put("US_TGA", line(700_000, 900_000));
+        macro.put("US_RRP", line(100, 300));
+        macro.put("US_HY_SPREAD", line(3.0, 5.0));
+        macro.put("DXY", line(95, 105));
+        macro.put("US_10Y", line(3.0, 4.6));   // +0.37 points in 3 months
+        macro.put("US_2Y", line(3.6, 4.0));
+        MarketContext market = new MarketContext("IDX", ihsg.getLast().date(), "IHSG", ihsg, new LinkedHashMap<>(), macro);
+        List<Candle> bars = pair(150, 1.001, 3);
+        Map<String, Object> doc = new SnapshotCalculator(properties, thousandths)
+                .snapshot("FOREX", "USDJPY", "USD/JPY", null, "JPY", bars, List.of(), market);
+        Map<String, Object> out = PresetSummaries.summarize(new PresetSummaries.Input(doc,
+                IndicatorEngine.compute(bars, Interval.D), thousandths, "FOREX"));
+
+        assertThat(out.get("type")).isEqualTo("FOREX");
+        for (Map<String, Object> s : summaries(out)) {
+            assertConsistent(s, thousandths);
+        }
+        Map<String, Object> druck = of(out, "druckenmiller");
+        List<String> points = ((List<Map<String, Object>>) druck.get("points")).stream()
+                .map(p -> (String) p.get("text")).toList();
+        // USD/JPY: the US 10Y and the dollar drive it; no IHSG regime, no leadership among the stocks
+        assertThat(points).anyMatch(p -> p.startsWith("US 10Y yield up"));
+        assertThat(points).anyMatch(p -> p.startsWith("Dollar strengthening"));
+        assertThat(points).noneMatch(p -> p.contains("IHSG") || p.contains("percentile of the stored listings"));
+        assertThat((Double) druck.get("maxScore")).isEqualTo(3.0);
+        assertThat((String) druck.get("thesis")).contains("Druckenmiller trades USD/JPY");
+        // prices with the decimals of the tick, no volume caveat hidden
+        assertThat((String) druck.get("thesis")).containsPattern("\\d+\\.\\d{3}");
+        assertThat(caveats(out)).anyMatch(c -> c.startsWith("No traded volume for USD/JPY"));
+        // the risk regime reaches PTJ
+        List<String> ptj = ((List<Map<String, Object>>) of(out, "ptj").get("points")).stream()
+                .map(p -> (String) p.get("text")).toList();
+        assertThat(ptj).anyMatch(p -> p.startsWith("Macro risk"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void tighteningLiquidityLiftsUsdIdrAndWeighsOnGold() {
+        Map<String, List<MarketContext.Observation>> macro = new LinkedHashMap<>();
+        macro.put("US_FED_FUNDS", line(3.6, 4.1));
+        macro.put("US_FED_ASSETS", line(7_000_000, 6_600_000));
+        macro.put("US_TGA", line(700_000, 900_000));
+        macro.put("US_RRP", line(100, 300));
+        macro.put("US_HY_SPREAD", line(3.0, 5.0));
+        MarketContext market = new MarketContext("IDX", ihsg.getLast().date(), "IHSG", ihsg, new LinkedHashMap<>(), macro);
+        IdxTickSize ones = new IdxTickSize(List.of(new TechnicalProperties.TickBand(null, BigDecimal.ONE)));
+        List<Candle> idr = pair(16000, 1.0003, 0);
+        Map<String, Object> usdIdr = PresetSummaries.summarize(new PresetSummaries.Input(new SnapshotCalculator(properties, ones)
+                .snapshot("FOREX", "USDIDR", "USD/IDR", null, "IDR", idr, List.of(), market),
+                IndicatorEngine.compute(idr, Interval.D), ones, "FOREX"));
+        IdxTickSize tenths = new IdxTickSize(List.of(new TechnicalProperties.TickBand(null, new BigDecimal("0.1"))));
+        List<Candle> gold = pair(4000, 1.0003, 1);
+        Map<String, Object> goldOut = PresetSummaries.summarize(new PresetSummaries.Input(new SnapshotCalculator(properties, tenths)
+                .snapshot("COMMODITY", "GOLD", "Gold", null, "USD", gold, List.of(), market),
+                IndicatorEngine.compute(gold, Interval.D), tenths, "COMMODITY"));
+
+        Map<String, Object> idrPoint = ((List<Map<String, Object>>) of(usdIdr, "druckenmiller").get("points")).stream()
+                .filter(p -> ((String) p.get("text")).startsWith("Liquidity tightening")).findFirst().orElseThrow();
+        assertThat(idrPoint.get("tone")).isEqualTo("POSITIVE");
+        assertThat((String) idrPoint.get("text")).contains("supports USD/IDR").contains("Fed hiking");
+        Map<String, Object> goldPoint = ((List<Map<String, Object>>) of(goldOut, "druckenmiller").get("points")).stream()
+                .filter(p -> ((String) p.get("text")).startsWith("Liquidity tightening")).findFirst().orElseThrow();
+        assertThat(goldPoint.get("tone")).isEqualTo("NEGATIVE");
+        assertThat((String) goldPoint.get("text")).contains("weighs on Gold");
+        for (Map<String, Object> s : summaries(usdIdr)) {
+            assertConsistent(s, ones);
+        }
+        for (Map<String, Object> s : summaries(goldOut)) {
+            assertConsistent(s, tenths);
+        }
+    }
+
     @Test
     void anAcronymKeepsItsCase() {
         assertThat(PresetSummaries.lowerFirst("IHSG above its 200-day")).isEqualTo("IHSG above its 200-day");

@@ -3,7 +3,7 @@ import type { Metadata } from "next"
 import { AccessDenied } from "@/components/access-denied"
 import { ApiErrorState } from "@/components/api-error-state"
 import { TechnicalsPageClient } from "@/components/technical/technicals-page-client"
-import { ApiError, getExchanges, requireUser } from "@/lib/api"
+import { ApiError, getTechnicalMarkets, requireUser } from "@/lib/api"
 import { hasPermission, homePath } from "@/lib/permissions"
 import type { ChartSettings, IndicatorId, PresetId } from "@/lib/technical"
 
@@ -16,7 +16,8 @@ function first(value: string | string[] | undefined): string | undefined {
 }
 
 /**
- * Companies > Technicals: technical analysis charts of a listing. The chart settings come from the URL
+ * Companies > Technicals: technical analysis charts of a listing, the IHSG index, a currency pair (Forex) or a
+ * commodity (Commodities). The chart settings come from the URL
  * (?exchange=IDX&ticker=HRTA&interval=D&range=1Y&adjustment=split&preset=murphy&ind=sma50,sma200), else from the
  * user's saved settings; they are validated on the client.
  */
@@ -31,9 +32,9 @@ export default async function Page({
   }
 
   const params = await searchParams
-  let exchanges
+  let markets
   try {
-    exchanges = await getExchanges()
+    markets = await getTechnicalMarkets()
   } catch (error) {
     if (error instanceof ApiError) {
       return (
@@ -59,7 +60,7 @@ export default async function Page({
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-      <TechnicalsPageClient exchanges={exchanges} initial={initial} />
+      <TechnicalsPageClient markets={markets} initial={initial} />
     </div>
   )
 }

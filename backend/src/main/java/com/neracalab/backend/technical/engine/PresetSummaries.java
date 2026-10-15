@@ -14,7 +14,7 @@ import com.neracalab.backend.technical.idx.IdxTickSize;
  * A quick summary of the chart for each preset (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller): a stance, a buy
  * price, a sell price (target), a stop and the thesis, each derived by fixed rules from the indicator snapshot and the
  * daily indicators. Deterministic: no model is called, the same data always gives the same summary, and every price is
- * a valid IDX price (rounded to the tick of its band; an index to 0.01).
+ * a valid price (an IDX stock: the tick of its band; an index: 0.01; a Forex pair or commodity: its tick size).
  * <p>
  * The rules are the presets' published styles reduced to the indicators the page shows:
  * <ul>
@@ -25,18 +25,22 @@ import com.neracalab.backend.technical.idx.IdxTickSize;
  *       52-week range, the drawdown from the all-time high and buying vs selling volume; buy low in the base (or at the
  *       heaviest volume node), sell at the prior peak (52-week / all-time high), stop below the base.</li>
  *   <li><b>Paul Tudor Jones</b> - the 200-day rule and breakouts with strict risk: above the SMA 200, ADX with +DI /
- *       -DI, the 20 / 50-day channels; buy a break of the 20-day high, stop at the 20-day low or 2 ATR, target 5 times
- *       the risk.</li>
- *   <li><b>Druckenmiller</b> - liquidity and leadership: IHSG above its SMA 200, breadth, USD/IDR and the BI rate,
- *       relative strength vs IHSG and its percentile, 12-1 month momentum; buy the leader on a pullback (EMA 20, SMA
- *       50), sell at the prior high, stop below the SMA 50.</li>
+ *       -DI, the 20 / 50-day channels and the macro risk regime (VIX, credit, the US curve, the dollar, US inflation,
+ *       SBN yields); buy a break of the 20-day high, stop at the 20-day low or 2 ATR, target 5 times the risk.</li>
+ *   <li><b>Druckenmiller</b> - liquidity and leadership: IHSG above its SMA 200, breadth, the macro liquidity regime
+ *       (the Fed and BI direction, US net liquidity, credit, the dollar, the rupiah, foreign flows; without it USD/IDR
+ *       and the BI rate), relative strength vs IHSG and its percentile, 12-1 month momentum; buy the leader on a
+ *       pullback (EMA 20, SMA 50), sell at the prior high, stop below the SMA 50. A Forex pair or commodity is read
+ *       through its own macro drivers instead of IHSG and leadership (USD/IDR: the dollar, US yields, the BI - Fed
+ *       spread, foreign flows; gold: real yields, the dollar, positioning; oil, coal, palm oil: the dollar, risk,
+ *       China).</li>
  * </ul>
  * Every price keeps stop &lt; buy &lt; sell. A missing indicator (limited history, no IHSG) does not vote.
  */
 public final class PresetSummaries {
 
     /** Changes when a rule changes (summaries are computed on request, never stored). */
-    public static final String RULES_VERSION = "2026-10-15.1";
+    public static final String RULES_VERSION = "2026-10-16.1";
 
     public static final String DISCLAIMER = "Rules-based summary of the indicators, computed by Neraca Lab from stored "
             + "daily prices (no AI model). For information only. Not investment advice.";
@@ -44,10 +48,21 @@ public final class PresetSummaries {
     /**
      * @param snapshot the listing's IndicatorSnapshot document (docs/indicator-snapshot.md)
      * @param daily    the daily indicators of the same bars (channels, EMA 20)
-     * @param ticks    price rounding: the IDX tick table, or 0.01 for an index
-     * @param index    the listing is an index (IHSG): no relative strength vs itself, no liquidity caveats
+     * @param ticks    price rounding: the IDX tick table, 0.01 for an index, the instrument's tick size
+     * @param type     STOCK, INDEX (IHSG: no relative strength vs itself, no liquidity caveats), FOREX or COMMODITY
+     *                 (read through their macro drivers, no IHSG comparison)
      */
-    public record Input(Map<String, Object> snapshot, IndicatorSet daily, IdxTickSize ticks, boolean index) {
+    public record Input(Map<String, Object> snapshot, IndicatorSet daily, IdxTickSize ticks, String type) {
+
+        /** A stock, or the index ({@code index}). */
+        public Input(Map<String, Object> snapshot, IndicatorSet daily, IdxTickSize ticks, boolean index) {
+            this(snapshot, daily, ticks, index ? "INDEX" : "STOCK");
+        }
+
+        /** Not a stock: no relative strength vs IHSG, no IDX liquidity caveats. */
+        public boolean index() {
+            return !"STOCK".equals(type);
+        }
     }
 
     /**
@@ -81,7 +96,7 @@ public final class PresetSummaries {
         out.put("asOfDate", input.snapshot().get("asOfDate"));
         out.put("currency", input.snapshot().get("currency"));
         out.put("close", SnapshotCalculator.num(d.close));
-        out.put("type", input.index() ? "INDEX" : "STOCK");
+        out.put("type", input.type());
         out.put("method", "rules");
         out.put("rulesVersion", RULES_VERSION);
         List<Map<String, Object>> summaries = new ArrayList<>();
@@ -307,7 +322,20 @@ public final class PresetSummaries {
             s.vote(-0.5, "Volatility high (ATR in the " + Math.round(d.atrPercentile) + "th percentile of the year): "
                     + "trade smaller");
         }
-        s.maxScore = 4.5;
+        if (d.riskRegime != null) {
+            String why = d.regimeEvidence(d.riskComponents, d.riskRegime.equals("RISK_OFF") ? -1 : 1);
+            switch (d.riskRegime) {
+                case "RISK_OFF" -> s.vote(-1, "Macro risk-off (score " + signed(d.riskScore) + " of " + d.riskSignals
+                        + " signals" + why + "): play defense");
+                case "RISK_ON" -> s.vote(0.5, "Macro risk-on (score " + signed(d.riskScore) + " of " + d.riskSignals
+                        + " signals" + why + ")");
+                default -> s.info("Macro risk regime neutral (score " + signed(d.riskScore) + " of " + d.riskSignals
+                        + " signals)");
+            }
+        } else {
+            s.info("No macro risk regime: fewer than 3 macro signals (run the macro ingestion on Ingestion > Macro)");
+        }
+        s.maxScore = 5;
         if (!above) {
             s.stance = "AVOID";
         } else if (trending && upDi) {
@@ -351,36 +379,61 @@ public final class PresetSummaries {
     }
 
     static Summary druckenmiller(Data d) {
-        Summary s = new Summary("druckenmiller", "Druckenmiller", "Liquidity and leadership: own the strongest stocks "
-                + "when liquidity supports the market, concentrate in the leaders, get out when the thesis breaks");
-        if (d.indexAbove != null) {
-            s.vote(d.indexAbove ? 1 : -1, "IHSG " + (d.indexAbove ? "above" : "below") + " its 200-day average ("
-                    + pct(d.indexVs200) + "): liquidity " + (d.indexAbove ? "supportive" : "draining"));
-        } else {
-            s.info("No IHSG regime: run the IHSG ingestion");
-        }
-        if (ok(d.breadth)) {
-            if (d.breadth >= 55) {
-                s.vote(0.5, "Breadth: " + num1(d.breadth) + "% of the stored listings above their SMA 200: broad participation");
-            } else if (d.breadth <= 45) {
-                s.vote(-0.5, "Breadth: only " + num1(d.breadth) + "% of the stored listings above their SMA 200: a narrow market");
+        Summary s = new Summary("druckenmiller", "Druckenmiller", d.instrument
+                ? "Liquidity and the macro drivers: take the side the liquidity and the drivers of " + d.name
+                + " favour, size up when momentum agrees, get out when the thesis breaks"
+                : "Liquidity and leadership: own the strongest stocks when liquidity supports the market, concentrate in "
+                + "the leaders, get out when the thesis breaks");
+        if (!d.instrument) {
+            if (d.indexAbove != null) {
+                s.vote(d.indexAbove ? 1 : -1, "IHSG " + (d.indexAbove ? "above" : "below") + " its 200-day average ("
+                        + pct(d.indexVs200) + "): liquidity " + (d.indexAbove ? "supportive" : "draining"));
             } else {
-                s.info("Breadth: " + num1(d.breadth) + "% of the stored listings above their SMA 200");
+                s.info("No IHSG regime: run the IHSG ingestion");
+            }
+            if (ok(d.breadth)) {
+                if (d.breadth >= 55) {
+                    s.vote(0.5, "Breadth: " + num1(d.breadth) + "% of the stored listings above their SMA 200: broad participation");
+                } else if (d.breadth <= 45) {
+                    s.vote(-0.5, "Breadth: only " + num1(d.breadth) + "% of the stored listings above their SMA 200: a narrow market");
+                } else {
+                    s.info("Breadth: " + num1(d.breadth) + "% of the stored listings above their SMA 200");
+                }
             }
         }
-        if (ok(d.usdIdrChange)) {
-            if (d.usdIdrChange >= 2) {
-                s.vote(-0.5, "Rupiah weakened " + num1(d.usdIdrChange) + "% vs USD in 3 months: tighter liquidity");
-            } else if (d.usdIdrChange <= -1) {
-                s.vote(0.5, "Rupiah strengthened " + num1(-d.usdIdrChange) + "% vs USD in 3 months: easier liquidity");
+        double liquiditySign = d.instrument ? liquiditySign(d.ticker) : 1;
+        if (d.liquidityRegime != null && liquiditySign != 0) {
+            double w = d.liquidityRegime.equals("EASING") ? liquiditySign : d.liquidityRegime.equals("TIGHTENING")
+                    ? -liquiditySign : 0;
+            String regime = "Liquidity " + d.liquidityRegime.toLowerCase(Locale.ROOT) + " (score " + signed(d.liquidityScore)
+                    + " of " + d.liquiditySignals + " macro signals"
+                    + d.regimeEvidence(d.liquidityComponents, d.liquidityRegime.equals("TIGHTENING") ? -1 : 1) + ")";
+            if (w == 0) {
+                s.info(regime);
             } else {
-                s.info("USD/IDR " + pct(d.usdIdrChange) + " in 3 months: stable");
+                s.vote(w, regime + (d.instrument ? (w > 0 ? ": supports " : ": weighs on ") + d.name
+                        : w > 0 ? ": supportive" : ": draining"));
             }
+        } else if (!d.instrument) {
+            // no regime (fewer than 3 macro signals): the rupiah and the BI rate alone, as before the macro ingestion
+            if (ok(d.usdIdrChange)) {
+                if (d.usdIdrChange >= 2) {
+                    s.vote(-0.5, "Rupiah weakened " + num1(d.usdIdrChange) + "% vs USD in 3 months: tighter liquidity");
+                } else if (d.usdIdrChange <= -1) {
+                    s.vote(0.5, "Rupiah strengthened " + num1(-d.usdIdrChange) + "% vs USD in 3 months: easier liquidity");
+                } else {
+                    s.info("USD/IDR " + pct(d.usdIdrChange) + " in 3 months: stable");
+                }
+            }
+            if (ok(d.biRateChange) && d.biRateChange != 0) {
+                s.vote(d.biRateChange < 0 ? 0.5 : -0.5, "BI rate " + (d.biRateChange < 0 ? "cut" : "raised") + " by "
+                        + num2(Math.abs(d.biRateChange)) + " points in 6 months");
+            }
+            s.info("No macro liquidity regime: fewer than 3 macro signals (run the macro ingestion on Ingestion > Macro)");
+        } else if (liquiditySign != 0) {
+            s.info("No macro liquidity regime: fewer than 3 macro signals (run the macro ingestion on Ingestion > Macro)");
         }
-        if (ok(d.biRateChange) && d.biRateChange != 0) {
-            s.vote(d.biRateChange < 0 ? 0.5 : -0.5, "BI rate " + (d.biRateChange < 0 ? "cut" : "raised") + " by "
-                    + num2(Math.abs(d.biRateChange)) + " points in 6 months");
-        }
+        double driversMax = d.instrument ? drivers(s, d) : 0;
         if (!d.index) {
             if (ok(d.pct6)) {
                 if (d.pct6 >= 70) {
@@ -408,20 +461,30 @@ public final class PresetSummaries {
             s.vote(d.close > d.sma50 ? 0.5 : -0.5, (d.close > d.sma50 ? "Above" : "Below") + " the SMA 50 ("
                     + d.fmt(d.sma50) + ")");
         }
-        s.maxScore = d.index ? 3.5 : 6;
+        s.maxScore = d.instrument ? (liquiditySign != 0 ? 1 : 0) + driversMax + 1 : d.index ? 3.5 : 6;
         s.stance = s.score >= 3 ? "BUY" : s.score >= 1 ? "ACCUMULATE" : s.score >= -1 ? "WAIT" : "AVOID";
-        s.label = switch (s.stance) {
-            case "BUY" -> d.index ? "Risk on: liquidity and momentum support the market" : "Own the leader: relative "
-                    + "strength with liquidity behind it";
-            case "ACCUMULATE" -> d.index ? "Lean long: the backdrop is mixed" : "A leader in a mixed market: build gradually";
-            case "WAIT" -> d.index ? "Neutral: wait for liquidity to turn" : "Wait: leadership or liquidity is missing";
-            default -> d.index ? "Risk off: liquidity is draining" : "Avoid: a laggard, or liquidity is draining";
-        };
+        if (d.instrument) {
+            s.label = switch (s.stance) {
+                case "BUY" -> "Macro tailwind: liquidity, the drivers and momentum favour " + d.name + " higher";
+                case "ACCUMULATE" -> "Lean long " + d.name + ": the drivers are mixed";
+                case "WAIT" -> "Neutral: wait for the macro drivers of " + d.name + " to line up";
+                default -> "Macro headwind: the drivers point to " + d.name + " lower";
+            };
+        } else {
+            s.label = switch (s.stance) {
+                case "BUY" -> d.index ? "Risk on: liquidity and momentum support the market" : "Own the leader: relative "
+                        + "strength with liquidity behind it";
+                case "ACCUMULATE" -> d.index ? "Lean long: the backdrop is mixed" : "A leader in a mixed market: build gradually";
+                case "WAIT" -> d.index ? "Neutral: wait for liquidity to turn" : "Wait: leadership or liquidity is missing";
+                default -> d.index ? "Risk off: liquidity is draining" : "Avoid: a laggard, or liquidity is draining";
+            };
+        }
 
         Level buy;
         String buyType = "LIMIT";
         if ((s.stance.equals("WAIT") || s.stance.equals("AVOID")) && ok(d.sma50) && d.close < d.sma50) {
-            buy = new Level(d.above(d.sma50), d.index ? "a buy-stop above the SMA 50: only once the index reclaims it"
+            buy = new Level(d.above(d.sma50), d.instrument ? "a buy-stop above the SMA 50: only once the price reclaims it"
+                    : d.index ? "a buy-stop above the SMA 50: only once the index reclaims it"
                     : "a buy-stop above the SMA 50: only once it reclaims it and leads IHSG again");
             buyType = "STOP";
         } else {
@@ -448,9 +511,149 @@ public final class PresetSummaries {
                 ? new Level(d.floor(d.sma50 - d.atrOr(0)), "1 ATR below the SMA 50")
                 : buy.stop(d, 2);
         s.prices(d, buy, buyType, sell, stop, 3);
-        s.thesis = thesis(s, d, d.index ? "Druckenmiller reads the market through liquidity; "
+        s.thesis = thesis(s, d, d.instrument ? "Druckenmiller trades " + d.name + " on liquidity and its macro drivers; "
+                : d.index ? "Druckenmiller reads the market through liquidity; "
                 : "Druckenmiller owns leaders while liquidity lasts; ");
         return s;
+    }
+
+    /**
+     * How the liquidity regime moves an instrument: +1 when easier liquidity lifts it (gold, commodities), -1 when it
+     * lowers it (USD/IDR: easier liquidity strengthens the rupiah), 0 when it has no clear effect (USD/JPY).
+     */
+    static double liquiditySign(String code) {
+        return switch (code) {
+            case "USDIDR" -> -1;
+            case "USDJPY" -> 0;
+            default -> 1;
+        };
+    }
+
+    /**
+     * The macro drivers of a Forex pair or commodity, voted into {@code s}.
+     *
+     * @return the largest score the drivers can add (for the max score)
+     */
+    static double drivers(Summary s, Data d) {
+        double max = 0;
+        switch (d.ticker) {
+            case "USDIDR" -> {
+                max += dollarVote(s, d, 1, "supports USD/IDR", "weighs on USD/IDR");
+                max += 0.5;
+                if (ok(d.us10yChange)) {
+                    if (d.us10yChange >= 0.25) {
+                        s.vote(0.5, "US 10Y yield up " + num2(d.us10yChange) + " points in 3 months: draws money to the dollar");
+                    } else if (d.us10yChange <= -0.25) {
+                        s.vote(-0.5, "US 10Y yield down " + num2(-d.us10yChange) + " points in 3 months: eases the pressure on the rupiah");
+                    } else {
+                        s.info("US 10Y yield " + signed(d.us10yChange) + " points in 3 months");
+                    }
+                }
+                max += 0.5;
+                if (ok(d.biChange) && ok(d.fedChange)) {
+                    double spread = d.biChange - d.fedChange;
+                    if (spread <= -0.25) {
+                        s.vote(0.5, "The BI - Fed rate gap narrowed by " + num2(-spread) + " points in 6 months: less carry for the rupiah");
+                    } else if (spread >= 0.25) {
+                        s.vote(-0.5, "The BI - Fed rate gap widened by " + num2(spread) + " points in 6 months: more carry for the rupiah");
+                    } else {
+                        s.info("The BI - Fed rate gap is unchanged over 6 months");
+                    }
+                }
+                max += 0.5;
+                if ("OUTFLOW".equals(d.flowsState)) {
+                    s.vote(0.5, "Foreigners net sellers on IDX (20 sessions): pressure on the rupiah");
+                } else if ("INFLOW".equals(d.flowsState)) {
+                    s.vote(-0.5, "Foreigners net buyers on IDX (20 sessions): support for the rupiah");
+                }
+            }
+            case "USDJPY" -> {
+                max += 1;
+                if (ok(d.us10yChange)) {
+                    if (d.us10yChange >= 0.25) {
+                        s.vote(1, "US 10Y yield up " + num2(d.us10yChange) + " points in 3 months: the yield gap favours the dollar");
+                    } else if (d.us10yChange <= -0.25) {
+                        s.vote(-1, "US 10Y yield down " + num2(-d.us10yChange) + " points in 3 months: the yield gap narrows");
+                    } else {
+                        s.info("US 10Y yield " + signed(d.us10yChange) + " points in 3 months");
+                    }
+                }
+                max += dollarVote(s, d, 0.5, "supports USD/JPY", "weighs on USD/JPY");
+                max += riskVote(s, d, 0.5, "risk-on: the yen (a haven) weakens", "risk-off: the yen (a haven) strengthens");
+            }
+            case "GOLD" -> {
+                max += 1;
+                if (ok(d.realYieldChange)) {
+                    if (d.realYieldChange <= -0.15) {
+                        s.vote(1, "US real yield down " + num2(-d.realYieldChange) + " points in 3 months: gold's cost of carry falls");
+                    } else if (d.realYieldChange >= 0.15) {
+                        s.vote(-1, "US real yield up " + num2(d.realYieldChange) + " points in 3 months: a headwind for gold");
+                    } else {
+                        s.info("US real yield " + signed(d.realYieldChange) + " points in 3 months");
+                    }
+                }
+                max += dollarVote(s, d, -0.5, "supports gold", "weighs on gold");
+                max += crowdingVote(s, d.cotGold, "gold");
+            }
+            default -> {
+                if (d.type.equals("FOREX")) {
+                    // another pair against the dollar: the dollar's trend
+                    if (d.ticker.startsWith("USD")) {
+                        max += dollarVote(s, d, 1, "supports " + d.name, "weighs on " + d.name);
+                    }
+                } else {
+                    max += dollarVote(s, d, -0.5, "supports " + d.name + " (priced in dollars)",
+                            "weighs on " + d.name + " (priced in dollars)");
+                    max += riskVote(s, d, 0.5, "risk-on: demand for raw materials", "risk-off: demand fears");
+                    if (d.ticker.equals("BRENT")) {
+                        max += crowdingVote(s, d.cotCrude, "crude oil");
+                    }
+                    max += 0.5;
+                    if ("EXPANSION".equals(d.chinaState)) {
+                        s.vote(0.5, "China manufacturing PMI " + num1(d.chinaPmi) + ": expanding demand");
+                    } else if ("CONTRACTION".equals(d.chinaState)) {
+                        s.vote(-0.5, "China manufacturing PMI " + num1(d.chinaPmi) + ": contracting demand");
+                    }
+                }
+            }
+        }
+        return max;
+    }
+
+    /** The dollar's 3-month trend; {@code weight} > 0 when a stronger dollar lifts the instrument. */
+    private static double dollarVote(Summary s, Data d, double weight, String up, String down) {
+        if (d.dxyTrend == null) {
+            return Math.abs(weight);
+        }
+        String change = " (DXY " + pct(d.dxyChange) + " in 3 months)";
+        if (d.dxyTrend.equals("STRENGTHENING")) {
+            s.vote(weight, "Dollar strengthening" + change + ": " + (weight > 0 ? up : down));
+        } else if (d.dxyTrend.equals("WEAKENING")) {
+            s.vote(-weight, "Dollar weakening" + change + ": " + (weight > 0 ? down : up));
+        } else {
+            s.info("Dollar stable" + change);
+        }
+        return Math.abs(weight);
+    }
+
+    /** The macro risk regime; {@code weight} > 0 when risk-on lifts the instrument. */
+    private static double riskVote(Summary s, Data d, double weight, String on, String off) {
+        if ("RISK_ON".equals(d.riskRegime)) {
+            s.vote(weight, "Macro " + on);
+        } else if ("RISK_OFF".equals(d.riskRegime)) {
+            s.vote(-weight, "Macro " + off);
+        }
+        return Math.abs(weight);
+    }
+
+    /** Speculators' positioning (CFTC): crowded long is a risk, crowded short fuel for a rise. */
+    private static double crowdingVote(Summary s, String state, String what) {
+        if ("CROWDED_LONG".equals(state)) {
+            s.vote(-0.5, "Speculators crowded long " + what + " (90th percentile of 3 years): a risk of a shake-out");
+        } else if ("CROWDED_SHORT".equals(state)) {
+            s.vote(0.5, "Speculators crowded short " + what + " (10th percentile of 3 years): fuel for a rise");
+        }
+        return 0.5;
     }
 
     private static String trendWord(Data d) {
@@ -605,7 +808,14 @@ public final class PresetSummaries {
 
     /** The values the rules read, from the snapshot (NaN / null when missing). */
     static final class Data {
+        /** not a stock (an index or an instrument) */
         final boolean index;
+        /** a Forex pair or commodity */
+        final boolean instrument;
+        /** STOCK, INDEX, FOREX or COMMODITY */
+        final String type;
+        final String ticker;
+        final String name;
         final IdxTickSize ticks;
         final double close;
         final double atr;
@@ -645,6 +855,25 @@ public final class PresetSummaries {
         final double breadth;
         final double usdIdrChange;
         final double biRateChange;
+        final String liquidityRegime;
+        final double liquidityScore;
+        final int liquiditySignals;
+        final List<Map<String, Object>> liquidityComponents;
+        final String riskRegime;
+        final double riskScore;
+        final int riskSignals;
+        final List<Map<String, Object>> riskComponents;
+        final String dxyTrend;
+        final double dxyChange;
+        final double us10yChange;
+        final double biChange;
+        final double fedChange;
+        final String flowsState;
+        final double realYieldChange;
+        final String cotGold;
+        final String cotCrude;
+        final String chinaState;
+        final double chinaPmi;
         final double prior20High;
         final double prior20Low;
         final double prior50High;
@@ -658,6 +887,10 @@ public final class PresetSummaries {
         Data(Input in) {
             this.doc = in.snapshot();
             this.index = in.index();
+            this.type = in.type();
+            this.instrument = "FOREX".equals(in.type()) || "COMMODITY".equals(in.type());
+            this.ticker = String.valueOf(doc.get("ticker"));
+            this.name = doc.get("companyName") == null ? ticker : String.valueOf(doc.get("companyName"));
             this.ticks = in.ticks();
             close = d("price.close");
             atr = d("volatility.atr14");
@@ -697,6 +930,25 @@ public final class PresetSummaries {
             breadth = d("marketRegime.breadthAbove200Pct");
             usdIdrChange = d("macro.usdIdr.changePct");
             biRateChange = d("macro.biRate.changePoints");
+            liquidityRegime = (String) get("macro.regimes.liquidity.state");
+            liquidityScore = d("macro.regimes.liquidity.score");
+            liquiditySignals = (int) orZero(d("macro.regimes.liquidity.signals"));
+            liquidityComponents = list("macro.regimes.liquidity.components");
+            riskRegime = (String) get("macro.regimes.risk.state");
+            riskScore = d("macro.regimes.risk.score");
+            riskSignals = (int) orZero(d("macro.regimes.risk.signals"));
+            riskComponents = list("macro.regimes.risk.components");
+            dxyTrend = (String) get("macro.signals.dollar.dxyTrend");
+            dxyChange = d("macro.signals.dollar.dxyChange3mPct");
+            us10yChange = d("macro.signals.usCurve.us10yChange3mPoints");
+            biChange = d("macro.signals.biPolicy.change6mPoints");
+            fedChange = d("macro.signals.fedPolicy.change6mPoints");
+            flowsState = (String) get("macro.signals.foreignFlows.idxState");
+            realYieldChange = d("macro.signals.inflation.usRealYieldChange3mPoints");
+            cotGold = (String) get("macro.signals.positioning.gold.state");
+            cotCrude = (String) get("macro.signals.positioning.crude.state");
+            chinaState = (String) get("macro.signals.china.state");
+            chinaPmi = d("macro.signals.china.pmi");
             IndicatorSet ind = in.daily();
             prior20High = ind == null ? Double.NaN : ind.ago("channel20.high", 1);
             prior20Low = ind == null ? Double.NaN : ind.ago("channel20.low", 1);
@@ -730,6 +982,23 @@ public final class PresetSummaries {
 
         double d(String path) {
             return get(path) instanceof Number n ? n.doubleValue() : Double.NaN;
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> list(String path) {
+            return get(path) instanceof List<?> l ? (List<Map<String, Object>>) l : List.of();
+        }
+
+        /** ": Fed cutting rates, dollar weakening" - the regime components that voted in {@code direction} (at most 3). */
+        String regimeEvidence(List<Map<String, Object>> components, int direction) {
+            List<String> texts = new ArrayList<>();
+            for (Map<String, Object> c : components) {
+                double vote = num(c.get("vote"));
+                if (ok(vote) && Math.signum(vote) == direction && texts.size() < 3) {
+                    texts.add(String.valueOf(c.get("text")));   // "Fed hiking", "US net liquidity": names keep their case
+                }
+            }
+            return texts.isEmpty() ? "" : ": " + String.join(", ", texts);
         }
 
         List<Level> supportZonesBelow() {
@@ -874,12 +1143,16 @@ public final class PresetSummaries {
             return p > price ? p : ticks.ceil(p + ticks.tick(p) / 2);
         }
 
+        /** A price with the decimals of its tick (an IDX price in whole rupiah, an index with 2, USD/JPY with 3). */
         String fmt(double price) {
             if (!ok(price)) {
                 return "n/a";
             }
-            return index || ticks.tick(price) < 1 ? String.format(Locale.US, "%,.2f", price)
-                    : String.format(Locale.US, "%,.0f", price);
+            int decimals = Math.max(0, java.math.BigDecimal.valueOf(ticks.tick(price)).stripTrailingZeros().scale());
+            if (index && !instrument) {
+                decimals = Math.max(decimals, 2);
+            }
+            return String.format(Locale.US, "%,." + decimals + "f", price);
         }
 
         List<String> caveats() {
@@ -890,6 +1163,10 @@ public final class PresetSummaries {
             }
             if (!ok(atr)) {
                 out.add("Fewer than 15 trading days: no ATR, so no prices are given.");
+            }
+            if (instrument && orZero(d("volume.avgVolume20")) == 0) {
+                out.add("No traded volume for " + name + " (an over-the-counter market): the volume evidence (OBV, "
+                        + "volume profile, up / down volume) is skipped.");
             }
             if (!index) {
                 double value = d("risk.avgValueTraded20");
@@ -938,6 +1215,14 @@ public final class PresetSummaries {
 
     private static String pct(double v) {
         return (v > 0 ? "+" : "") + String.format(Locale.US, "%.1f", v) + "%";
+    }
+
+    /** "+3", "-1.5", "0" */
+    private static String signed(double v) {
+        if (!ok(v)) {
+            return "n/a";
+        }
+        return (v > 0 ? "+" : "") + trim(v);
     }
 
     private static String num1(double v) {

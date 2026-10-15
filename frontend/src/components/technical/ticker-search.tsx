@@ -14,11 +14,16 @@ export function TickerSearch({
   exchange,
   value,
   onSelect,
+  itemLabel = "Ticker",
 }: {
   exchange: string
   value: string | null
   onSelect: (ticker: TickerInfo) => void
+  /** what the market's entries are called: Ticker (an exchange), Currency, Commodity */
+  itemLabel?: string
 }) {
+  const market = itemLabel !== "Ticker"
+  const prompt = market ? `Search ${itemLabel.toLowerCase()}` : "Search ticker, company or IHSG"
   const [text, setText] = useState("")
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
@@ -67,8 +72,8 @@ export function TickerSearch({
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
-        aria-label="Search ticker, company or IHSG"
-        placeholder={value ? `${value} · search another ticker` : "Search ticker, company or IHSG"}
+        aria-label={prompt}
+        placeholder={value ? `${value} · search another ${market ? itemLabel.toLowerCase() : "ticker"}` : prompt}
         className="pl-8"
         value={text}
         onFocus={() => setOpen(true)}
@@ -104,7 +109,9 @@ export function TickerSearch({
         >
           {results.isError && <li className="px-2 py-1.5 text-sm text-destructive">{results.error.message}</li>}
           {!results.isError && items.length === 0 && !results.isFetching && (
-            <li className="px-2 py-1.5 text-sm text-muted-foreground">No company or index found</li>
+            <li className="px-2 py-1.5 text-sm text-muted-foreground">
+              {market ? `No ${itemLabel.toLowerCase()} found` : "No company or index found"}
+            </li>
           )}
           {items.map((item, i) => (
             <li
@@ -130,6 +137,12 @@ export function TickerSearch({
                   ? item.tradingDays === 0
                     ? "index · no bars"
                     : "index"
+                  : item.type === "FOREX" || item.type === "COMMODITY"
+                    ? item.tradingDays === 0
+                      ? "no prices"
+                      : item.frequency === "MONTHLY"
+                        ? "monthly"
+                        : (item.unit ?? "")
                   : item.tradingDays === 0
                     ? "no prices"
                     : item.limitedHistory

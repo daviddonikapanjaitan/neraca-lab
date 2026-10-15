@@ -1,7 +1,7 @@
 "use client"
 
 import { Checkbox } from "@/components/ui/checkbox"
-import { INDICATOR_GROUPS, INDICATORS, NOT_FOR_INDEX, type IndicatorId } from "@/lib/technical"
+import { INDICATOR_GROUPS, INDICATORS, NOT_FOR_INDEX, NOT_FOR_MONTHLY, type IndicatorId } from "@/lib/technical"
 
 const LABELS = new Map(INDICATORS.map((i) => [i.id, i.label]))
 
@@ -11,21 +11,25 @@ export function IndicatorPicker({
   onToggle,
   levelsDisabled,
   index = false,
+  monthly = false,
 }: {
   selected: IndicatorId[]
   onToggle: (id: IndicatorId, on: boolean) => void
   /** levels are tradable prices: not drawn on the total-return basis */
   levelsDisabled: boolean
-  /** the chart shows the index (IHSG): no comparison with itself, no events, no auto-rejection */
+  /** the chart shows the index (IHSG), a currency pair or a commodity: no comparison with IHSG, no events, no auto-rejection */
   index?: boolean
+  /** a monthly series (coal): no levels or volume profile either */
+  monthly?: boolean
 }) {
+  const unavailable = monthly ? NOT_FOR_MONTHLY : index ? NOT_FOR_INDEX : []
   return (
     <div className="space-y-4">
       {INDICATOR_GROUPS.map((group) => (
         <fieldset key={group.title} className="space-y-1.5">
           <legend className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{group.title}</legend>
           {group.ids.map((id) => {
-            const disabled = (levelsDisabled && group.title === "Levels") || (index && NOT_FOR_INDEX.includes(id))
+            const disabled = (levelsDisabled && group.title === "Levels") || unavailable.includes(id)
             const inputId = `indicator-${id}`
             return (
               <label key={id} htmlFor={inputId} className="flex cursor-pointer items-center gap-2 text-sm has-disabled:cursor-not-allowed has-disabled:opacity-50">
@@ -42,8 +46,13 @@ export function IndicatorPicker({
           {levelsDisabled && group.title === "Levels" && (
             <p className="text-xs text-muted-foreground">Levels are tradable prices: shown on split-adjusted prices only.</p>
           )}
-          {index && group.ids.some((id) => NOT_FOR_INDEX.includes(id)) && (
-            <p className="text-xs text-muted-foreground">An index has no events or auto-rejection and is not compared with itself.</p>
+          {monthly && group.title === "Levels" && (
+            <p className="text-xs text-muted-foreground">A monthly series has no levels: they need daily bars.</p>
+          )}
+          {index && group.title === "Markers & comparison" && (
+            <p className="text-xs text-muted-foreground">
+              An index, a currency pair or a commodity has no events or auto-rejection and is not compared with IHSG.
+            </p>
           )}
         </fieldset>
       ))}

@@ -16,5 +16,7 @@ public enum IngestionJobType {
     /** news of a company within a date range into the RAG vector store */
     RAG_NEWS,
     /** AI analysis of one stock: research agent over its stored documents, investor agents, synthesis, report */
-    ANALYSIS
+    ANALYSIS,
+    /** one macro series (BI rate, US 10Y, Fed assets, ...) from its source into macro_series (technical analysis) */
+    MACRO
 }

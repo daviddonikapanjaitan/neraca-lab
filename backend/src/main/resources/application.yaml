@@ -53,6 +53,7 @@ spring:
         - classpath:db/V1.0.19__schema_ingestion_cost.sql      # model cost of the .xlsx ingestion (llm_usage.job_id)
         - classpath:db/V1.0.20__schema_screening_currency.sql  # currency of the screening fundamentals (USD reporters)
         - classpath:db/V1.0.23__schema_technical.sql           # technical analysis: index, events, macro, snapshots, chart settings
+        - classpath:db/V1.0.25__schema_markets_macro.sql       # Forex / commodity bars, macro series catalog and release dates
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -62,6 +63,7 @@ spring:
         - classpath:db/V1.0.22__data_TUGU_shares.sql      # the 1:2 split of 2023-05-24 no filing restates
         - classpath:db/V1.0.24__data_BACH_shares.sql      # share count after the IPO of 2026-07-08
         - classpath:db/V1.0.6__data_metrics_valuation.sql
+        - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
   jpa:
     hibernate:
@@ -133,6 +135,30 @@ neracalab:
       cron: "0 30 17 * * MON-FRI"
       zone: Asia/Jakarta
       exchange: IDX
+
+  # Forex pairs and commodities (Price Ingestion with the market Forex / Commodities, /api/v1/markets; charted on
+  # Technicals). The catalog is market_instrument (V1.0.26__data_markets_macro.sql): USD/IDR, USD/JPY, Brent, gold and
+  # palm oil from Yahoo Finance through the price queue; coal monthly from the World Bank Pink Sheet.
+  markets:
+    world-bank:
+      page-url: https://www.worldbank.org/en/research/commodity-markets   # links the current CMO-Historical-Data-Monthly.xlsx
+      file-url: ${WORLD_BANK_PINK_SHEET_URL:}                             # the workbook itself; empty = the link on page-url
+
+  # Macro data of the Druckenmiller and Paul Tudor Jones views (Ingestion > Macro, /api/v1/macro; macro.md). The catalog
+  # is macro_series_def (V1.0.26__data_markets_macro.sql): FRED, Bank Indonesia (indicator pages and SEKI tables), CNBC
+  # (SBN 10Y), CFTC (positioning), Yahoo Finance (DXY); the series without a readable source take a CSV upload.
+  macro:
+    overlap-days: 45                    # an update re-reads the last 45 days, so revisions are picked up
+    schedule:
+      enabled: ${MACRO_SCHEDULE_ENABLED:false}   # evening run: every series whose next release is due
+      cron: "0 0 20 * * *"
+      zone: Asia/Jakarta
+
+  # The polite HTTP client of the crawlers (the macro sources and the World Bank): one request per host at a time and
+  # min-delay between two, a User-Agent that names the application, no retries around a refusal.
+  crawl:
+    min-delay: 2s
+    request-timeout: 90s
 
   # Technical analysis (Companies > Technicals, /api/v1/technical); docs/v1_docs/TECHNICAL_DOCS.md. No model is called:
   # every value is computed in Java. The snapshot JSON is documented in docs/indicator-snapshot.md.

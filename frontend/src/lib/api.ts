@@ -18,8 +18,11 @@ import type {
   IngestionJobList,
   IngestionJobType,
   PermissionInfo,
+  MacroStatus,
+  MarketStatus,
   PriceQueue,
   PriceStatus,
+  TechnicalMarket,
   RagDocumentPage,
   RagStatus,
   RagSourceType,
@@ -138,6 +141,15 @@ export const getIngestions = cache((type: IngestionJobType, limit: number) =>
 
 /** GET /api/v1/prices/ingestions (the configured price provider and the queue length) */
 export const getPriceQueue = cache(() => get<PriceQueue>("/api/v1/prices/ingestions"))
+
+/** GET /api/v1/markets (the Forex pairs and commodities and how far their bars reach) */
+export const getMarkets = cache(() => get<MarketStatus[]>("/api/v1/markets"))
+
+/** GET /api/v1/macro/series (every macro series and its state) */
+export const getMacroStatus = cache(() => get<MacroStatus>("/api/v1/macro/series"))
+
+/** GET /api/v1/technical/markets (the exchanges and markets of the Technicals page) */
+export const getTechnicalMarkets = cache(() => get<TechnicalMarket[]>("/api/v1/technical/markets"))
 
 /** GET /api/v1/prices/status?exchange= (how far the stored prices and the index reach) */
 export const getPriceStatus = cache((exchange: string) =>
