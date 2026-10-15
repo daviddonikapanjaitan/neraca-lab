@@ -157,7 +157,8 @@ public class ValuationRepository {
                                 f.free_cash_flow_ttm                             AS fcf_ttm,
                                 f.shareholders_equity                            AS book_value
                             FROM valuation_dates d
-                            -- fundamentals: latest period on or before the date with TTM revenue and a balance sheet
+                            -- fundamentals: latest period on or before the date with TTM revenue and a balance
+                            -- sheet; without any (newly listed company) the latest balance sheet: no TTM figures
                             JOIN LATERAL (
                                 SELECT t.period_id, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
                                        t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
@@ -166,9 +167,8 @@ public class ValuationRepository {
                                 JOIN v_key_metrics km ON km.period_id = t.period_id
                                 WHERE t.company_id = d.company_id
                                   AND t.period_end <= d.valuation_date
-                                  AND t.revenue_ttm IS NOT NULL
                                   AND km.total_assets IS NOT NULL
-                                ORDER BY t.period_end DESC
+                                ORDER BY t.revenue_ttm IS NULL, t.period_end DESC
                                 LIMIT 1
                             ) f ON TRUE
                             -- price: last close on or before the date

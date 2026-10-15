@@ -1532,11 +1532,12 @@ public final class FilingMapper {
         List<Check> checks = new ArrayList<>();
         BigDecimal change = req(c, "Total net increase (decrease) in cash and cash equivalents", ctx, checks);
         BigDecimal[] totals = sectionTotals(c, ctx, change, checks);
+        BigDecimal beginning = amount(c.value(CASH_BEGINNING, ctx));
+        BigDecimal ending = req(c, CASH_END, ctx, checks);
+        correctSectionTotal(c, ctx, totals, change, beginning, ending, checks);
         BigDecimal operating = totals[0];
         BigDecimal investing = totals[1];
         BigDecimal financing = totals[2];
-        BigDecimal beginning = amount(c.value(CASH_BEGINNING, ctx));
-        BigDecimal ending = req(c, CASH_END, ctx, checks);
         if (operating != null && investing != null && financing != null && change != null) {
             checks.add(equal("net_change", "operating + investing + financing = net change in cash",
                     operating.add(investing).add(financing), change));
@@ -1560,13 +1561,18 @@ public final class FilingMapper {
             checks.add(equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
                     beginning.add(change).add(other).add(deconsolidated), ending));
         }
+        // lines a section shows twice (dropped once from its sum): not counted in the fields either
+        Set<String> repeated = new java.util.HashSet<>();
         if (investing != null) {
             checks.addAll(section(c, ctx, "Cash flows from investing activities",
-                    "Total net cash flows received from (used in) investing activities", investing, "investing"));
+                    "Total net cash flows received from (used in) investing activities", investing, "investing", repeated));
         }
         if (financing != null) {
             checks.addAll(section(c, ctx, "Cash flows from financing activities",
-                    "Total net cash flows received from (used in) financing activities", financing, "financing"));
+                    "Total net cash flows received from (used in) financing activities", financing, "financing", repeated));
+        }
+        if (!repeated.isEmpty()) {
+            c = c.without(repeated, ctx);
         }
         if (financial) {
             // no cash_vs_balance_sheet check: the bank balance sheet's cash is taken from this statement
@@ -1702,8 +1708,86 @@ public final class FilingMapper {
         return c.lines().subList(from + 1, to).stream().noneMatch(l -> l.hasValue(ctx));
     }
 
-    /** Signs every line of a cash flow section and checks it against the reported section total. */
-    private List<Check> section(StatementTable c, int ctx, String headerLabel, String totalLabel, BigDecimal total, String name) {
+    /**
+     * A filed investing or financing total that the filing's own figures contradict: the section's lines add up to
+     * another amount, and with that amount (and not with the filed total) operating + investing + financing gives the
+     * net change in cash, whose roll-forward to the ending cash holds. Then the filed total left out a line, and the
+     * section is counted at the sum of its lines. WIFI FY2025: financing filed 10,909,102,818,568, its lines add up to
+     * 10,904,384,108,332 (the total leaves out the dividends paid, 4,718,710,236), and -814,048,360,263
+     * - 3,944,132,255,717 + 10,904,384,108,332 = 6,146,203,492,352, the net change as filed (18,495,026,165 +
+     * 6,146,203,492,352 = 6,164,698,518,517, the ending cash as filed). Only when exactly one section explains it.
+     */
+    private void correctSectionTotal(StatementTable c, int ctx, BigDecimal[] totals, BigDecimal change,
+                                     BigDecimal beginning, BigDecimal ending, List<Check> checks) {
+        if (change == null || beginning == null || ending == null
+                || totals[0] == null || totals[1] == null || totals[2] == null) {
+            return;
+        }
+        BigDecimal sum = totals[0].add(totals[1]).add(totals[2]);
+        if (!equal("net_change", "", sum, change).isError()) {
+            return;
+        }
+        BigDecimal other = sum(c, List.of("Effect of exchange rate changes on cash and cash equivalents",
+                "Other increase (decrease) in cash and cash equivalents"), ctx);
+        BigDecimal deconsolidated = sum(c, List.of("Cash and cash equivalent of deconsolidated subsidiaries"), ctx);
+        BigDecimal rolled = beginning.add(change).add(other);
+        if (rolled.compareTo(ending) != 0 && rolled.add(deconsolidated).compareTo(ending) != 0) {
+            return;     // the net change itself is not confirmed by the filing
+        }
+        int section = -1;
+        BigDecimal lines = null;
+        for (int s = 1; s < 3; s++) {
+            BigDecimal l = sectionLineSum(c, ctx, CASH_FLOW_SECTIONS[s][1], CASH_FLOW_SECTIONS[s][2]);
+            if (l == null || l.compareTo(totals[s]) == 0
+                    || equal("net_change", "", sum.subtract(totals[s]).add(l), change).isError()) {
+                continue;
+            }
+            if (section >= 0) {
+                return;     // two sections could explain it: ambiguous
+            }
+            section = s;
+            lines = l;
+        }
+        if (section < 0) {
+            return;
+        }
+        String name = CASH_FLOW_SECTIONS[section][0];
+        checks.add(Check.warning(name + "_total", "The filed " + name + " total " + totals[section].stripTrailingZeros()
+                .toPlainString() + " is not the sum of its lines " + lines.stripTrailingZeros().toPlainString()
+                + " (difference " + totals[section].subtract(lines).stripTrailingZeros().toPlainString() + "); with the sum "
+                + "of the lines operating + investing + financing = the net change in cash as filed, and beginning cash + "
+                + "net change = ending cash: counted at the sum of its lines"));
+        totals[section] = lines;
+    }
+
+    /** Signed sum of the lines of a cash flow section; {@code null} when its bounds or a line's direction are unknown. */
+    private BigDecimal sectionLineSum(StatementTable c, int ctx, String headerLabel, String totalLabel) {
+        int from = c.indexOf(headerLabel);
+        int to = c.indexOf(totalLabel);
+        if (from < 0 || to <= from) {
+            return null;
+        }
+        BigDecimal sum = ZERO;
+        for (StatementTable.Line line : c.lines().subList(from + 1, to)) {
+            BigDecimal raw = line.value(ctx);
+            if (raw == null) {
+                continue;
+            }
+            BigDecimal signed = signedFlow(line.label(), amount(raw));
+            if (signed == null) {
+                return null;
+            }
+            sum = sum.add(signed);
+        }
+        return sum;
+    }
+
+    /**
+     * Signs every line of a cash flow section and checks it against the reported section total. Lines the section
+     * shows twice and that are not counted are added to {@code repeated}.
+     */
+    private List<Check> section(StatementTable c, int ctx, String headerLabel, String totalLabel, BigDecimal total, String name,
+                                Set<String> repeated) {
         int from = c.indexOf(headerLabel);
         int to = c.indexOf(totalLabel);
         if (from < 0 || to < 0) {
@@ -1713,6 +1797,8 @@ public final class FilingMapper {
         List<String> unknown = new ArrayList<>();
         Map<String, BigDecimal> residual = new LinkedHashMap<>();
         Map<String, BigDecimal> specific = new LinkedHashMap<>();
+        Map<String, BigDecimal> signedLines = new LinkedHashMap<>();
+        Map<String, BigDecimal> rawLines = new LinkedHashMap<>();
         for (StatementTable.Line line : c.lines().subList(from + 1, to)) {
             BigDecimal raw = line.value(ctx);
             if (raw == null) {
@@ -1725,6 +1811,8 @@ public final class FilingMapper {
                 sum = sum.add(signed);
                 if (signed.signum() != 0) {
                     (isResidual(line.label()) ? residual : specific).putIfAbsent(line.label(), signed);
+                    signedLines.putIfAbsent(line.label(), signed);
+                    rawLines.putIfAbsent(line.label(), amount(raw));
                 }
             }
         }
@@ -1749,8 +1837,50 @@ public final class FilingMapper {
                             + "of the other lines); not counted"));
                 }
             }
+            List<String> twice = enteredTwice(signedLines, rawLines);
+            BigDecimal once = sum;
+            for (String label : twice) {
+                once = once.subtract(signedLines.get(label));
+            }
+            if (!twice.isEmpty() && once.compareTo(total) == 0) {
+                repeated.addAll(twice);
+                return List.of(Check.warning(name + "_section", "Amounts entered twice in the " + name + " section: "
+                        + twice.stream().map(l -> "'" + l + "' " + signedLines.get(l).stripTrailingZeros().toPlainString())
+                        .toList() + " repeat another line's cash flow; counted once, the lines then add up to the filing's "
+                        + name + " total " + total.stripTrailingZeros().toPlainString() + " (not counted in the fields either)"));
+            }
         }
         return List.of(equal(name + "_section", "sum of " + name + " lines (payments negative) = " + name + " total", sum, total));
+    }
+
+    /**
+     * Lines of a section that repeat another line's cash flow (the same signed amount), one per pair: the line whose
+     * filed sign contradicts its label (proceeds or payments entered negative), else the later one. WIFI's H1 2025
+     * comparative in its H1 2026 filing: bank loans 783,412,016,329 also as unsecured loans, the repayment of other
+     * borrowings 15,495,302,170 also as negative non-bank proceeds, consumer financing 674,885,668 as proceeds and as
+     * a negative payment. An amount found on three or more lines is left alone.
+     */
+    static List<String> enteredTwice(Map<String, BigDecimal> signedLines, Map<String, BigDecimal> rawLines) {
+        Map<BigDecimal, List<String>> byAmount = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> e : signedLines.entrySet()) {
+            byAmount.computeIfAbsent(e.getValue().stripTrailingZeros(), k -> new ArrayList<>()).add(e.getKey());
+        }
+        List<String> twice = new ArrayList<>();
+        for (List<String> labels : byAmount.values()) {
+            if (labels.size() != 2) {
+                continue;
+            }
+            String first = labels.get(0);
+            String second = labels.get(1);
+            twice.add(contradictsLabel(first, rawLines.get(first)) && !contradictsLabel(second, rawLines.get(second))
+                    ? first : second);
+        }
+        return twice;
+    }
+
+    /** A line whose direction is given by its label ("Proceeds ...", "Payments ..."), entered as a negative amount. */
+    private static boolean contradictsLabel(String label, BigDecimal raw) {
+        return raw != null && raw.signum() < 0 && !label.contains("(");
     }
 
     /** Cash direction of an IDX cash flow line: payments are entered positive, "(..)" labels are signed. */
@@ -2571,14 +2701,29 @@ public final class FilingMapper {
 
     private Check equal(String rule, String description, BigDecimal computed, BigDecimal reported) {
         BigDecimal diff = computed.subtract(reported).abs();
-        // full-amount filings must match exactly; filings in thousands / millions may be off by one
-        // reported unit because every line is rounded separately
-        BigDecimal tolerance = precision.compareTo(BigDecimal.ONE) > 0 ? precision : ZERO;
-        return diff.compareTo(tolerance) <= 0
-                ? Check.ok(rule, description)
+        // filings in thousands / millions may be off by one reported unit because every line is rounded separately
+        if (precision.compareTo(BigDecimal.ONE) > 0) {
+            return diff.compareTo(precision) <= 0
+                    ? Check.ok(rule, description)
+                    : Check.error(rule, description + ": computed " + computed.toPlainString()
+                    + " vs reported " + reported.toPlainString() + " (difference " + diff.toPlainString() + ")");
+        }
+        if (diff.signum() == 0) {
+            return Check.ok(rule, description);
+        }
+        // full-amount filings must match, up to a slip of under a billionth of the amount (WIFI FY2022: beginning cash
+        // 10,565,474,157 + net change 10,363,301,088 = 20,928,775,245, ending cash filed 20,928,775,242)
+        BigDecimal tolerance = computed.abs().max(reported.abs()).multiply(FULL_AMOUNT_SLIP);
+        return diff.compareTo(tolerance) < 0
+                ? Check.warning(rule, description + ": computed " + computed.toPlainString() + " vs reported "
+                + reported.toPlainString() + " (difference " + diff.toPlainString() + ", under a billionth of the "
+                + "amount: a slip in the filing; the reported figure is stored)")
                 : Check.error(rule, description + ": computed " + computed.toPlainString()
                 + " vs reported " + reported.toPlainString() + " (difference " + diff.toPlainString() + ")");
     }
+
+    /** Largest relative difference of a full-amount filing's own figures that is taken as a slip, not a missing line. */
+    static final BigDecimal FULL_AMOUNT_SLIP = new BigDecimal("1e-9");
 
     private static Check epsCheck(BigDecimal implied, BigDecimal reported) {
         int decimals = Math.max(0, reported.stripTrailingZeros().scale());

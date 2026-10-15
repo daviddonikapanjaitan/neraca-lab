@@ -76,6 +76,9 @@ class UploadJobTimeoutTest {
         assertThat(job.stage()).startsWith("Stopped after the 3 seconds limit on HRTA 2026 H1");
         assertThat(job.message()).contains("exceeded its time limit of 3 seconds").contains("the next step (test)");
         assertThat(Duration.between(job.startedAt(), job.finishedAt())).isLessThan(Duration.ofSeconds(8));
+        // recorded before the job is finished, so the clean-up below finds it (error 415 was left behind)
+        assertThat(jdbc.sql("SELECT error_type FROM ingestion_error WHERE job_id = :id").param("id", created)
+                .query(String.class).list()).containsExactly("SLOW_EXTRACTION");
     }
 
     private IngestionJob awaitFinished(UUID id) throws InterruptedException {

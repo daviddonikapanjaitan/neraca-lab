@@ -110,6 +110,7 @@ neraca_lab/
 │               ├── V1.0.13__data_BNGA_shares.sql  (BNGA audited share counts from its annual reports)
 │               ├── V1.0.21__data_RAJA_shares.sql  (RAJA share counts and its 1:5 stock split of 2026-07-16)
 │               ├── V1.0.22__data_TUGU_shares.sql  (TUGU's 1:2 stock split of 2023-05-24, no filing restates it)
+│               ├── V1.0.24__data_BACH_shares.sql  (BACH share count after its IPO of 2026-07-08)
 │               └── V1.0.6__data_metrics_valuation.sql
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
@@ -147,6 +148,11 @@ neraca_lab/
 │                                annual, 2026-II; balance sheet by order of liquidity)
 │                                BBYB, BTPS, NOBU (banks), MARK, NRCA, GOTO (also pdf/) (2022 .. 2025 annual,
 │                                2026-II), BLES (2024, 2025 annual, 2026-II), DWGL (2022, 2024, 2025 annual, 2026-II)
+│                                ACES, ASSA, BIRD, BJTM (bank), EKAD, ERAA, MPMX, MTDL, OMED, WINS, TPIA (USD) and WIFI
+│                                (2022 .. 2025 annual, 2026-II; WIFI: a financing total without its dividends, amounts
+│                                entered twice, a 3 rupiah slip), DCII and UNVR (the same, also pdf/), BREN (2023 ..
+│                                2025 annual, 2026-II, also pdf/), DATA, DGWG, ERAL (2024, 2025 annual, 2026-II), BACH
+│                                (2026-II only: listed 2026-07-08, IPO share count from V1.0.24, no TTM yet)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -636,7 +642,9 @@ inventory, investment properties as capex, a restated FY2024);
 `FilingMapperFinancialTest` maps the five BNGA, five BMRI, four BTPN and five BRIS filings (Financial and Sharia Industry
 taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
-`FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
+`FilingMapperWifiTpiaTest` the WIFI cash flows (a financing total that leaves out the dividends, amounts entered
+twice, a 3 rupiah slip) and TPIA's self-contradicting comparatives; `IngestionVerifierSegmentsTest` a refused comparative
+breakdown of a period already stored as a note; `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
@@ -719,6 +727,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.13__data_BNGA_shares.sql`       | BNGA audited year-end share counts 2021 .. 2025 (note 33 of the annual reports; two share classes and treasury shares) |
 | `V1.0.21__data_RAJA_shares.sql`       | RAJA share counts (21,135,412,500 split-adjusted, from 2021-12-31), its 1:5 stock split of 2026-07-16 and the EPS of the periods before it (/ 5) |
 | `V1.0.22__data_TUGU_shares.sql`       | TUGU's 1:2 stock split of 2023-05-24 (par Rp 100 -> Rp 50), which no filing restates: counts 3,555,575,600 split-adjusted from 2021-12-31, the per-share figures before it (/ 2) |
+| `V1.0.24__data_BACH_shares.sql`       | BACH's IPO of 2026-07-08 (615,000,000 new shares at Rp 442), after its only filing: 4,084,430,000 shares from the listing (the filing gives 3,469,430,000 before it) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).

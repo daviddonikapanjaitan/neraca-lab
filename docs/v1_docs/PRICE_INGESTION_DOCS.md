@@ -188,6 +188,12 @@ caps start on 2022-01-03 (the first trading day after the first share snapshot, 
 prices have no market cap. INDY on 2026-10-05: USD 0.14317549 x 5,202,692,000 = USD 744.9 million
 (Rp 2,570 x 5,202,692,000 = Rp 13.4 trillion).
 
+A newly listed company's filings end before its listing, so their share count is the one of before the IPO:
+BACH (listed 2026-07-08, only filing H1 2026) gets its count after the IPO (4,084,430,000 = 3,469,430,000 + 615,000,000
+new shares) from `V1.0.24__data_BACH_shares.sql`. Without a full fiscal year it has no trailing twelve months; its
+valuation snapshots then hold market cap, EV, book value and P/B only (2026-10-14: Rp 332 x 4,084,430,000 = Rp 1,356.0
+billion, P/B 2.21), see [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 4.6.
+
 ## 3. Polite crawling
 
 | Rule                                   | Implementation                                                                                                           |

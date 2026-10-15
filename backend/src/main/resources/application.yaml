@@ -60,6 +60,7 @@ spring:
         - classpath:db/V1.0.13__data_BNGA_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.21__data_RAJA_shares.sql      # share counts and the 1:5 split of 2026-07-16
         - classpath:db/V1.0.22__data_TUGU_shares.sql      # the 1:2 split of 2023-05-24 no filing restates
+        - classpath:db/V1.0.24__data_BACH_shares.sql      # share count after the IPO of 2026-07-08
         - classpath:db/V1.0.6__data_metrics_valuation.sql
       continue-on-error: false
   jpa:

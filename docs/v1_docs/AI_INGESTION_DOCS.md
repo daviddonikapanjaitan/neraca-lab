@@ -515,6 +515,23 @@ Rules:
   financing total. A missing section total counts as 0 (warning) only when the section has no reported
   line and the other totals add up to the net change in cash exactly (228,589,953,937 - 9,003,638,218 =
   219,586,315,719); otherwise it is an error as before.
+- **A section total that leaves out a line.** WIFI's FY2025 financing total, 10,909,102,818,568, is not the sum
+  of its lines, 10,904,384,108,332: it leaves out the dividends paid (4,718,710,236). With the sum of the lines,
+  operating + investing + financing = the net change as filed (6,146,203,492,352), and beginning cash + net change
+  = ending cash. When exactly one section (investing or financing) explains the gap this way and the roll-forward
+  holds, that section is counted at the sum of its lines (warning `financing_total` / `investing_total`). Before,
+  the dividends were taken for a line "outside the total" and the column failed `net_change`.
+- **Amounts entered twice in a section.** WIFI's H1 2026 filing enters three H1 2025 financing cash flows twice:
+  bank loans 783,412,016,329 also as unsecured loans, the repayment of other borrowings 15,495,302,170 also as
+  negative non-bank proceeds, consumer financing 674,885,668 as proceeds and as a negative payment. Lines of a
+  section with the same signed amount (exactly two per amount) are one cash flow; when dropping one of each pair
+  gives the filed section total exactly, they are counted once - in the section and in the fields (debt issued
+  784,086,901,997, debt repaid -15,495,302,170) - dropping the line whose filed sign contradicts its label, else
+  the later one (warning `financing_section`). Tried after the single line outside the total.
+- **A slip of a few rupiah in a full-amount filing.** Full-amount filings must still reconcile, up to a difference
+  of under a billionth of the amount, which is a warning, not an error: WIFI's FY2022 ending cash is filed
+  20,928,775,242, beginning cash + net change is 20,928,775,245. The reported figures are stored. Filings in
+  thousands or millions keep their tolerance of one reported unit.
 - **One amount reported twice in a column.** Also a specific line and a residual "Other ..." line with
   the same amount (CEKA H1 2025: "Interest and finance costs" and "Other expenses" 79,134; interest paid
   79,134): counted once on the specific line, only when profit before tax then reconciles exactly.
@@ -582,7 +599,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `ModelSpeedSettingsTest` (unit, local HTTP server) | the real Spring AI client sends `"reasoning": {"enabled": false}` (and nothing when reasoning is on); a call slower than the per-call timeout is retried at once and a fast answer used; a call that always stalls gives up after the retries in under 3 s |
 | `DeterministicFinisherTest` (Docker Postgres, rolled back) | a model failing every call: HRTA H1 2026 is still stored, refreshed and verified complete by the deterministic finish; display names from legal names; segments keep the filing's names and types and reuse stored English names |
 | `JobDeadlineTest` (unit) | the time limit inside the agent: a slow model call stops at it, no retry pause past it, no model call and no tool after it, the planner's fallback does not swallow it |
-| `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit |
+| `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit, and its `ingestion_error` row is written before the job is finished (so its clean-up finds it) |
 | `FilingMapperEpsTest` (unit) | NCKL FY2024: contradicting EPS columns give no share counts, EPS and share counts rejected (cleared), FY2025's comparative gives 101.1 at par 100; all MYOR, NCKL and PTSN filings map without errors |
 | `FilingMapperCekaTest` (unit) | all five CEKA filings without errors; "Produk Palm Kernel" domestic and export kept as two segments (FY2025 total = revenue 9,733,304,188,977); a repeated name blocks the breakdown; H1 2026 financing 0 without lines or total; H1 2025 interest also filed as "Other expenses" counted once; a name on two lines of the same kind is one segment, added up |
 | `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
@@ -597,6 +614,8 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperTinsTest` (unit) | the TINS filings: FY2025's comparative counts its residual profit or loss lines once and its cash flow's residual investing line not at all, the current year still counts every line, every statement of FY2025 is storable; FY2024 as published has no current-year figures; FY2023's loss per share is scaled and gets its sign (-60) |
 | `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned; MSIN FY2025 (by nature): profit from operations left empty is asked for again and stored from the rows that compute it, and is an open item of the upload when the last answer leaves it empty too |
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
+| `FilingMapperWifiTpiaTest` (unit) | WIFI FY2025: the financing total that leaves out the dividends is counted at the sum of its lines (10,904,384,108,332), the FY2024 comparative unchanged; WIFI H1 2025 (in the H1 2026 filing): three amounts entered twice counted once, debt issued 784,086,901,997 and repaid -15,495,302,170, which line of a pair is dropped; WIFI FY2022: a 3 rupiah slip is a warning; TPIA's self-contradicting H1 2025 income statement and FY2024 breakdown are still refused |
+| `IngestionVerifierSegmentsTest` (unit) | TPIA FY2025: a refused comparative breakdown of a period whose stored breakdown adds up to its revenue is a note, not an open item; without a stored breakdown, or with one that does not add up, it stays open |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
 | `IngestionServiceFallbackTest` (unit, scripted stages) | when the full-text extraction takes over: unsupported workbook (agent not started), INCOMPLETE, past the 3 minutes, failed; never after a clean result; its own failure leaves what the standard extraction reached, its own timeout fails the upload; switched off; the upload endpoint accepts an unsupported workbook and refuses an unreadable one |
 | `FullTextExtractionDatabaseTest` (Docker Postgres, scripted model, rolled back) | TINS FY2024 is stored from its text with the standard steps: the comparative 2023 FY in the database, nothing for 2024, the verification says why; the error log keeps what went wrong and starts unfixed |
@@ -607,7 +626,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
 | `FilingMapperTuguMoliCnmaTest` (unit) | the filings behind the error rows of 2026-10-14: TUGU read in the Insurance Industry taxonomy with 3,555,575,600 shares at par 50 (EPS in millions in FY2024, an unrestated split in FY2023), MOLI's EPS in thousands (H1 2026) and its contradicting FY2025 columns (no par 1), CNMA's depreciation with its balance sheet by order of liquidity |
 | `FilingMapperTotlMidiTest` (unit) | the filings behind the error rows of 2026-10-13: TOTL's breakdowns with "Jasa Konstruksi" on several lines of one kind are one segment equal to the line its FY2024 filing shows (lines of different kinds stay apart); MIDI's H1 2025 cash roll-forward holds without the deconsolidation line its ending cash excludes |
-| `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs |
+| `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs, a company with prices, shares and a balance sheet but no trailing twelve months (BACH) is valued on its balance sheet (market cap, EV, P/B; no TTM ratios), the same rows from the per-company refresh |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
@@ -869,6 +888,30 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The uploads of 2026-10-15 (errors 415 - 420, 432): a total without its dividends, amounts entered twice, a 3 rupiah slip
+
+Seven rows: a test artefact, three WIFI filings fixed in the rule-based extraction, and two TPIA comparatives that
+contradict themselves. WIFI's three filings and TPIA's FY2025 filing were uploaded again: `SUCCEEDED` on the
+standard extraction, no row, no model cost. A sweep of all 385 workbooks in `data/IDX_XBRL` changes only the WIFI
+columns below.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A test's row, left behind.** `UploadJobTimeoutTest` (3 s limit) removes its job's error rows once the job is finished, but the worker finished the job before it wrote the error row; deleting the job then set the row's `job_id` to NULL. | 415 | The error row is written before the job is finished (`FinancialStatementQueue`); the test asserts it. |
+| **A section total that leaves out a line.** WIFI FY2025: financing filed 10,909,102,818,568, its lines 10,904,384,108,332 (without the dividends paid, 4,718,710,236); only the sum of the lines gives the net change as filed. The full-text extraction stored the filed total, so O+I+F did not give the net change. | 418 | `correctSectionTotal` (section 4): financing 10,904,384,108,332. |
+| **Amounts entered twice.** WIFI's H1 2026 filing, H1 2025 column: three financing cash flows on two lines each (783,412,016,329; 15,495,302,170; 674,885,668). The model's debt repaid was -14,820,416,502. | 419 | Counted once when that gives the filed total exactly, also in the fields: debt issued 784,086,901,997, debt repaid -15,495,302,170. |
+| **A slip of 3 rupiah.** WIFI FY2022 (full amounts): ending cash filed 20,928,775,242, beginning + net change 20,928,775,245. | 420 | A difference under a billionth of the amount is a warning in a full-amount filing. |
+| **A comparative income statement that contradicts itself (closed without a rule).** TPIA's H1 2026 filing, H1 2025 column: its lines give profit before tax 1,572,723 thousand USD, the filed total is 1,576,527 (profit before tax + tax = profit holds); 3,804 is no line and no reversed sign. | 416, 432 (the upload again) | None: rightly refused; the full-text extraction stores it with the filed totals (`SUCCEEDED`). |
+| **A refused comparative breakdown of a period already stored.** TPIA's FY2025 filing repeats FY2024 figures under other names (product lines 2,107,089 under a subtotal of 1,695,869 thousand). Refused - but FY2024's breakdown is stored from its own filing and a comparative never overwrites it, so the open item could never close (`INCOMPLETE`). | 417 | `IngestionVerifier`: a note, not an open item, when the stored breakdown adds up to the period's revenue. |
+
+Also on 2026-10-15, outside the error log: BACH (listed 2026-07-08) had no valuation. Its only filing is H1 2026,
+so no trailing twelve months exist (no FY2025 income statement), and a valuation needed TTM revenue; its share
+count was the one of before its IPO (3,469,430,000). `V1.0.24__data_BACH_shares.sql` adds the 615,000,000 IPO
+shares from the listing date (4,084,430,000), and a company without TTM is valued on its latest balance sheet
+(market cap Rp 1,356.0 billion, P/B 2.21 at Rp 332; no P/E until a full year is stored).
+
+Tests: `FilingMapperWifiTpiaTest`, `IngestionVerifierSegmentsTest`, `UploadJobTimeoutTest`, `DerivedDataRefreshTest`.
 
 ### The uploads of 2026-10-14 (errors 346 - 355): an insurer, an EPS in three units, a balance sheet by liquidity
 
