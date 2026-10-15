@@ -162,8 +162,29 @@ public class TechnicalRepository {
     }
 
     public Optional<LocalDate> latestIndexDate(String indexCode) {
-        return jdbc.sql("SELECT max(trading_date) FROM index_daily WHERE index_code = :code").param("code", indexCode)
-                .query(LocalDate.class).optional();
+        return Optional.ofNullable(indexStats(indexCode).lastDate());
+    }
+
+    /** Stored bars of an index: count, first and last day ({@code null} when none). */
+    public record IndexStats(int rows, LocalDate firstDate, LocalDate lastDate) {
+    }
+
+    /** Count, first and last day of the stored bars of an index. */
+    public IndexStats indexStats(String indexCode) {
+        return jdbc.sql("SELECT count(*), min(trading_date), max(trading_date) FROM index_daily WHERE index_code = :code")
+                .param("code", indexCode)
+                .query((rs, i) -> new IndexStats(rs.getInt(1), rs.getObject(2, LocalDate.class),
+                        rs.getObject(3, LocalDate.class)))
+                .single();
+    }
+
+    /** Stored days of an index between {@code from} and {@code to} (inclusive). */
+    public java.util.Set<LocalDate> indexDates(String indexCode, LocalDate from, LocalDate to) {
+        return new java.util.HashSet<>(jdbc.sql("""
+                        SELECT trading_date FROM index_daily
+                        WHERE index_code = :code AND trading_date BETWEEN :from AND :to""")
+                .param("code", indexCode).param("from", from).param("to", to)
+                .query(LocalDate.class).list());
     }
 
     /** Upserts index bars; returns the rows inserted or changed. */

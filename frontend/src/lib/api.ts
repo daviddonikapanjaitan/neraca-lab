@@ -19,6 +19,7 @@ import type {
   IngestionJobType,
   PermissionInfo,
   PriceQueue,
+  PriceStatus,
   RagDocumentPage,
   RagStatus,
   RagSourceType,
@@ -137,6 +138,11 @@ export const getIngestions = cache((type: IngestionJobType, limit: number) =>
 
 /** GET /api/v1/prices/ingestions (the configured price provider and the queue length) */
 export const getPriceQueue = cache(() => get<PriceQueue>("/api/v1/prices/ingestions"))
+
+/** GET /api/v1/prices/status?exchange= (how far the stored prices and the index reach) */
+export const getPriceStatus = cache((exchange: string) =>
+  get<PriceStatus>(`/api/v1/prices/status?exchange=${encodeURIComponent(exchange)}`)
+)
 
 /** GET /api/v1/fundamentals/status?exchange= (screening data stored, active ETL run) */
 export const getFundamentalsStatus = cache((exchange: string) =>

@@ -129,7 +129,7 @@ neracalab:
     fx:
       base-url: https://api.frankfurter.dev/v1   # ECB reference rates, converts listings quoted in another currency (INDY)
     schedule:
-      enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run over all active companies of the exchange
+      enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run: the companies of the exchange behind, and IHSG
       cron: "0 30 17 * * MON-FRI"
       zone: Asia/Jakarta
       exchange: IDX

@@ -33,15 +33,18 @@ import com.neracalab.backend.technical.TechnicalService.RefreshStatus;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Technical analysis charts (Companies > Technicals). Read-only, deterministic data: no model is called, no score or
- * signal is given. Exchange and ticker codes are case-insensitive. Series are compact arrays of
- * {@code [time, value]}, time in seconds since the epoch at 00:00 UTC of the trading day.
+ * Technical analysis charts (Companies > Technicals). Read-only, deterministic data: no model is called. The preset
+ * summaries give a stance with buy / sell prices by fixed rules over the indicators; everything else is data. Exchange
+ * and ticker codes are case-insensitive; the ticker IHSG (or ^JKSE) is the exchange's index. Series are compact arrays
+ * of {@code [time, value]}, time in seconds since the epoch at 00:00 UTC of the trading day.
  * <ul>
  *   <li>{@code GET /api/v1/technical/tickers?exchange=IDX&query=} - ticker search (code and company name)</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/ohlcv?interval=D|W|M&range=|from=&to=&adjustment=split|total}</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/indicators?interval=&range=|from=&to=&set=sma50,sma200,rsi14,...}</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/levels} - zones, retracements, swings, volume profile, 52-week / ATH</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/snapshot} - the agent-ready IndicatorSnapshot (versioned JSON)</li>
+ *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/summary} - the preset summaries (stance, buy / sell / stop,
+ *       thesis by fixed rules)</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/events} - corporate events for chart markers</li>
  *   <li>{@code GET /api/v1/technical/market?exchange=IDX&range=} - index regime, breadth, macro series</li>
  *   <li>{@code GET / PUT /api/v1/technical/settings} - the user's last chart settings</li>
@@ -105,6 +108,13 @@ public class TechnicalController {
     @GetMapping("/{exchange}/{ticker}/snapshot")
     public ResponseEntity<String> snapshot(@PathVariable("exchange") String exchange, @PathVariable("ticker") String ticker) {
         return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(service.snapshot(exchange, ticker));
+    }
+
+    /** The preset summaries (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller): stance, buy / sell / stop, thesis. */
+    @RequiresPermission(Permission.COMPANIES)
+    @GetMapping("/{exchange}/{ticker}/summary")
+    public Map<String, Object> summary(@PathVariable("exchange") String exchange, @PathVariable("ticker") String ticker) {
+        return service.summary(exchange, ticker);
     }
 
     @RequiresPermission(Permission.COMPANIES)

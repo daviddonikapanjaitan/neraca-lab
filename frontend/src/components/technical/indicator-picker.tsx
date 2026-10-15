@@ -1,7 +1,7 @@
 "use client"
 
 import { Checkbox } from "@/components/ui/checkbox"
-import { INDICATOR_GROUPS, INDICATORS, type IndicatorId } from "@/lib/technical"
+import { INDICATOR_GROUPS, INDICATORS, NOT_FOR_INDEX, type IndicatorId } from "@/lib/technical"
 
 const LABELS = new Map(INDICATORS.map((i) => [i.id, i.label]))
 
@@ -10,11 +10,14 @@ export function IndicatorPicker({
   selected,
   onToggle,
   levelsDisabled,
+  index = false,
 }: {
   selected: IndicatorId[]
   onToggle: (id: IndicatorId, on: boolean) => void
   /** levels are tradable prices: not drawn on the total-return basis */
   levelsDisabled: boolean
+  /** the chart shows the index (IHSG): no comparison with itself, no events, no auto-rejection */
+  index?: boolean
 }) {
   return (
     <div className="space-y-4">
@@ -22,7 +25,7 @@ export function IndicatorPicker({
         <fieldset key={group.title} className="space-y-1.5">
           <legend className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{group.title}</legend>
           {group.ids.map((id) => {
-            const disabled = levelsDisabled && group.title === "Levels"
+            const disabled = (levelsDisabled && group.title === "Levels") || (index && NOT_FOR_INDEX.includes(id))
             const inputId = `indicator-${id}`
             return (
               <label key={id} htmlFor={inputId} className="flex cursor-pointer items-center gap-2 text-sm has-disabled:cursor-not-allowed has-disabled:opacity-50">
@@ -38,6 +41,9 @@ export function IndicatorPicker({
           })}
           {levelsDisabled && group.title === "Levels" && (
             <p className="text-xs text-muted-foreground">Levels are tradable prices: shown on split-adjusted prices only.</p>
+          )}
+          {index && group.ids.some((id) => NOT_FOR_INDEX.includes(id)) && (
+            <p className="text-xs text-muted-foreground">An index has no events or auto-rejection and is not compared with itself.</p>
           )}
         </fieldset>
       ))}

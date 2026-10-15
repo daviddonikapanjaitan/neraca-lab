@@ -2,11 +2,11 @@ import type { NextRequest } from "next/server"
 
 import { forward } from "@/lib/api"
 
-const RESOURCES = new Set(["ohlcv", "indicators", "levels", "snapshot", "events"])
+const RESOURCES = new Set(["ohlcv", "indicators", "levels", "snapshot", "events", "summary"])
 const PARAMS = ["interval", "range", "from", "to", "set", "adjustment"]
 
 /**
- * GET /api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events}?... -> backend
+ * GET /api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events|summary}?... -> backend
  * GET /api/v1/technical/{exchange}/{ticker}/{resource} with the chart parameters.
  */
 export async function GET(

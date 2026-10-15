@@ -1,8 +1,10 @@
 package com.neracalab.backend.price;
 
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZonedDateTime;
 import java.util.List;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -62,6 +64,21 @@ public record PriceProperties(
 
     public LocalDate fullHistoryFromDate() {
         return LocalDate.parse(fullHistoryFrom);
+    }
+
+    /**
+     * The latest trading day whose bar is final at exchange-local time {@code now}: today from the session close cutoff
+     * on, otherwise the previous day; weekends step back to Friday. Exchange holidays are not known here: a holiday
+     * simply returns no bar.
+     */
+    public LocalDate lastCompletedTradingDay(ZonedDateTime now) {
+        LocalDate day = now.toLocalTime().isBefore(sessionCloseCutoffTime())
+                ? now.toLocalDate().minusDays(1)
+                : now.toLocalDate();
+        while (day.getDayOfWeek() == DayOfWeek.SATURDAY || day.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            day = day.minusDays(1);
+        }
+        return day;
     }
 
     /** @param baseUrl chart API host; query2.finance.yahoo.com serves the same API */

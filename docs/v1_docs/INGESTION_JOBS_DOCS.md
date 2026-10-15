@@ -5,7 +5,7 @@ Every ingestion runs asynchronously in the background and records its progress i
 | Ingestion                       | Start                                          | Worker                                                     |
 |---------------------------------|------------------------------------------------|------------------------------------------------------------|
 | Financial statement (`.xlsx`)   | `POST /api/v1/financial-statements/upload`     | `FinancialStatementQueue`: one thread, AI agent ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)) |
-| Daily prices (Yahoo Finance)    | `POST /api/v1/prices/ingestions?exchange=&ticker=` | `PriceIngestionQueue`: one thread ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)) |
+| Daily prices (Yahoo Finance); every company of an exchange to today; the IHSG index (ticker `IHSG`) | `POST /api/v1/prices/ingestions?exchange=&ticker=`, `POST /api/v1/prices/updates?exchange=`, `POST /api/v1/prices/index-ingestions?exchange=` | `PriceIngestionQueue`: one thread ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)) |
 | Screening data ETL (Yahoo Finance) | `POST /api/v1/fundamentals/ingestions?exchange=` | `FundamentalsQueue`: one thread ([SCREENING_DOCS.md](SCREENING_DOCS.md)) |
 | AI stock screening              | `POST /api/v1/screenings`                      | `ScreeningQueue`: one thread ([SCREENING_DOCS.md](SCREENING_DOCS.md)) |
 | RAG PDF document (`.pdf`)       | `POST /api/v1/rag/pdf`                         | `RagQueue`: one thread for both RAG types ([RAG_DOCS.md](RAG_DOCS.md)) |

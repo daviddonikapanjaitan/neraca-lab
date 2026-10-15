@@ -17,6 +17,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Skeleton } from "@/components/ui/skeleton"
 import { IndicatorPicker } from "@/components/technical/indicator-picker"
 import type { PriceChartHandle } from "@/components/technical/price-chart"
+import { PresetSummariesCard } from "@/components/technical/preset-summaries"
 import { KeyLevelsCard, MacroCard, RegimeCard, SnapshotCard, VolumeProfileCard } from "@/components/technical/side-panels"
 import { TickerSearch } from "@/components/technical/ticker-search"
 import { jsonBody, RequestError } from "@/lib/client-api"
@@ -30,12 +31,14 @@ import {
   INTERVALS,
   levelsSchema,
   marketSchema,
+  NOT_FOR_INDEX,
   ohlcvSchema,
   parseSettings,
   PRESETS,
   RANGES,
   seriesFor,
   snapshotSchema,
+  summarySchema,
   technicalUrl,
   TRADINGVIEW_NOTICE,
   type ChartSettings,
@@ -173,7 +176,6 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
 
   const { exchange, ticker, interval, range, adjustment, indicators } = settings
   const has = (id: IndicatorId) => indicators.includes(id)
-  const set = useMemo(() => seriesFor(indicators), [indicators])
   const params = { interval, range, adjustment }
 
   const ohlcv = useQuery({
@@ -181,6 +183,14 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "ohlcv", params), ohlcvSchema, signal),
     enabled: !!ticker,
   })
+  // the index (IHSG) is charted in points: no comparison with itself, no events, no auto-rejection
+  const isIndex = ohlcv.data ? ohlcv.data.type === "INDEX" : ticker === "IHSG"
+  const shown = useMemo(
+    () => (isIndex ? indicators.filter((id) => !NOT_FOR_INDEX.includes(id)) : indicators),
+    [indicators, isIndex]
+  )
+  const set = useMemo(() => seriesFor(shown), [shown])
+
   const series = useQuery({
     queryKey: ["technical", "indicators", exchange, ticker, interval, range, adjustment, set.join(",")],
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "indicators", { ...params, set: set.join(",") }), indicatorsSchema, signal),
@@ -199,6 +209,11 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
   const snapshot = useQuery({
     queryKey: ["technical", "snapshot", exchange, ticker],
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "snapshot"), snapshotSchema, signal),
+    enabled: !!ticker,
+  })
+  const summary = useQuery({
+    queryKey: ["technical", "summary", exchange, ticker],
+    queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "summary"), summarySchema, signal),
     enabled: !!ticker,
   })
   const showMarket = has("regime") || has("macro")
@@ -228,7 +243,7 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
   const change = last && prev ? (last[4] / prev[4] - 1) * 100 : null
   const levelsDisabled = adjustment === "total"
 
-  const picker = <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} />
+  const picker = <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} index={isIndex} />
 
   return (
     <div className="flex flex-col gap-4">
@@ -260,7 +275,7 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
               <SheetContent side="right" className="w-[300px] overflow-y-auto">
                 <SheetHeader>
                   <SheetTitle>Indicators</SheetTitle>
-                  <SheetDescription>Choose what the chart shows. Presets only toggle indicators.</SheetDescription>
+                  <SheetDescription>Choose what the chart shows. Presets toggle indicators; their summaries are below the chart.</SheetDescription>
                 </SheetHeader>
                 <div className="px-4 pb-6">{picker}</div>
               </SheetContent>
@@ -302,8 +317,8 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
           <CardContent className="py-10">
             <EmptyState
               variant="search"
-              title="Choose a company"
-              description={`Search a ticker or company name of ${exchange} to open its chart.`}
+              title="Choose a company or the index"
+              description={`Search a ticker or company name of ${exchange}, or IHSG for the composite index, to open its chart.`}
             />
           </CardContent>
         </Card>
@@ -315,7 +330,8 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   <span className="font-mono">{ticker}</span>
                   <span className="font-normal text-muted-foreground">{data?.companyName ?? ""}</span>
-                  {data && (
+                  {data && data.type === "INDEX" && <Badge variant="secondary">Index</Badge>}
+                  {data && data.type !== "INDEX" && (
                     <Link href={companyHref(data.exchange, data.ticker)} className="text-xs font-normal text-primary underline-offset-4 hover:underline">
                       Fundamentals
                     </Link>
@@ -325,13 +341,17 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
                   {last ? (
                     <>
                       <span className="font-mono text-base font-semibold text-foreground tabular-nums">
-                        {data!.currency} {formatPrice(last[4])}
+                        {isIndex ? `${formatPrice(last[4])} points` : `${data!.currency} ${formatPrice(last[4])}`}
                       </span>
                       <span className={cn("font-mono tabular-nums", change !== null && change > 0 && "text-emerald-600 dark:text-emerald-400",
                         change !== null && change < 0 && "text-rose-600 dark:text-rose-400")}>
                         {change === null ? EMPTY : `${change > 0 ? "+" : ""}${formatNumber(change, 2)}%`}
                       </span>
-                      <span>{formatDate(data!.lastDate)} · {data!.tradingDays.toLocaleString("en-US")} trading days since {formatDate(data!.firstDate)} · lot {data!.lotSize} shares</span>
+                      <span>
+                        {formatDate(data!.lastDate)} · {data!.tradingDays.toLocaleString("en-US")} trading days since{" "}
+                        {formatDate(data!.firstDate)}
+                        {data!.lotSize !== null ? ` · lot ${data!.lotSize} shares` : " · Yahoo Finance ^JKSE"}
+                      </span>
                     </>
                   ) : (
                     <span>{ohlcv.isPending ? "Loading…" : ""}</span>
@@ -357,7 +377,7 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
                     indicators={series.data}
                     levels={levels.data}
                     events={events.data}
-                    selected={indicators}
+                    selected={shown}
                     dark={dark}
                   />
                 )}
@@ -369,6 +389,21 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
                 )}
               </CardContent>
             </Card>
+
+            {summary.data ? (
+              <PresetSummariesCard
+                summary={summary.data}
+                activePreset={settings.preset}
+                onShowPreset={(id) => {
+                  const preset = PRESETS.find((p) => p.id === id)
+                  if (preset) update({ preset: preset.id, indicators: preset.indicators })
+                }}
+              />
+            ) : summary.isError ? (
+              <ErrorNote error={summary.error} onRetry={() => summary.refetch()} />
+            ) : (
+              <Skeleton className="h-[320px] w-full" />
+            )}
 
             {(has("regime") || has("macro")) && (
               market.isError ? (
@@ -393,7 +428,7 @@ function TechnicalsView({ exchanges, start }: { exchanges: Exchange[]; start: Ch
           <Card className="hidden h-fit lg:block">
             <CardHeader>
               <CardTitle>Indicators</CardTitle>
-              <CardDescription>Presets only toggle indicators: no scores, no signals.</CardDescription>
+              <CardDescription>Presets toggle indicators; their summaries are below the chart.</CardDescription>
             </CardHeader>
             <CardContent>{picker}</CardContent>
           </Card>

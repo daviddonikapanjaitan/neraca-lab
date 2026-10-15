@@ -32,6 +32,7 @@ import com.neracalab.backend.technical.engine.IndicatorEngine;
 import com.neracalab.backend.technical.engine.IndicatorSet;
 import com.neracalab.backend.technical.engine.Interval;
 import com.neracalab.backend.technical.engine.MarketContext;
+import com.neracalab.backend.technical.engine.PresetSummaries;
 import com.neracalab.backend.technical.engine.RelativeStrength;
 import com.neracalab.backend.technical.engine.SnapshotCalculator;
 import com.neracalab.backend.technical.engine.SnapshotCalculator.EventInfo;
@@ -47,6 +48,10 @@ import tools.jackson.databind.json.JsonMapper;
  * The technical analysis: chart data (bars, indicator series, levels, events, market panel), the agent-ready snapshot
  * and the refresh of the data it needs beyond the daily prices (the index, corporate events). No model is called
  * anywhere: every value is computed in Java from stored data.
+ * <p>
+ * The exchange's index (IHSG) is a listing too ({@link #INDEX_ID}): its bars come from {@code index_daily}, its levels
+ * are rounded to 0.01 index points instead of IDX price ticks, and it has no corporate events, no auto-rejection limits
+ * and no stored snapshot (the snapshot table belongs to companies).
  * <p>
  * Daily bars, indicator series and the market context are cached in memory (Caffeine). A cache key carries a
  * fingerprint of the stored prices (count, last date and the sums of close, adjusted close and volume), so new prices
@@ -99,13 +104,20 @@ public class TechnicalService {
     private final com.neracalab.backend.price.PriceProperties prices;
     private final IdxTickSize ticks;
     private final SnapshotCalculator calculator;
+    /** levels of an index are index points: rounded to 0.01, not to IDX price ticks */
+    private final IdxTickSize indexTicks = new IdxTickSize(List.of(
+            new TechnicalProperties.TickBand(null, new java.math.BigDecimal("0.01"))));
+    private final SnapshotCalculator indexCalculator;
+    private final com.neracalab.backend.price.IndexIngestion indexIngestion;
     private final Cache<String, Object> cache;
     private final AtomicReference<RefreshStatus> refresh = new AtomicReference<>(
             new RefreshStatus(false, null, null, null, null, null, null, null, null, List.of()));
 
     public TechnicalService(TechnicalRepository repository, TechnicalProperties properties, YahooChartClient yahoo,
-                            JsonMapper json, JdbcClient jdbc, com.neracalab.backend.price.PriceProperties prices) {
+                            JsonMapper json, JdbcClient jdbc, com.neracalab.backend.price.PriceProperties prices,
+                            com.neracalab.backend.price.IndexIngestion indexIngestion) {
         this.repository = repository;
+        this.indexIngestion = indexIngestion;
         this.prices = prices;
         this.properties = properties;
         this.yahoo = yahoo;
@@ -113,6 +125,7 @@ public class TechnicalService {
         this.jdbc = jdbc;
         this.ticks = new IdxTickSize(properties.tickSizes());
         this.calculator = new SnapshotCalculator(properties, ticks);
+        this.indexCalculator = new SnapshotCalculator(properties, indexTicks);
         this.cache = Caffeine.newBuilder().maximumSize(properties.cacheSize()).expireAfterWrite(properties.cacheTtl()).build();
     }
 
@@ -120,13 +133,58 @@ public class TechnicalService {
         return ticks;
     }
 
+    /** The company id of the index listing (no company has it). */
+    public static final long INDEX_ID = -1L;
+
+    /** Display name of an index: "IDX Composite Index (IHSG)". */
+    public static String indexName(String code) {
+        return "IHSG".equalsIgnoreCase(code) ? "IDX Composite Index (IHSG)" : code + " index";
+    }
+
+    static boolean isIndex(Listing listing) {
+        return listing.companyId() == INDEX_ID;
+    }
+
+    /** The exchange's index as a listing (empty: the exchange has no index configured). */
+    java.util.Optional<Listing> indexListing(Exchange exchange) {
+        TechnicalProperties.Index index = properties.index();
+        if (!Exchange.of(index.exchange()).equals(exchange)) {
+            return java.util.Optional.empty();
+        }
+        TechnicalRepository.IndexStats stats = repository.indexStats(index.code());
+        return java.util.Optional.of(new Listing(INDEX_ID, exchange.code(), index.code(), indexName(index.code()), null,
+                null, exchange.currency(), true, stats.rows(), stats.firstDate(), stats.lastDate()));
+    }
+
+    private boolean indexMatches(Listing index, String query) {
+        String q = query == null ? "" : query.trim().toUpperCase(Locale.ROOT);
+        return q.isEmpty() || index.ticker().toUpperCase(Locale.ROOT).contains(q)
+                || index.companyName().toUpperCase(Locale.ROOT).contains(q)
+                || properties.index().yahooSymbol().toUpperCase(Locale.ROOT).contains(q)
+                || "INDEX".contains(q) || "INDEKS".contains(q) || "COMPOSITE".contains(q);
+    }
+
+    private SnapshotCalculator calculator(Listing listing) {
+        return isIndex(listing) ? indexCalculator : calculator;
+    }
+
+    private IdxTickSize ticks(Listing listing) {
+        return isIndex(listing) ? indexTicks : ticks;
+    }
+
     // ------------------------------------------------------------------ listings
 
     public List<Map<String, Object>> tickers(String exchangeCode, String query, int limit) {
         Exchange exchange = Exchange.of(exchangeCode);
+        int max = Math.max(1, Math.min(limit, 200));
+        List<Listing> listings = new ArrayList<>();
+        // the index first: it is what the market is compared with
+        indexListing(exchange).filter(ix -> indexMatches(ix, query)).ifPresent(listings::add);
+        listings.addAll(repository.search(exchange, query, max));
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Listing l : repository.search(exchange, query, Math.max(1, Math.min(limit, 200)))) {
+        for (Listing l : listings.subList(0, Math.min(listings.size(), max))) {
             Map<String, Object> m = new LinkedHashMap<>();
+            m.put("type", isIndex(l) ? "INDEX" : "STOCK");
             m.put("exchange", l.exchange());
             m.put("ticker", l.ticker());
             m.put("companyName", l.companyName());
@@ -144,6 +202,13 @@ public class TechnicalService {
 
     Listing listing(String exchangeCode, String ticker) {
         Exchange exchange = Exchange.of(exchangeCode);
+        if (ticker != null && (ticker.trim().equalsIgnoreCase(properties.index().code())
+                || ticker.trim().equalsIgnoreCase(properties.index().yahooSymbol()))) {
+            java.util.Optional<Listing> index = indexListing(exchange);
+            if (index.isPresent()) {
+                return index.get();
+            }
+        }
         String t = Tickers.normalize(ticker);
         return repository.listing(exchange, t).orElseThrow(() -> new ListingNotFoundException(
                 "No company " + t + " on " + exchange.code()));
@@ -151,6 +216,14 @@ public class TechnicalService {
 
     /** Daily split-adjusted bars of a listing in the exchange currency (cached by price fingerprint). */
     List<Candle> dailyBars(Listing listing) {
+        if (isIndex(listing)) {
+            List<Candle> bars = indexBars();
+            if (bars.isEmpty()) {
+                throw new NoPricesException("No " + listing.ticker() + " bars stored (run the IHSG ingestion on Ingestion "
+                        + "> Price Ingestion first)");
+            }
+            return bars;
+        }
         String key = "bars:" + listing.companyId() + ":" + fingerprint(listing.companyId());
         @SuppressWarnings("unchecked")
         List<Candle> bars = (List<Candle>) cache.get(key, k -> repository.bars(listing.companyId(),
@@ -226,7 +299,7 @@ public class TechnicalService {
         // auto-rejection hits are detected on the daily bars as traded; on a weekly / monthly chart they mark the bar
         // of the week / month they fall in
         List<List<Object>> hits = new ArrayList<>();
-        for (AutoRejection.Hit hit : calculator.autoRejection().hits(daily)) {
+        for (AutoRejection.Hit hit : isIndex(listing) ? List.<AutoRejection.Hit>of() : calculator.autoRejection().hits(daily)) {
             LocalDate barDate = barDate(bars, hit.date(), interval);
             if (barDate != null && in(barDate, from, to, interval)) {
                 hits.add(List.of(time(barDate), hit.type().name(), r4(hit.changePct()), hit.date().toString()));
@@ -234,7 +307,8 @@ public class TechnicalService {
         }
         Map<String, Object> out = header(listing, interval, daily);
         out.put("adjustment", adjustment.name().toLowerCase(Locale.ROOT));
-        out.put("priceBasis", adjustment == Adjustment.SPLIT
+        out.put("priceBasis", isIndex(listing) ? "index points (Yahoo Finance " + properties.index().yahooSymbol() + ")"
+                : adjustment == Adjustment.SPLIT
                 ? "split-adjusted, as traded since the last split (raw prices before a split are not stored)"
                 : "adjusted for splits and cash dividends (total return); not tradable prices");
         out.put("columns", List.of("time", "open", "high", "low", "close", "volume", "value"));
@@ -357,7 +431,7 @@ public class TechnicalService {
         Map<String, Object> snapshot = snapshotDocument(listing);
         Map<String, Object> structure = (Map<String, Object>) snapshot.get("structure");
         List<Candle> daily = dailyBars(listing);
-        Structure.VolumeProfile profile = calculator.structure().volumeProfile(daily);
+        Structure.VolumeProfile profile = calculator(listing).structure().volumeProfile(daily);
         List<Map<String, Object>> buckets = new ArrayList<>();
         for (Structure.ProfileBucket b : profile.buckets()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -380,13 +454,14 @@ public class TechnicalService {
         Map<String, Object> vp = new LinkedHashMap<>((Map<String, Object>) structure.get("volumeProfile"));
         vp.put("buckets", buckets);
         out.put("volumeProfile", vp);
-        out.put("keyLevels", keyLevels(structure, ((Number) ((Map<String, Object>) snapshot.get("price")).get("close")).doubleValue()));
+        out.put("keyLevels", keyLevels(structure, ((Number) ((Map<String, Object>) snapshot.get("price")).get("close")).doubleValue(),
+                ticks(listing)));
         return out;
     }
 
     /** One table of every level with its distance from the close, from the top price down. */
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> keyLevels(Map<String, Object> structure, double close) {
+    private List<Map<String, Object>> keyLevels(Map<String, Object> structure, double close, IdxTickSize ticks) {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Map<String, Object> z : (List<Map<String, Object>>) structure.get("zones")) {
             rows.add(level(z.get("type").equals("SUPPORT") ? "Support zone" : z.get("type").equals("RESISTANCE")
@@ -445,7 +520,7 @@ public class TechnicalService {
     public Map<String, Object> events(String exchange, String ticker) {
         Listing listing = listing(exchange, ticker);
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (Event e : repository.events(listing.companyId())) {
+        for (Event e : isIndex(listing) ? List.<Event>of() : repository.events(listing.companyId())) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("date", e.date().toString());
             m.put("time", time(e.date()));
@@ -460,6 +535,11 @@ public class TechnicalService {
         out.put("exchange", listing.exchange());
         out.put("ticker", listing.ticker());
         out.put("events", rows);
+        if (isIndex(listing)) {
+            out.put("eventsFetchedAt", null);
+            out.put("note", "An index has no corporate events.");
+            return out;
+        }
         out.put("eventsFetchedAt", repository.eventsFetchedAt(listing.companyId(), YahooChartClient.SOURCE)
                 .map(OffsetDateTime::toString).orElse(null));
         out.put("note", "Dividends and splits from Yahoo Finance and the splits recorded from the filings. Earnings dates, "
@@ -589,6 +669,9 @@ public class TechnicalService {
     }
 
     private String snapshotJson(Listing listing) {
+        if (isIndex(listing)) {
+            return indexSnapshotJson(listing);
+        }
         List<Candle> daily = dailyBars(listing);
         MarketContext market = marketContext(Exchange.of(listing.exchange()));
         List<EventInfo> events = eventInfos(listing);
@@ -604,6 +687,43 @@ public class TechnicalService {
         String text = json.writeValueAsString(doc);
         repository.saveSnapshot(listing.companyId(), daily.getLast().date(), SnapshotCalculator.SCHEMA_VERSION, text, hash);
         return text;
+    }
+
+    /**
+     * The snapshot of the index: the same groups on its bars (levels in index points), kept in memory only. What does
+     * not apply to an index is null, with a note: relative strength against itself, auto-rejection limits, lot size
+     * and value traded (index points x shares is no value).
+     */
+    @SuppressWarnings("unchecked")
+    private String indexSnapshotJson(Listing listing) {
+        List<Candle> daily = dailyBars(listing);
+        MarketContext market = marketContext(Exchange.of(listing.exchange()));
+        String key = "indexSnapshot:" + SnapshotCalculator.inputHash(daily, List.of(), market, properties);
+        return (String) cache.get(key, unused -> {
+            Map<String, Object> doc = indexCalculator.snapshot(listing.exchange(), listing.ticker(), listing.companyName(),
+                    null, Exchange.of(listing.exchange()).currency(), daily, List.of(), market);
+            doc.put("priceBasis", "index points (Yahoo Finance " + properties.index().yahooSymbol()
+                    + "), daily bars; levels rounded to 0.01");
+            Map<String, Object> price = (Map<String, Object>) doc.get("price");
+            price.put("valueTraded", null);
+            price.put("tickSize", 0.01);
+            price.put("lotSize", null);
+            Map<String, Object> rs = (Map<String, Object>) doc.get("relativeStrength");
+            rs.put("ratio", null);
+            rs.put("ratioChange50Pct", null);
+            Map<String, Object> risk = (Map<String, Object>) doc.get("risk");
+            for (String k : List.of("avgValueTraded20", "araCount60", "arbCount60", "lastAra", "lastArb")) {
+                risk.put(k, null);
+            }
+            Map<String, Object> volume = (Map<String, Object>) doc.get("volume");
+            volume.put("avgValue20", null);
+            volume.put("avgValue50", null);
+            List<String> notes = (List<String>) doc.get("notes");
+            notes.add("An index: relative strength vs " + properties.index().code() + " (itself), auto-rejection "
+                    + "limits, lot size and value traded do not apply and are null; the percentiles compare its returns "
+                    + "with the stored listings");
+            return json.writeValueAsString(doc);
+        });
     }
 
     @SuppressWarnings("unchecked")
@@ -700,15 +820,27 @@ public class TechnicalService {
      * ({@code neracalab.prices.session-close-cutoff}): before it, it is an unfinished intraday bar.
      */
     int refreshIndex() {
-        var index = properties.index();
-        Exchange exchange = Exchange.of(index.exchange());
-        LocalDate from = repository.latestIndexDate(index.code()).map(d -> d.minusDays(7)).orElse(index.historyFrom());
-        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(exchange.zone());
-        LocalDate to = now.toLocalTime().isBefore(prices.sessionCloseCutoffTime()) ? now.toLocalDate().minusDays(1)
-                : now.toLocalDate();
-        List<Candle> bars = yahoo.dailyBars(index.yahooSymbol(), exchange.zone(), from, to).stream()
-                .filter(b -> !b.date().isAfter(to)).toList();
-        return repository.upsertIndexBars(index.code(), exchange.code(), YahooChartClient.SOURCE, bars);
+        Exchange exchange = Exchange.of(properties.index().exchange());
+        var index = indexIngestion.index(exchange).orElseThrow();
+        var result = indexIngestion.ingest(index, false);
+        return result.inserted() + result.updated();
+    }
+
+    // ------------------------------------------------------------------ preset summaries
+
+    /**
+     * A quick summary of the chart for each preset (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller): stance, buy
+     * and sell price, stop and thesis by fixed rules ({@link PresetSummaries}) from the snapshot and the daily
+     * indicators. Computed on request; no model is called.
+     */
+    public Map<String, Object> summary(String exchange, String ticker) {
+        Listing listing = listing(exchange, ticker);
+        Map<String, Object> snapshot = snapshotDocument(listing);
+        IndicatorSet daily = indicatorSet(listing, Interval.D, Adjustment.SPLIT);
+        Map<String, Object> out = PresetSummaries.summarize(new PresetSummaries.Input(snapshot, daily, ticks(listing),
+                isIndex(listing)));
+        out.put("companyName", listing.companyName());
+        return out;
     }
 
     // ------------------------------------------------------------------ chart settings
@@ -735,6 +867,7 @@ public class TechnicalService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("exchange", listing.exchange());
         out.put("ticker", listing.ticker());
+        out.put("type", isIndex(listing) ? "INDEX" : "STOCK");
         out.put("companyName", listing.companyName());
         out.put("currency", Exchange.of(listing.exchange()).currency());
         out.put("interval", interval.name());
@@ -743,7 +876,7 @@ public class TechnicalService {
         out.put("lastDate", daily.getLast().date().toString());
         out.put("limitedHistory", daily.size() < properties.minHistoryDays());
         out.put("minHistoryDays", properties.minHistoryDays());
-        out.put("lotSize", properties.lotSize());
+        out.put("lotSize", isIndex(listing) ? null : properties.lotSize());
         return out;
     }
 

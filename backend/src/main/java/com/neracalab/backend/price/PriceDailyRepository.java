@@ -76,6 +76,22 @@ public class PriceDailyRepository {
                 .list();
     }
 
+    /** An active company with its latest stored trading day ({@code null}: no prices). */
+    public record CompanyLatest(CompanyRef company, LocalDate latestTradingDate) {
+    }
+
+    /** Every active company of an exchange with its latest stored trading day, ordered by ticker. */
+    public List<CompanyLatest> activeCompaniesWithLatest(Exchange exchange) {
+        return jdbc.sql("""
+                        SELECT c.company_id, c.ticker, c.currency,
+                               (SELECT max(p.trading_date) FROM price_daily p WHERE p.company_id = c.company_id) AS latest
+                        FROM company c WHERE c.exchange = :exchange AND c.active ORDER BY c.ticker""")
+                .param("exchange", exchange.code())
+                .query((rs, i) -> new CompanyLatest(new CompanyRef(rs.getLong("company_id"), exchange,
+                        rs.getString("ticker"), rs.getString("currency")), rs.getObject("latest", LocalDate.class)))
+                .list();
+    }
+
     /** Empty when no price is stored (a max() aggregate would return one NULL row, which single() rejects). */
     public Optional<LocalDate> latestTradingDate(long companyId) {
         return jdbc.sql("""

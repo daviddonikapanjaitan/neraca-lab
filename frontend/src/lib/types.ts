@@ -422,6 +422,57 @@ export interface PriceQueue {
   pending: number
 }
 
+/** The exchange's index (IHSG) in index_daily */
+export interface IndexPriceStatus {
+  code: string
+  /** at the source: ^JKSE */
+  symbol: string
+  name: string
+  /** yahoo */
+  source: string
+  rows: number
+  firstDate: string | null
+  lastDate: string | null
+  /** the latest stored day is the last completed trading day */
+  upToDate: boolean
+}
+
+/** GET /api/v1/prices/status?exchange= : how far the stored prices reach */
+export interface PriceStatus {
+  exchange: string
+  /** the latest day whose bar is final: today from 17:00 WIB, else the trading day before */
+  lastCompletedTradingDay: string
+  /** active companies of the exchange */
+  companies: number
+  upToDate: number
+  /** companies whose prices end before the last completed trading day */
+  behind: number
+  withoutPrices: number
+  oldestLatestDate: string | null
+  newestLatestDate: string | null
+  index: IndexPriceStatus | null
+  provider: string
+  pending: number
+}
+
+/** POST /api/v1/prices/updates?exchange=&index= : what "Update all companies" queued */
+export interface PriceUpdate {
+  exchange: string
+  lastCompletedTradingDay: string
+  companies: number
+  /** queued now: only the days after each company's latest stored day */
+  queued: number
+  /** already queued or running (kept) */
+  alreadyActive: number
+  /** skipped: their prices reach the last completed trading day */
+  upToDate: number
+  /** of the queued, companies without prices (their whole history) */
+  withoutPrices: number
+  index: { code: string; outcome: "QUEUED" | "ALREADY_ACTIVE" | "UP_TO_DATE"; job: IngestionJob | null } | null
+  /** the first job queued, for the jobs table to follow */
+  firstJob: IngestionJob | null
+}
+
 // Users, roles and permissions (docs/v1_docs/AUTH_DOCS.md)
 
 export type Permission = "ADMIN" | "INGESTION" | "COMPANIES" | "SCREENING"

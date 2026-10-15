@@ -1,13 +1,15 @@
 # Neraca Lab - Technical Analysis (v1)
 
 **Companies › Technicals** (`/companies/technicals`): interactive technical analysis charts of the listings stored in
-the database, and an agent-ready snapshot of every indicator per listing. Read-only and deterministic: **no model is
-called, no score, no buy / sell signal** - the page shows data and indicators. The sidebar's Companies entry is a
-dropdown: **Fundamentals** (the company list and company pages, as before) and **Technicals**.
+the database and of the **IHSG index**, an agent-ready snapshot of every indicator per listing, and below the chart a
+**summary for each preset** (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller): a stance, a buy price, a sell price,
+a stop and the thesis from the indicators and price patterns (section 8). Deterministic: **no model is called** - the
+summaries apply fixed rules to the snapshot, so the same data always gives the same summary. The sidebar's Companies
+entry is a dropdown: **Fundamentals** (the company list and company pages, as before) and **Technicals**.
 
 Future technical agents (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller, a risk overlay) are meant to be
 consumers of the snapshot ([../indicator-snapshot.md](../indicator-snapshot.md)) and of the `/levels` and `/market`
-APIs, without changes to the data or indicator layers.
+APIs, without changes to the data or indicator layers; the rules-based summaries are their deterministic baseline.
 
 ## 1. Data
 
@@ -15,7 +17,7 @@ APIs, without changes to the data or indicator layers.
 |---|---|---|
 | Listings | the companies of an exchange (filter by exchange; IDX only today, other exchanges via `Exchange`) | `company` |
 | Daily bars | the existing price ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)); split-adjusted OHLC, dividend-adjusted close, volume | `price_daily` |
-| IHSG | Yahoo Finance `^JKSE`, daily from 1990 (8,890 bars on 2026-10-14), fetched by the technical refresh | `index_daily` (new) |
+| IHSG | Yahoo Finance `^JKSE`, daily from 1990 (8,891 bars on 2026-10-15), fetched by the IHSG ingestion (Ingestion › Price Ingestion, the "Update all companies" run, the price schedule) and the technical refresh | `index_daily` (new) |
 | Corporate events | Yahoo Finance dividends and splits (one monthly-interval request per listing, refreshed after 7 days), and the splits recorded from the filings or by data scripts | `corporate_event` (new), `corporate_event_fetch` (new), `corporate_action` |
 | USD/IDR | ECB reference rates of the price ingestion | `fx_rate_daily` |
 | BI rate, SBN 10Y | no source connected; rows `BI_RATE` / `SBN_10Y` can be inserted by hand | `macro_series` (new) |
@@ -29,8 +31,9 @@ never call an outside service. The tables are filled beforehand by two jobs:
 
 | Job | Fetches | Into | How to run |
 |---|---|---|---|
-| Price ingestion (existing) | daily prices of a listing from the Yahoo Finance chart API (`/v8/finance/chart/HRTA.JK`; EODHD as an alternative provider) and USD/IDR from the ECB (Frankfurter API) | `price_daily`, `fx_rate_daily` | Ingestion › Prices, automatically after a filing upload, nightly when `PRICE_SCHEDULE_ENABLED=true` |
-| Technical refresh (new) | IHSG (`^JKSE`) and the dividends / splits of every listing from the same Yahoo Finance chart API | `index_daily`, `corporate_event` | nightly 19:00 WIB, or `POST /api/v1/technical/refresh` (INGESTION) |
+| Price ingestion (existing) | daily prices of a listing from the Yahoo Finance chart API (`/v8/finance/chart/HRTA.JK`; EODHD as an alternative provider) and USD/IDR from the ECB (Frankfurter API) | `price_daily`, `fx_rate_daily` | Ingestion › Price Ingestion (one company, or "Update all companies to today"), automatically after a filing upload, nightly when `PRICE_SCHEDULE_ENABLED=true` |
+| IHSG ingestion (new, in the price queue) | IHSG (`^JKSE`) from the same Yahoo Finance chart API: from the latest stored day to the last completed trading day, or the whole history | `index_daily` | Ingestion › Price Ingestion (IHSG card, or with "Update all companies"), the price schedule, and the technical refresh |
+| Technical refresh (new) | IHSG (through the IHSG ingestion) and the dividends / splits of every listing from the same Yahoo Finance chart API | `index_daily`, `corporate_event` | nightly 19:00 WIB, or `POST /api/v1/technical/refresh` (INGESTION) |
 
 Both call Yahoo Finance's web API directly from Java (the endpoint the Python `yfinance` package also uses; that
 package is not used) through the app's paced HTTP client: one request at a time, 1 - 2 s apart, backoff on HTTP 429,
@@ -85,15 +88,21 @@ company ("Company not found") or no prices ("No prices").
 
 | Endpoint | Content |
 |---|---|
-| `GET /api/v1/technical/tickers?exchange=IDX&query=&limit=` | ticker search by code or company name (exact and prefix matches first): trading days, first / last date, `limitedHistory` |
+| `GET /api/v1/technical/tickers?exchange=IDX&query=&limit=` | ticker search by code or company name (exact and prefix matches first): `type` (`STOCK`, or `INDEX` for IHSG, listed first when it matches: "IHSG", "JKSE", "index", "composite"), trading days, first / last date, `limitedHistory` |
 | `GET /api/v1/technical/{exchange}/{ticker}/ohlcv?interval=D\|W\|M&range=3M\|6M\|1Y\|3Y\|5Y\|10Y\|YTD\|MAX&from=&to=&adjustment=split\|total` | `bars` rows `[time, open, high, low, close, volume, value]`, `autoRejection` `[time, ARA\|ARB, change %, day]`, the listing header (currency, trading days, `limitedHistory`, lot size). `range` counts back from the listing's last trading day; `from` / `to` override it |
 | `GET .../indicators?interval=&range=&set=sma50,sma200,rsi14,bb,macd,...` | the requested series; a group name expands (`bb` → `bb.upper`, `bb.middle`, `bb.lower`, `bb.width`). Names: `sma20 sma50 sma100 sma200 ema20 ema50 bb.* rsi14 macd.line macd.signal macd.histogram stoch.k stoch.d adx.adx adx.plusDi adx.minusDi atr14 atrPct atrBands.upper atrBands.lower obv volSma20 volSma50 valueSma20 valueSma50 roc21 roc63 roc126 roc252 channel20.high channel20.low channel50.high channel50.low mom12_1`, plus `rs` (stock / IHSG rebased to 100) and `index` (IHSG on the bars' dates) |
 | `GET .../levels` | `zones`, `retracement`, `swings`, `week52`, `allTimeHigh`, `base`, the full `volumeProfile` (24 buckets), and `keyLevels`: one table of every level with its distance from the close, ordered from the top |
 | `GET .../snapshot` | the IndicatorSnapshot ([../indicator-snapshot.md](../indicator-snapshot.md)) |
 | `GET .../events` | corporate events with chart time, source and URL |
+| `GET .../summary` | the preset summaries (section 8): per preset `stance` (`BUY`, `ACCUMULATE`, `WAIT`, `AVOID`), `stanceLabel`, `score` / `maxScore`, `buy` / `sell` / `stopLoss` (`price`, `type` LIMIT or STOP, `basis`, `distancePct`), `rewardRisk`, `thesis`, `points` (the evidence, `tone` POSITIVE / NEGATIVE / NEUTRAL); `caveats` (limited history, thin liquidity, ARA / ARB, stale prices), `disclaimer` |
 | `GET /api/v1/technical/market?exchange=IDX&range=1Y` | IHSG regime (close, SMA 200, series), breadth, macro series |
 | `GET`, `PUT /api/v1/technical/settings` | the user's last chart settings (a JSON object up to 20,000 characters; 204 when none) |
-| `POST /api/v1/technical/refresh?exchange=IDX&ticker=&forceEvents=false` (INGESTION) | starts a refresh in the background (202): IHSG (from 7 days before its last stored day; today's bar only after the price ingestion's session-close cutoff), the events that are due, then every snapshot. `GET` the same path for its status (`indexRows`, `eventCompanies`, `eventsStored`, `snapshots`, `errors`). A Yahoo rate limit stops the event fetches of that run |
+| `POST /api/v1/technical/refresh?exchange=IDX&ticker=&forceEvents=false` (INGESTION) | starts a refresh in the background (202): IHSG (the IHSG ingestion: from its last stored day; today's bar only after the price ingestion's session-close cutoff), the events that are due, then every snapshot. `GET` the same path for its status (`indexRows`, `eventCompanies`, `eventsStored`, `snapshots`, `errors`). A Yahoo rate limit stops the event fetches of that run |
+
+`{ticker}` = `IHSG` (or `^JKSE`, URL-encoded) is the exchange's index: bars from `index_daily` in index points, levels
+rounded to 0.01 instead of IDX ticks, `type` = `INDEX` and `lotSize` = null in the header, no auto-rejection days, no
+events; its snapshot is computed on request and kept in memory only (`indicator_snapshot` belongs to companies), with
+relative strength vs itself, auto-rejection, lot size and value traded null.
 
 Measured on 2026-10-14 (61 listings, cached): 0.04 - 0.13 s per call; the first `/levels` of a listing after new
 prices about 1 s.
@@ -112,9 +121,9 @@ distributed lock).
 `src/app/(dashboard)/companies/technicals`, client component `TechnicalsPageClient`; data via TanStack Query through
 the Next.js route handlers `/api/technical/...`, every response validated with zod before charting.
 
-- **Controls**: exchange (IDX), ticker search with autocomplete (code or name, keyboard navigable), interval
-  Daily / Weekly / Monthly, range 3M / 6M / 1Y / 3Y / 5Y / Max, Split-adjusted vs Total return, indicator checkboxes
-  (a side column; a sheet on a phone) and presets that only toggle indicators:
+- **Controls**: exchange (IDX), ticker search with autocomplete (code or name, or IHSG for the composite index;
+  keyboard navigable), interval Daily / Weekly / Monthly, range 3M / 6M / 1Y / 3Y / 5Y / Max, Split-adjusted vs Total
+  return, indicator checkboxes (a side column; a sheet on a phone) and presets that toggle indicators:
   Murphy (SMA 50 / 200, zones, retracements, RSI, MACD, volume, OBV, RS vs IHSG), Keith Gill (SMA 200, volume,
   volume profile, base, 52-week range, events), Paul Tudor Jones (SMA 200, 20 / 50-bar channels, ADX, ATR bands),
   Druckenmiller (RS vs IHSG, 12-1 month momentum, IHSG regime panel, macro panel).
@@ -129,6 +138,12 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
   50-bar average, RSI, MACD, Stochastic, OBV, ADX ±DI, ATR %, RS vs IHSG, 12-1 month momentum. Colors follow the
   app's CSS variables and the light / dark theme. The `attributionLogo` stays on; the notice is in the page footer and
   on `/credits`.
+- **Preset summaries** (below the chart): one card per preset, the selected one first and highlighted - the stance,
+  "Buy at or below / at or above", "Sell (target)" and "Stop loss" with their distance from the close and why the
+  level was chosen, reward to risk, the thesis, and the evidence (each indicator's vote) on request; "Show on chart"
+  applies the preset. Caveats (limited history, thin liquidity, ARA / ARB days, stale prices) above them.
+- **IHSG**: searched like a ticker; the header shows index points and an "Index" badge instead of the lot and the
+  Fundamentals link; relative strength, the IHSG comparison line, events and ARA / ARB markers are disabled for it.
 - **Side panels**: key levels (CSV export), snapshot in readable form labeled "data, not signals" (CSV export), volume
   by price (Recharts), IHSG regime and macro (Recharts).
 - **Export**: the chart as PNG (`takeScreenshot`), key levels and snapshot as CSV.
@@ -142,9 +157,14 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 | `IndicatorEngineTest` | SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, OBV, ROC, channels, momentum against reference formulas written in the test; warm-ups; weekly / monthly aggregation incl. an ISO week across the year end |
 | `StructureTest` | fractal pivots, zone clustering, volume-profile bucketing, retracement math (up and down swings), base detection, extremes |
 | `SnapshotCalculatorTest` | on about 300 real days of HRTA, SMSM and MYOR with IHSG (`src/test/resources/technical/*.csv`): the complete versioned schema, valid tick prices, determinism and the input hash, limited history, missing sessions vs stale prices, earnings reaction |
-| `TechnicalControllerTest` | every endpoint against the Docker Postgres (rolled back): search, bars, aggregation, indicators, levels, snapshot, events, market, settings, invalid parameters, unknown ticker, a 30-day listing and one without prices |
+| `TechnicalControllerTest` | every endpoint against the Docker Postgres (rolled back): search, bars, aggregation, indicators, levels, snapshot, events, market, settings, invalid parameters, unknown ticker, a 30-day listing and one without prices; IHSG as a listing (search, bars in points by `IHSG` and `^JKSE`, levels with 2 decimals, snapshot not stored, no events, summary); the summaries of a stock (valid IDX prices, stop < buy < sell) |
+| `PresetSummariesTest` | the four summaries on the real HRTA, SMSM and MYOR fixtures (stance, valid IDX prices, stop < buy < sell, reward to risk, thesis), determinism, an uptrend bought and a downtrend avoided (PTJ: a buy-stop above the close below the 200-day, 5:1 target), an index in points without relative strength vs itself, no prices with fewer than 15 bars |
+| `IndexIngestionServiceTest` | the IHSG ingestion: from the latest stored day, today's bar only after the cutoff, no request when up to date, the whole history the first time and with `full` |
 
 ## 7. Known limitations
+
+- The preset summaries are fixed rules over the indicators, not the investors' own judgement: no fundamentals, news,
+  order flow or position sizing; a stance can change with every new bar. "For information only. Not investment advice."
 
 - No earnings, RUPS / RUPSLB, rights-issue or private-placement dates: `reporting_period.filing_date` is not filled
   by the ingestion yet, and no event source exists for the others.
@@ -153,3 +173,24 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
   the whole exchange.
 - `value` (value traded) is approximated by close x volume.
 - No springdoc / OpenAPI types: the API types are hand-written zod schemas (`src/lib/technical.ts`).
+
+## 8. Preset summaries
+
+`technical.engine.PresetSummaries` (rules version `2026-10-15.1`), served by `GET .../summary` and shown below the chart.
+Input: the listing's snapshot and its daily indicators (the 20 / 50-day channels of the bars before the last one, EMA
+20). Each preset scores its own evidence (every vote is listed in `points`), takes a stance from the score, and derives
+three prices. Every price is a valid IDX price (an index: 0.01); stop < buy < sell always holds (a target at or below
+the entry becomes 3 ATR - PTJ 5 - above it, a stop at or above the entry 1 ATR below it). Without an ATR (fewer than 15
+bars) no prices are given. A missing indicator (limited history, no IHSG) does not vote.
+
+| Preset | Evidence (votes) | Stance | Buy | Sell (target) | Stop |
+|---|---|---|---|---|---|
+| Murphy (trend with confirmation) | close vs SMA 200 (primary trend), golden / death cross, close vs SMA 50, MACD histogram, RSI (overbought / oversold), OBV slope, relative strength vs IHSG | score ≥ 3 BUY, ≥ 1 ACCUMULATE, > -2 WAIT, else AVOID | BUY / ACCUMULATE: the nearest support below the close within 12 % (support zone top, retracement of the up swing, SMA 50 / 200); else 1 ATR below. WAIT / AVOID: the strongest support zone (most touches) or the 52-week low, only after a close back above the SMA 50 | the nearest resistance above the entry + ½ ATR (resistance zone bottom, retracement of a down swing, SMA 200 overhead, 52-week high) | ½ ATR below the support zone, else 1.5 ATR below the entry |
+| Keith Gill (contrarian accumulation) | a base (+1.5), position in the 52-week range, drawdown from the all-time high (≤ -50 %), up / down volume ratio, volume spikes on up vs down days, OBV, SMA 200 (back above / falling) | ≥ 3 BUY, ≥ 1.5 ACCUMULATE, ≥ -1 WAIT, else AVOID | in a base: its lower quarter (at the close when already there); above the base: a retest of the base high; no base: the heaviest volume node below the close, a support zone, the 52-week low | the 52-week high (prior peak) if 5 % above, else the all-time high, else the next resistance | ½ ATR below the base low / volume node / support zone, else 2 ATR |
+| Paul Tudor Jones (200-day rule, breakouts) | above / below the SMA 200 (±2), ADX ≥ 25 / ≥ 20 with +DI vs -DI, a break of the 20-day high / low, top of the 50-day channel, ATR in the top 20 % of the year | below the SMA 200 AVOID; trending (ADX ≥ 20, +DI leads) BUY when score ≥ 2.5 else ACCUMULATE; ADX < 20 WAIT | a buy-stop one tick above the 20-day high (at the close when today broke it); AVOID: a buy-stop above the SMA 200 and the 20-day high | 5 times the risk (5:1) | the 20-day low when within 2 ATR, else 2 ATR below the entry; trail to the 20-day low |
+| Druckenmiller (liquidity and leadership) | IHSG vs its SMA 200, breadth (≥ 55 / ≤ 45 %), USD/IDR 3-month change, BI rate change, 6- and 12-month return percentile, relative strength vs IHSG, 12-1 month momentum, close vs SMA 50 (an index: no leadership votes) | ≥ 3 BUY, ≥ 1 ACCUMULATE, ≥ -1 WAIT, else AVOID | a pullback within 10 % (EMA 20, SMA 50, support zone) else ½ ATR below the close; WAIT / AVOID below the SMA 50: a buy-stop above it | the 52-week high if 3 % above, else the all-time high, else 3 ATR above the close | 1 ATR below the SMA 50 when it is below the entry, else 2 ATR |
+
+Example (ANTM, 2026-10-15, close Rp 2,990): Murphy AVOID (buy 2,920 only after a close above the SMA 50, sell 3,060,
+stop 2,740); Keith Gill BUY (a 73-day base: buy 2,900, sell 4,970 at the 52-week high, stop 2,680); Paul Tudor Jones
+AVOID (below the 200-day: buy-stop 3,420, target 4,570 = 5:1, stop 3,190); Druckenmiller AVOID (IHSG 16.8 % below its
+200-day: buy-stop 3,160 above the SMA 50).

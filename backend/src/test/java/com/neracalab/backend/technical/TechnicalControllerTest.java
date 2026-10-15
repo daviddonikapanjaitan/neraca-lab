@@ -193,6 +193,97 @@ class TechnicalControllerTest {
                 .andExpect(jsonPath("$.title").value("No prices"));
     }
 
+    /** 300 weekday IHSG bars up to 2026-10-14, rising from 6,500 (the stored bars are replaced; rolled back). */
+    private void syntheticIhsg() {
+        jdbc.sql("DELETE FROM index_daily WHERE index_code = 'IHSG'").update();
+        LocalDate d = LocalDate.of(2026, 10, 14);
+        for (int i = 0; i < 300; i++) {
+            while (d.getDayOfWeek().getValue() > 5) {
+                d = d.minusDays(1);
+            }
+            double close = 6500 + (299 - i) * 3.17 + (i % 7) * 11.5;
+            jdbc.sql("""
+                            INSERT INTO index_daily (index_code, exchange, trading_date, open_price, high_price, low_price,
+                                                     close_price, volume, source)
+                            VALUES ('IHSG', 'IDX', :d, :p - 5, :p + 20.25, :p - 20.25, :p, 300000000, 'test')""")
+                    .param("d", d).param("p", BigDecimal.valueOf(close).setScale(2, java.math.RoundingMode.HALF_UP)).update();
+            d = d.minusDays(1);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void theIndexIsAListingInIndexPoints() throws Exception {
+        syntheticIhsg();
+        mvc.perform(get("/api/v1/technical/tickers?exchange=IDX&query=ihsg"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].ticker").value("IHSG"))
+                .andExpect(jsonPath("$[0].type").value("INDEX"))
+                .andExpect(jsonPath("$[0].companyName").value("IDX Composite Index (IHSG)"))
+                .andExpect(jsonPath("$[0].tradingDays").value(300));
+        mvc.perform(get("/api/v1/technical/tickers?exchange=IDX&query=hrta"))
+                .andExpect(jsonPath("$[0].ticker").value("HRTA"))
+                .andExpect(jsonPath("$[0].type").value("STOCK"));
+
+        Map<String, Object> bars = getJson("/api/v1/technical/IDX/IHSG/ohlcv?interval=D&range=1Y");
+        assertThat(bars.get("type")).isEqualTo("INDEX");
+        assertThat(bars.get("lotSize")).isNull();
+        assertThat(bars.get("lastDate")).isEqualTo("2026-10-14");
+        assertThat((List<?>) bars.get("autoRejection")).isEmpty();
+        assertThat((String) bars.get("priceBasis")).contains("index points");
+        // the Yahoo symbol works too (encoded as the browser sends it)
+        mvc.perform(get(java.net.URI.create("/api/v1/technical/IDX/%5EJKSE/ohlcv?interval=W")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ticker").value("IHSG"));
+
+        Map<String, Object> levels = getJson("/api/v1/technical/IDX/IHSG/levels");
+        for (Map<String, Object> level : (List<Map<String, Object>>) levels.get("keyLevels")) {
+            BigDecimal price = new BigDecimal(String.valueOf(level.get("price")));
+            assertThat(price.stripTrailingZeros().scale()).as(level.toString()).isLessThanOrEqualTo(2);
+        }
+        Map<String, Object> snapshot = getJson("/api/v1/technical/IDX/IHSG/snapshot");
+        assertThat(((Map<String, Object>) snapshot.get("relativeStrength")).get("ratio")).isNull();
+        assertThat(((Map<String, Object>) snapshot.get("price")).get("lotSize")).isNull();
+        assertThat(((Map<String, Object>) snapshot.get("risk")).get("araCount60")).isNull();
+        assertThat(jdbc.sql("SELECT count(*) FROM indicator_snapshot WHERE company_id = -1").query(Long.class).single()).isZero();
+        Map<String, Object> events = getJson("/api/v1/technical/IDX/IHSG/events");
+        assertThat((List<?>) events.get("events")).isEmpty();
+
+        Map<String, Object> summary = getJson("/api/v1/technical/IDX/IHSG/summary");
+        assertThat(summary.get("type")).isEqualTo("INDEX");
+        assertSummaries(summary, null);
+    }
+
+    @Test
+    void presetSummariesOfAStock() throws Exception {
+        Map<String, Object> summary = getJson("/api/v1/technical/IDX/HRTA/summary");
+        assertThat(summary.get("type")).isEqualTo("STOCK");
+        assertThat(summary.get("method")).isEqualTo("rules");
+        assertThat(summary.get("companyName")).isNotNull();
+        assertSummaries(summary, new IdxTickSize(properties.tickSizes()));
+        mvc.perform(get("/api/v1/technical/IDX/ZZZZ/summary")).andExpect(status().isNotFound());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void assertSummaries(Map<String, Object> out, IdxTickSize ticks) {
+        List<Map<String, Object>> summaries = (List<Map<String, Object>>) out.get("summaries");
+        assertThat(summaries).extracting(s -> s.get("preset")).containsExactly("murphy", "gill", "ptj", "druckenmiller");
+        for (Map<String, Object> s : summaries) {
+            assertThat(s.get("stance")).isIn("BUY", "ACCUMULATE", "WAIT", "AVOID");
+            double buy = ((Number) ((Map<String, Object>) s.get("buy")).get("price")).doubleValue();
+            double sell = ((Number) ((Map<String, Object>) s.get("sell")).get("price")).doubleValue();
+            double stop = ((Number) ((Map<String, Object>) s.get("stopLoss")).get("price")).doubleValue();
+            assertThat(stop).as(s.get("preset") + " stop < buy < sell").isLessThan(buy);
+            assertThat(buy).as(s.get("preset") + " buy < sell").isLessThan(sell);
+            if (ticks != null) {
+                for (double p : new double[] {buy, sell, stop}) {
+                    assertThat(ticks.isValid(BigDecimal.valueOf(p))).as(s.get("preset") + " " + p).isTrue();
+                }
+            }
+            assertThat((String) s.get("thesis")).isNotBlank();
+        }
+    }
+
     @Test
     void chartSettingsRoundTrip() throws Exception {
         String body = "{\"ticker\":\"HRTA\",\"interval\":\"W\",\"indicators\":[\"sma50\",\"rsi14\"]}";

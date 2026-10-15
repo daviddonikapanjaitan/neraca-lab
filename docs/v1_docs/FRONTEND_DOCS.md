@@ -135,12 +135,13 @@ The Companies entry of the sidebar is a dropdown: **Fundamentals** (`/companies`
 **Technicals**. The chart page is a client component (`components/technical/technicals-page-client.tsx`); the chart
 (`price-chart.tsx`) is a small wrapper around Lightweight Charts loaded with `next/dynamic` (`ssr: false`), rebuilt when
 its data, indicators or the theme change, removed on unmount. The browser computes no indicator: every series comes
-from `/api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events}`, `/api/technical/market`,
+from `/api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events|summary}`, `/api/technical/market`,
 `/api/technical/tickers` and `/api/technical/settings` (route handlers forwarding to `/api/v1/technical/**`).
 
 | Element | Content |
 |---|---|
-| Controls | exchange, ticker search (code or name, arrows / Enter / Escape), Daily / Weekly / Monthly, 3M .. Max, Split-adjusted / Total return, presets (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller: they only toggle indicators), indicator checkboxes (side column; a sheet on a phone), PNG export |
+| Controls | exchange, ticker search (code or name, or IHSG for the index; arrows / Enter / Escape), Daily / Weekly / Monthly, 3M .. Max, Split-adjusted / Total return, presets (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller: they toggle indicators), indicator checkboxes (side column; a sheet on a phone; for IHSG relative strength, the comparison line, events and ARA / ARB are disabled), PNG export |
+| Preset summaries | below the chart (`preset-summaries.tsx`): a card per preset, the selected one first - stance, buy / sell / stop with distance and basis, reward to risk, thesis, the evidence on request, "Show on chart"; caveats and the disclaimer |
 | Main chart | candles, moving averages, Bollinger, channels, ATR bands, IHSG rebased; zones and the base as shaded bands (series primitive); retracement, 52-week and all-time-high lines; event and ARA / ARB markers; lower panes for volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, RS vs IHSG, 12-1 month momentum |
 | Panels | key levels (CSV), snapshot "data, not signals" (CSV), volume by price, IHSG regime, macro |
 | Settings | saved per user (`PUT /api/technical/settings`, debounced), localStorage as fallback, and in the URL; the URL wins |
@@ -158,7 +159,7 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | Page                         | Card                                                                                  |
 |------------------------------|---------------------------------------------------------------------------------------|
 | IDX XBRL (`/ingestion/xbrl`) | Financial statement upload                                                            |
-| Price Ingestion (`/ingestion/prices`) | Price ingestion (exchanges, stored companies and the price provider are loaded for this page only) |
+| Price Ingestion (`/ingestion/prices`) | Left: price ingestion of one company. Right: "Update all companies to today" (`price-update-card.tsx`: companies up to date / behind / without prices against the last completed trading day, IHSG with them) and the IHSG index (`index-price-card.tsx`: stored range, fetch, full history, link to its chart). Exchanges, stored companies, `GET /api/v1/prices/status` per exchange and the price provider are loaded for this page only |
 | Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
 | PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload, then the stored PDF documents ([RAG_DOCS.md](RAG_DOCS.md)) |
 | News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |

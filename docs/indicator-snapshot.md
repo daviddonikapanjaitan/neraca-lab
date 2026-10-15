@@ -2,7 +2,8 @@
 
 The latest technical snapshot of a listing: every indicator the future technical agents (Murphy, Keith Gill, Paul
 Tudor Jones, Stanley Druckenmiller, and the risk overlay) will read, as one versioned JSON document. It is data, not a
-signal: no score, no buy / sell verdict, no model call. Computed in Java (`technical.engine.SnapshotCalculator`) from
+signal: no score, no buy / sell verdict, no model call (the preset summaries, `GET .../summary`, derive a stance and
+prices from it by fixed rules: [v1_docs/TECHNICAL_DOCS.md](v1_docs/TECHNICAL_DOCS.md) section 8). Computed in Java (`technical.engine.SnapshotCalculator`) from
 stored daily prices, the IHSG bars, corporate events and macro series.
 
 - API: `GET /api/v1/technical/{exchange}/{ticker}/snapshot` (permission COMPANIES).
@@ -14,6 +15,10 @@ stored daily prices, the IHSG bars, corporate events and macro series.
 - Versioning: `schemaVersion` changes on any incompatible change (a field renamed, removed or redefined); new fields
   may be added within a version. Consumers must ignore unknown fields. `SnapshotCalculator.ENGINE_REVISION` (not in
   the document) changes when a value is computed differently without a schema change.
+
+The IHSG index has a snapshot too (`.../IHSG/snapshot`): the same groups on its bars in index points (levels rounded to
+0.01), computed on request and not stored; `relativeStrength.ratio` / `ratioChange50Pct` (vs itself), the auto-rejection
+counts, `price.lotSize`, `price.valueTraded` and the value averages are null, with a note.
 
 ## Conventions
 

@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { EMPTY, formatDate, formatNumber, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
 import { creatorLabel, formatBytes, formatDuration, isActive, providerLabel, TYPE_LABEL } from "@/lib/ingestion"
-import { companyHref } from "@/lib/links"
+import { companyHref, INDEX_TICKERS, technicalsHref } from "@/lib/links"
 import type { IngestionJob } from "@/lib/types"
 
 /** Fields of the financial statement upload result (IngestionResponse) shown here. */
@@ -439,10 +439,15 @@ export function JobDetailSheet({
 
               {shown.ticker && shown.exchange && !isActive(shown.status) && shown.status !== "FAILED" && (
                 <Link
-                  href={companyHref(shown.exchange, shown.ticker)}
+                  href={
+                    INDEX_TICKERS.has(shown.ticker)
+                      ? technicalsHref(shown.exchange, shown.ticker)
+                      : companyHref(shown.exchange, shown.ticker)
+                  }
                   className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
                 >
-                  Open {shown.ticker} <ChevronRightIcon />
+                  {INDEX_TICKERS.has(shown.ticker) ? `Open the ${shown.ticker} chart` : `Open ${shown.ticker}`}{" "}
+                  <ChevronRightIcon />
                 </Link>
               )}
             </>

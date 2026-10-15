@@ -30,7 +30,8 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     section: "prices",
     title: "Price Ingestion",
     heading: "Price Ingestion",
-    description: "Fetch daily prices of a listed company; market and valuation data are recalculated afterwards.",
+    description:
+      "Fetch daily prices of one company, bring every company of an exchange up to today, and ingest the IHSG index; market and valuation data are recalculated afterwards.",
     href: "/ingestion/prices",
     jobType: "PRICE",
   },

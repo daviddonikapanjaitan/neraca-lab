@@ -3,7 +3,6 @@ package com.neracalab.backend.price;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -286,19 +285,19 @@ public class PriceIngestionService {
                 .orElse(false);
     }
 
-    /**
-     * Today when the session has closed (exchange-local time at or after the cutoff), otherwise the
-     * previous day; weekends step back to Friday. Exchange holidays are not known here: a holiday
-     * simply returns no bar.
-     */
+    /** {@link PriceProperties#lastCompletedTradingDay}: today after the session close cutoff, else the trading day before. */
     LocalDate lastCompletedTradingDay(ZonedDateTime now) {
-        LocalDate day = now.toLocalTime().isBefore(properties.sessionCloseCutoffTime())
-                ? now.toLocalDate().minusDays(1)
-                : now.toLocalDate();
-        while (day.getDayOfWeek() == DayOfWeek.SATURDAY || day.getDayOfWeek() == DayOfWeek.SUNDAY) {
-            day = day.minusDays(1);
-        }
-        return day;
+        return properties.lastCompletedTradingDay(now);
+    }
+
+    /** The last completed trading day of an exchange now. */
+    public LocalDate lastCompletedTradingDay(com.neracalab.backend.company.Exchange exchange) {
+        return lastCompletedTradingDay(ZonedDateTime.now(clock.withZone(exchange.zone())));
+    }
+
+    /** The latest stored trading day of a company (empty: no prices). */
+    public Optional<LocalDate> latestTradingDate(CompanyRef company) {
+        return prices.latestTradingDate(company.companyId());
     }
 
     /**

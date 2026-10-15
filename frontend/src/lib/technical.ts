@@ -11,7 +11,12 @@ const nullableNum = z.number().nullable()
 /** [time (seconds, 00:00 UTC of the day), value] */
 const point = z.tuple([num, num])
 
+/** STOCK: a listed company; INDEX: the exchange's index (IHSG), charted in index points */
+const listingType = z.enum(["STOCK", "INDEX"]).catch("STOCK")
+export type ListingType = z.infer<typeof listingType>
+
 export const tickerSchema = z.object({
+  type: listingType,
   exchange: z.string(),
   ticker: z.string(),
   companyName: z.string().nullable(),
@@ -26,6 +31,7 @@ export const tickerSchema = z.object({
 export type TickerInfo = z.infer<typeof tickerSchema>
 
 const header = {
+  type: listingType,
   exchange: z.string(),
   ticker: z.string(),
   companyName: z.string().nullable(),
@@ -36,7 +42,8 @@ const header = {
   lastDate: z.string(),
   limitedHistory: z.boolean(),
   minHistoryDays: num,
-  lotSize: num,
+  /** shares per lot; null for an index */
+  lotSize: nullableNum,
 }
 
 export const ohlcvSchema = z.object({
@@ -177,6 +184,52 @@ export const snapshotSchema = z
   .passthrough()
 export type Snapshot = z.infer<typeof snapshotSchema>
 
+const priceLevelSchema = z.object({
+  price: num,
+  /** LIMIT: at or below (a sell: at or above); STOP: at or above for a buy, at or below for the stop */
+  type: z.enum(["LIMIT", "STOP"]),
+  basis: z.string(),
+  distancePct: nullableNum,
+})
+export type PriceLevel = z.infer<typeof priceLevelSchema>
+
+export const STANCES = ["BUY", "ACCUMULATE", "WAIT", "AVOID"] as const
+export type Stance = (typeof STANCES)[number]
+
+const presetSummarySchema = z.object({
+  preset: z.enum(["murphy", "gill", "ptj", "druckenmiller"]),
+  name: z.string(),
+  style: z.string(),
+  stance: z.enum(STANCES),
+  stanceLabel: z.string(),
+  score: num,
+  maxScore: num,
+  buy: priceLevelSchema.nullable(),
+  sell: priceLevelSchema.nullable(),
+  stopLoss: priceLevelSchema.nullable(),
+  rewardRisk: nullableNum,
+  thesis: z.string(),
+  points: z.array(z.object({ tone: z.enum(["POSITIVE", "NEGATIVE", "NEUTRAL"]), text: z.string() })),
+})
+export type PresetSummary = z.infer<typeof presetSummarySchema>
+
+/** GET .../summary: the four preset summaries (fixed rules over the indicators; no AI model) */
+export const summarySchema = z.object({
+  exchange: z.string(),
+  ticker: z.string(),
+  companyName: z.string().nullable(),
+  asOfDate: z.string(),
+  currency: z.string(),
+  close: num,
+  type: listingType,
+  method: z.string(),
+  rulesVersion: z.string(),
+  summaries: z.array(presetSummarySchema),
+  caveats: z.array(z.string()),
+  disclaimer: z.string(),
+})
+export type Summary = z.infer<typeof summarySchema>
+
 export const marketSchema = z.object({
   exchange: z.string(),
   asOfDate: z.string().nullable(),
@@ -294,7 +347,7 @@ export const INDICATOR_GROUPS: { title: string; ids: IndicatorId[] }[] = [
 
 export type PresetId = "murphy" | "gill" | "ptj" | "druckenmiller"
 
-/** Presets only toggle indicators: no score, no signal. */
+/** Presets toggle indicators; the backend summarises the chart in each preset's style (GET .../summary). */
 export const PRESETS: { id: PresetId; label: string; description: string; indicators: IndicatorId[] }[] = [
   {
     id: "murphy",
@@ -323,6 +376,9 @@ export const PRESETS: { id: PresetId; label: string; description: string; indica
 ]
 
 export const DEFAULT_INDICATORS: IndicatorId[] = ["sma50", "sma200", "volume", "events", "autoRejection"]
+
+/** What an index (IHSG) cannot show: a comparison with itself, corporate events, auto-rejection limits. */
+export const NOT_FOR_INDEX: IndicatorId[] = ["rs", "ihsg", "events", "autoRejection"]
 
 export interface ChartSettings {
   exchange: string
@@ -369,6 +425,12 @@ export function seriesFor(ids: IndicatorId[]): string[] {
 }
 
 export const DISCLAIMER = "For information only. Not investment advice."
+
+/** A level: an index in points with 2 decimals; an IDX price in whole rupiah (decimals only where it has them) */
+export function formatLevel(value: number | null | undefined, index: boolean): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—"
+  return value.toLocaleString("en-US", { minimumFractionDigits: index ? 2 : 0, maximumFractionDigits: 2 })
+}
 
 export const TRADINGVIEW_NOTICE = "TradingView Lightweight Charts™ Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/"
 

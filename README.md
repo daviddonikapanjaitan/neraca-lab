@@ -389,6 +389,12 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                 
 | `POST /api/v1/prices/ingestions?exchange=&ticker=[&full=true]` | queues an ingestion: **202** with the new job, **200** with the job already queued / running for the company; 400 / 404 as the company APIs |
 | `GET /api/v1/prices/ingestions/{id}`                          | the job: `status` (`QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `FAILED`), `message`, `result` (requests, rows inserted / updated, valuation rows) |
 | `GET /api/v1/prices/ingestions`                               | `provider`, `pending` jobs and the recent jobs, most recent first                                                                        |
+| `GET /api/v1/prices/status?exchange=IDX`                      | how far the stored prices reach: last completed trading day, companies up to date / behind / without prices, the IHSG index            |
+| `POST /api/v1/prices/updates?exchange=IDX[&index=true]`       | **"Update all companies to today"**: queues every active company whose prices end before the last completed trading day - only its missing days (ANTM stored up to 9 Oct: 9 Oct to today) - and IHSG; up-to-date companies are skipped |
+| `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | the IHSG index (Yahoo Finance `^JKSE`) into `index_daily` through the same queue: **202** new job, **200** job already active          |
+
+On the page (Ingestion › Price Ingestion) the left card fetches one company; the right-hand cards update every company
+of the exchange to today (IDX for now) and ingest IHSG.
 
 Background workers (5 companies at the same time, `neracalab.jobs.workers`) fetch the
 [Yahoo Finance chart API](https://query1.finance.yahoo.com/v8/finance/chart/HRTA.JK) (`HRTA.JK` for IDX) and never inside a web request;
@@ -423,7 +429,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.eodhd.api-token` / `EODHD_API_TOKEN` | empty                       | required for `eodhd`                                |
 | `neracalab.prices.min-delay`, `max-delay`             | `1s`, `2s`                  | pause between two requests                          |
 | `neracalab.prices.backoff`                            | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429                    |
-| `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: queues every active company of `IDX`   |
+| `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: like "Update all companies" - the `IDX` companies behind and IHSG |
 | `neracalab.ingestion.prices-after-upload` / `INGESTION_PRICES_AFTER_UPLOAD` | `true` | a stored filing queues the daily prices of its company (nothing when they are up to date) |
 | `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
 | `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
@@ -540,32 +546,39 @@ growth rates stay those of the USD statements. Details: [`docs/v1_docs/ANALYSIS_
 **Companies › Technicals** charts every stored listing: candles with moving averages, Bollinger Bands, channels, ATR
 bands, support / resistance zones, retracements, 52-week and all-time levels, a base range, corporate events and ARA / ARB
 days, lower panes (volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, relative strength vs IHSG, 12-1 month momentum), key
-levels, volume by price, IHSG regime and macro panels. No model is called and no score or signal is given: the backend
-computes every indicator deterministically (ta4j 0.22.6 and custom code), rounds every level to a valid IDX price (tick
-sizes, lot 100) and detects auto-rejection days with the limits in force on each day. The latest **IndicatorSnapshot** of
-every listing (versioned JSON, [`docs/indicator-snapshot.md`](docs/indicator-snapshot.md)) is the input of the
-technical agents planned next.
+levels, volume by price, IHSG regime and macro panels - and the **IHSG index** itself (search IHSG). Below the chart, a
+**summary for each preset** (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller): the stance, the price to buy at,
+the price to sell at, the stop and the thesis from the indicators and price patterns, by fixed rules (no AI model; the
+same data always gives the same summary; "For information only. Not investment advice."). The backend computes every
+indicator deterministically (ta4j 0.22.6 and custom code), rounds every level to a valid IDX price (tick sizes, lot 100;
+the index to 0.01) and detects auto-rejection days with the limits in force on each day. The latest
+**IndicatorSnapshot** of every listing (versioned JSON, [`docs/indicator-snapshot.md`](docs/indicator-snapshot.md)) is
+the input of the summaries and of the technical agents planned next.
 
 The page and its APIs read only the database: daily prices from `price_daily` (filled by the price ingestion), IHSG from
-`index_daily` and dividends / splits from `corporate_event` (filled by the technical refresh). Both jobs call the Yahoo
+`index_daily` (filled by the IHSG ingestion on Ingestion › Price Ingestion and by the technical refresh) and dividends /
+splits from `corporate_event` (filled by the technical refresh). Both jobs call the Yahoo
 Finance chart API directly from Java (no `yfinance` package, no API key); USD/IDR comes from the ECB rates in
 `fx_rate_daily`. TradingView only supplies the open-source chart library (Lightweight Charts™) that draws in the
 browser - no data comes from TradingView.
 
 | Endpoint (permission COMPANIES) | Content |
 |---|---|
-| `GET /api/v1/technical/tickers?exchange=IDX&query=` | ticker search |
+| `GET /api/v1/technical/tickers?exchange=IDX&query=` | ticker search (IHSG listed as `type` INDEX) |
 | `GET /api/v1/technical/{exchange}/{ticker}/ohlcv?interval=D\|W\|M&range=1Y&adjustment=split\|total` | bars and ARA / ARB days |
 | `GET /api/v1/technical/{exchange}/{ticker}/indicators?set=sma50,sma200,rsi14,...` | indicator series (`[time, value]`) |
 | `GET /api/v1/technical/{exchange}/{ticker}/levels` | zones, retracements, swings, volume profile, 52-week / all-time levels, key levels table |
 | `GET /api/v1/technical/{exchange}/{ticker}/snapshot` | the agent-ready snapshot |
 | `GET /api/v1/technical/{exchange}/{ticker}/events` | dividends and splits for chart markers |
+| `GET /api/v1/technical/{exchange}/{ticker}/summary` | the preset summaries: stance, buy / sell / stop prices, reward to risk, thesis, evidence (`{ticker}` = IHSG for the index) |
 | `GET /api/v1/technical/market?exchange=IDX` | IHSG regime, breadth, USD/IDR |
 | `POST /api/v1/technical/refresh` (INGESTION) | load IHSG and corporate events from Yahoo Finance, recompute every snapshot (also nightly, 19:00 WIB) |
 
 ```bash
 curl -X POST -H "$AUTH" "http://localhost:8080/api/v1/technical/refresh?exchange=IDX"   # first run: IHSG since 1990, events of every listing
 curl -H "$AUTH" "http://localhost:8080/api/v1/technical/IDX/HRTA/snapshot"
+curl -H "$AUTH" "http://localhost:8080/api/v1/technical/IDX/ANTM/summary"   # Murphy, Gill, PTJ, Druckenmiller: buy / sell / stop, thesis
+curl -H "$AUTH" "http://localhost:8080/api/v1/technical/IDX/IHSG/ohlcv?interval=D&range=1Y"   # the IHSG index
 ```
 
 Details: [`docs/v1_docs/TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md).
@@ -586,7 +599,7 @@ npm run dev                   # http://localhost:3000
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
-| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts) with overlays, levels, events, ARA / ARB days and lower panes; ticker search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller - toggles only); key levels, snapshot, volume profile, IHSG regime and macro panels; PNG / CSV export. Settings saved per user and in the URL |
+| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts) with overlays, levels, events, ARA / ARB days and lower panes; ticker search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG index (search IHSG); key levels, snapshot, volume profile, IHSG regime and macro panels; PNG / CSV export. Settings saved per user and in the URL |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
@@ -596,7 +609,7 @@ npm run dev                   # http://localhost:3000
 | `/screening/analysis`            | Analysis: one stock of the companies table (with its stored data) and the investor agents; saved analyses (10 per page: 5 / 10 / 20 / 50) |
 | `/screening/analysis/{id}`       | analysis report: progress, overall score and cost, executive summary (bull / bear case, risks), every agent's view, research brief with its excerpts and ReAct steps, key figures, data used, notes, token usage, PDF download |
 | `/ingestion/xbrl`                | Ingestion dropdown (like the Admin Center), IDX XBRL: upload an `.xlsx` financial statement (`/ingestion` opens this page) |
-| `/ingestion/prices`              | Price Ingestion: fetch daily prices (exchange / ticker dropdowns) |
+| `/ingestion/prices`              | Price Ingestion: fetch daily prices of one company (exchange / ticker dropdowns); on the right, update every company of the exchange to today and ingest the IHSG index |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
 | `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company into the pgvector store; stored documents (10 per page: 5 / 10 / 20 / 50) and a search test |
 | `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles (10 per page: 5 / 10 / 20 / 50) and a search test |
@@ -646,6 +659,7 @@ classification while the column still fails;
 twice, a 3 rupiah slip) and TPIA's self-contradicting comparatives; `IngestionVerifierSegmentsTest` a refused comparative
 breakdown of a period already stored as a note; `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+`PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;

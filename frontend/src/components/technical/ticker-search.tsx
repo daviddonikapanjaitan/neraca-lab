@@ -67,8 +67,8 @@ export function TickerSearch({
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
-        aria-label="Search ticker or company"
-        placeholder={value ? `${value} · search another ticker` : "Search ticker or company"}
+        aria-label="Search ticker, company or IHSG"
+        placeholder={value ? `${value} · search another ticker` : "Search ticker, company or IHSG"}
         className="pl-8"
         value={text}
         onFocus={() => setOpen(true)}
@@ -104,11 +104,11 @@ export function TickerSearch({
         >
           {results.isError && <li className="px-2 py-1.5 text-sm text-destructive">{results.error.message}</li>}
           {!results.isError && items.length === 0 && !results.isFetching && (
-            <li className="px-2 py-1.5 text-sm text-muted-foreground">No company found</li>
+            <li className="px-2 py-1.5 text-sm text-muted-foreground">No company or index found</li>
           )}
           {items.map((item, i) => (
             <li
-              key={item.ticker}
+              key={`${item.type}-${item.ticker}`}
               role="option"
               aria-selected={i === active}
               className={cn(
@@ -126,7 +126,15 @@ export function TickerSearch({
                 <span className="truncate text-muted-foreground">{item.companyName}</span>
               </span>
               <span className="shrink-0 text-xs text-muted-foreground">
-                {item.tradingDays === 0 ? "no prices" : item.limitedHistory ? `${item.tradingDays} days` : ""}
+                {item.type === "INDEX"
+                  ? item.tradingDays === 0
+                    ? "index · no bars"
+                    : "index"
+                  : item.tradingDays === 0
+                    ? "no prices"
+                    : item.limitedHistory
+                      ? `${item.tradingDays} days`
+                      : ""}
               </span>
             </li>
           ))}
