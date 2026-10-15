@@ -52,13 +52,18 @@ spring:
         - classpath:db/V1.0.18__schema_ingestion_error.sql     # error log of the .xlsx ingestion API
         - classpath:db/V1.0.19__schema_ingestion_cost.sql      # model cost of the .xlsx ingestion (llm_usage.job_id)
         - classpath:db/V1.0.20__schema_screening_currency.sql  # currency of the screening fundamentals (USD reporters)
+        - classpath:db/V1.0.23__schema_technical.sql           # technical analysis: index, events, macro, snapshots, chart settings
+        - classpath:db/V1.0.25__schema_markets_macro.sql       # Forex / commodity bars, macro series catalog and release dates
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
         - classpath:db/V1.0.12__data_SMDR_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.13__data_BNGA_shares.sql      # share counts not derivable from the filings
         - classpath:db/V1.0.21__data_RAJA_shares.sql      # share counts and the 1:5 split of 2026-07-16
+        - classpath:db/V1.0.22__data_TUGU_shares.sql      # the 1:2 split of 2023-05-24 no filing restates
+        - classpath:db/V1.0.24__data_BACH_shares.sql      # share count after the IPO of 2026-07-08
         - classpath:db/V1.0.6__data_metrics_valuation.sql
+        - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
   jpa:
     hibernate:
@@ -126,8 +131,102 @@ neracalab:
     fx:
       base-url: https://api.frankfurter.dev/v1   # ECB reference rates, converts listings quoted in another currency (INDY)
     schedule:
-      enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run over all active companies of the exchange
+      enabled: ${PRICE_SCHEDULE_ENABLED:false}   # evening run: the companies of the exchange behind, and IHSG
       cron: "0 30 17 * * MON-FRI"
+      zone: Asia/Jakarta
+      exchange: IDX
+
+  # Forex pairs and commodities (Price Ingestion with the market Forex / Commodities, /api/v1/markets; charted on
+  # Technicals). The catalog is market_instrument (V1.0.26__data_markets_macro.sql): USD/IDR, USD/JPY, Brent, gold and
+  # palm oil from Yahoo Finance through the price queue; coal monthly from the World Bank Pink Sheet.
+  markets:
+    world-bank:
+      page-url: https://www.worldbank.org/en/research/commodity-markets   # links the current CMO-Historical-Data-Monthly.xlsx
+      file-url: ${WORLD_BANK_PINK_SHEET_URL:}                             # the workbook itself; empty = the link on page-url
+
+  # Macro data of the Druckenmiller and Paul Tudor Jones views (Ingestion > Macro, /api/v1/macro; macro.md). The catalog
+  # is macro_series_def (V1.0.26__data_markets_macro.sql): FRED, Bank Indonesia (indicator pages and SEKI tables), CNBC
+  # (SBN 10Y), CFTC (positioning), Yahoo Finance (DXY); the series without a readable source take a CSV upload.
+  macro:
+    overlap-days: 45                    # an update re-reads the last 45 days, so revisions are picked up
+    schedule:
+      enabled: ${MACRO_SCHEDULE_ENABLED:false}   # evening run: every series whose next release is due
+      cron: "0 0 20 * * *"
+      zone: Asia/Jakarta
+
+  # The polite HTTP client of the crawlers (the macro sources and the World Bank): one request per host at a time and
+  # min-delay between two, a User-Agent that names the application, no retries around a refusal.
+  crawl:
+    min-delay: 2s
+    request-timeout: 90s
+
+  # Technical analysis (Companies > Technicals, /api/v1/technical); docs/v1_docs/TECHNICAL_DOCS.md. No model is called:
+  # every value is computed in Java. The snapshot JSON is documented in docs/indicator-snapshot.md.
+  technical:
+    index:
+      code: IHSG                     # benchmark of relative strength and the market regime (index_daily.index_code)
+      yahoo-symbol: "^JKSE"          # Jakarta Composite Index on Yahoo Finance
+      exchange: IDX
+      history-from: "1990-01-01"     # start of the first index fetch
+    min-history-days: 250            # fewer trading days: "limited history" warning
+    cache-size: 200                  # chart series kept in memory (ticker x interval x price basis)
+    cache-ttl: 12h
+    lot-size: 100                    # shares per lot on IDX
+    tick-sizes:                      # IDX price fractions (fraksi harga): tick of prices below 'below'; the last band is open
+      - { below: 200, tick: 1 }
+      - { below: 500, tick: 2 }
+      - { below: 2000, tick: 5 }
+      - { below: 5000, tick: 10 }
+      - { tick: 25 }
+    # IDX auto-rejection limits (ARA up / ARB down) by effective date and previous-close band ('up-to' inclusive, the
+    # last band open). Detection: close at the day's high (low) and within one tick of the limit. Verify against the
+    # exchange's current rules before relying on the counts.
+    auto-rejection:
+      - from: "1990-01-01"
+        ara: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+        arb: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+      - from: "2020-03-10"           # Covid: ARB 10 %
+        ara: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+        arb: [ { pct: 0.10 } ]
+      - from: "2020-03-13"           # ARB 7 %
+        ara: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+        arb: [ { pct: 0.07 } ]
+      - from: "2023-06-05"           # normalisation phase 1: ARB 15 %
+        ara: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+        arb: [ { pct: 0.15 } ]
+      - from: "2023-09-04"           # phase 2: ARB symmetric with ARA
+        ara: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+        arb: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+      - from: "2025-04-08"           # ARB 15 % again
+        ara: [ { up-to: 200, pct: 0.35 }, { up-to: 5000, pct: 0.25 }, { pct: 0.20 } ]
+        arb: [ { pct: 0.15 } ]
+    pivot:
+      bars-each-side: 2              # 5-bar fractals
+    zones:
+      tolerance-pct: 0.02            # swing points within 2 % of a zone's mean join it
+      lookback-days: 250
+      max-zones: 8
+      min-width-pct: 0.005           # half-width of a zone of one swing point
+    volume-profile:
+      days: 120
+      buckets: 24
+      top-nodes: 3
+    retracement:
+      major-swing-atr: 3             # a major swing spans at least 3 x ATR(14)
+      ratios: [0.33, 0.382, 0.5, 0.618, 0.66]
+    base:
+      min-days: 60
+      max-days: 120
+      max-depth-pct: 0.25            # (high - low) / low of the base at most 25 %
+      max-atr-contraction: 0.9       # ATR% of the last third <= 0.9 x that of the first third
+    volume:
+      spike-multiple: 2.0            # volume >= 2 x the 50-day average
+    events:
+      refresh-after: 7d              # Yahoo Finance dividends / splits of a listing are fetched again after 7 days
+      upcoming-days: 60
+    schedule:
+      enabled: ${TECHNICAL_SCHEDULE_ENABLED:true}   # nightly: index, due events, snapshots of every active listing
+      cron: "0 0 19 * * MON-FRI"
       zone: Asia/Jakarta
       exchange: IDX
 

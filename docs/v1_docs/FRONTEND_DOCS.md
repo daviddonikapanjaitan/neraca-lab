@@ -13,7 +13,8 @@ exchange, and everything stored for one company. It reads the company APIs
 | Theme      | [shadcn-fintech](https://github.com/abderrahimghazali/shadcn-fintech) (MIT): `components.json`, `globals.css`, ui components, inset sidebar shell, empty states, theme toggle |
 | Components | shadcn/ui `base-nova` style on Base UI (`@base-ui/react`)                                                                                                                     |
 | Styling    | Tailwind CSS 4, `tw-animate-css`, Geist fonts, light / dark mode (`next-themes`)                                                                                              |
-| Charts     | Recharts 3 through the shadcn `ChartContainer`                                                                                                                                |
+| Charts     | Recharts 3 through the shadcn `ChartContainer`; the candlestick chart of Technicals: TradingView Lightweight Charts 5.2.1 (Apache-2.0, attribution kept) |
+| Client data | TanStack Query 5.104.0 and zod 4.6.5 on the Technicals page (requests through the route handlers, responses validated before charting) |
 | Icons      | lucide-react                                                                                                                                                                  |
 
 ## 2. Data flow
@@ -128,9 +129,29 @@ Statement tables:
 
 Unknown company: not-found page. Invalid ticker or unsupported exchange: the backend's 400 message.
 
-### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news` (`INGESTION`)
+### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
 
-Sidebar entry below Screening, a dropdown like the Admin Center with five pages (`/ingestion` opens the
+The Companies entry of the sidebar is a dropdown: **Fundamentals** (`/companies` and the company pages) and
+**Technicals**. The chart page is a client component (`components/technical/technicals-page-client.tsx`); the chart
+(`price-chart.tsx`) is a small wrapper around Lightweight Charts loaded with `next/dynamic` (`ssr: false`), rebuilt when
+its data, indicators or the theme change, removed on unmount. The browser computes no indicator: every series comes
+from `/api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events|summary}`, `/api/technical/market`,
+`/api/technical/tickers` and `/api/technical/settings` (route handlers forwarding to `/api/v1/technical/**`).
+
+| Element | Content |
+|---|---|
+| Controls | exchange or market (`GET /api/v1/technical/markets`: IDX, Forex, Commodities), ticker search (code or name, or IHSG for the index; with a market its currencies / commodities; arrows / Enter / Escape), Daily / Weekly / Monthly (a monthly series - coal - is shown monthly only), 3M .. Max, Split-adjusted / Total return (not for a currency or commodity), presets (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller: they toggle indicators), indicator checkboxes (side column; a sheet on a phone; for IHSG, a currency or commodity relative strength, the comparison line, events and ARA / ARB are disabled; for a monthly series the levels too), PNG export |
+| Preset summaries | below the chart (`preset-summaries.tsx`): a card per preset, the selected one first - stance, buy / sell / stop with distance and basis (with the decimals of the instrument: `priceDecimals`), reward to risk, thesis, the evidence on request, "Show on chart"; caveats and the disclaimer. A monthly series shows a note instead (no daily bars) |
+| Main chart | candles, moving averages, Bollinger, channels, ATR bands, IHSG rebased; zones and the base as shaded bands (series primitive); retracement, 52-week and all-time-high lines; event and ARA / ARB markers; lower panes for volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, RS vs IHSG, 12-1 month momentum |
+| Panels | key levels (CSV; a currency or commodity at its own tick), snapshot "data, not signals" (CSV; the liquidity and risk regimes), volume by price (hidden without volume), IHSG regime, macro (the liquidity and risk regimes with every vote, and the BI rate, SBN 10Y, USD/IDR, Indonesian CPI, Fed funds, US 10Y, DXY, US high-yield spread and VIX over a year) |
+| Settings | saved per user (`PUT /api/technical/settings`, debounced), localStorage as fallback, and in the URL; the URL wins |
+| Other | limited-history warning, disclaimer "For information only. Not investment advice.", TradingView notice in the footer and on `/credits`; usable at phone width; colors from the theme's CSS variables |
+
+Details: [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md).
+
+### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news`, `/ingestion/macro` (`INGESTION`)
+
+Sidebar entry below Screening, a dropdown like the Admin Center with six pages (`/ingestion` opens the
 first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and breadcrumbs come from
 `src/lib/ingestion-sections.ts`. Everything runs in the background
 ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)).
@@ -138,10 +159,11 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | Page                         | Card                                                                                  |
 |------------------------------|---------------------------------------------------------------------------------------|
 | IDX XBRL (`/ingestion/xbrl`) | Financial statement upload                                                            |
-| Price Ingestion (`/ingestion/prices`) | Price ingestion (exchanges, stored companies and the price provider are loaded for this page only) |
+| Price Ingestion (`/ingestion/prices`) | Left: price ingestion of one company, or with the market **Forex** / **Commodities** of one currency / commodity (the second dropdown becomes Currency / Commodity; `/api/markets/{market}/ingestions`). Right: "Update all companies to today" (`price-update-card.tsx`: companies up to date / behind / without prices against the last completed trading day, IHSG with them; with a market "Update all currencies / commodities to today": each instrument with its last date, `/api/markets/{market}/updates`) and the IHSG index (`index-price-card.tsx`: stored range, fetch, full history, link to its chart). Exchanges, stored companies, `GET /api/v1/prices/status` per exchange, `GET /api/v1/markets` and the price provider are loaded for this page only |
 | Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
 | PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload, then the stored PDF documents ([RAG_DOCS.md](RAG_DOCS.md)) |
 | News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |
+| Macro (`/ingestion/macro`) | `macro-card.tsx`: "Update all macro data to today" (counts per state), then one table per region (Indonesia, United States, Global and China): series with code, frequency, unit and the presets using it; source (link) and its publication lag; latest value and date; state (up to date, behind and when due, not fetched, failing and why, CSV upload); Fetch, Full, CSV upload, Chart (a sheet with the history and the latest observations with their release dates). `GET /api/v1/macro/series`; route handlers `/api/macro/ingestions`, `/updates`, `/series/{code}`, `/series/{code}/upload` ([MACRO_DOCS.md](MACRO_DOCS.md)) |
 
 Every page shows its card, then the summary tiles and the jobs table. The table opens on the page's
 own job type (IDX XBRL: Financial statements, Price Ingestion: Prices, Screening Data IDX: Screening
@@ -166,7 +188,7 @@ DeepSeek) and the full-text extraction (Haiku) side by side
 | News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |
 | Stored documents (RAG)     | badge with stored documents and chunks, ticker filter (tickers starting with it, applied once typing pauses), search box (5 closest chunks with distance, pages or date, link to the article), table: company, document / article (link), pages or published date, chunks, stored; pages as in the jobs table (10 rows, or 5 / 20 / 50; first / previous / next / last); reloaded when a job finishes |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
-| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG) / analyses, scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
+| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG) / analyses / macro, scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
 | Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency, or RAG pages / chunks / model, or news range, per-source counts and articles not stored), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that

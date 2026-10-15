@@ -79,7 +79,7 @@ public class FullTextExtractor {
             new Field("gross_profit", "total gross profit (a bank or financing company: the rows of revenue with sign 1 and the rows of cost_of_revenue with sign -1). A profit or loss presented BY NATURE has no 'Total gross profit' row and no gross profit: []"),
             new Field("sga_expense", "selling expenses + general and administrative expenses (+ salaries and employee benefits where they are a row of their own), POSITIVE"),
             new Field("operating_expenses", "every operating expense below gross profit: selling, general and administrative, salaries and employee benefits, depreciation, other operating expenses (a bank or financing company: also impairment charges / provision for impairment losses), POSITIVE"),
-            new Field("operating_income", "profit from operations. Use the filing's own 'profit from operation' row when it has one; otherwise ALWAYS give the terms that compute it: the gross profit row with sign 1, every operating expense row (selling, general and administrative, other operating expenses) with sign -1, other operating income rows with sign 1 (a profit or loss BY NATURE: the revenue and other income rows with sign 1 and every operating expense row by nature with sign -1). Without finance income and costs, share of associates, foreign exchange and other non-operating gains and losses"),
+            new Field("operating_income", "profit from operations. Use the filing's own 'profit from operation' row when it has one; otherwise ALWAYS give the terms that compute it: the gross profit row with sign 1, every operating expense row (selling, general and administrative, other operating expenses) with sign -1, other operating income rows with sign 1 (a profit or loss BY NATURE: the revenue and other income rows with sign 1 and every operating expense row by nature with sign -1). The template's 'Other income' row (sign 1) and 'Other expenses' row (sign -1) are operating and belong to it, as in the rule-based extraction - except a row the filing's own profit before tax does not count (then it is in no field). Without finance income and costs, share of associates, foreign exchange, 'Other gains (losses)' and the other non-operating gains and losses"),
             new Field("depreciation", "depreciation EXPENSE of the period, POSITIVE - only when profit or loss or the cash flow statement shows it as a row of its own (a financing company's 'Depreciation of ... property and equipment'); never accumulated depreciation of the balance sheet; else []"),
             new Field("amortization", "amortization expense of intangible assets of the period, POSITIVE - only when shown as a row of its own; else []"),
             new Field("interest_income", "finance / interest income, POSITIVE"),
@@ -111,7 +111,20 @@ public class FullTextExtractor {
             new Field("retained_earnings", "retained earnings: BOTH rows, appropriated (also filed as 'General and legal reserves') + unappropriated"),
             new Field("goodwill", "goodwill"),
             new Field("intangible_assets", "intangible assets other than goodwill"),
-            new Field("temporary_syirkah_funds", "total temporary syirkah funds (sharia banks only; neither liabilities nor equity)"));
+            new Field("temporary_syirkah_funds", "total temporary syirkah funds (sharia banks; an insurer: 'Total temporary syirkah funds' = accumulated tabarru' funds of its sharia participants), neither liabilities nor equity: total assets = total liabilities + these + total equity"));
+
+    /**
+     * Debt fields a balance sheet without any borrowing row has as 0, as the rule-based extraction stores them (the sum
+     * of no rows). Left empty they made total debt, net debt and the enterprise value unknown (CNMA, by order of
+     * liquidity: no bank loans since FY2023, every valuation without EV / EBITDA and EV / operating profit).
+     */
+    private static final List<String> DEBT_FIELDS = List.of("short_term_debt", "long_term_debt", "lease_liabilities");
+
+    /**
+     * Per-share fields of the profit or loss, not stored when the filing's EPS columns contradict each other (as in the
+     * rule-based extraction: FilingMapper#epsContradiction).
+     */
+    private static final List<String> EPS_FIELDS = List.of("basic_eps", "diluted_eps", "basic_shares");
 
     private static final List<Field> CASH_FLOW_FIELDS = List.of(
             new Field("operating_cash_flow", "total net cash flows from (used in) operating activities"),
@@ -368,7 +381,7 @@ public class FullTextExtractor {
         List<Kind> kinds = targets.stream().map(Target::kind).distinct().toList();
         List<StatementColumn> columns = targets.stream().map(Target::column).distinct().toList();
         List<Message> history = new ArrayList<>();
-        history.add(new SystemMessage(systemPrompt(mapper.financial())));
+        history.add(new SystemMessage(systemPrompt(mapper.financial(), mapper.insurance())));
         history.add(new UserMessage(userPrompt(mapper, text, targets, kinds, reason)));
         Map<Target, MappedStatement> statements = new LinkedHashMap<>();
         Map<Target, List<String>> open = new LinkedHashMap<>();
@@ -468,7 +481,7 @@ public class FullTextExtractor {
         return statements;
     }
 
-    private static String systemPrompt(boolean bank) {
+    private static String systemPrompt(boolean bank, boolean insurer) {
         StringBuilder sb = new StringBuilder("""
                 You map an Indonesian listed company's financial statements, filed as an IDX XBRL workbook, to the \
                 fields of a database. You get the text of the whole workbook. Each row of the three statements has \
@@ -516,7 +529,7 @@ public class FullTextExtractor {
         fields(sb, "income_statement", INCOME_FIELDS, bank);
         fields(sb, "balance_sheet", BALANCE_FIELDS, bank);
         fields(sb, "cash_flow_statement", CASH_FLOW_FIELDS, bank);
-        if (bank) {
+        if (bank && !insurer) {
             sb.append("""
 
                     The company is a bank or a financing company: its balance sheet is presented by order of liquidity, \
@@ -525,6 +538,29 @@ public class FullTextExtractor {
                     (customer deposits are not debt). When the balance sheet has its own 'Cash and cash equivalents' \
                     row (a financing company), use that row for cash_and_equivalents. Without a 'profit from operation' \
                     row and without non-operating lines, operating_income is the profit before tax row.
+                    """);
+        }
+        if (insurer) {
+            sb.append("""
+
+                    The company is an insurer (IDX Insurance Industry taxonomy). Its balance sheet is presented by order \
+                    of liquidity: leave current_assets, current_liabilities, inventory, accounts_receivable and \
+                    accounts_payable empty; use its own 'Cash and cash equivalents' row; insurance contract liabilities \
+                    are not debt (bonds payable, sukuk and borrowings, if any, go to long_term_debt). Its accumulated \
+                    tabarru' funds ('Total temporary syirkah funds') are temporary_syirkah_funds, never part of \
+                    total_liabilities. Its profit or loss has no gross profit and no 'profit from operation' row: \
+                    revenue = revenue from insurance premiums - reinsurance and retrocession premiums (sign -1, as filed, \
+                    in every column: the filing's profit before tax deducts the filed amount whatever its sign) - 'Decrease \
+                    (increase) in premium income ceded to reinsurancer' (sign -1) + 'Decrease (increase) in unearned premiums' \
+                    + commission income (as filed, also when negative) + net investment income + ujrah received + gains on \
+                    investments + other underwriting income; cost_of_revenue = claim expenses - reinsurance and \
+                    retrocession claims (sign -1) + 'Increase (decrease) in estimated claims liability' and the other \
+                    increases in insurance liabilities - 'Increase (decrease) in insurance liabilities ceded to reinsurers' \
+                    (sign -1: the reinsurers' share) + commission, acquisition and other underwriting expenses; \
+                    gross_profit = revenue - cost_of_revenue; operating_expenses = general and administrative expenses; \
+                    operating_income = profit before tax + interest and finance costs (the profit before tax row alone \
+                    when there are none). Check that revenue - cost_of_revenue - operating_expenses - interest and finance \
+                    costs reproduces profit before tax in every column.
                     """);
         }
         return sb.toString();
@@ -765,6 +801,8 @@ public class FullTextExtractor {
         boolean bank = mapper.financial();
         Map<String, BigDecimal> values = new LinkedHashMap<>();
         Map<String, String> how = new LinkedHashMap<>();
+        // every row as counted in its field (signed, full units), to point out a row whose sign breaks an identity
+        Map<String, List<Counted>> counted = new LinkedHashMap<>();
         String sheet = null;
         for (Field field : fieldsOf(target.kind())) {
             if (field.name().equals("temporary_syirkah_funds") && !bank) {
@@ -783,6 +821,8 @@ public class FullTextExtractor {
                     continue;
                 }
                 sum = (sum == null ? BigDecimal.ZERO : sum).add(term.sign() < 0 ? raw.negate() : raw);
+                counted.computeIfAbsent(field.name(), k -> new ArrayList<>())
+                        .add(new Counted(term, (term.sign() < 0 ? raw.negate() : raw).multiply(mapper.unit())));
                 parts.add((term.sign() < 0 ? "-" : "+") + " '" + term.row().label() + "' (" + term.row().ref() + ")");
                 sheet = sheet == null ? term.row().sheet() : sheet;
             }
@@ -819,6 +859,25 @@ public class FullTextExtractor {
         if (target.kind() == Kind.INCOME && !bank) {
             derive(values, how);
         }
+        Set<String> rejected = new java.util.LinkedHashSet<>();
+        String epsContradiction = target.kind() == Kind.INCOME ? mapper.epsContradiction() : null;
+        if (epsContradiction != null) {
+            // the rule-based extraction does not store them either (FilingMapper#incomeStatement): an EPS whose unit or
+            // share basis the filing itself contradicts is not stored, also not over a value stored before
+            for (String eps : EPS_FIELDS) {
+                values.put(eps, null);
+                how.put(eps, "not stored: " + epsContradiction);
+                rejected.add(eps);
+            }
+        }
+        if (target.kind() == Kind.BALANCE_SHEET && !bank && values.get("total_liabilities") != null) {
+            for (String debt : DEBT_FIELDS) {
+                if (values.get(debt) == null) {
+                    values.put(debt, BigDecimal.ZERO);
+                    how.put(debt, "full-text extraction: no such row in the balance sheet (0, as the rule-based extraction stores it)");
+                }
+            }
+        }
         if (target.kind() == Kind.INCOME) {
             // earnings per share has the sign of the profit attributable to the parent (a loss filed without it)
             BigDecimal parent = values.get("net_income_to_parent");
@@ -848,10 +907,28 @@ public class FullTextExtractor {
                         values.get("shareholders_equity"));
             }
             case INCOME -> {
-                if (!bank) {
+                if (!bank || mapper.insurance()) {
                     identity(issues, checks, tolerance, mapper, "gross_profit = revenue - cost_of_revenue", values.get("gross_profit"),
                             sum(values.get("revenue"), negate(values.get("cost_of_revenue"))), values.get("revenue"),
                             values.get("cost_of_revenue"));
+                }
+                if (mapper.insurance()) {
+                    // an insurer has no 'profit from operation' row and every line of its profit or loss above profit
+                    // before tax is in revenue, cost of revenue, operating expenses or finance costs: they must give it.
+                    // TUGU FY2022: 'Decrease (increase) in premium income ceded to reinsurancer' and 'Increase (decrease)
+                    // in insurance liabilities ceded to reinsurers' added instead of deducted left revenue - costs at
+                    // -404,637,096 thousand for a profit before tax of 517,197,214
+                    BigDecimal fromLines = sum(values.get("revenue"), negate(values.get("cost_of_revenue")),
+                            negate(values.get("operating_expenses")), negate(values.get("interest_expense")));
+                    int before = issues.size();
+                    identity(issues, checks, tolerance, mapper,
+                            "pretax_income = revenue - cost_of_revenue - operating_expenses - interest_expense",
+                            values.get("pretax_income"), fromLines,
+                            values.get("revenue"), values.get("cost_of_revenue"), values.get("operating_expenses"));
+                    if (issues.size() > before) {
+                        signHint(counted, values.get("pretax_income").subtract(fromLines), tolerance, columnName(target))
+                                .ifPresent(issues::add);
+                    }
                 }
                 BigDecimal afterTax = sum(values.get("pretax_income"), negate(values.get("income_tax")));
                 if (values.get("net_income") != null && values.get("income_tax") != null
@@ -886,7 +963,10 @@ public class FullTextExtractor {
                     + String.join(", ", differences)));
         }
         checks.add(Check.ok("full_text", "Every value decided by the model from the text of the workbook; amounts read from its cells"));
-        Set<String> cleared = new java.util.LinkedHashSet<>();
+        if (epsContradiction != null) {
+            checks.add(Check.warning("eps_columns", epsContradiction + "; the EPS of this column is not stored"));
+        }
+        Set<String> cleared = new java.util.LinkedHashSet<>(rejected);
         if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
             for (String field : BY_FUNCTION_ONLY) {
                 // not a gap to fill: the filing has no such figure, so one stored by an earlier upload goes. Rows
@@ -964,6 +1044,59 @@ public class FullTextExtractor {
             values.put("ebitda", null);
             how.put("ebitda", "not derived: depreciation unknown");
         }
+    }
+
+    /** A row as counted in a field: its term and its amount with the term's sign, in full units. */
+    private record Counted(Term term, BigDecimal amount) {
+    }
+
+    /** Fields of an insurer's revenue - costs, with the sign they take in it (in this order in a hint). */
+    private static final List<Map.Entry<String, Integer>> INSURER_RESULT = List.of(Map.entry("revenue", 1),
+            Map.entry("cost_of_revenue", -1), Map.entry("operating_expenses", -1), Map.entry("interest_expense", -1));
+
+    /**
+     * The row - or the two rows - of revenue, cost of revenue, operating expenses and finance costs whose sign, reversed,
+     * makes revenue - costs equal profit before tax exactly; only when exactly one such choice exists. A hint for the
+     * model, which decides: TUGU's 'Decrease (increase) in premium income ceded to reinsurancer' reads like a row signed
+     * already, but its profit before tax deducts the amount as filed (FY2023: 261,564,001 thousand added instead of
+     * deducted, revenue - costs 2,155,458,543 for a profit before tax of 1,632,330,541).
+     *
+     * @param gap profit before tax - (revenue - costs), full units
+     */
+    private static Optional<String> signHint(Map<String, List<Counted>> counted, BigDecimal gap, BigDecimal tolerance, String column) {
+        record Candidate(String field, Counted row, BigDecimal effect) {
+        }
+        List<Candidate> candidates = new ArrayList<>();
+        for (Map.Entry<String, Integer> field : INSURER_RESULT) {
+            for (Counted row : counted.getOrDefault(field.getKey(), List.of())) {
+                if (row.amount().signum() != 0) {
+                    // reversing the row changes revenue - costs by -2 x what it adds now
+                    candidates.add(new Candidate(field.getKey(), row, row.amount().multiply(BigDecimal.valueOf(-2L * field.getValue()))));
+                }
+            }
+        }
+        List<List<Candidate>> fits = new ArrayList<>();
+        for (Candidate one : candidates) {
+            if (one.effect().subtract(gap).abs().compareTo(tolerance) <= 0) {
+                fits.add(List.of(one));
+            }
+        }
+        if (fits.isEmpty()) {
+            for (int i = 0; i < candidates.size(); i++) {
+                for (int j = i + 1; j < candidates.size(); j++) {
+                    if (candidates.get(i).effect().add(candidates.get(j).effect()).subtract(gap).abs().compareTo(tolerance) <= 0) {
+                        fits.add(List.of(candidates.get(i), candidates.get(j)));
+                    }
+                }
+            }
+        }
+        if (fits.size() != 1) {
+            return Optional.empty();
+        }
+        return Optional.of("revenue - costs equal profit before tax in " + column + " exactly when the sign of "
+                + String.join(" and of ", fits.getFirst().stream().map(c -> "'" + c.row().term().row().label() + "' ("
+                + c.row().term().row().ref() + ") in " + c.field()).toList())
+                + " is reversed: check how the filing's profit before tax counts it");
     }
 
     /** An identity that must hold when both sides are known (and every operand in {@code needed} was mapped). */

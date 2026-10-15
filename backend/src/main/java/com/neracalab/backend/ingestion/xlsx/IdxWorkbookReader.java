@@ -100,13 +100,16 @@ public class IdxWorkbookReader {
      *   <li>"Financing Industry" taxonomy (multifinance, e.g. BFIN): codes starting with 8 (8220000, 8312000 /
      *       8322000, 8410000, 8510000, 8611000 / 8612000 notes) -> 1220000, 1312000, ...; its statements are
      *       not mapped by rules, see {@link IdxTaxonomy#FINANCING}.</li>
+     *   <li>"Insurance Industry" taxonomy (insurers, e.g. TUGU): codes starting with 6 (6220000, 6312000 /
+     *       6322000, 6410000, 6510000, 6611000 / 6612000 notes) -> 1220000, 1312000, ...; its statements are not
+     *       mapped by rules either, see {@link IdxTaxonomy#INSURANCE}.</li>
      * </ul>
      * Sheet 1000000 (general information) is shared by all taxonomies. Sheets of any other taxonomy keep their
      * own name and are not mapped; {@link IdxWorkbook#allSheets()} has every sheet of the file.
      */
     static String canonicalName(String sheetName) {
         String name = filedName(sheetName);
-        if (name.matches("[2348]\\d{6}(PY)?")) {
+        if (name.matches("[23468]\\d{6}(PY)?")) {
             name = "1" + name.substring(1);
         }
         return name;

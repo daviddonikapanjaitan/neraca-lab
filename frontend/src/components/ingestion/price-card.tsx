@@ -15,35 +15,50 @@ import {
 import { formatDate } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
 import { providerLabel } from "@/lib/ingestion"
-import type { CompanySummary, Exchange, IngestionJob } from "@/lib/types"
+import type { CompanySummary, Exchange, IngestionJob, MarketStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 type Notice = { tone: "success" | "error"; text: string }
 
-/** Queues a daily price ingestion for one company (exchange and ticker chosen from the stored companies). */
+/**
+ * Queues a price ingestion of one company (an exchange and a ticker from the stored companies), or of one Forex pair or
+ * commodity (the market Forex or Commodities: the second dropdown becomes Currency or Commodity).
+ */
 export function PriceCard({
   exchanges,
   companiesByExchange,
+  markets,
   provider,
   onSubmitted,
 }: {
   exchanges: Exchange[]
   /** companies stored per exchange code, ordered by ticker */
   companiesByExchange: Record<string, CompanySummary[]>
+  /** Forex and Commodities with their instruments */
+  markets: MarketStatus[]
   provider: string
   onSubmitted: (job: IngestionJob) => void
 }) {
-  const [exchange, setExchange] = useState<string | null>(exchanges[0]?.code ?? null)
+  const [exchange, setExchange] = useState<string | null>(exchanges[0]?.code ?? markets[0]?.market ?? null)
   const [ticker, setTicker] = useState<string | null>(null)
   const [full, setFull] = useState(false)
   const [pending, setPending] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
 
-  const source = providerLabel(provider)
-  const companies = exchange ? companiesByExchange[exchange] ?? [] : []
+  const market = markets.find((m) => m.market === exchange) ?? null
+  const companies = exchange && !market ? companiesByExchange[exchange] ?? [] : []
   const company = companies.find((c) => c.ticker === ticker)
-  const exchangeItems = exchanges.map((e) => ({ value: e.code, label: `${e.code} · ${e.name}` }))
-  const tickerItems = companies.map((c) => ({ value: c.ticker, label: `${c.ticker} · ${c.companyName}` }))
+  const instrument = market?.items.find((i) => i.code === ticker) ?? null
+  const source = market ? providerLabel(instrument?.source ?? "yahoo") : providerLabel(provider)
+  const exchangeItems = [
+    ...exchanges.map((e) => ({ value: e.code, label: `${e.code} · ${e.name}` })),
+    ...markets.map((m) => ({ value: m.market, label: m.name })),
+  ]
+  const tickerItems = market
+    ? market.items.map((i) => ({ value: i.code, label: `${i.name} · ${i.unit}` }))
+    : companies.map((c) => ({ value: c.ticker, label: `${c.ticker} · ${c.companyName}` }))
+  const itemLabel = market ? market.itemLabel : "Ticker"
+  const empty = market ? `No ${market.itemsLabel.toLowerCase()} configured` : "No companies stored"
 
   function changeExchange(code: string | null) {
     if (!code || code === exchange) return
@@ -57,17 +72,24 @@ export function PriceCard({
     setPending(true)
     setNotice(null)
     try {
-      const { status, body: job } = await requestJson<IngestionJob>("/api/prices/ingestions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exchange, ticker, full }),
-      })
+      const { status, body: job } = market
+        ? await requestJson<IngestionJob>(`/api/markets/${market.market}/ingestions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: ticker, full }),
+          })
+        : await requestJson<IngestionJob>("/api/prices/ingestions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ exchange, ticker, full }),
+          })
+      const name = instrument?.name ?? ticker
       setNotice({
         tone: "success",
         text:
           status === 202
-            ? `Queued the ${full ? "full price history" : "daily prices"} of ${ticker} from ${source}.`
-            : `A price ingestion for ${ticker} is already queued or running. Follow it in the table below.`,
+            ? `Queued the ${full ? "full price history" : "latest prices"} of ${name} from ${source}.`
+            : `A price ingestion for ${name} is already queued or running. Follow it in the table below.`,
       })
       onSubmitted(job)
     } catch (error) {
@@ -85,26 +107,40 @@ export function PriceCard({
           Price ingestion · {source}
         </CardTitle>
         <CardDescription>
-          Fetches daily prices (open, high, low, close, adjusted close, volume) and recalculates market cap and
-          valuation ratios.
+          {market
+            ? `Fetches the ${market.name === "Forex" ? "exchange rates" : "prices"} of one ${market.itemLabel.toLowerCase()} (open, high, low, close) for its chart on Companies › Technicals and the macro view.`
+            : "Fetches daily prices (open, high, low, close, adjusted close, volume) and recalculates market cap and valuation ratios."}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-          <li>Only new trading days since the latest stored day are fetched. The first run loads the full history.</li>
-          <li>
-            The ticker list shows the companies already stored. Upload a financial statement first to add a
-            company.
-          </li>
-          <li>Runs in the background, one company at a time, with a short pause between requests.</li>
+          {market ? (
+            <>
+              <li>Only the days after the latest stored day are fetched. The first run loads the full history.</li>
+              <li>
+                Daily bars up to the last completed day (today&apos;s bar is still forming). Coal is the World Bank
+                monthly average, one bar per month.
+              </li>
+              <li>Bad prints of the source (a price that jumps away and straight back) are not stored.</li>
+            </>
+          ) : (
+            <>
+              <li>Only new trading days since the latest stored day are fetched. The first run loads the full history.</li>
+              <li>
+                The ticker list shows the companies already stored. Upload a financial statement first to add a
+                company.
+              </li>
+              <li>Runs in the background, one company at a time, with a short pause between requests.</li>
+            </>
+          )}
         </ul>
 
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Exchange</span>
+            <span className="text-xs font-medium text-muted-foreground">Exchange or market</span>
             <Select items={exchangeItems} value={exchange} onValueChange={changeExchange}>
-              <SelectTrigger aria-label="Exchange" className="w-full" disabled={pending}>
-                <SelectValue placeholder="Choose an exchange" />
+              <SelectTrigger aria-label="Exchange or market" className="w-full" disabled={pending}>
+                <SelectValue placeholder="Choose an exchange or market" />
               </SelectTrigger>
               <SelectContent>
                 {exchangeItems.map((e) => (
@@ -116,7 +152,7 @@ export function PriceCard({
             </Select>
           </div>
           <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Ticker</span>
+            <span className="text-xs font-medium text-muted-foreground">{itemLabel}</span>
             <Select
               items={tickerItems}
               value={ticker}
@@ -125,8 +161,8 @@ export function PriceCard({
                 setNotice(null)
               }}
             >
-              <SelectTrigger aria-label="Ticker" className="w-full" disabled={pending || companies.length === 0}>
-                <SelectValue placeholder={companies.length === 0 ? "No companies stored" : "Choose a ticker"} />
+              <SelectTrigger aria-label={itemLabel} className="w-full" disabled={pending || tickerItems.length === 0}>
+                <SelectValue placeholder={tickerItems.length === 0 ? empty : `Choose a ${itemLabel.toLowerCase()}`} />
               </SelectTrigger>
               <SelectContent>
                 {tickerItems.map((t) => (
@@ -144,6 +180,14 @@ export function PriceCard({
             {company.latestPriceDate
               ? `Prices stored up to ${formatDate(company.latestPriceDate)}.`
               : "No prices stored yet: the full history will be loaded."}
+          </p>
+        )}
+        {instrument && (
+          <p className="text-xs text-muted-foreground">
+            {instrument.lastDate
+              ? `${instrument.rows.toLocaleString("en-US")} ${instrument.frequency === "MONTHLY" ? "months" : "days"} stored, ${formatDate(instrument.firstDate)} to ${formatDate(instrument.lastDate)}${instrument.upToDate ? " (up to date)" : ""}.`
+              : "No prices stored yet: the full history will be loaded."}{" "}
+            Source: {providerLabel(instrument.source)} ({instrument.symbol}).
           </p>
         )}
 

@@ -18,8 +18,8 @@ user ──< user_roles >── role ──< role_permissions (ADMIN | INGESTION
 | Permission  | Pages                                          | APIs                                                                                         |
 |-------------|------------------------------------------------|----------------------------------------------------------------------------------------------|
 | `ADMIN`     | Admin Center: User Management, Role Management | `/api/v1/admin/**` (users, roles, permissions, user avatars)                                 |
-| `INGESTION` | Ingestion                                      | `/api/v1/financial-statements/**`, `/api/v1/prices/ingestions/**`, `/api/v1/ingestions/**`, `/api/v1/fundamentals/**`, and the company **list** (ticker dropdown) |
-| `COMPANIES` | Companies, company detail                      | `/api/v1/companies` (list), `/api/v1/companies/{exchange}/{ticker}` (detail)                  |
+| `INGESTION` | Ingestion                                      | `/api/v1/financial-statements/**`, `/api/v1/prices/ingestions/**`, `/api/v1/prices/{status,updates,index-ingestions}`, `/api/v1/ingestions/**`, `/api/v1/fundamentals/**`, `/api/v1/technical/refresh`, and the company **list** (ticker dropdown) |
+| `COMPANIES` | Companies: Fundamentals (list, company detail), Technicals | `/api/v1/companies` (list), `/api/v1/companies/{exchange}/{ticker}` (detail), `/api/v1/technical/**` (charts, snapshot, chart settings) |
 | `SCREENING` | Screening (Screening Stocks, Selected Stocks, Analysis), reports | `/api/v1/screenings` (runs, reports, PDF, `/companies` to select), `/api/v1/analyses`, `/api/v1/fundamentals/status` |
 | any login   | Profile                                        | `/api/v1/auth/me`, `/api/v1/profile/**`, `/api/v1/exchanges`                                 |
 | public      | Login                                          | `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/health`                  |

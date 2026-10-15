@@ -19,6 +19,15 @@ public enum IdxTaxonomy {
      */
     FINANCIAL('4'),
     /**
+     * "Insurance Industry" (insurers, e.g. TUGU): balance sheet by order of liquidity (6220000), profit or loss by
+     * nature (6312000 / 6322000), changes in equity (6410000), cash flow (6510000), plus the statements of the
+     * tabarru' funds (6332000 / 6342000). Its line items (premiums, reinsurance, claims, underwriting results) are
+     * not mapped by the rule-based extraction: like the Financing Industry, the statements are decided by the
+     * full-text extraction, and the sheets are read under the General Industry codes for the share capital, the
+     * per-share unit and the notes.
+     */
+    INSURANCE('6'),
+    /**
      * "Financing Industry" (multifinance companies, e.g. BFIN): balance sheet by order of liquidity (8220000),
      * profit or loss by nature (8312000 / 8322000), cash flow (8510000). Its line items (income from finance
      * lease, consumer financing, murabahah, ...) are not mapped by the rule-based extraction: the statements of

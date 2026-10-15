@@ -268,6 +268,7 @@ export type IngestionJobType =
   | "RAG_PDF"
   | "RAG_NEWS"
   | "ANALYSIS"
+  | "MACRO"
 
 export type RagSourceType = "PDF" | "NEWS"
 
@@ -420,6 +421,203 @@ export interface PriceQueue {
   provider: string
   /** jobs waiting in the price queue */
   pending: number
+}
+
+/** The exchange's index (IHSG) in index_daily */
+export interface IndexPriceStatus {
+  code: string
+  /** at the source: ^JKSE */
+  symbol: string
+  name: string
+  /** yahoo */
+  source: string
+  rows: number
+  firstDate: string | null
+  lastDate: string | null
+  /** the latest stored day is the last completed trading day */
+  upToDate: boolean
+}
+
+/** GET /api/v1/prices/status?exchange= : how far the stored prices reach */
+export interface PriceStatus {
+  exchange: string
+  /** the latest day whose bar is final: today from 17:00 WIB, else the trading day before */
+  lastCompletedTradingDay: string
+  /** active companies of the exchange */
+  companies: number
+  upToDate: number
+  /** companies whose prices end before the last completed trading day */
+  behind: number
+  withoutPrices: number
+  oldestLatestDate: string | null
+  newestLatestDate: string | null
+  index: IndexPriceStatus | null
+  provider: string
+  pending: number
+}
+
+/** POST /api/v1/prices/updates?exchange=&index= : what "Update all companies" queued */
+export interface PriceUpdate {
+  exchange: string
+  lastCompletedTradingDay: string
+  companies: number
+  /** queued now: only the days after each company's latest stored day */
+  queued: number
+  /** already queued or running (kept) */
+  alreadyActive: number
+  /** skipped: their prices reach the last completed trading day */
+  upToDate: number
+  /** of the queued, companies without prices (their whole history) */
+  withoutPrices: number
+  index: { code: string; outcome: "QUEUED" | "ALREADY_ACTIVE" | "UP_TO_DATE"; job: IngestionJob | null } | null
+  /** the first job queued, for the jobs table to follow */
+  firstJob: IngestionJob | null
+}
+
+// Forex pairs and commodities (docs/v1_docs/PRICE_INGESTION_DOCS.md)
+
+/** An entry of the Technicals dropdown: an exchange (IDX) or a market (Forex, Commodities) */
+export interface TechnicalMarket {
+  code: string
+  name: string
+  kind: "EXCHANGE" | "MARKET"
+  /** Ticker, Currency, Commodity */
+  itemLabel: string
+}
+
+/** A market beside the stock exchanges (Price Ingestion, Technicals) */
+export type MarketCode = "FOREX" | "COMMODITY"
+
+/** One instrument of a market and how far its bars reach */
+export interface InstrumentStatus {
+  /** USDIDR, GOLD */
+  code: string
+  /** USD/IDR, Gold */
+  name: string
+  /** at the source: IDR=X; the World Bank column of coal */
+  symbol: string
+  /** yahoo | worldbank */
+  source: string
+  /** "IDR per USD", "USD per barrel" */
+  unit: string
+  quoteCurrency: string
+  frequency: "DAILY" | "MONTHLY"
+  description: string | null
+  rows: number
+  firstDate: string | null
+  lastDate: string | null
+  /** the latest bar that is final now: the weekday before today, or the month before */
+  lastCompleted: string
+  upToDate: boolean
+}
+
+/** GET /api/v1/markets(/{market}) */
+export interface MarketStatus {
+  market: MarketCode
+  /** Forex, Commodities */
+  name: string
+  /** Currency, Commodity */
+  itemLabel: string
+  itemsLabel: string
+  instruments: number
+  upToDate: number
+  behind: number
+  withoutPrices: number
+  items: InstrumentStatus[]
+  pending: number
+}
+
+/** POST /api/v1/markets/{market}/updates */
+export interface MarketUpdate {
+  market: MarketCode
+  instruments: number
+  queued: number
+  alreadyActive: number
+  upToDate: number
+  withoutPrices: number
+  firstJob: IngestionJob | null
+}
+
+// Macro data (docs/v1_docs/MACRO_DOCS.md)
+
+export type MacroState = "UP_TO_DATE" | "BEHIND" | "NEVER_FETCHED" | "FAILING" | "MANUAL"
+
+/** One macro series with what is stored of it */
+export interface MacroSeriesStatus {
+  code: string
+  name: string
+  /** ID, US, CN, GLOBAL */
+  country: string
+  category: string
+  unit: string
+  frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY" | "EVENT"
+  /** fred | yahoo | bi | bi_seki | cnbc | cftc | manual */
+  source: string
+  sourceLabel: string
+  sourceUrl: string | null
+  releaseLagDays: number
+  priority: number
+  /** DRUCKENMILLER, TUDOR_JONES */
+  usedBy: string[]
+  description: string | null
+  rows: number
+  firstDate: string | null
+  lastDate: string | null
+  lastValue: number | null
+  /** the day the latest observation became public */
+  lastRelease: string | null
+  updatedAt: string | null
+  /** the latest observation that should be public today */
+  expectedLatest: string
+  state: MacroState
+  lastJobStatus: string | null
+  lastJobMessage: string | null
+}
+
+/** GET /api/v1/macro/series */
+export interface MacroStatus {
+  today: string
+  series: number
+  upToDate: number
+  behind: number
+  neverFetched: number
+  failing: number
+  manual: number
+  pending: number
+  items: MacroSeriesStatus[]
+}
+
+/** POST /api/v1/macro/updates */
+export interface MacroUpdate {
+  series: number
+  queued: number
+  alreadyActive: number
+  upToDate: number
+  manual: number
+  firstJob: { id: string } | null
+}
+
+/** Result of a macro job or of a CSV upload */
+export interface MacroResult {
+  source: string
+  requests: number
+  requestedFrom: string | null
+  fullHistory: boolean
+  received: number
+  kept: number
+  inserted: number
+  revised: number
+  unchanged: number
+  latestDate: string | null
+  latestRelease: string | null
+  warnings: string[]
+  revisions: string[]
+}
+
+/** GET /api/v1/macro/series/{code}: [date, value, released] */
+export interface MacroHistory {
+  series: MacroSeriesStatus
+  points: [string, number, string][]
 }
 
 // Users, roles and permissions (docs/v1_docs/AUTH_DOCS.md)

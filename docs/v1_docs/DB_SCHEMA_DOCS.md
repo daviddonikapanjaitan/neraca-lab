@@ -24,12 +24,17 @@ foreign key.
 | `V1.0.18__schema_ingestion_error.sql`     | `ingestion_error`: error log of the .xlsx ingestion API, work list of Claude Code (`fixed_by_claude_code`); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 6 |
 | `V1.0.19__schema_ingestion_cost.sql`      | `llm_usage.job_id`: the model calls of a financial statement upload (tokens and cost per job); [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 7 |
 | `V1.0.20__schema_screening_currency.sql`  | `fundamental_snapshot.financial_currency`: currency of a listing's Yahoo fundamentals, for companies that report in another currency than they trade in (section 4.11) |
+| `V1.0.23__schema_technical.sql`           | technical analysis ([TECHNICAL_DOCS.md](TECHNICAL_DOCS.md)): `index_daily` (IHSG bars, unique index_code + trading_date), `corporate_event` (dividends / splits / other dated events for chart markers, unique company + type + date + source), `corporate_event_fetch` (last event fetch per company and source), `macro_series` (BI_RATE, SBN_10Y observations; USD/IDR is read from `fx_rate_daily`), `indicator_snapshot` (latest snapshot per company: `as_of_date`, `schema_version`, `snapshot_json` JSONB, `input_hash`; [../indicator-snapshot.md](../indicator-snapshot.md)), `chart_setting` (a user's chart settings JSONB, deleted with the user). New tables only |
+| `V1.0.25__schema_markets_macro.sql`       | Forex / commodity prices and macro data ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 1b, [MACRO_DOCS.md](MACRO_DOCS.md)): `market_instrument` (the catalog: market FOREX / COMMODITY, source yahoo / worldbank, symbol, quote currency, unit, DAILY / MONTHLY, tick size, `max_spike` of the bad-print cleaning), `instrument_daily` (their bars, unique instrument + trading_date), `macro_series_def` (the macro catalog: source, `source_ref`, unit, frequency, `release_lag_days`, priority, `used_by`, sanity range `min_value` / `max_value`, `max_change`); `macro_series` gains `period_end`, `release_date` (point in time), `revision`, `updated_at`. `ingestion_job.job_type` gains `MACRO` (in V1.0.10 and V1.0.14, which re-create the check) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
 | `V1.0.13__data_BNGA_shares.sql`           | BNGA audited year-end share counts 2021 .. 2025 from its annual reports (not derivable from its filings: two share classes, treasury shares); no-op until BNGA is uploaded; also run after every upload |
 | `V1.0.21__data_RAJA_shares.sql`           | RAJA share counts from public sources (not derivable from its USD filings), its 1:5 stock split of 2026-07-16 (after its latest filing, so the published counts did not fit the filed EPS) and the EPS of the earlier periods on the basis after it; no-op until RAJA is uploaded |
+| `V1.0.22__data_TUGU_shares.sql`           | TUGU's 1:2 stock split of 2023-05-24 from public sources (the FY2023 filing does not restate its FY2022 comparative, so the split is never detected from the filings), split-adjusted share counts 3,555,575,600 where empty and the per-share figures of the dates before it on the basis after it; no-op until TUGU is uploaded |
+| `V1.0.24__data_BACH_shares.sql`           | BACH's share count after its IPO of 2026-07-08 (615,000,000 new shares at Rp 442, after its only filing, H1 2026): 4,084,430,000 from the listing date and the IPO in `corporate_action`; no-op until BACH is uploaded; also run after every upload |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
+| `V1.0.26__data_markets_macro.sql`         | the catalogs: 6 instruments (USDIDR, USDJPY, BRENT, GOLD, COAL, PALM_OIL) and 25 macro series (FRED, Bank Indonesia, CNBC, CFTC, Yahoo, manual), each brought back to its definition on every start |
 
 New filings can also be loaded at runtime through the upload endpoint, which writes the same
 tables with the same rules (section 8 and [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)), and daily
@@ -482,7 +487,10 @@ Constraint: `uq_market_snapshot UNIQUE (company_id, snapshot_date)`.
 
 Price against trailing-twelve-month (TTM) fundamentals. One row per period end that has TTM
 figures, plus the latest trading day. Price = last close on or before `valuation_date`;
-fundamentals = latest period ended on or before it with TTM revenue and a balance sheet.
+fundamentals = latest period ended on or before it with TTM revenue and a balance sheet. A company
+without any such period (newly listed: its first interim filing has no prior fiscal year, e.g. BACH)
+takes its latest balance sheet instead: market cap, EV, book value and P/B, and no TTM figures or
+TTM ratios (`NULL`), until a filing gives a full year.
 Every price ingestion adds the new latest trading day and keeps the earlier "latest day" rows, so
 daily ingestion builds a valuation history; it also recalculates those earlier rows when prices
 are corrected.

@@ -33,6 +33,7 @@ export const TYPE_LABEL: Record<IngestionJobType, string> = {
   RAG_PDF: "PDF document (RAG)",
   RAG_NEWS: "News (RAG)",
   ANALYSIS: "AI analysis",
+  MACRO: "Macro series",
 }
 
 /** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */
@@ -69,8 +70,32 @@ export function providerLabel(provider: string | null | undefined): string {
       return "Yahoo Finance"
     case "eodhd":
       return "EODHD"
+    case "worldbank":
+      return "the World Bank Pink Sheet"
     default:
       return provider || "the price provider"
+  }
+}
+
+/** "fred" -> "FRED" (macro_series_def.source) */
+export function macroSourceLabel(source: string | null | undefined): string {
+  switch (source) {
+    case "fred":
+      return "FRED"
+    case "yahoo":
+      return "Yahoo Finance"
+    case "bi":
+      return "Bank Indonesia"
+    case "bi_seki":
+      return "Bank Indonesia SEKI"
+    case "cnbc":
+      return "CNBC"
+    case "cftc":
+      return "CFTC"
+    case "manual":
+      return "CSV upload"
+    default:
+      return source || EMPTY
   }
 }
 

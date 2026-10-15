@@ -8,6 +8,7 @@ import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
+import com.neracalab.backend.ingestion.mapping.Check;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.PeriodRef;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
@@ -88,11 +89,23 @@ public class IngestionVerifier {
                         : "saveStatements(" + column + ") is blocked: " + blockReason(blocked));
             }
             var segments = session.segments(column);
-            if (segments.isPresent() && !session.savedSegments().containsKey(column)) {
-                pending.add("saveRevenueSegments(" + column + ") for " + period.key()
-                        + (session.isSegmentsExtracted(column) ? "" : " (call extractRevenueSegments first)"));
-            }
             var stored = repository.storedPeriod(companyId, period);
+            if (segments.isPresent() && !session.savedSegments().containsKey(column)) {
+                List<String> failed = segments.get().checks().stream().filter(Check::isError).map(Check::message).toList();
+                if (column != StatementColumn.CURRENT_PERIOD && !failed.isEmpty() && stored.isPresent()
+                        && hasReconciledSegments(stored.get())) {
+                    // a comparative breakdown that contradicts itself, for a period whose breakdown is already stored and
+                    // adds up to its revenue (from the period's own filing): a comparative never overwrites it, so there
+                    // is nothing left to save (TPIA FY2024 in its FY2025 filing: the lines add up to 2,107,089 thousand
+                    // under a product subtotal of 1,695,869)
+                    notes.add(period.key() + ": the revenue breakdown of " + column + " does not reconcile " + failed
+                            + "; the " + stored.get().segments() + " segments stored for " + period.key()
+                            + " add up to its revenue and are kept (a comparative never overwrites them)");
+                } else {
+                    pending.add("saveRevenueSegments(" + column + ") for " + period.key()
+                            + (session.isSegmentsExtracted(column) ? "" : " (call extractRevenueSegments first)"));
+                }
+            }
             if (stored.isEmpty()) {
                 continue;
             }
@@ -140,6 +153,12 @@ public class IngestionVerifier {
                     + "(neracalab.ingestion.prices-after-upload).");
         }
         return new Verification(pending.isEmpty() && problems.isEmpty(), pending, problems, expected, periods, rows, notes);
+    }
+
+    /** The stored period has a revenue breakdown and it adds up to the stored revenue. */
+    static boolean hasReconciledSegments(StoredPeriod p) {
+        return p.segments() > 0 && p.revenue() != null && p.segmentRevenue() != null
+                && p.segmentRevenue().compareTo(p.revenue()) == 0;
     }
 
     /**

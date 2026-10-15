@@ -33,6 +33,9 @@
 		<jsoup.version>1.23.2</jsoup.version>
 		<openpdf.version>3.0.5</openpdf.version>
 		<pdfbox.version>3.0.8</pdfbox.version>
+		<!-- pre-1.0, APIs change between minor versions: pinned exactly. 0.22.6 is the newest release built for Java 21
+		     (from 0.22.7 ta4j ships Java 25 class files, which the Java 21 build and runtime of this app cannot load) -->
+		<ta4j.version>0.22.6</ta4j.version>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -96,6 +99,16 @@
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+		<!-- technical analysis: standard indicators (MIT) and an in-memory cache of chart series -->
+		<dependency>
+			<groupId>org.ta4j</groupId>
+			<artifactId>ta4j-core</artifactId>
+			<version>${ta4j.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

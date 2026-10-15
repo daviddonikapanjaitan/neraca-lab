@@ -12,6 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
+import { TECHNICALS_HREF } from "@/lib/companies-sections"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { ANALYSIS_HREF, SELECTED_STOCKS_HREF } from "@/lib/screening-sections"
 
@@ -27,6 +28,7 @@ const ADMIN_PAGES: Record<string, string> = {
 
 /**
  * /companies                -> Companies
+ * /companies/technicals     -> Companies / Technicals
  * /companies/IDX/HRTA       -> Companies / IDX / HRTA
  * /admin/users              -> Admin Center / User Management
  * /ingestion/prices         -> Ingestion / Price Ingestion
@@ -71,6 +73,9 @@ function crumbs(pathname: string): Crumb[] {
     }))
   }
   const result: Crumb[] = [{ label: "Companies", href: "/companies" }]
+  if (segments[1] === "technicals") {
+    return [...result, { label: "Technicals", href: TECHNICALS_HREF }]
+  }
   const [, exchange, ticker] = segments
   if (exchange) {
     const code = exchange.toUpperCase()

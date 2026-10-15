@@ -118,6 +118,21 @@ public final class StatementTable {
         return line == null ? null : line.value(contextIndex);
     }
 
+    /** A copy in which the given lines report nothing in the context (lines a filing shows twice). */
+    public StatementTable without(java.util.Set<String> labels, int contextIndex) {
+        List<Line> copy = new ArrayList<>(lines.size());
+        for (Line line : lines) {
+            if (labels.contains(line.label()) && line.hasValue(contextIndex)) {
+                BigDecimal[] values = line.values().clone();
+                values[contextIndex] = null;
+                copy.add(new Line(line.row(), line.label(), values));
+            } else {
+                copy.add(line);
+            }
+        }
+        return new StatementTable(sheet, contexts, List.copyOf(copy));
+    }
+
     public boolean hasData(int contextIndex) {
         return lines.stream().anyMatch(l -> l.hasValue(contextIndex));
     }

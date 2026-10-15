@@ -49,6 +49,11 @@ class IdxWorkbookReaderTest {
         assertThat(IdxTaxonomy.of("1210000")).isEqualTo(IdxTaxonomy.GENERAL);
         assertThat(IdxTaxonomy.of("3410000PY")).isEqualTo(IdxTaxonomy.INFRASTRUCTURE);
         assertThat(IdxTaxonomy.of("4220000")).isEqualTo(IdxTaxonomy.FINANCIAL);
+        // Insurance Industry (TUGU): read under the General codes, its statements decided by the model
+        assertThat(IdxTaxonomy.of("6220000")).isEqualTo(IdxTaxonomy.INSURANCE);
+        assertThat(IdxWorkbookReader.canonicalName("6220000")).isEqualTo(IdxSheets.BALANCE_SHEET_LIQUIDITY);
+        assertThat(IdxWorkbookReader.canonicalName("6410000 2 PriorYear")).isEqualTo(IdxSheets.EQUITY_PRIOR_YEAR);
+        assertThat(IdxWorkbookReader.canonicalName("6332000")).isEqualTo("1332000");   // tabarru' funds, not used
         assertThat(IdxTaxonomy.of("Context")).isNull();
         assertThat(IdxTaxonomy.FINANCIAL.code(IdxSheets.BALANCE_SHEET_LIQUIDITY)).isEqualTo("4220000");
     }

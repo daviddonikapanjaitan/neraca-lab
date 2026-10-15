@@ -22,6 +22,8 @@ import org.springframework.stereotype.Component;
 import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.job.WorkerThreads;
+import com.neracalab.backend.price.IndexIngestion.IndexRef;
+import com.neracalab.backend.price.InstrumentIngestion.InstrumentRef;
 import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.provider.RateLimitedException;
 
@@ -37,7 +39,10 @@ import com.neracalab.backend.price.provider.RateLimitedException;
  * stops the run: the job, every job answered 429 with it and every queued job fail, and the next
  * submission starts fresh.
  * <p>
- * At most one active job per company; jobs are lost on restart (re-submit; nothing is fetched twice).
+ * An exchange's index (IHSG) is ingested by the same queue ({@link #submitIndex}), through {@link IndexIngestion}, and
+ * so are the Forex pairs and commodities ({@link #submitInstrument}, through {@link InstrumentIngestion}).
+ * <p>
+ * At most one active job per company (per index, per instrument); jobs are lost on restart (re-submit; nothing is fetched twice).
  * Every state change is also reported to the {@link Listener} ({@link PriceIngestionTracker} records
  * it in {@code ingestion_job}); a listener failure never affects the job.
  */
@@ -58,6 +63,10 @@ public class PriceIngestionQueue implements SmartLifecycle {
     }
 
     private final PriceIngestionService service;
+    /** {@code null} in tests without an index */
+    private final IndexIngestion indexIngestion;
+    /** {@code null} in tests without instruments */
+    private final InstrumentIngestion instrumentIngestion;
     private final PriceProperties properties;
     private final Listener listener;
     private final LinkedBlockingQueue<PriceIngestionJob> pending = new LinkedBlockingQueue<>();
@@ -79,18 +88,32 @@ public class PriceIngestionQueue implements SmartLifecycle {
     private String pauseReason;
 
     @Autowired
-    public PriceIngestionQueue(PriceIngestionService service, PriceProperties properties, Listener listener,
+    public PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion,
+                               InstrumentIngestion instrumentIngestion, PriceProperties properties, Listener listener,
                                JobProperties jobProperties) {
-        this(service, properties, listener, jobProperties.workers());
+        this(service, indexIngestion, instrumentIngestion, properties, listener, jobProperties.workers());
     }
 
-    /** One worker, no listener (tests). */
+    /** One worker, no listener, no index (tests). */
     PriceIngestionQueue(PriceIngestionService service, PriceProperties properties) {
-        this(service, properties, job -> { }, 1);
+        this(service, null, properties, job -> { }, 1);
     }
 
     PriceIngestionQueue(PriceIngestionService service, PriceProperties properties, Listener listener, int workers) {
+        this(service, null, properties, listener, workers);
+    }
+
+    PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion, PriceProperties properties,
+                        Listener listener, int workers) {
+        this(service, indexIngestion, null, properties, listener, workers);
+    }
+
+    PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion,
+                        InstrumentIngestion instrumentIngestion, PriceProperties properties, Listener listener,
+                        int workers) {
         this.service = service;
+        this.indexIngestion = indexIngestion;
+        this.instrumentIngestion = instrumentIngestion;
         this.properties = properties;
         this.listener = listener;
         this.workers = new WorkerThreads("price-ingestion", workers, this::work);
@@ -107,13 +130,38 @@ public class PriceIngestionQueue implements SmartLifecycle {
      * Queues an ingestion requested by a user ({@code null}: scheduled run). When the company already
      * has an active job, that job is returned (it keeps its own requester).
      */
-    public synchronized Submission submit(CompanyRef company, boolean full, Requester requestedBy) {
-        for (PriceIngestionJob job : jobs.values()) {
-            if (job.company().companyId() == company.companyId() && job.isActive()) {
-                return new Submission(job, false);
+    public Submission submit(CompanyRef company, boolean full, Requester requestedBy) {
+        return submit(new PriceIngestionJob(company, full, requestedBy));
+    }
+
+    /**
+     * Queues an ingestion of an exchange's index (IHSG) requested by a user ({@code null}: scheduled run). When the
+     * index already has an active job, that job is returned.
+     */
+    public Submission submitIndex(IndexRef index, boolean full, Requester requestedBy) {
+        if (indexIngestion == null) {
+            throw new IllegalStateException("No index ingestion configured");
+        }
+        return submit(new PriceIngestionJob(index, full, requestedBy));
+    }
+
+    /**
+     * Queues an ingestion of a Forex pair or commodity requested by a user ({@code null}: scheduled run). When the
+     * instrument already has an active job, that job is returned.
+     */
+    public Submission submitInstrument(InstrumentRef instrument, boolean full, Requester requestedBy) {
+        if (instrumentIngestion == null) {
+            throw new IllegalStateException("No instrument ingestion configured");
+        }
+        return submit(new PriceIngestionJob(instrument, full, requestedBy));
+    }
+
+    private synchronized Submission submit(PriceIngestionJob job) {
+        for (PriceIngestionJob existing : jobs.values()) {
+            if (existing.sameTarget(job) && existing.isActive()) {
+                return new Submission(existing, false);
             }
         }
-        PriceIngestionJob job = new PriceIngestionJob(company, full, requestedBy);
         jobs.put(job.id(), job);
         report(job);   // before the worker can see the job, so QUEUED is never recorded after RUNNING
         pending.add(job);
@@ -176,6 +224,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
 
     private void process(PriceIngestionJob job) {
         CompanyRef company = job.company();
+        String exchange = job.exchange();
         boolean attempted = false;
         while (true) {
             long eventsBefore = awaitResume(job, attempted);
@@ -188,7 +237,9 @@ public class PriceIngestionQueue implements SmartLifecycle {
             job.running();
             report(job);
             try {
-                job.succeeded(service.ingest(company, job.full()));
+                job.succeeded(company != null ? service.ingest(company, job.full())
+                        : job.index() != null ? indexIngestion.ingest(job.index(), job.full())
+                        : instrumentIngestion.ingest(job.instrument(), job.full()));
                 report(job);
                 synchronized (rateLimit) {
                     if (rateLimitEvents == eventsBefore) {
@@ -207,7 +258,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
                     return;
                 }
                 String message = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
-                log.warn("{} {}: price ingestion failed: {}", company.exchange(), company.ticker(), message, e);
+                log.warn("{} {}: price ingestion failed: {}", exchange, job.ticker(), message, e);
                 job.failed(message);
                 report(job);
                 return;
@@ -234,7 +285,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
                 reason = pauseReason;
             }
             if (attempted) {
-                job.waitingForRateLimit(until, reason + ", then " + job.company().ticker() + " is retried");
+                job.waitingForRateLimit(until, reason + ", then " + job.ticker() + " is retried");
                 report(job);
             }
             Duration wait = Duration.between(Instant.now(), until);
@@ -284,7 +335,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
             pausedUntil = Instant.now().plus(wait);
             pauseReason = e.getMessage() + "; queue paused for " + format(wait) + " (wait "
                     + rateLimitStreak + " of " + backoff.size() + ")";
-            log.warn("{}, then {} is retried", pauseReason, job.company().ticker());
+            log.warn("{}, then {} is retried", pauseReason, job.ticker());
             return true;
         }
     }

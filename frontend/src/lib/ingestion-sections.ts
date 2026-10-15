@@ -2,7 +2,7 @@
 
 import type { IngestionJobType } from "@/lib/types"
 
-export type IngestionSection = "xbrl" | "prices" | "screening-data" | "rag-pdf" | "rag-news"
+export type IngestionSection = "xbrl" | "prices" | "screening-data" | "rag-pdf" | "rag-news" | "macro"
 
 export interface IngestionSectionInfo {
   section: IngestionSection
@@ -30,7 +30,8 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     section: "prices",
     title: "Price Ingestion",
     heading: "Price Ingestion",
-    description: "Fetch daily prices of a listed company; market and valuation data are recalculated afterwards.",
+    description:
+      "Fetch daily prices of one company, a Forex pair or a commodity, bring every company of an exchange (or every pair / commodity) up to today, and ingest the IHSG index; market and valuation data are recalculated afterwards.",
     href: "/ingestion/prices",
     jobType: "PRICE",
   },
@@ -59,6 +60,15 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
       "Collect the news of a listed IDX company for a date range; every article is chunked, embedded and stored in the pgvector store for RAG.",
     href: "/ingestion/rag-news",
     jobType: "RAG_NEWS",
+  },
+  {
+    section: "macro",
+    title: "Macro",
+    heading: "Macro Data",
+    description:
+      "Collect the macro data of the Druckenmiller and Paul Tudor Jones views (rates, inflation, liquidity, credit, the dollar, flows, positioning) from FRED, Bank Indonesia, CNBC, the CFTC and Yahoo Finance; Companies › Technicals turns them into the liquidity and risk regimes.",
+    href: "/ingestion/macro",
+    jobType: "MACRO",
   },
 ]
 

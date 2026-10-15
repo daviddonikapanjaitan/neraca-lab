@@ -8,7 +8,11 @@ import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.IngestionJobType;
 import com.neracalab.backend.price.PriceIngestionService.Result;
 
-/** Records every state change of a price ingestion job in {@code ingestion_job} (type PRICE). */
+/**
+ * Records every state change of a price ingestion job in {@code ingestion_job} (type PRICE; an index job, IHSG, too:
+ * its ticker is the index code; a Forex pair / commodity too: its exchange is the market FOREX / COMMODITY, its ticker
+ * the instrument code).
+ */
 @Component
 public class PriceIngestionTracker implements PriceIngestionQueue.Listener {
 
@@ -38,6 +42,27 @@ public class PriceIngestionTracker implements PriceIngestionQueue.Listener {
     }
 
     private String stage(PriceIngestionJob.View job) {
+        if (job.instrument()) {
+            // the source (Yahoo Finance, the World Bank) is known from the result only
+            return switch (job.status()) {
+                case QUEUED -> "Waiting in the price queue";
+                case RUNNING -> "Fetching " + (job.full() ? "the full history of " : "the latest prices of ") + job.ticker();
+                case WAITING_RATE_LIMIT -> "The source answered HTTP 429 (rate limit); paused, then retried";
+                case SUCCEEDED -> job.monthly() ? months(job.result()) : succeeded(job.result(), "price");
+                case FAILED -> "Failed";
+            };
+        }
+        if (job.index()) {
+            String source = providerLabel(job.result() != null ? job.result().provider() : "yahoo");
+            return switch (job.status()) {
+                case QUEUED -> "Waiting in the price queue";
+                case RUNNING -> "Fetching " + (job.full() ? "the full history of the " : "the daily bars of the ") + job.ticker()
+                        + " index from " + source;
+                case WAITING_RATE_LIMIT -> source + " answered HTTP 429 (rate limit); paused, then retried";
+                case SUCCEEDED -> succeeded(job.result(), "index");
+                case FAILED -> "Failed";
+            };
+        }
         String provider = providerLabel(service.providerName());
         return switch (job.status()) {
             case QUEUED -> "Waiting in the price queue";
@@ -51,6 +76,11 @@ public class PriceIngestionTracker implements PriceIngestionQueue.Listener {
 
     /** "Stored 2 new and 1 updated price days, latest 2026-10-02" */
     static String succeeded(Result result) {
+        return succeeded(result, "price");
+    }
+
+    /** "Stored 2 new and 1 updated index days, latest 2026-10-02" */
+    static String succeeded(Result result, String kind) {
         if (result == null) {
             return "Done";
         }
@@ -58,14 +88,28 @@ public class PriceIngestionTracker implements PriceIngestionQueue.Listener {
         if (result.requests() == 0) {
             return "Already up to date" + latest;
         }
-        return "Stored " + result.inserted() + " new and " + result.updated() + " updated price "
+        return "Stored " + result.inserted() + " new and " + result.updated() + " updated " + kind + " "
                 + (result.inserted() + result.updated() == 1 ? "day" : "days") + latest;
+    }
+
+    /** "Stored 1 new and 0 updated months, latest 2026-09-01" */
+    static String months(Result result) {
+        if (result == null) {
+            return "Done";
+        }
+        String latest = result.latestTradingDate() == null ? "" : ", latest " + result.latestTradingDate();
+        if (result.requests() == 0) {
+            return "Already up to date" + latest;
+        }
+        return "Stored " + result.inserted() + " new and " + result.updated() + " updated "
+                + (result.inserted() + result.updated() == 1 ? "month" : "months") + latest;
     }
 
     static String providerLabel(String name) {
         return switch (name) {
             case "yahoo" -> "Yahoo Finance";
             case "eodhd" -> "EODHD";
+            case "worldbank" -> "the World Bank Pink Sheet";
             default -> name;
         };
     }

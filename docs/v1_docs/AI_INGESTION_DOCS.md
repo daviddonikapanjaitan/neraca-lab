@@ -274,7 +274,23 @@ no revenue-segment notes. Share counts are not guessed: BNGA has two share class
 par values and treasury stock, and its 2-decimal EPS does not give an exact count, so no
 `share_snapshot` count is derived from the filings; the audited counts come from the annual reports
 instead (`V1.0.13__data_BNGA_shares.sql`, see section 4).
-Other IDX taxonomies (property, securities, insurance) are not supported.
+
+**Insurance Industry taxonomy (insurers).** Insurers (e.g. TUGU, Asuransi Tugu Pratama, "G4. Insurance") file with
+sheet codes starting with 6: balance sheet by order of liquidity `6220000`, profit or loss by nature `6312000` /
+`6322000`, changes in equity `6410000` (+`PY`), cash flow `6510000`, PP&E / right-of-use notes `6611000` / `6612000`,
+and the statements of the tabarru' funds of the sharia participants `6332000` / `6342000`. Like the Financing
+Industry, the sheets are read under the General codes (`IdxTaxonomy.INSURANCE`), so the share capital, the per-share
+unit and the notes are read by the rules, but the line items (premiums, reinsurance, claims, underwriting results)
+are not mapped by rules: the workbook goes straight to the full-text extraction (section 6) and is decided by the
+model by design. The model gets an insurer's instructions: the accumulated tabarru' funds are
+`temporary_syirkah_funds` (assets = liabilities + tabarru' funds + equity), revenue = premiums less the reinsurers'
+share + commission, investment and other underwriting income, cost of revenue = claims less reinsurance claims +
+changes in insurance liabilities less the reinsurers' share, operating income = profit before tax + finance costs,
+and revenue - cost of revenue - operating expenses - finance costs must give profit before tax (section 6). Like a
+bank, an insurer has no current / non-current split and no EV. Before, the reader did not know the 6xxxxxx sheets at
+all: TUGU had no share counts and no valuation, its tabarru' funds were left out of its balance sheet or put in its
+liabilities, and its EPS was stored as filed in thousands and millions.
+Other IDX taxonomies (securities) are not supported.
 
 **Pre-2023 template.** Filings for FY2022 and earlier (e.g. `FinancialStatement-2022-Tahunan-INDF.xlsx`,
 `-2022-Tahunan-HRTA.xlsx`) use an older layout, read into the same structure:
@@ -420,6 +436,15 @@ Rules:
   judged from the profit or loss as filed, by function or by nature: MSIN (by nature, 1322000) files
   0.00000655 for Rp 6.55 in FY2024, and its EPS was stored a million times too small - and every published
   share count refused - while only the profit or loss by function was read.
+- **EPS unit judged by the share capital.** Where profit / EPS gives a plausible share count both as filed and
+  with the declared unit, the share capital decides (`FilingMapper.epsScaleFromShareCapital`): the EPS multiplied
+  by 1, 1,000 or 1,000,000 must reproduce profit attributable to the parent / (share capital / a standard par value)
+  within the rounding of the figure as filed, and exactly one multiplier may fit. MOLI's H1 2026 workbook (in
+  thousands) files 0.02321 for Rp 23.21 (63,221,614 thousand / 2,724,036,580 shares, par 100); TUGU's FY2023 workbook
+  0.372 for Rp 371.92 (par 50) and its FY2024 workbook 0.0002 for Rp 197.11 - in millions, with four decimals, so 150
+  .. 250 rupiah. Par value inference and the column check below use the rounding of the figure as filed (0.0002 in
+  millions is 150 .. 250, not 199.5 .. 200.5). When two multipliers fit (MOLI FY2025: 0.277 is Rp 0.277 at par 1 or
+  Rp 277 at par 1000) nothing is changed.
 - **Proforma equity.** A comparative column restated for an entity combined under common control carries
   that entity's equity on a 'Proforma equity' row between the parent's equity and the non-controlling
   interests (IMPC FY2023 in its FY2024 filing: 138,044,698,258; MSIN FY2021 in its FY2022 filing: 2,418,216
@@ -471,7 +496,14 @@ Rules:
   631 billion shares (ten times too many) were stored. Now a workbook whose columns contradict each other
   gives no share counts, and its EPS and share counts are *rejected*: stored as NULL even over a value
   stored before (`MappedStatement.rejected`); the company's other filings agree and supply them (NCKL
-  FY2025's comparative fills FY2024 with EPS 101.1 and 63,098,600,000 shares). (2) Within a column, with
+  FY2025's comparative fills FY2024 with EPS 101.1 and 63,098,600,000 shares). A column whose EPS fits no par
+  value as filed is judged in the rounding unit (the slip corrected within a column below) and must then fit the
+  other column's par value: MOLI's FY2025 workbook files 0.277 (Rp 27.70, fits only par 1) and 0.00475 (Rp 4.75,
+  fits only par 100 in thousands). Before, par 1 was inferred - 272,403,658,000 shares, 100 times too many - the
+  comparative was "corrected" to 0.0475 and a 1:100 share split that never was recorded; every MOLI market cap was
+  100 times too large (P/E 1,105 .. 7,626). Now the filing gives no share counts and no EPS (FY2025's EPS stays
+  empty); MOLI's other filings give 2,724,036,580 shares (par 100). The full-text extraction applies the same
+  rejection to the EPS the model names. (2) Within a column, with
   the share count known: an EPS off by exactly a power of ten is corrected when profit / shares confirms
   it within 2% (INDF's H1 2025 workbook files the H1 2024 EPS in millions, 0.000439, stored as 439); any
   other mismatch of 3x or more is not stored.
@@ -483,6 +515,23 @@ Rules:
   financing total. A missing section total counts as 0 (warning) only when the section has no reported
   line and the other totals add up to the net change in cash exactly (228,589,953,937 - 9,003,638,218 =
   219,586,315,719); otherwise it is an error as before.
+- **A section total that leaves out a line.** WIFI's FY2025 financing total, 10,909,102,818,568, is not the sum
+  of its lines, 10,904,384,108,332: it leaves out the dividends paid (4,718,710,236). With the sum of the lines,
+  operating + investing + financing = the net change as filed (6,146,203,492,352), and beginning cash + net change
+  = ending cash. When exactly one section (investing or financing) explains the gap this way and the roll-forward
+  holds, that section is counted at the sum of its lines (warning `financing_total` / `investing_total`). Before,
+  the dividends were taken for a line "outside the total" and the column failed `net_change`.
+- **Amounts entered twice in a section.** WIFI's H1 2026 filing enters three H1 2025 financing cash flows twice:
+  bank loans 783,412,016,329 also as unsecured loans, the repayment of other borrowings 15,495,302,170 also as
+  negative non-bank proceeds, consumer financing 674,885,668 as proceeds and as a negative payment. Lines of a
+  section with the same signed amount (exactly two per amount) are one cash flow; when dropping one of each pair
+  gives the filed section total exactly, they are counted once - in the section and in the fields (debt issued
+  784,086,901,997, debt repaid -15,495,302,170) - dropping the line whose filed sign contradicts its label, else
+  the later one (warning `financing_section`). Tried after the single line outside the total.
+- **A slip of a few rupiah in a full-amount filing.** Full-amount filings must still reconcile, up to a difference
+  of under a billionth of the amount, which is a warning, not an error: WIFI's FY2022 ending cash is filed
+  20,928,775,242, beginning cash + net change is 20,928,775,245. The reported figures are stored. Filings in
+  thousands or millions keep their tolerance of one reported unit.
 - **One amount reported twice in a column.** Also a specific line and a residual "Other ..." line with
   the same amount (CEKA H1 2025: "Interest and finance costs" and "Other expenses" 79,134; interest paid
   79,134): counted once on the specific line, only when profit before tax then reconciles exactly.
@@ -550,7 +599,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `ModelSpeedSettingsTest` (unit, local HTTP server) | the real Spring AI client sends `"reasoning": {"enabled": false}` (and nothing when reasoning is on); a call slower than the per-call timeout is retried at once and a fast answer used; a call that always stalls gives up after the retries in under 3 s |
 | `DeterministicFinisherTest` (Docker Postgres, rolled back) | a model failing every call: HRTA H1 2026 is still stored, refreshed and verified complete by the deterministic finish; display names from legal names; segments keep the filing's names and types and reuse stored English names |
 | `JobDeadlineTest` (unit) | the time limit inside the agent: a slow model call stops at it, no retry pause past it, no model call and no tool after it, the planner's fallback does not swallow it |
-| `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit |
+| `UploadJobTimeoutTest` (Docker Postgres) | an upload job over a 3 s limit (mock agent working 4 s) ends `FAILED` with "Stopped after the 3 seconds limit on HRTA 2026 H1" within seconds of the limit, and its `ingestion_error` row is written before the job is finished (so its clean-up finds it) |
 | `FilingMapperEpsTest` (unit) | NCKL FY2024: contradicting EPS columns give no share counts, EPS and share counts rejected (cleared), FY2025's comparative gives 101.1 at par 100; all MYOR, NCKL and PTSN filings map without errors |
 | `FilingMapperCekaTest` (unit) | all five CEKA filings without errors; "Produk Palm Kernel" domestic and export kept as two segments (FY2025 total = revenue 9,733,304,188,977); a repeated name blocks the breakdown; H1 2026 financing 0 without lines or total; H1 2025 interest also filed as "Other expenses" counted once; a name on two lines of the same kind is one segment, added up |
 | `IngestionAgentRetryTest` (unit) | a model call is retried after a read timeout (`OpenAIInvalidDataException` with an `InterruptedIOException`), gives up after `model-retries`, never retries a permanent error |
@@ -565,6 +614,8 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperTinsTest` (unit) | the TINS filings: FY2025's comparative counts its residual profit or loss lines once and its cash flow's residual investing line not at all, the current year still counts every line, every statement of FY2025 is storable; FY2024 as published has no current-year figures; FY2023's loss per share is scaled and gets its sign (-60) |
 | `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned; MSIN FY2025 (by nature): profit from operations left empty is asked for again and stored from the rows that compute it, and is an open item of the upload when the last answer leaves it empty too |
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
+| `FilingMapperWifiTpiaTest` (unit) | WIFI FY2025: the financing total that leaves out the dividends is counted at the sum of its lines (10,904,384,108,332), the FY2024 comparative unchanged; WIFI H1 2025 (in the H1 2026 filing): three amounts entered twice counted once, debt issued 784,086,901,997 and repaid -15,495,302,170, which line of a pair is dropped; WIFI FY2022: a 3 rupiah slip is a warning; TPIA's self-contradicting H1 2025 income statement and FY2024 breakdown are still refused |
+| `IngestionVerifierSegmentsTest` (unit) | TPIA FY2025: a refused comparative breakdown of a period whose stored breakdown adds up to its revenue is a note, not an open item; without a stored breakdown, or with one that does not add up, it stays open |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
 | `IngestionServiceFallbackTest` (unit, scripted stages) | when the full-text extraction takes over: unsupported workbook (agent not started), INCOMPLETE, past the 3 minutes, failed; never after a clean result; its own failure leaves what the standard extraction reached, its own timeout fails the upload; switched off; the upload endpoint accepts an unsupported workbook and refuses an unreadable one |
 | `FullTextExtractionDatabaseTest` (Docker Postgres, scripted model, rolled back) | TINS FY2024 is stored from its text with the standard steps: the comparative 2023 FY in the database, nothing for 2024, the verification says why; the error log keeps what went wrong and starts unfixed |
@@ -573,8 +624,9 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not; BBCA FY2022: the count accepted at 2022-12-31 is carried to 2021-12-31 and 2020-12-31 (share capital unchanged, no treasury stock, the FY2021 EPS confirms it), never to a date the website publishes itself, never with treasury stock (BFIN), never where the EPS contradicts it |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
+| `FilingMapperTuguMoliCnmaTest` (unit) | the filings behind the error rows of 2026-10-14: TUGU read in the Insurance Industry taxonomy with 3,555,575,600 shares at par 50 (EPS in millions in FY2024, an unrestated split in FY2023), MOLI's EPS in thousands (H1 2026) and its contradicting FY2025 columns (no par 1), CNMA's depreciation with its balance sheet by order of liquidity |
 | `FilingMapperTotlMidiTest` (unit) | the filings behind the error rows of 2026-10-13: TOTL's breakdowns with "Jasa Konstruksi" on several lines of one kind are one segment equal to the line its FY2024 filing shows (lines of different kinds stay apart); MIDI's H1 2025 cash roll-forward holds without the deconsolidation line its ending cash excludes |
-| `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs |
+| `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs, a company with prices, shares and a balance sheet but no trailing twelve months (BACH) is valued on its balance sheet (market cap, EV, P/B; no TTM ratios), the same rows from the per-company refresh |
 | `WebShareCountsTest` (unit) | the fallback with a mocked Yahoo client: completes BNGA, a failed fetch leaves the filing unchanged with a note, no fetch when disabled or when the filing has counts |
 | `IdxWorkbookReaderTest` (unit) | sheet names: General kept, pre-2023 `1 CurrentYear` / `2 PriorYear`, Infrastructure `3xxxxxx` and Financial `4xxxxxx` -> `1xxxxxx`; taxonomy of a sheet code |
 | `IngestionRepositorySegmentsTest` | a current-period breakdown removes a segment that only another filing stored for the period (rolled back)                                                                                                                                          |
@@ -754,13 +806,32 @@ still refused.
 **A filing by nature is the model's to decide.** NSSS (1312000) and MSIN (1322000) present profit or loss
 by nature, which the rule-based extraction does not map: such a workbook goes straight to the full-text
 extraction, and when that stores and verifies it nothing went wrong - it is no longer written to the error
-log (`FilingMapper.decidedByModel`: a filing by nature, or the Financing Industry taxonomy, with nothing else
-wrong). An upload of it that ends `INCOMPLETE` or `FAILED` is still logged. `cost_of_revenue` and
+log (`FilingMapper.decidedByModel`: a filing by nature, the Financing or Insurance Industry taxonomy, or a General
+Industry balance sheet by order of liquidity (CNMA, 1220000), with nothing else wrong). An upload of it that ends `INCOMPLETE` or `FAILED` is still logged. `cost_of_revenue` and
 `gross_profit` are never stored for it, whatever the model answers (MSIN: 'Program and broadcasting
 expenses' named as cost of revenue, no gross profit beside it) - they are cleared before the checks.
 MSIN, five filings uploaded together, Claude Haiku 5.5: one call each, 21-40 s, USD 0.002-0.003, all
 `SUCCEEDED`; share counts 60,676,178,205 from Yahoo Finance accepted for 2023-12-31 .. 2025-12-31 (397,637
 million / count = 6.5534, the FY2024 EPS 6.55).
+
+**Debt where there are no borrowings.** A non-financial company whose balance sheet has no borrowing row gets 0
+for `short_term_debt`, `long_term_debt` and `lease_liabilities` when the model names no rows for them, as the
+rule-based extraction stores them (the sum of no rows). Left empty, total debt, net debt and EV were unknown: CNMA
+(no bank loans since FY2023) had no EV, EV / EBITDA or EV / operating profit in any valuation. A bank, financing
+company or insurer keeps them empty (no EV). **Depreciation** of a balance sheet the rules do not map (by order of
+liquidity) comes from the PP&E note as for every filing: the balance sheet as filed tells whether there are
+right-of-use assets without a note of their own (CNMA: they are in the PP&E note; FY2025 791,951 million).
+**Operating income** includes the template's 'Other income' and 'Other expenses' rows, as in the rules (CNMA's
+operating income had them in some years and not in others), unless the filing's own profit before tax leaves a row
+out.
+
+**An insurer's revenue and costs give its profit before tax.** For the Insurance Industry taxonomy, revenue - cost of
+revenue - operating expenses - finance costs must equal profit before tax; where it does not, the model is shown
+the difference and, when exactly one row (or pair of rows) of those fields closes it with its sign reversed, that
+row (`FullTextExtractor.signHint`). TUGU deducts 'Decrease (increase) in premium income ceded to reinsurancer' and
+'Increase (decrease) in insurance liabilities ceded to reinsurers' as filed, although the labels read like rows
+signed already; only that reading reconciles every column of its five filings (FY2022: revenue 3,219,450,604 -
+cost 1,672,348,143 - G&A 1,029,905,247 = 517,197,214 thousand).
 
 **Providers.** The model calls of the ingestion never go to an OpenRouter provider listed in
 `neracalab.ingestion.provider-ignore` (default `OpenInference`, env `INGESTION_PROVIDER_IGNORE`): its DeepSeek
@@ -817,6 +888,47 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The uploads of 2026-10-15 (errors 415 - 420, 432): a total without its dividends, amounts entered twice, a 3 rupiah slip
+
+Seven rows: a test artefact, three WIFI filings fixed in the rule-based extraction, and two TPIA comparatives that
+contradict themselves. WIFI's three filings and TPIA's FY2025 filing were uploaded again: `SUCCEEDED` on the
+standard extraction, no row, no model cost. A sweep of all 385 workbooks in `data/IDX_XBRL` changes only the WIFI
+columns below.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A test's row, left behind.** `UploadJobTimeoutTest` (3 s limit) removes its job's error rows once the job is finished, but the worker finished the job before it wrote the error row; deleting the job then set the row's `job_id` to NULL. | 415 | The error row is written before the job is finished (`FinancialStatementQueue`); the test asserts it. |
+| **A section total that leaves out a line.** WIFI FY2025: financing filed 10,909,102,818,568, its lines 10,904,384,108,332 (without the dividends paid, 4,718,710,236); only the sum of the lines gives the net change as filed. The full-text extraction stored the filed total, so O+I+F did not give the net change. | 418 | `correctSectionTotal` (section 4): financing 10,904,384,108,332. |
+| **Amounts entered twice.** WIFI's H1 2026 filing, H1 2025 column: three financing cash flows on two lines each (783,412,016,329; 15,495,302,170; 674,885,668). The model's debt repaid was -14,820,416,502. | 419 | Counted once when that gives the filed total exactly, also in the fields: debt issued 784,086,901,997, debt repaid -15,495,302,170. |
+| **A slip of 3 rupiah.** WIFI FY2022 (full amounts): ending cash filed 20,928,775,242, beginning + net change 20,928,775,245. | 420 | A difference under a billionth of the amount is a warning in a full-amount filing. |
+| **A comparative income statement that contradicts itself (closed without a rule).** TPIA's H1 2026 filing, H1 2025 column: its lines give profit before tax 1,572,723 thousand USD, the filed total is 1,576,527 (profit before tax + tax = profit holds); 3,804 is no line and no reversed sign. | 416, 432 (the upload again) | None: rightly refused; the full-text extraction stores it with the filed totals (`SUCCEEDED`). |
+| **A refused comparative breakdown of a period already stored.** TPIA's FY2025 filing repeats FY2024 figures under other names (product lines 2,107,089 under a subtotal of 1,695,869 thousand). Refused - but FY2024's breakdown is stored from its own filing and a comparative never overwrites it, so the open item could never close (`INCOMPLETE`). | 417 | `IngestionVerifier`: a note, not an open item, when the stored breakdown adds up to the period's revenue. |
+
+Also on 2026-10-15, outside the error log: BACH (listed 2026-07-08) had no valuation. Its only filing is H1 2026,
+so no trailing twelve months exist (no FY2025 income statement), and a valuation needed TTM revenue; its share
+count was the one of before its IPO (3,469,430,000). `V1.0.24__data_BACH_shares.sql` adds the 615,000,000 IPO
+shares from the listing date (4,084,430,000), and a company without TTM is valued on its latest balance sheet
+(market cap Rp 1,356.0 billion, P/B 2.21 at Rp 332; no P/E until a full year is stored).
+
+Tests: `FilingMapperWifiTpiaTest`, `IngestionVerifierSegmentsTest`, `UploadJobTimeoutTest`, `DerivedDataRefreshTest`.
+
+### The uploads of 2026-10-14 (errors 346 - 355): an insurer, an EPS in three units, a balance sheet by liquidity
+
+Fifteen rows (346 - 355, and 367 - 371 from the uploads of the fix itself), three companies, all fixed in code and
+uploaded again on 2026-10-14.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **An insurer's taxonomy the reader did not know.** TUGU files in the Insurance Industry taxonomy (6xxxxxx). No sheet was read - not even the share capital - so TUGU had no share counts and no valuation; the model mapped it as a General Industry company: the tabarru' funds (43,696,710 thousand at 2026-06-30) left out of the balance sheet (347: assets != liabilities + equity) or put in its liabilities, an operating income of its own (H1 2025: -2,238,844,699 thousand), the EPS as filed in thousands (FY2023 0.372) and millions (FY2024 0.0002). The 2:1 split of 2023-05-24 (par Rp 100 -> Rp 50) is restated by no filing: the FY2023 filing's comparative EPS is from before it. | 346 - 350; 367, 368 (the model added 'Decrease (increase) in premium income ceded to reinsurancer' instead of deducting it) | `IdxTaxonomy.INSURANCE`, decided by the model by design, with an insurer's instructions; revenue - costs must give profit before tax, the row whose reversed sign closes the gap pointed out; EPS unit from the share capital (par 50, 3,555,575,600 shares); the split recorded by `V1.0.22__data_TUGU_shares.sql`. Statements deleted and the five filings uploaded again: all `SUCCEEDED`, every period reconciles, EPS 89 / 97.5 / 370 / 200 / 200 / 135 (FY2021 .. H1 2026, split-adjusted), P/E 5.66 and P/B 0.57 at Rp 1,465 (2026-10-13). |
+| **A balance sheet by order of liquidity, an incomplete valuation.** CNMA's General Industry balance sheet is by order of liquidity (1220000); the model stored all four filings, but no debt rows meant NULL debt (no EV), no right-of-use row meant no depreciation (no EBITDA), and its operating income had 'Other income' in some years only. | 351 - 354 | Debt 0 for a non-financial balance sheet without borrowing rows; the balance sheet as filed for depreciation; 'Other income' / 'Other expenses' operating as in the rules; such a workbook is decided by the model by design. Uploaded again: all `SUCCEEDED`, no row; FY2025 EV / EBITDA 5.36. |
+| **A column that contradicts itself (closed without a rule), and an EPS in three units.** MOLI's H1 2025 column reconciles to its profit before tax only without its 'Other income' line of -1,985,667 thousand, for no reason the filing gives; the full-text extraction stores it with the filed totals. MOLI files its EPS in rupiah, hundredths and thousandths of the right figure from filing to filing: par 1 was inferred from FY2025 (272,403,658,000 shares) and a 1:100 split that never was recorded - every market cap 100 times too large. | 355; 369 - 371 (the same column in the uploads of the fix) | EPS unit from the share capital (H1 2026: thousands, par 100); a column fitting no par as filed judged in the rounding unit, so FY2025's columns contradict each other and give no share counts and no EPS. Statements, share counts and the false split deleted and the five filings uploaded again: 2,724,036,580 shares from 2021-12-31, no split, P/E 9.13 at Rp 398. |
+
+Tests: `FilingMapperTuguMoliCnmaTest` (the insurance taxonomy, TUGU's share counts at par 50 and its EPS in millions,
+FY2023's unrestated split, MOLI's EPS units in FY2025, H1 2026 and FY2024, CNMA's depreciation),
+`FullTextExtractorTest` (an insurer's tabarru' funds and share capital, its revenue and costs against profit before
+tax with the sign hint, a contradicting filing's EPS not stored, no debt without borrowing rows),
+`IdxWorkbookReaderTest` (the 6xxxxxx sheets).
 
 ### The uploads of 2026-10-13 (errors 321 - 323): a memo line in the cash roll-forward, one name on several lines
 

@@ -1,7 +1,5 @@
 package com.neracalab.backend.price;
 
-import java.util.List;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -10,12 +8,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import com.neracalab.backend.company.Exchange;
-import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 
 /**
- * Optional evening run ({@code neracalab.prices.schedule.enabled=true}): queues every active company
- * of the configured exchange; the queue then fetches them one by one with the usual pacing
- * (about 15-30 minutes for 900 tickers).
+ * Optional evening run ({@code neracalab.prices.schedule.enabled=true}): brings the configured exchange up to date like
+ * "Update all companies" on Ingestion › Price Ingestion ({@link PriceUpdateService#updateAll}): every active company
+ * whose prices end before the last completed trading day is queued, and the exchange's index (IHSG); the queue then
+ * fetches them one by one with the usual pacing (about 15-30 minutes for 900 tickers).
  */
 @Configuration(proxyBeanMethods = false)
 @EnableScheduling
@@ -24,23 +22,19 @@ public class PriceIngestionSchedule {
 
     private static final Logger log = LoggerFactory.getLogger(PriceIngestionSchedule.class);
 
-    private final PriceIngestionQueue queue;
-    private final PriceDailyRepository prices;
+    private final PriceUpdateService updates;
     private final PriceProperties properties;
 
-    public PriceIngestionSchedule(PriceIngestionQueue queue, PriceDailyRepository prices, PriceProperties properties) {
-        this.queue = queue;
-        this.prices = prices;
+    public PriceIngestionSchedule(PriceUpdateService updates, PriceProperties properties) {
+        this.updates = updates;
         this.properties = properties;
     }
 
     @Scheduled(cron = "${neracalab.prices.schedule.cron:0 30 17 * * MON-FRI}",
                zone = "${neracalab.prices.schedule.zone:Asia/Jakarta}")
     public void queueAllActiveCompanies() {
-        Exchange exchange = Exchange.of(properties.schedule().exchange());
-        List<CompanyRef> companies = prices.activeCompanies(exchange);
-        long created = companies.stream().filter(c -> queue.submit(c, false).created()).count();
-        log.info("Scheduled price ingestion: {} active {} companies, {} queued (others already active)",
-                companies.size(), exchange.code(), created);
+        PriceUpdateService.Update update = updates.updateAll(Exchange.of(properties.schedule().exchange()), true, null);
+        log.info("Scheduled price ingestion: {} active {} companies, {} queued, {} already active, {} up to date",
+                update.companies(), update.exchange(), update.queued(), update.alreadyActive(), update.upToDate());
     }
 }

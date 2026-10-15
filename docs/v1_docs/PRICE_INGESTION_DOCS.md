@@ -3,22 +3,31 @@
 Loads daily prices (`price_daily`) from a market data provider and recalculates the company's
 valuation (`market_snapshot`, `valuation_snapshot`, VALUATION rows of `financial_metric`).
 Default provider: the Yahoo Finance chart API (free, unofficial); fallback: EODHD (paid API key).
+The same queue also ingests the IHSG index and the **Forex pairs and commodities** (section 1b).
+Code for these: `backend/src/main/java/com/neracalab/backend/market/`.
 
 Code: `backend/src/main/java/com/neracalab/backend/price/`
 
 | Class                      | Role                                                                                                     |
 |----------------------------|----------------------------------------------------------------------------------------------------------|
 | `PriceIngestionController` | `/api/v1/prices/ingestions` endpoints and error responses (ProblemDetail)                                |
-| `PriceIngestionQueue`      | in-memory job queue with 5 worker threads (`neracalab.jobs.workers`); HTTP 429 back-off; one active job per company |
+| `PriceUpdateController`    | `/api/v1/prices/status`, `/updates` (every company of an exchange to today), `/index-ingestions` (IHSG)    |
+| `PriceUpdateService`       | status of an exchange against the last completed trading day; queues the companies behind (and the index) |
+| `IndexIngestion`           | the exchange's index (IHSG) in the price queue; implemented by `technical.IndexIngestionService` (`index_daily`) |
+| `PriceIngestionQueue`      | in-memory job queue with 5 worker threads (`neracalab.jobs.workers`); HTTP 429 back-off; one active job per company (per index) |
 | `PriceIngestionJob`        | job state and its JSON view                                                                              |
 | `PriceIngestionService`    | one ingestion: date range, provider request, cleaning, re-adjustment check, write + valuation refresh   |
 | `PriceDailyRepository`     | company lookup, latest stored day, `price_daily` upsert                                                  |
 | `ValuationRepository`      | company-scoped recalculation with the formulas of `V1.0.6__data_metrics_valuation.sql`                   |
-| `PriceIngestionSchedule`   | optional evening run over all active companies (off by default)                                          |
+| `PriceIngestionSchedule`   | optional evening run (off by default): `PriceUpdateService.updateAll` - the companies behind and IHSG   |
 | `PricesAfterUpload`        | queues the prices of a company whose financial statement filing was just stored                          |
 | `PriceProperties`          | configuration `neracalab.prices.*`                                                                       |
 | `provider/PriceProvider`   | provider interface; `YahooPriceProvider` / `EodhdPriceProvider`, one active by configuration             |
 | `provider/PacedHttpClient` | the one HTTP client of the providers: cookie store, browser User-Agent, one request at a time, pause     |
+| `InstrumentIngestion`      | a Forex pair / commodity in the price queue; implemented by `market.InstrumentIngestionService` (`instrument_daily`) |
+| `market.MarketController`, `MarketService` | `/api/v1/markets`: the markets with their instruments, one instrument, "Update all" of a market |
+| `market.BarCleaner`        | drops the bad prints of the Yahoo currency / futures history (a close that jumps away and straight back) |
+| `market.WorldBankPinkSheetClient` | the monthly coal price (World Bank Pink Sheet workbook)                                          |
 
 ## 1. Endpoints
 
@@ -52,6 +61,109 @@ user who uploaded the file - unless the stored prices already reach the last com
 the first time therefore gets its whole price history, its market caps and its valuations by itself
 (`neracalab.ingestion.prices-after-upload`, default `true`;
 [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md) section 4).
+
+### Every company of an exchange up to today, and the IHSG index
+
+```bash
+curl -H "$AUTH" "http://localhost:8080/api/v1/prices/status?exchange=IDX"                    # how far the prices reach
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/prices/updates?exchange=IDX&index=true"  # every company behind + IHSG
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/prices/index-ingestions?exchange=IDX"    # IHSG alone (&full=true: whole history)
+```
+
+| Request | Response |
+|---|---|
+| `GET /api/v1/prices/status?exchange=IDX` | `lastCompletedTradingDay` (today from 17:00 WIB, else the trading day before; weekends step back to Friday), `companies` (active), `upToDate`, `behind`, `withoutPrices`, `oldestLatestDate`, `newestLatestDate`, `index` (`code`, `symbol`, `rows`, `firstDate`, `lastDate`, `upToDate`), `provider`, `pending` |
+| `POST /api/v1/prices/updates?exchange=IDX[&index=true]` | **202**: `queued`, `alreadyActive` (their job is kept), `upToDate` (skipped), `withoutPrices` (of the queued), `index` (`outcome` QUEUED / ALREADY_ACTIVE / UP_TO_DATE), `firstJob` |
+| `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | **202** new job, **200** the job already queued / running (`ticker` = IHSG, `index` = true); 404 when the exchange has no index |
+
+"Update all companies" (Ingestion › Price Ingestion, right-hand card) queues every active company whose latest stored
+day is before the last completed trading day as an ordinary `full=false` job: only the missing days are fetched, from
+the company's latest stored day (re-fetched as the overlap check) to that day - ANTM stored up to 9 Oct is fetched from
+9 Oct to 15 Oct. A company without prices gets its whole history; a company already up to date is not queued. The jobs
+run in the same queue (5 workers, one paced request at a time) and appear one by one in the jobs table. Exchanges other
+than IDX are added as `Exchange` constants; the card lists them.
+
+The **IHSG ingestion** (`IndexIngestion`, Yahoo Finance `^JKSE` into `index_daily`) runs in the same queue as an index
+job: from the latest stored day to the last completed trading day (no request when that day is stored; today's bar
+only after the session close cutoff), the whole history (from 1990) the first time or with `full=true`. It is recorded
+in `ingestion_job` as a `PRICE` job with ticker `IHSG` ("Stored 1 new and 0 updated index day, latest ..."). The
+technical refresh uses the same ingestion.
+
+Measured on 2026-10-15 at 20:08 WIB: 80 IDX companies, 6 up to date, 74 behind (the oldest from 5 Oct) - 74 jobs queued,
+all `SUCCEEDED` within about two minutes (ANTM: 4 new days, BBCA 4, HRTA 2), every company stored up to 15 Oct; IHSG
+already up to date (8,891 days), its job "Already up to date".
+
+### 1b. Forex and Commodities
+
+The dropdown of Price Ingestion lists the exchanges, then **Forex** and **Commodities**. With a market:
+- the second dropdown becomes **Currency** or **Commodity**;
+- the right-hand card becomes "Update all currencies / commodities to today".
+
+The instruments are the catalog `market_instrument`, seeded by `V1.0.26__data_markets_macro.sql`. Their bars are
+stored in `instrument_daily`, in the quote currency and the unit of each instrument.
+
+| Market | Code | Instrument | Source | History | Tick | Bad-print threshold |
+|---|---|---|---|---|---|---|
+| Forex | `USDIDR` | USD/IDR (IDR per USD) | Yahoo Finance `IDR=X` (London close) | 2001- | 1 | 3 % |
+| Forex | `USDJPY` | USD/JPY (JPY per USD) | Yahoo Finance `JPY=X` | 1996- | 0.001 | 5 % |
+| Commodities | `BRENT` | Crude Oil (Brent), USD per barrel | Yahoo Finance `BZ=F` (front month) | 2007- | 0.01 | 15 % |
+| Commodities | `GOLD` | Gold, USD per troy ounce | Yahoo Finance `GC=F` | 2000- | 0.1 | 8 % |
+| Commodities | `COAL` | Coal (Newcastle), USD per metric ton | **World Bank Pink Sheet**, "Coal, Australian", **monthly** | 1979- | 0.01 | - |
+| Commodities | `PALM_OIL` | Palm Oil, USD per metric ton | Yahoo Finance `CPO=F` (CME USD Malaysian crude palm oil) | 2010- | 0.25 | 10 % |
+
+**Why coal is monthly.** Yahoo Finance has no current coal future: `MTF=F` (API2 Rotterdam) stopped updating in 2025,
+and the Newcastle future is not served. A daily coal price has no free source a program may read (investing.com and
+stooq answer with a bot challenge). The World Bank's monthly average of Australian (Newcastle) thermal coal is official
+and free:
+- **Source:** the workbook `CMO-Historical-Data-Monthly.xlsx`, sheet "Monthly Prices". Its address changes every month,
+  so it is taken from the link on the Commodity Markets page.
+- **Storage:** one bar per month, dated on the 1st, with open = high = low = close = the average.
+- **Update:** up to the month before the current one.
+
+**One instrument** (`InstrumentIngestionService`) is a `PRICE` job like a company. Its exchange column holds the market,
+its ticker the code:
+- **Daily instruments:** the fetch runs from 14 days before the latest stored day (the cleaning needs neighbours) to the
+  **last completed day**: the weekday before today in the market's time zone (London for currencies, New York for the
+  futures). A currency or future trades around the clock, so today's bar is still forming.
+- **No request** when that day is stored already.
+- **First run, or `full=true`:** the whole history from the instrument's `history_from`.
+- **Stage text:** "Stored 2 new and 0 updated price days, latest 2026-10-14" ("months" for coal).
+
+**Bad prints** (`BarCleaner`, threshold `max_spike`). The Yahoo history of USD/IDR has impossible prints: 888.11
+between 8,923 and 8,906 on 2010-11-01, a stale 9,612.45 on nine days of 2013, 15,069 on 2024-12-26. The cleaning:
+- **Spikes:** drops a run of one to three closes that all lie more than the threshold away from the close before and
+  after the run, on the same side, while those two agree within half of it. The price jumped and came straight back.
+- **Real moves are kept:** a real move does not come back; the 2008 crash moves of USD/JPY are larger than 5 % and stay.
+- **Wicks:** a high or low further than the threshold from the open and close is cut back to them.
+- **Stored bad prints:** a dropped day that was stored is deleted.
+- **Measured on the full histories (2026-10-16):**
+  - USD/IDR: 23 bad prints dropped; its largest remaining daily move is 9.8 %, the real rally of 26 July 2001.
+  - USD/JPY: 3 dropped.
+  - Brent: 2 wicks cut.
+
+**Requests**
+```bash
+curl -H "$AUTH" "http://localhost:8080/api/v1/markets"                                          # markets and instruments
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/markets/FOREX/ingestions?code=USDIDR"      # one instrument (&full=true)
+curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/markets/COMMODITY/updates"                # every commodity behind
+```
+
+| Request | Response |
+|---|---|
+| `GET /api/v1/markets`, `GET /api/v1/markets/{FOREX\|COMMODITY}` | `market`, `name`, `itemLabel` (Currency / Commodity), counts `upToDate` / `behind` / `withoutPrices`, `items` (`code`, `name`, `symbol`, `source`, `unit`, `quoteCurrency`, `frequency`, `rows`, `firstDate`, `lastDate`, `lastCompleted`, `upToDate`) |
+| `POST /api/v1/markets/{market}/ingestions?code=&full=` | **202** new job, **200** job already active (`exchange` = the market, `ticker` = the code, `instrument` = true); 404 unknown instrument, 400 unknown market |
+| `POST /api/v1/markets/{market}/updates` | **202**: `queued`, `alreadyActive`, `upToDate`, `withoutPrices`, `firstJob` |
+
+**Measured on 2026-10-16 (first full load):**
+- USD/IDR: 6,365 days.
+- USD/JPY: 7,765 days.
+- Brent: 4,782 days.
+- Gold: 6,556 days.
+- Palm oil: 3,965 days.
+- Coal: 573 months (1979-01 .. 2026-09).
+
+All jobs `SUCCEEDED` within a minute. Companies › Technicals charts every instrument (`TECHNICAL_DOCS.md`, section 9).
+The USD/IDR pair is also the `USD_IDR` series of the macro view (`MACRO_DOCS.md`).
 
 Every state change of a job is also recorded in the `ingestion_job` table (type `PRICE`,
 `PriceIngestionTracker`), so `GET /api/v1/ingestions` lists price jobs next to the uploads and keeps
@@ -188,6 +300,12 @@ caps start on 2022-01-03 (the first trading day after the first share snapshot, 
 prices have no market cap. INDY on 2026-10-05: USD 0.14317549 x 5,202,692,000 = USD 744.9 million
 (Rp 2,570 x 5,202,692,000 = Rp 13.4 trillion).
 
+A newly listed company's filings end before its listing, so their share count is the one of before the IPO:
+BACH (listed 2026-07-08, only filing H1 2026) gets its count after the IPO (4,084,430,000 = 3,469,430,000 + 615,000,000
+new shares) from `V1.0.24__data_BACH_shares.sql`. Without a full fiscal year it has no trailing twelve months; its
+valuation snapshots then hold market cap, EV, book value and P/B only (2026-10-14: Rp 332 x 4,084,430,000 = Rp 1,356.0
+billion, P/B 2.21), see [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 4.6.
+
 ## 3. Polite crawling
 
 | Rule                                   | Implementation                                                                                                           |
@@ -247,8 +365,19 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 | `job-history`                | `500`                       | finished jobs kept in memory                                              |
 | `yahoo.base-url`             | `https://query1.finance.yahoo.com` | `query2.finance.yahoo.com` serves the same API                     |
 | `fx.base-url`                | `https://api.frankfurter.dev/v1` | ECB reference rates for listings quoted in another currency (INDY) |
-| `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: queues every active company of `schedule.exchange`           |
+| `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: like "Update all companies" - the companies of `schedule.exchange` behind, and IHSG |
 | `schedule.cron`, `schedule.zone`, `schedule.exchange` | `0 30 17 * * MON-FRI`, `Asia/Jakarta`, `IDX` | when and for which exchange              |
+
+`neracalab.markets` (Forex and Commodities):
+
+| Property | Default | Meaning |
+|---|---|---|
+| `world-bank.page-url` | `https://www.worldbank.org/en/research/commodity-markets` | the page that links the current Pink Sheet workbook |
+| `world-bank.file-url` (`WORLD_BANK_PINK_SHEET_URL`) | empty | the workbook itself (empty: the link on the page) |
+
+`neracalab.crawl` (the HTTP client of the World Bank and the macro sources): `min-delay` `2s` per host, `request-timeout`
+`90s`, `user-agent` naming the application. The evening price run (`schedule.enabled`) updates the companies of the
+exchange and IHSG; Forex and Commodities are updated from the page.
 
 ## 6. Known limitations
 
@@ -273,8 +402,15 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 |-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | `PriceIngestionServiceTest`   | against the Docker Postgres with a stub provider, each test rolled back: incremental fetch with new rows, market / valuation snapshot and metrics of the new day; intraday cutoff; no request when up to date; full re-fetch after re-adjustment; first ingestion of a company without prices; the company-scoped valuation SQL produces exactly the `V1.0.6` rows; a listing quoted in another currency: conversion with the previous FX day's rate at 8 decimals, rates of the trading day and before the window not used, bars without a rate dropped, EODHD (no currency) converted with the exchange currency, same-currency listings untouched, no rates = nothing stored, rates of another source ignored |
 | `EcbFxRateProviderTest`       | a real Frankfurter response: business days only, quote units per base unit; wrong base and missing rates rejected; days without the quote ignored |
-| `PriceIngestionQueueTest`     | 429 back-off and retry of the same job, run stop and failed queued jobs, back-off reset after a success, other failures, one active job per company; five workers ingest five companies at the same time, 429 of jobs running together counts as one pause, the run stop fails them all, a queued job stays QUEUED during a pause |
+| `PriceIngestionQueueTest`     | 429 back-off and retry of the same job, run stop and failed queued jobs, back-off reset after a success, other failures, one active job per company; five workers ingest five companies at the same time, 429 of jobs running together counts as one pause, the run stop fails them all, a queued job stays QUEUED during a pause; an index job (IHSG) runs through the index ingestion, one active job per index |
 | `PriceIngestionControllerTest`| the endpoints over MockMvc: 202 + `Location`, job polling, queue listing, 400 / 404                                                           |
+| `PriceUpdateServiceTest`      | "Update all companies": only the companies behind are queued (never `full`), a company without prices too, an active job kept, the up-to-date ones skipped; the index queued unless up to date; the status counts; an exchange without index |
+| `PriceUpdateControllerTest`   | status, update of an exchange and the IHSG ingestion over MockMvc against the Docker Postgres (stub provider, mocked index): the index job in the queue, recorded in `ingestion_job` with ticker IHSG |
+| `IndexIngestionServiceTest`   | the IHSG ingestion: from the latest stored day, today's bar only after the cutoff, no request when up to date, the whole history the first time |
+| `InstrumentIngestionServiceTest` | a Forex pair / commodity: the last completed day by the market's zone, no request when up to date, the overlap window, today's bar and a bad print not stored (and deleted), coal monthly up to the month before, the whole history the first time |
+| `BarCleanerTest`              | the bad prints of the real USD/IDR and USD/JPY histories dropped (one to three days), a real move kept, wicks cut, the first and last bar never judged |
+| `WorldBankPinkSheetClientTest`| the Pink Sheet workbook: the months of one column, "…" months skipped, an unknown column / sheet failing |
+| `MarketControllerTest`        | the markets and instruments, one instrument queued and recorded (exchange FOREX), "Update all" of a market, 404 / 400 |
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
 | `PricesAfterUploadTest`       | prices of a stored filing's company: queued when missing or behind, for the uploader, never `full`; the active job is reused; nothing when up to date, for an unknown company or when switched off (`PriceIngestionServiceTest`: up to date only when the last completed trading day is stored) |
 | `YahooPriceProviderTest`      | parsing of a real Yahoo response (HRTA.JK around the Rp40 dividend and a holiday), symbol mapping, `Retry-After`                              |

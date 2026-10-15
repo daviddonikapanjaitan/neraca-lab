@@ -235,10 +235,11 @@ public class FinancialStatementQueue implements SmartLifecycle {
         try {
             session = service.open(content, task.fileName());
         } catch (IdxWorkbookException e) {
-            finish(id, IngestionJobStatus.FAILED, "Invalid workbook", e.getMessage(), null);
+            // the error log first: whoever sees the job finished finds its error row
             errors.record(new NewError(id, task.fileId(), task.fileName(), Exchange.IDX.code(), null, null,
                     IngestionErrorRepository.Type.UPLOAD_REJECTED, e.getMessage(), null, false, null, "FAILED",
                     "Invalid workbook: " + e.getMessage()));
+            finish(id, IngestionJobStatus.FAILED, "Invalid workbook", e.getMessage(), null);
             return;
         }
         Duration standardLimit = service.standardLimit(jobTimeout);
@@ -286,8 +287,10 @@ public class FinancialStatementQueue implements SmartLifecycle {
                 message = response.error();
             }
         }
-        finish(id, status, stage, message, response);
+        // the error log first: whoever sees the job finished finds its error row (a test that removes the job's
+        // rows once it is finished left an orphaned row when the error was recorded after it: error 415)
         recordError(task, session, response, status, stage, message);
+        finish(id, status, stage, message, response);
         if (status != IngestionJobStatus.FAILED) {
             queuePrices(task, ticker);
         }

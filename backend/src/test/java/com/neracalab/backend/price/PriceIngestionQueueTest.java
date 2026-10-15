@@ -236,6 +236,58 @@ class PriceIngestionQueueTest {
         assertThat(statusesOfQueued).containsExactly(Status.QUEUED, Status.RUNNING, Status.SUCCEEDED);
     }
 
+    /** The exchange's index (IHSG) runs in the same queue: one active job per index, beside the company jobs. */
+    @Test
+    void anIndexJobRunsThroughTheIndexIngestion() {
+        ScriptedService service = new ScriptedService();
+        service.script(HRTA, () -> OK);
+        IndexIngestion.IndexRef ihsg = new IndexIngestion.IndexRef("IHSG", "^JKSE", "IDX Composite Index (IHSG)", Exchange.IDX);
+        Result indexResult = new Result("yahoo", 1, null, null, false, false, 2, 0, 1, 0, 1, null, null, null);
+        java.util.concurrent.atomic.AtomicInteger indexCalls = new java.util.concurrent.atomic.AtomicInteger();
+        IndexIngestion index = new IndexIngestion() {
+            @Override
+            public java.util.Optional<IndexRef> index(Exchange exchange) {
+                return java.util.Optional.of(ihsg);
+            }
+
+            @Override
+            public Stored stored(IndexRef ref) {
+                return new Stored(0, null, null);
+            }
+
+            @Override
+            public String sourceName() {
+                return "yahoo";
+            }
+
+            @Override
+            public Result ingest(IndexRef ref, boolean full) {
+                indexCalls.incrementAndGet();
+                return indexResult;
+            }
+        };
+        queue = new PriceIngestionQueue(service, index, TestPriceProperties.defaults(), job -> { }, 1);
+
+        Submission first = queue.submitIndex(ihsg, false, null);
+        Submission again = queue.submitIndex(ihsg, true, null);
+        PriceIngestionJob company = queue.submit(HRTA, false).job();
+        assertThat(first.created()).isTrue();
+        assertThat(again.created()).isFalse();
+        assertThat(again.job()).isSameAs(first.job());
+        queue.start();
+
+        PriceIngestionJob.View view = awaitFinished(first.job());
+        assertThat(view.status()).isEqualTo(Status.SUCCEEDED);
+        assertThat(view.index()).isTrue();
+        assertThat(view.ticker()).isEqualTo("IHSG");
+        assertThat(view.exchange()).isEqualTo("IDX");
+        assertThat(view.result()).isEqualTo(indexResult);
+        assertThat(indexCalls.get()).isEqualTo(1);
+        assertThat(awaitFinished(company).status()).isEqualTo(Status.SUCCEEDED);
+        assertThat(awaitFinished(company).index()).isFalse();
+        assertThat(PriceIngestionTracker.succeeded(indexResult, "index")).isEqualTo("Stored 1 new and 0 updated index day");
+    }
+
     private static void await(CyclicBarrier barrier) {
         try {
             barrier.await(5, TimeUnit.SECONDS);

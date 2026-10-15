@@ -44,7 +44,8 @@ public class IngestionRepository {
     private static final String DERIVED_SCRIPT = "db/V1.0.6__data_metrics_valuation.sql";
     /** Share counts from outside the filings; they need the company, which an upload may just have created. */
     private static final List<String> SHARE_SCRIPTS = List.of(
-            "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql");
+            "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql",
+            "db/V1.0.24__data_BACH_shares.sql");
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;

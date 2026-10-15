@@ -16,6 +16,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.neracalab.backend.price.ValuationRepository;
+
 /**
  * The refresh of the derived data at the end of an upload ({@code market_snapshot}, {@code valuation_snapshot},
  * {@code financial_metric} of every company). It took 20 s and more with 157,000 prices stored, and the uploads
@@ -73,6 +75,44 @@ class DerivedDataRefreshTest {
                     FROM market_snapshot) x""").query(Integer.class).single();
 
         assertThat(different).isZero();
+    }
+
+    /**
+     * A company with prices, a share count and a balance sheet has a valuation for its latest trading day, also without
+     * trailing-twelve-month figures (BACH, listed 2026-07-08: its only filing is H1 2026, no FY2025 income statement is
+     * stored, and it had no valuation at all). Such a valuation has market cap, EV, book value and P/B and no TTM
+     * ratios, and the per-company refresh after new prices (ValuationRepository) gives the same rows as V1.0.6.
+     */
+    @Test
+    void aCompanyWithoutTrailingTwelveMonthsIsValuedOnItsBalanceSheet(@Autowired ValuationRepository valuations) {
+        repository.refreshDerivedData();
+
+        List<String> unvalued = jdbc.sql("""
+                SELECT c.ticker FROM company c
+                JOIN LATERAL (SELECT max(trading_date) AS d FROM price_daily pd
+                              WHERE pd.company_id = c.company_id AND pd.close_price IS NOT NULL) px ON px.d IS NOT NULL
+                WHERE EXISTS (SELECT 1 FROM share_snapshot ss WHERE ss.company_id = c.company_id
+                                AND ss.snapshot_date <= px.d AND ss.shares_outstanding IS NOT NULL)
+                  AND EXISTS (SELECT 1 FROM v_key_metrics km JOIN v_ttm_financials t ON t.period_id = km.period_id
+                              WHERE km.company_id = c.company_id AND km.period_end <= px.d AND km.total_assets IS NOT NULL)
+                  AND NOT EXISTS (SELECT 1 FROM valuation_snapshot vs
+                                  WHERE vs.company_id = c.company_id AND vs.valuation_date = px.d)""")
+                .query(String.class).list();
+        assertThat(unvalued).isEmpty();
+
+        List<Long> withoutTtm = jdbc.sql("""
+                SELECT DISTINCT vs.company_id FROM valuation_snapshot vs WHERE vs.revenue_ttm IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM v_ttm_financials t WHERE t.company_id = vs.company_id
+                                    AND t.period_end <= vs.valuation_date AND t.revenue_ttm IS NOT NULL)""")
+                .query(Long.class).list();
+        for (long companyId : withoutTtm) {
+            assertThat(jdbc.sql("""
+                    SELECT count(*) FROM valuation_snapshot WHERE company_id = :c
+                      AND (market_cap IS NULL OR book_value IS NULL OR pb_ratio IS NULL OR pe_ratio IS NOT NULL
+                           OR ps_ratio IS NOT NULL OR ev_ebitda IS NOT NULL OR eps_ttm IS NOT NULL)""")
+                    .param("c", companyId).query(Long.class).single()).as("company " + companyId).isZero();
+            assertThat(valuations.refresh(companyId).valuationSnapshots()).as("company " + companyId).isZero();
+        }
     }
 
     /**

@@ -10,6 +10,7 @@ import {
   FileSpreadsheetIcon,
   FileTextIcon,
   HourglassIcon,
+  LandmarkIcon,
   LineChartIcon,
   LoaderIcon,
   MicroscopeIcon,
@@ -65,6 +66,7 @@ const TYPE_ICON: Record<IngestionJobType, typeof FileSpreadsheetIcon> = {
   RAG_PDF: FileTextIcon,
   RAG_NEWS: NewspaperIcon,
   ANALYSIS: MicroscopeIcon,
+  MACRO: LandmarkIcon,
 }
 
 /** Refresh interval while a job is active, and otherwise. */
@@ -83,6 +85,7 @@ const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: "RAG_PDF", label: "PDF (RAG)" },
   { value: "RAG_NEWS", label: "News (RAG)" },
   { value: "ANALYSIS", label: "Analyses" },
+  { value: "MACRO", label: "Macro" },
 ]
 
 const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: string }[] = [

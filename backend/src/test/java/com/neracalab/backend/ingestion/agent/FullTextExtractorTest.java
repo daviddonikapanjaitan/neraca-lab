@@ -452,7 +452,223 @@ public class FullTextExtractorTest {
         assertThat(extractor(3).model()).isEqualTo("test");
     }
 
+    /**
+     * TUGU (an insurer, Insurance Industry taxonomy, error 347): the model is told it maps an insurer, sees the
+     * temporary syirkah funds field and books the accumulated tabarru' funds there, so the balance sheet balances
+     * (before: 29,487,507,698 vs 29,443,810,988, the tabarru' funds missing, and the upload INCOMPLETE). Reinsurance
+     * premiums are deducted as filed in both columns (+714,569,758 and -1,307,049,634 thousand): revenue - cost of
+     * revenue - G&amp;A is the filed profit before tax in each. Share counts come from the share capital at par 50.
+     */
+    @Test
+    void anInsurerIsMappedWithItsTabarruFundsAndItsShareCapital() throws Exception {
+        IngestionSession session = session("TUGU", "2026-II");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        answers(insurer(text, "6312000"));
+
+        List<StatementColumn> columns = FullTextExtractor.columnsToExtract(session);
+        FullTextExtractor.Report report = extractor(3).extract(session, columns, "Unsupported filing", new AgentTrace());
+
+        assertThat(report.modelCalls()).isEqualTo(1);
+        assertThat(report.problems()).isEmpty();
+        assertThat(prompts.getFirst()).doesNotContain("Reference - what the rule-based extraction read");
+        MappedStatement balance = session.balance(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(balance.values().get("total_assets")).isEqualByComparingTo("29487507698000");
+        assertThat(balance.values().get("total_liabilities")).isEqualByComparingTo("19437509601000");
+        assertThat(balance.values().get("temporary_syirkah_funds")).isEqualByComparingTo("43696710000");
+        assertThat(balance.values().get("total_equity")).isEqualByComparingTo("10006301387000");
+        assertThat(balance.values().get("shares_outstanding")).isEqualByComparingTo("3555575600");
+        // an insurer is a financial company: no debt is assumed where it has no borrowing row (no EV, like a bank)
+        assertThat(balance.values().get("short_term_debt")).isNull();
+        assertThat(balance.values().get("long_term_debt")).isNull();
+        assertThat(balance.checks()).noneMatch(c -> c.message().contains("does not hold"));
+        assertThat(session.balance(StatementColumn.PRIOR_YEAR_END).orElseThrow().values().get("temporary_syirkah_funds"))
+                .isEqualByComparingTo("40280576000");
+        MappedStatement current = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(current.values().get("revenue")).isEqualByComparingTo("4269460227000");
+        assertThat(current.values().get("revenue").subtract(current.values().get("cost_of_revenue"))
+                .subtract(current.values().get("operating_expenses"))).isEqualByComparingTo(current.values().get("pretax_income"));
+        assertThat(current.values().get("pretax_income")).isEqualByComparingTo("554777023000");
+        assertThat(current.values().get("basic_eps")).isEqualByComparingTo("135");
+        assertThat(current.values().get("basic_shares")).isEqualByComparingTo("3555575600");
+        MappedStatement prior = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(prior.values().get("revenue")).isEqualByComparingTo("5691810918000");
+        assertThat(prior.values().get("revenue").subtract(prior.values().get("cost_of_revenue"))
+                .subtract(prior.values().get("operating_expenses"))).isEqualByComparingTo("375254569000");
+        assertThat(systemPrompt(session)).contains("The company is an insurer (IDX Insurance Industry taxonomy)",
+                "- temporary_syirkah_funds: ").doesNotContain("The company is a bank or a financing company");
+    }
+
+    /**
+     * TUGU FY2022: the model added 'Decrease (increase) in premium income ceded to reinsurancer' to revenue and 'Increase
+     * (decrease) in insurance liabilities ceded to reinsurers' to cost of revenue; revenue - costs came to -404,637,096
+     * thousand for a profit before tax of 517,197,214. An insurer's lines above profit before tax must give it: the
+     * model is shown the difference, and only deducting both (the reinsurers' share) reconciles both columns.
+     */
+    @Test
+    void anInsurersRevenueAndCostsMustGiveItsProfitBeforeTax() throws Exception {
+        IngestionSession session = session("TUGU", "2022-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String wrong = insurerIncome(text, "+Decrease (increase) in premium income ceded to reinsurancer",
+                "+Increase (decrease) in insurance liabilities ceded to reinsurers");
+        String right = insurerIncome(text, "-Decrease (increase) in premium income ceded to reinsurancer",
+                "-Increase (decrease) in insurance liabilities ceded to reinsurers");
+        answers(wrong, right);
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.CURRENT_PERIOD,
+                StatementColumn.PRIOR_PERIOD), "Unsupported filing", new AgentTrace());
+
+        assertThat(report.modelCalls()).isEqualTo(2);
+        assertThat(prompts.get(1)).contains("pretax_income = revenue - cost_of_revenue - operating_expenses - interest_expense "
+                + "does not hold: 517197214 vs -404637096",
+                // the only two rows whose reversed sign closes the gap (517,197,214 + 404,637,096 thousand) exactly
+                "revenue - costs equal profit before tax in c1 exactly when the sign of 'Decrease (increase) in premium income "
+                        + "ceded to reinsurancer' (6312000!R", ") in revenue and of 'Increase (decrease) in insurance liabilities "
+                        + "ceded to reinsurers' (6312000!R", ") in cost_of_revenue is reversed");
+        assertThat(report.problems()).isEmpty();
+        MappedStatement current = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        // 6,705,580,219 - 3,518,922,914 - 341,732,165 - 502,133,301 + 369,439,119 + 507,219,646
+        assertThat(current.values().get("revenue")).isEqualByComparingTo("3219450604000");
+        // 2,284,625,795 - 972,264,314 + 1,162,635,982 - 802,649,320
+        assertThat(current.values().get("cost_of_revenue")).isEqualByComparingTo("1672348143000");
+        MappedStatement prior = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(prior.values().get("revenue").subtract(prior.values().get("cost_of_revenue"))
+                .subtract(prior.values().get("operating_expenses"))).isEqualByComparingTo("374456355000");
+    }
+
+    /**
+     * TUGU FY2023 states its EPS after the 2:1 split of 2023-05-24 and the comparative before it, unrestated: the
+     * columns contradict each other, and the EPS the model names is not stored either (the model stored 0.372 and
+     * 0.195, the figures in thousands).
+     */
+    @Test
+    void theEpsOfAFilingWhoseColumnsContradictEachOtherIsNotStored() throws Exception {
+        IngestionSession session = session("TUGU", "2023-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("operating_income", terms(text, "6312000", "+Total profit (loss) before tax")),
+                Map.entry("pretax_income", terms(text, "6312000", "+Total profit (loss) before tax")),
+                Map.entry("net_income", terms(text, "6312000", "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, "6312000", "+Profit (loss) attributable to parent entity")),
+                Map.entry("basic_eps", terms(text, "6312000", "+Basic earnings (loss) per share from continuing operations")));
+        answers("{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}");
+
+        extractor(1).extract(session, FullTextExtractor.columnsToExtract(session), "Unsupported filing", new AgentTrace());
+
+        for (StatementColumn column : List.of(StatementColumn.CURRENT_PERIOD, StatementColumn.PRIOR_PERIOD)) {
+            MappedStatement income = session.income(column).orElseThrow();
+            assertThat(income.values().get("basic_eps")).isNull();
+            assertThat(income.rejected()).contains("basic_eps", "diluted_eps", "basic_shares");
+            assertThat(income.checks()).anyMatch(c -> c.rule().equals("eps_columns"));
+            assertThat(income.values().get("net_income_to_parent")).isNotNull();
+        }
+    }
+
+    /**
+     * CNMA (General Industry, balance sheet by order of liquidity) has no bank loans: the model names no debt rows. As
+     * in the rule-based extraction, that is 0, not unknown - else total debt, net debt and EV stay empty (every CNMA
+     * valuation had no EV / EBITDA and EV / operating profit).
+     */
+    @Test
+    void aBalanceSheetWithoutBorrowingsHasNoDebt() throws Exception {
+        IngestionSession session = session("CNMA", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        Map<String, String> balance = Map.ofEntries(
+                Map.entry("cash_and_equivalents", terms(text, "1220000", "+Cash and cash equivalents")),
+                Map.entry("total_assets", terms(text, "1220000", "+Total assets")),
+                Map.entry("total_liabilities", terms(text, "1220000", "+Total liabilities")),
+                Map.entry("lease_liabilities", terms(text, "1220000", "+Finance lease liabilities")),
+                Map.entry("shareholders_equity", terms(text, "1220000", "+Total equity attributable to equity owners of parent entity")),
+                Map.entry("non_controlling_interest", terms(text, "1220000", "+Non-controlling interests")),
+                Map.entry("total_equity", terms(text, "1220000", "+Total equity")),
+                Map.entry("short_term_debt", "[]"),
+                Map.entry("long_term_debt", "[]"));
+        answers("{\"balance_sheet\": " + object(balance) + ", \"notes\": []}");
+
+        extractor(1).extract(session, FullTextExtractor.columnsToExtract(session), "Unsupported filing", new AgentTrace());
+
+        for (StatementColumn column : List.of(StatementColumn.CURRENT_PERIOD, StatementColumn.PRIOR_PERIOD)) {
+            MappedStatement mapped = session.balance(column).orElseThrow();
+            assertThat(mapped.values().get("short_term_debt")).isEqualByComparingTo("0");
+            assertThat(mapped.values().get("long_term_debt")).isEqualByComparingTo("0");
+            assertThat(mapped.derivations().get("long_term_debt")).contains("no such row in the balance sheet");
+        }
+        assertThat(session.balance(StatementColumn.CURRENT_PERIOD).orElseThrow().values().get("lease_liabilities"))
+                .isEqualByComparingTo("1677168000000");
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    /** The system prompt of the full-text extraction for the session's workbook. */
+    private String systemPrompt(IngestionSession session) throws Exception {
+        var method = FullTextExtractor.class.getDeclaredMethod("systemPrompt", boolean.class, boolean.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, session.mapper().financial(), session.mapper().insurance());
+    }
+
+    /**
+     * TUGU FY2022 (pre-2023 template, no tabarru' funds): a mapping of its statements whose revenue and cost of revenue
+     * take the reinsurers' share of premiums and of insurance liabilities with the given signs.
+     */
+    private static String insurerIncome(WorkbookText text, String cededPremiums, String cededLiabilities) {
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, "6312000", "+Revenue from insurance premiums", "-Reinsurance premiums",
+                        cededPremiums, "+Commission income", "+Net investment income", "+Other underwriting income")),
+                Map.entry("cost_of_revenue", terms(text, "6312000", "+Claim expenses", "-Reinsurance claims",
+                        "+Increase (decrease) in estimated claims liability", cededLiabilities)),
+                Map.entry("gross_profit", "[]"),
+                Map.entry("operating_expenses", terms(text, "6312000", "+General and administrative expenses")),
+                Map.entry("operating_income", terms(text, "6312000", "+Total profit (loss) before tax")),
+                Map.entry("pretax_income", terms(text, "6312000", "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, "6312000", "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, "6312000", "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, "6312000", "+Profit (loss) attributable to parent entity")));
+        Map<String, String> balance = Map.ofEntries(
+                Map.entry("cash_and_equivalents", terms(text, "6220000", "+Cash and cash equivalents")),
+                Map.entry("total_assets", terms(text, "6220000", "+Total assets")),
+                Map.entry("total_liabilities", terms(text, "6220000", "+Total liabilities")),
+                Map.entry("shareholders_equity", terms(text, "6220000", "+Total equity attributable to equity owners of parent entity")),
+                Map.entry("non_controlling_interest", terms(text, "6220000", "+Non-controlling interests")),
+                Map.entry("total_equity", terms(text, "6220000", "+Total equity")));
+        Map<String, String> cash = Map.ofEntries(
+                Map.entry("operating_cash_flow", terms(text, "6510000", "+Total net cash flows received from (used in) operating activities")),
+                Map.entry("investing_cash_flow", terms(text, "6510000", "+Total net cash flows received from (used in) investing activities")),
+                Map.entry("financing_cash_flow", terms(text, "6510000", "+Total net cash flows received from (used in) financing activities")),
+                Map.entry("cash_change", terms(text, "6510000", "+Total net increase (decrease) in cash and cash equivalents")));
+        return "{\"income_statement\": " + object(profitOrLoss) + ",\n \"balance_sheet\": " + object(balance)
+                + ",\n \"cash_flow_statement\": " + object(cash) + ",\n \"notes\": [\"scripted\"]}";
+    }
+
+    /** A mapping of an insurer's statements (TUGU, Insurance Industry taxonomy), profit or loss from {@code income}. */
+    private static String insurer(WorkbookText text, String income) {
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, income, "+Revenue from insurance premiums", "-Reinsurance premiums",
+                        "+Net investment income", "+Other underwriting income")),
+                Map.entry("cost_of_revenue", terms(text, income, "+Claim expenses", "+Other underwriting expenses")),
+                Map.entry("operating_expenses", terms(text, income, "+General and administrative expenses")),
+                Map.entry("operating_income", terms(text, income, "+Total profit (loss) before tax")),
+                Map.entry("pretax_income", terms(text, income, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, income, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, income, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, income, "+Profit (loss) attributable to parent entity")),
+                Map.entry("basic_eps", terms(text, income, "+Basic earnings (loss) per share from continuing operations")));
+        Map<String, String> balance = Map.ofEntries(
+                Map.entry("cash_and_equivalents", terms(text, "6220000", "+Cash and cash equivalents")),
+                Map.entry("total_assets", terms(text, "6220000", "+Total assets")),
+                Map.entry("total_liabilities", terms(text, "6220000", "+Total liabilities")),
+                Map.entry("temporary_syirkah_funds", terms(text, "6220000", "+Total temporary syirkah funds")),
+                Map.entry("shareholders_equity", terms(text, "6220000", "+Total equity attributable to equity owners of parent entity")),
+                Map.entry("non_controlling_interest", terms(text, "6220000", "+Non-controlling interests")),
+                Map.entry("total_equity", terms(text, "6220000", "+Total equity")));
+        Map<String, String> cash = Map.ofEntries(
+                Map.entry("operating_cash_flow", terms(text, "6510000", "+Total net cash flows received from (used in) operating activities")),
+                Map.entry("investing_cash_flow", terms(text, "6510000", "+Total net cash flows received from (used in) investing activities")),
+                Map.entry("financing_cash_flow", terms(text, "6510000", "+Total net cash flows received from (used in) financing activities")),
+                Map.entry("dividends_paid", terms(text, "6510000", "-Dividends paid from financing activities")),
+                Map.entry("cash_change", terms(text, "6510000", "+Total net increase (decrease) in cash and cash equivalents")),
+                Map.entry("ending_cash", terms(text, "6510000", "+Cash and cash equivalents cash flows, end of the period")));
+        return "{\"income_statement\": " + object(profitOrLoss) + ",\n \"balance_sheet\": " + object(balance)
+                + ",\n \"cash_flow_statement\": " + object(cash) + ",\n \"notes\": [\"scripted\"]}";
+    }
 
     private FullTextExtractor extractor(int rounds) {
         return new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),

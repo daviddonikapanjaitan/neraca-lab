@@ -13,7 +13,10 @@
 --   valuation_snapshot every period end that has trailing-twelve-month figures, plus
 --                      the latest trading day; price = last close on or before the date,
 --                      fundamentals = latest period ended on or before the date that has
---                      TTM revenue and a balance sheet.
+--                      TTM revenue and a balance sheet; a company with no such period yet
+--                      (newly listed: its first interim filing has no prior fiscal year)
+--                      takes its latest balance sheet, so it has market cap, EV, book value
+--                      and P/B, and no TTM figures or TTM ratios.
 --   financial_metric   fundamental metrics per reporting period (from v_key_metrics) and
 --                      valuation metrics per valuation date (from valuation_snapshot),
 --                      including ev_op = enterprise value / TTM operating profit.
@@ -103,15 +106,14 @@ WITH valuation_dates AS (
     WHERE pd.close_price IS NOT NULL
     GROUP BY pd.company_id
 ),
--- the periods with TTM revenue and a balance sheet, read once (the views are not evaluated per valuation date)
+-- the periods with a balance sheet, read once (the views are not evaluated per valuation date)
 fundamentals AS MATERIALIZED (
     SELECT t.company_id, t.period_end, t.period_id, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
            t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
            km.net_debt, km.non_controlling_interest, km.shares, km.shareholders_equity
     FROM v_ttm_financials t
     JOIN v_key_metrics km ON km.period_id = t.period_id
-    WHERE t.revenue_ttm IS NOT NULL
-      AND km.total_assets IS NOT NULL
+    WHERE km.total_assets IS NOT NULL
 ),
 valued AS (
     SELECT
@@ -129,7 +131,8 @@ valued AS (
         f.free_cash_flow_ttm                             AS fcf_ttm,
         f.shareholders_equity                            AS book_value
     FROM valuation_dates d
-    -- fundamentals: latest period on or before the date with TTM revenue and a balance sheet
+    -- fundamentals: latest period on or before the date with TTM revenue and a balance sheet; without any
+    -- (newly listed company, no prior fiscal year stored) the latest balance sheet: no TTM figures
     JOIN LATERAL (
         SELECT t.period_id, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
                t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
@@ -137,7 +140,7 @@ valued AS (
         FROM fundamentals t
         WHERE t.company_id = d.company_id
           AND t.period_end <= d.valuation_date
-        ORDER BY t.period_end DESC
+        ORDER BY t.revenue_ttm IS NULL, t.period_end DESC
         LIMIT 1
     ) f ON TRUE
     -- price: last close on or before the date
