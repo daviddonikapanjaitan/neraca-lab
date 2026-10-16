@@ -1,7 +1,7 @@
 "use client"
 
 import { Checkbox } from "@/components/ui/checkbox"
-import { INDICATOR_GROUPS, INDICATORS, NOT_FOR_INDEX, NOT_FOR_MONTHLY, type IndicatorId } from "@/lib/technical"
+import { INDICATOR_GROUPS, INDICATORS, NOT_FOR_INDEX, NOT_FOR_MONTHLY, NOT_FOR_OTHER_INDEX, type IndicatorId } from "@/lib/technical"
 
 const LABELS = new Map(INDICATORS.map((i) => [i.id, i.label]))
 
@@ -11,6 +11,7 @@ export function IndicatorPicker({
   onToggle,
   levelsDisabled,
   index = false,
+  comparable = false,
   monthly = false,
 }: {
   selected: IndicatorId[]
@@ -19,10 +20,12 @@ export function IndicatorPicker({
   levelsDisabled: boolean
   /** the chart shows the index (IHSG), a currency pair or a commodity: no comparison with IHSG, no events, no auto-rejection */
   index?: boolean
+  /** an index compared with IHSG (LQ45): relative strength and the rebased line stay available */
+  comparable?: boolean
   /** a monthly series (coal): no levels or volume profile either */
   monthly?: boolean
 }) {
-  const unavailable = monthly ? NOT_FOR_MONTHLY : index ? NOT_FOR_INDEX : []
+  const unavailable = monthly ? NOT_FOR_MONTHLY : index ? (comparable ? NOT_FOR_OTHER_INDEX : NOT_FOR_INDEX) : []
   return (
     <div className="space-y-4">
       {INDICATOR_GROUPS.map((group) => (
@@ -51,7 +54,9 @@ export function IndicatorPicker({
           )}
           {index && group.title === "Markers & comparison" && (
             <p className="text-xs text-muted-foreground">
-              An index, a currency pair or a commodity has no events or auto-rejection and is not compared with IHSG.
+              {comparable
+                ? "An index has no events or auto-rejection; it is compared with IHSG."
+                : "An index, a currency pair or a commodity has no events or auto-rejection and is not compared with IHSG."}
             </p>
           )}
         </fieldset>

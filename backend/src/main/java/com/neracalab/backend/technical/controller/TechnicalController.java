@@ -50,8 +50,8 @@ import tools.jackson.databind.JsonNode;
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/summary} - the preset summaries (stance, buy / sell / stop,
  *       thesis by fixed rules)</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/events} - corporate events for chart markers</li>
- *   <li>{@code GET /api/v1/technical/market?exchange=IDX&range=} - index regime, breadth, macro series, signals and
- *       regimes</li>
+ *   <li>{@code GET /api/v1/technical/market?exchange=IDX&range=} - index regime and breadth (no macro data: the
+ *       Macro page has them)</li>
  *   <li>{@code GET / PUT /api/v1/technical/settings} - the user's last chart settings</li>
  *   <li>{@code POST /api/v1/technical/refresh?exchange=IDX&ticker=&forceEvents=} (INGESTION) - refresh the index, the
  *       corporate events and the snapshots in the background; {@code GET} the same path for its status</li>

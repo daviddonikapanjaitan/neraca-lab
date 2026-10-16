@@ -455,7 +455,20 @@ export interface IndexPriceStatus {
   rows: number
   firstDate: string | null
   lastDate: string | null
-  /** the latest stored day is the last completed trading day */
+  /** the index and the indexes stored with it (LQ45) all reach the last completed trading day */
+  upToDate: boolean
+  /** every index the job stores, IHSG first, then LQ45 */
+  indexes?: IndexEntry[]
+}
+
+/** One index of the index job (IHSG, LQ45) */
+export interface IndexEntry {
+  code: string
+  symbol: string
+  name: string
+  rows: number
+  firstDate: string | null
+  lastDate: string | null
   upToDate: boolean
 }
 

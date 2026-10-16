@@ -7,6 +7,7 @@ import {
   Building2Icon,
   ChevronRightIcon,
   DatabaseZapIcon,
+  GlobeIcon,
   LandmarkIcon,
   LoaderIcon,
   LogOutIcon,
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/sidebar"
 import { COMPANIES_SECTIONS } from "@/lib/companies-sections"
 import { INGESTION_SECTIONS } from "@/lib/ingestion-sections"
+import { MACRO_HREF } from "@/lib/macro"
 import { SCREENING_SECTIONS } from "@/lib/screening-sections"
 import { hasPermission, homePath } from "@/lib/permissions"
 import type { Permission, User } from "@/lib/types"
@@ -60,6 +62,13 @@ const navMarket: NavItem[] = [
     icon: <Building2Icon />,
     permission: "COMPANIES",
     pages: COMPANIES_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
+  },
+  {
+    // the country's index read through its macro data (Druckenmiller, Paul Tudor Jones); market data like Companies
+    title: "Macro",
+    url: MACRO_HREF,
+    icon: <GlobeIcon />,
+    permission: "COMPANIES",
   },
   {
     title: "Screening",

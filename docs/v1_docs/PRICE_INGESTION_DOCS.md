@@ -76,6 +76,13 @@ curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/prices/index-ingestions?ex
 | `POST /api/v1/prices/updates?exchange=IDX[&index=true]` | **202**: `queued`, `alreadyActive` (their job is kept), `upToDate` (skipped), `withoutPrices` (of the queued), `index` (`outcome` QUEUED / ALREADY_ACTIVE / UP_TO_DATE), `firstJob` |
 | `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | **202** new job, **200** the job already queued / running (`ticker` = IHSG, `index` = true); 404 when the exchange has no index |
 
+The index job also stores the exchange's other indexes (`neracalab.technical.other-indexes`: LQ45 = Yahoo Finance
+`^JKLQ45` for the Macro page), each from its own latest stored day; a failure of one of them is logged and does not fail
+the job. The index counts as up to date (`index.upToDate`, the `UP_TO_DATE` outcome) only when IHSG and LQ45 both reach
+the last completed trading day, so a missing LQ45 queues the job. `index.indexes` lists every index of the job (`code`,
+`symbol`, `name`, `rows`, `firstDate`, `lastDate`, `upToDate` each); Ingestion › Price Ingestion shows both in
+"Update all companies to today" ("Also update the IHSG and LQ45 indexes") and in the index card.
+
 "Update all companies" (Ingestion › Price Ingestion, right-hand card) queues every active company whose latest stored
 day is before the last completed trading day as an ordinary `full=false` job: only the missing days are fetched, from
 the company's latest stored day (re-fetched as the overlap check) to that day - ANTM stored up to 9 Oct is fetched from
@@ -366,7 +373,7 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 | `job-history`                | `500`                       | finished jobs kept in memory                                              |
 | `yahoo.base-url`             | `https://query1.finance.yahoo.com` | `query2.finance.yahoo.com` serves the same API                     |
 | `fx.base-url`                | `https://api.frankfurter.dev/v1` | ECB reference rates for listings quoted in another currency (INDY) |
-| `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: like "Update all companies" - the companies of `schedule.exchange` behind, and IHSG |
+| `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: like "Update all companies" - the companies of `schedule.exchange` behind, and IHSG and LQ45 |
 | `schedule.cron`, `schedule.zone`, `schedule.exchange` | `0 30 17 * * MON-FRI`, `Asia/Jakarta`, `IDX` | when and for which exchange              |
 
 `neracalab.markets` (Forex and Commodities):

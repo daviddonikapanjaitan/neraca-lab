@@ -168,6 +168,11 @@ neracalab:
       yahoo-symbol: "^JKSE"          # Jakarta Composite Index on Yahoo Finance
       exchange: IDX
       history-from: "1990-01-01"     # start of the first index fetch
+    other-indexes:                   # stored with the benchmark, in the same run (the Macro page's index dropdown)
+      - code: LQ45
+        yahoo-symbol: "^JKLQ45"      # IDX LQ45 on Yahoo Finance (monthly from 1997)
+        exchange: IDX
+        history-from: "1997-01-01"
     min-history-days: 250            # fewer trading days: "limited history" warning
     cache-size: 200                  # chart series kept in memory (ticker x interval x price basis)
     cache-ttl: 12h

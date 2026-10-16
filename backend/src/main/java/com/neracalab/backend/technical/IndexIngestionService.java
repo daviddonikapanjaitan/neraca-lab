@@ -28,6 +28,9 @@ import com.neracalab.backend.technical.engine.Candle;
  *   <li>Today's bar only after the session close cutoff of the price ingestion
  *       ({@code neracalab.prices.session-close-cutoff}): before it, it is an unfinished intraday bar.</li>
  *   <li>Upserts: a day whose values the source corrected is updated.</li>
+ *   <li>The other indexes of the exchange ({@code neracalab.technical.other-indexes}: LQ45, for the Macro page) are
+ *       ingested in the same run, each from its own latest stored day; a failure of one of them is logged and does not
+ *       fail the benchmark's job.</li>
  * </ul>
  */
 @Service
@@ -66,10 +69,30 @@ public class IndexIngestionService implements IndexIngestion {
                 exchange));
     }
 
+    /** The other indexes of the exchange (LQ45 with IHSG), ingested by the same job. */
+    @Override
+    public List<IndexRef> companions(IndexRef index) {
+        return properties.otherIndexes().stream()
+                .filter(o -> Exchange.of(o.exchange()).equals(index.exchange()) && !o.code().equalsIgnoreCase(index.code()))
+                .map(o -> new IndexRef(o.code(), o.yahooSymbol(), TechnicalService.indexName(o.code()), index.exchange()))
+                .toList();
+    }
+
     @Override
     public Stored stored(IndexRef index) {
         IndexStats stats = repository.indexStats(index.code());
         return new Stored(stats.rows(), stats.firstDate(), stats.lastDate());
+    }
+
+    /** The index and the other indexes of its exchange (LQ45 with IHSG) all stored up to {@code lastCompleted}. */
+    @Override
+    public boolean upToDate(IndexRef index, LocalDate lastCompleted) {
+        List<String> codes = new java.util.ArrayList<>(List.of(index.code()));
+        companions(index).forEach(c -> codes.add(c.code()));
+        return codes.stream().allMatch(code -> {
+            LocalDate last = repository.indexStats(code).lastDate();
+            return last != null && !last.isBefore(lastCompleted);
+        });
     }
 
     @Override
@@ -79,6 +102,28 @@ public class IndexIngestionService implements IndexIngestion {
 
     @Override
     public Result ingest(IndexRef index, boolean full) {
+        Result result = ingestOne(index, full);
+        for (TechnicalProperties.Index other : properties.otherIndexes()) {
+            if (!Exchange.of(other.exchange()).equals(index.exchange()) || other.code().equalsIgnoreCase(index.code())) {
+                continue;
+            }
+            IndexRef ref = new IndexRef(other.code(), other.yahooSymbol(), TechnicalService.indexName(other.code()),
+                    index.exchange());
+            try {
+                ingestOne(ref, full, other.historyFrom());
+            } catch (RuntimeException e) {
+                log.warn("{} {}: index ingestion failed: {}", index.exchange(), other.code(), e.getMessage());
+            }
+        }
+        return result;
+    }
+
+    /** The benchmark index from its {@code history-from}. */
+    private Result ingestOne(IndexRef index, boolean full) {
+        return ingestOne(index, full, properties.index().historyFrom());
+    }
+
+    private Result ingestOne(IndexRef index, boolean full, LocalDate historyFrom) {
         ZonedDateTime now = ZonedDateTime.now(clock.withZone(index.exchange().zone()));
         LocalDate today = now.toLocalDate();
         LocalDate lastCompleted = prices.lastCompletedTradingDay(now);
@@ -89,7 +134,7 @@ public class IndexIngestionService implements IndexIngestion {
                     null);
         }
         boolean fullHistory = full || latest.isEmpty();
-        LocalDate from = fullHistory ? properties.index().historyFrom() : latest.get();
+        LocalDate from = fullHistory ? historyFrom : latest.get();
         List<Candle> received = yahoo.dailyBars(index.symbol(), index.exchange().zone(), from, today);
         List<Candle> bars = received.stream()
                 .filter(b -> !b.date().isBefore(from) && !b.date().isAfter(lastCompleted))

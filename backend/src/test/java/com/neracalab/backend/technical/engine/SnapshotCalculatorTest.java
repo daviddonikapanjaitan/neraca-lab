@@ -27,7 +27,7 @@ class SnapshotCalculatorTest {
 
     private static final Set<String> TOP_LEVEL = Set.of("schemaVersion", "exchange", "ticker", "companyName", "sector",
             "currency", "asOfDate", "priceBasis", "history", "price", "trend", "momentum", "volatility", "volume",
-            "structure", "relativeStrength", "marketRegime", "macro", "events", "risk", "notes");
+            "structure", "relativeStrength", "marketRegime", "events", "risk", "notes");
 
     private final TechnicalProperties properties = TechnicalTestData.properties();
     private final IdxTickSize ticks = new IdxTickSize(properties.tickSizes());
@@ -47,12 +47,7 @@ class SnapshotCalculatorTest {
                     close > b.subList(n - 200, n).stream().mapToDouble(Candle::close).average().orElseThrow()));
             id++;
         }
-        Map<String, List<MarketContext.Observation>> macro = new LinkedHashMap<>();
-        macro.put("BI_RATE", List.of());
-        macro.put("SBN_10Y", List.of());
-        macro.put("USD_IDR", List.of(new MarketContext.Observation(LocalDate.of(2026, 6, 30), 16000),
-                new MarketContext.Observation(LocalDate.of(2026, 10, 1), 16800)));
-        return new MarketContext("IDX", ihsg.getLast().date(), "IHSG", ihsg, members, macro);
+        return new MarketContext("IDX", ihsg.getLast().date(), "IHSG", ihsg, members);
     }
 
     @ParameterizedTest
@@ -90,10 +85,10 @@ class SnapshotCalculatorTest {
         Map<String, Object> regime = (Map<String, Object>) doc.get("marketRegime");
         assertThat(regime.get("indexAboveSma200")).isNotNull();
         assertThat(regime.get("breadthAbove200Pct")).isNotNull();
-        Map<String, Object> macro = (Map<String, Object>) doc.get("macro");
-        assertThat(((Map<String, Object>) macro.get("usdIdr")).get("changePct")).isEqualTo(5.0);
-        assertThat(((Map<String, Object>) macro.get("biRate")).get("value")).isNull();
-        assertThat((List<String>) doc.get("notes")).anyMatch(n -> n.contains("BI_RATE"));
+        // technical only: no macro section (schema 3), no note about macro data
+        assertThat(doc).doesNotContainKey("macro");
+        assertThat(doc.get("schemaVersion")).isEqualTo(3);
+        assertThat((List<String>) doc.get("notes")).noneMatch(n -> n.contains("BI_RATE") || n.contains("USD_IDR"));
 
         // every level is a valid IDX price
         Map<String, Object> s = (Map<String, Object>) doc.get("structure");

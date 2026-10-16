@@ -8,7 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { requestJson } from "@/lib/client-api"
 import { formatDate } from "@/lib/format"
-import { providerLabel } from "@/lib/ingestion"
+import { indexesOf, indexNames, providerLabel } from "@/lib/ingestion"
 import { technicalsHref } from "@/lib/links"
 import type { Exchange, IngestionJob, PriceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -16,8 +16,9 @@ import { cn } from "@/lib/utils"
 type Notice = { tone: "success" | "error"; text: string }
 
 /**
- * The exchange's index (IHSG = Yahoo Finance ^JKSE) into index_daily, through the price queue: from its latest stored
- * day to today, or its whole history. Companies > Technicals charts it (search IHSG) and compares every stock with it.
+ * The exchange's indexes (IHSG = Yahoo Finance ^JKSE, LQ45 = ^JKLQ45) into index_daily, through the price queue, in one
+ * job: each from its latest stored day to today, or its whole history. Companies > Technicals charts them (search IHSG
+ * or LQ45) and compares every stock with IHSG; the Macro page reads both.
  */
 export function IndexPriceCard({
   exchanges,
@@ -40,6 +41,8 @@ export function IndexPriceCard({
     return null
   }
   const source = providerLabel(index.source)
+  const all = indexesOf(index)
+  const names = indexNames(index)
 
   async function submit() {
     if (pending) return
@@ -55,8 +58,8 @@ export function IndexPriceCard({
         tone: "success",
         text:
           http === 202
-            ? `Queued ${full ? "the full history" : "the daily bars"} of ${index!.code} from ${source}.`
-            : `An ingestion of ${index!.code} is already queued or running. Follow it in the table below.`,
+            ? `Queued ${full ? "the full history" : "the daily bars"} of ${names} from ${source}.`
+            : `An ingestion of ${names} is already queued or running. Follow it in the table below.`,
       })
       onSubmitted(job)
     } catch (error) {
@@ -71,28 +74,33 @@ export function IndexPriceCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ChartCandlestickIcon className="size-4 text-primary" />
-          {index.code} index · {source}
+          {names} {all.length > 1 ? "indexes" : "index"} · {source}
         </CardTitle>
         <CardDescription>
-          Daily bars of the {index.name} ({index.symbol}) for the IHSG chart on Companies › Technicals, relative strength
-          and the market regime.
+          Daily bars of {all.map((i) => `the ${i.name} (${i.symbol})`).join(" and ")}, in one job: the index charts on
+          Companies › Technicals, relative strength and the market regime (IHSG), and the Macro page.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        <ul className="space-y-1 text-xs text-muted-foreground">
+          {all.map((i) => (
+            <li key={i.code}>
+              <span className="font-medium text-foreground">{i.code}</span>:{" "}
+              {i.lastDate ? (
+                <>
+                  {i.rows.toLocaleString("en-US")} days stored, {formatDate(i.firstDate)} to{" "}
+                  <span className="font-medium text-foreground">{formatDate(i.lastDate)}</span>
+                  {i.upToDate ? " (up to date)." : `; today's update goes up to ${formatDate(status.lastCompletedTradingDay)}.`}
+                </>
+              ) : (
+                "not stored yet: the first run loads its whole history."
+              )}
+            </li>
+          ))}
+        </ul>
         <p className="text-xs text-muted-foreground">
-          {index.lastDate ? (
-            <>
-              {index.rows.toLocaleString("en-US")} days stored, {formatDate(index.firstDate)} to{" "}
-              <span className="font-medium text-foreground">{formatDate(index.lastDate)}</span>
-              {index.upToDate
-                ? " (up to date)."
-                : `; today's update goes up to ${formatDate(status.lastCompletedTradingDay)}.`}
-            </>
-          ) : (
-            "Not stored yet: the first run loads the whole history (from 1990)."
-          )}{" "}
-          Only the days after the latest stored day are fetched. The technical refresh also updates it every weekday at
-          19:00 WIB.
+          Only the days after each index&apos;s latest stored day are fetched. &ldquo;Update all companies to today&rdquo;
+          includes them, and the technical refresh updates them every weekday at 19:00 WIB.
         </p>
 
         <label className="flex items-start gap-2 text-sm">
@@ -131,13 +139,13 @@ export function IndexPriceCard({
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={submit} disabled={pending}>
             {pending ? <LoaderIcon className="animate-spin" /> : <RefreshCwIcon />}
-            {pending ? "Queuing..." : `Fetch ${index.code}`}
+            {pending ? "Queuing..." : `Fetch ${names}`}
           </Button>
-          {index.lastDate && (
-            <Link href={technicalsHref(exchange, index.code)} className={buttonVariants({ variant: "outline" })}>
-              Open the {index.code} chart <ChevronRightIcon />
+          {all.filter((i) => i.lastDate).map((i) => (
+            <Link key={i.code} href={technicalsHref(exchange, i.code)} className={buttonVariants({ variant: "outline" })}>
+              Open the {i.code} chart <ChevronRightIcon />
             </Link>
-          )}
+          ))}
         </div>
       </CardContent>
     </Card>

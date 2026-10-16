@@ -309,15 +309,16 @@ public class TechnicalRepository {
     /**
      * Observations of a macro series, oldest first, with the day each became public (a series without a stored
      * release date: its observation date). {@code USD_IDR} reads the USD/IDR pair of the Forex price ingestion (Yahoo
-     * Finance, London close) when it is stored, else the ECB reference rates of fx_rate_daily (16:00 CET); both close
-     * after the IDX session, so a rate is public in Jakarta the day after.
+     * Finance IDR=X, the latest stored day) when it is stored, else the ECB reference rates of fx_rate_daily (16:00 CET).
+     * A rate is public on its own date: the Forex ingestion stores a day only once it is complete, and the ECB fixes
+     * its rate the same afternoon (read by the Macro page only).
      */
     public List<Observation> macro(String seriesCode) {
         if ("USD_IDR".equals(seriesCode)) {
             List<Observation> pair = jdbc.sql("""
                             SELECT trading_date, close_price FROM instrument_daily
                             WHERE instrument_code = 'USDIDR' ORDER BY trading_date""")
-                    .query((rs, i) -> nextDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                    .query((rs, i) -> sameDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
                     .list();
             if (!pair.isEmpty()) {
                 return pair;
@@ -325,7 +326,7 @@ public class TechnicalRepository {
             return jdbc.sql("""
                             SELECT rate_date, rate FROM fx_rate_daily
                             WHERE base_currency = 'USD' AND quote_currency = 'IDR' ORDER BY rate_date""")
-                    .query((rs, i) -> nextDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                    .query((rs, i) -> sameDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
                     .list();
         }
         return jdbc.sql("""
@@ -341,11 +342,11 @@ public class TechnicalRepository {
     public String usdIdrSource() {
         Integer rows = jdbc.sql("SELECT count(*) FROM instrument_daily WHERE instrument_code = 'USDIDR'")
                 .query(Integer.class).single();
-        return rows != null && rows > 0 ? "Yahoo Finance IDR=X (Forex price ingestion)" : "ECB reference rates (fx_rate_daily)";
+        return rows != null && rows > 0 ? "Forex price ingestion (Yahoo Finance IDR=X)" : "ECB reference rates (fx_rate_daily)";
     }
 
-    private static Observation nextDay(LocalDate date, double value) {
-        return new Observation(date, value, date.plusDays(1));
+    private static Observation sameDay(LocalDate date, double value) {
+        return new Observation(date, value, date);
     }
 
     /** The active macro series of the catalog, in display order. */

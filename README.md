@@ -57,7 +57,7 @@ start), then change its password in Admin Center > User Management.
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
-| [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 2) the future technical agents read |
+| [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 3, technical only) the future technical agents read |
 | [`macro.md`](macro.md)                                      | requirements of the macro data (Druckenmiller, Tudor Jones) and how they were implemented |
 | [`commodities.md`](commodities.md)                          | which further commodities matter for screening IDX stocks (nickel, copper, tin, HBA, ...): insight, not built yet |
 
@@ -414,7 +414,7 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                 
 | `GET /api/v1/prices/ingestions/{id}`                          | the job: `status` (`QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `FAILED`), `message`, `result` (requests, rows inserted / updated, valuation rows) |
 | `GET /api/v1/prices/ingestions`                               | `provider`, `pending` jobs and the recent jobs, most recent first                                                                        |
 | `GET /api/v1/prices/status?exchange=IDX`                      | how far the stored prices reach: last completed trading day, companies up to date / behind / without prices, the IHSG index            |
-| `POST /api/v1/prices/updates?exchange=IDX[&index=true]`       | **"Update all companies to today"**: queues every active company whose prices end before the last completed trading day - only its missing days (ANTM stored up to 9 Oct: 9 Oct to today) - and IHSG; up-to-date companies are skipped |
+| `POST /api/v1/prices/updates?exchange=IDX[&index=true]`       | **"Update all companies to today"**: queues every active company whose prices end before the last completed trading day - only its missing days (ANTM stored up to 9 Oct: 9 Oct to today) - and the IHSG and LQ45 indexes (one job; queued unless both are up to date); up-to-date companies are skipped |
 | `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | the IHSG index (Yahoo Finance `^JKSE`) into `index_daily` through the same queue: **202** new job, **200** job already active          |
 | `GET /api/v1/markets`                                          | **Forex and Commodities**: the markets with their instruments (USD/IDR, USD/JPY; Brent, gold, coal, palm oil) and how far their bars reach |
 | `POST /api/v1/markets/{FOREX\|COMMODITY}/ingestions?code=USDIDR[&full=true]` | one Forex pair / commodity through the same queue (`PRICE` job, exchange = the market): **202** / **200** |
@@ -464,7 +464,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.eodhd.api-token` / `EODHD_API_TOKEN` | empty                       | required for `eodhd`                                |
 | `neracalab.prices.min-delay`, `max-delay`             | `1s`, `2s`                  | pause between two requests                          |
 | `neracalab.prices.backoff`                            | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429                    |
-| `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: like "Update all companies" - the `IDX` companies behind and IHSG |
+| `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: like "Update all companies" - the `IDX` companies behind, IHSG and LQ45 |
 | `neracalab.ingestion.prices-after-upload` / `INGESTION_PRICES_AFTER_UPLOAD` | `true` | a stored filing queues the daily prices of its company (nothing when they are up to date) |
 | `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
 | `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
@@ -585,7 +585,7 @@ growth rates stay those of the USD statements. Details: [`docs/v1_docs/ANALYSIS_
 (dropdown IDX / Forex / Commodities): candles with moving averages, Bollinger Bands, channels, ATR
 bands, support / resistance zones, retracements, 52-week and all-time levels, a base range, corporate events and ARA / ARB
 days, lower panes (volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, relative strength vs IHSG, 12-1 month momentum), key
-levels, volume by price, IHSG regime and macro panels - and the **IHSG index** itself (search IHSG). Below the chart, a
+levels, volume by price and IHSG regime panels - and the **IHSG index** itself (search IHSG). Below the chart, a
 **summary for each preset** (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller): the stance, the price to buy at,
 the price to sell at, the stop and the thesis from the indicators and price patterns, by fixed rules (no AI model; the
 same data always gives the same summary; "For information only. Not investment advice."). The backend computes every
@@ -598,10 +598,8 @@ The page and its APIs read only the database: daily prices from `price_daily` (f
 `index_daily` (filled by the IHSG ingestion on Ingestion › Price Ingestion and by the technical refresh) and dividends /
 splits from `corporate_event` (filled by the technical refresh). Both jobs call the Yahoo
 Finance chart API directly from Java (no `yfinance` package, no API key). Currencies and commodities come from
-`instrument_daily` (Price Ingestion with the market Forex / Commodities), the macro data from `macro_series`
-(Ingestion › Macro). The Druckenmiller and Paul Tudor Jones summaries read the macro **liquidity** and **risk** regimes
-(the Fed and BI, US net liquidity, credit, the dollar, the rupiah, VIX, the US curve, inflation; point in time: a value
-is used only from its release date), and a currency or commodity through its own macro drivers. TradingView only supplies the open-source chart library (Lightweight Charts™) that draws in the
+`instrument_daily` (Price Ingestion with the market Forex / Commodities). The presets are technical only: no macro
+data (that is the Macro page); a currency or commodity is read through its own trend. TradingView only supplies the open-source chart library (Lightweight Charts™) that draws in the
 browser - no data comes from TradingView.
 
 | Endpoint (permission COMPANIES) | Content |
@@ -614,7 +612,7 @@ browser - no data comes from TradingView.
 | `GET /api/v1/technical/{exchange}/{ticker}/snapshot` | the agent-ready snapshot |
 | `GET /api/v1/technical/{exchange}/{ticker}/events` | dividends and splits for chart markers |
 | `GET /api/v1/technical/{exchange}/{ticker}/summary` | the preset summaries: stance, buy / sell / stop prices, reward to risk, thesis, evidence (`{ticker}` = IHSG for the index) |
-| `GET /api/v1/technical/market?exchange=IDX` | IHSG regime, breadth, the macro series, signals and liquidity / risk regimes |
+| `GET /api/v1/technical/market?exchange=IDX` | IHSG regime and breadth (technical only: no macro data) |
 | `POST /api/v1/technical/refresh` (INGESTION) | load IHSG and corporate events from Yahoo Finance, recompute every snapshot (also nightly, 19:00 WIB) |
 
 ```bash
@@ -652,6 +650,23 @@ How the data is handled:
 
 The signals and regimes are described in [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 5.
 
+**The Macro page** (sidebar › Macro, between Companies and Screening; permission COMPANIES) reads a country's index
+through this data: Indonesia (the United States and China later), the index IHSG or LQ45 as a plain line, the macro
+panel (the liquidity and risk regimes and a chart per series, each with a summary of what it says for Indonesian
+equities), the Paul Tudor Jones and Druckenmiller summaries (macro side: stance, thesis, buy when / sell when) and the
+conclusion: an investability score from 0 to 100 (six weighted parts), the verdict (investable / selective / not
+investable now) and the action (buy, accumulate, wait, sell / reduce) with the buy and sell conditions met or not.
+Fixed rules in Java, no AI model (`MacroOutlook`). LQ45 (`^JKLQ45`) is stored with IHSG by the same index job.
+The page reads as of today (Jakarta): USD/IDR is the latest close of the Forex price ingestion (Yahoo Finance `IDR=X`)
+as soon as it is stored, and every chart names its source. Companies › Technicals reads no macro data: its presets and
+panels are technical only.
+
+```bash
+curl -H "$AUTH" "http://localhost:8080/api/v1/macro/outlook?country=ID&index=LQ45&range=1Y"
+```
+
+Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6a.
+
 ## Frontend
 
 Next.js web app in `frontend/` with the
@@ -668,7 +683,8 @@ npm run dev                   # http://localhost:3000
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
-| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG index (search IHSG); key levels, snapshot, volume profile, IHSG regime and macro panels (liquidity and risk regimes); PNG / CSV export. Settings saved per user and in the URL |
+| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
+| `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones and Druckenmiller summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
@@ -729,9 +745,10 @@ classification while the column still fails;
 twice, a 3 rupiah slip) and TPIA's self-contradicting comparatives; `IngestionVerifierSegmentsTest` a refused comparative
 breakdown of a period already stored as a note; `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
-`PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism; a currency pair read through its macro drivers); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
+`PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism; a currency pair read through its own trend; no macro data); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
 `InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories, coal monthly from the World Bank workbook, the markets API);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
+`MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;

@@ -1,15 +1,16 @@
-# IndicatorSnapshot JSON (schemaVersion 2)
+# IndicatorSnapshot JSON (schemaVersion 3)
 
 The latest technical snapshot of a listing: every indicator the future technical agents (Murphy, Keith Gill, Paul
 Tudor Jones, Stanley Druckenmiller, and the risk overlay) will read, as one versioned JSON document. It is data, not a
 signal: no score, no buy / sell verdict, no model call (the preset summaries, `GET .../summary`, derive a stance and
 prices from it by fixed rules: [v1_docs/TECHNICAL_DOCS.md](v1_docs/TECHNICAL_DOCS.md) section 8). Computed in Java (`technical.engine.SnapshotCalculator`) from
-stored daily prices, the IHSG bars, corporate events and macro series.
+stored daily prices, the IHSG bars and corporate events. It is technical only: no macro data (that is the Macro page,
+[v1_docs/MACRO_DOCS.md](v1_docs/MACRO_DOCS.md)).
 
 - API: `GET /api/v1/technical/{exchange}/{ticker}/snapshot` (permission COMPANIES).
 - Storage: `indicator_snapshot(company_id, as_of_date, schema_version, snapshot_json JSONB, input_hash, computed_at)`,
   one row per company (the latest). The nightly technical refresh recomputes every active listing; a request
-  recomputes a snapshot whose `input_hash` changed (new or re-adjusted prices, new index bars, events, macro data,
+  recomputes a snapshot whose `input_hash` changed (new or re-adjusted prices, new index bars, events,
   settings or engine revision) and serves the stored one otherwise. Being JSONB, the stored text lists keys in
   PostgreSQL's order, not the order below.
 - Versioning: `schemaVersion` changes on any incompatible change (a field renamed, removed or redefined); new fields
@@ -29,11 +30,12 @@ So does every daily **Forex pair or commodity** (`.../FOREX/USDIDR/snapshot`, `.
   - `risk.sessionsAfterLastBar`, `missingSessions60`, `possiblySuspended`;
   - `price.lotSize`, `price.valueTraded` and the value averages.
 - **Volume:** a currency pair has none, so its volume indicators are 0 or null.
-- **Shared groups:** `marketRegime` and `macro` are those of IDX.
+- **Shared groups:** `marketRegime` is that of IDX.
 
 Coal (monthly) has no snapshot (422).
 
 **Version history.**
+- **3** (2026-10-16): the `macro` section is removed; Technicals reads no macro data (the Macro page does).
 - **2** (2026-10-16): `macro` gained `series`, `signals` and `regimes`, and every macro value is point in time
   (section macro).
 - **1:** the first version.
@@ -61,7 +63,7 @@ Coal (monthly) has no snapshot (422).
 | `priceBasis` | string | the price basis in words |
 | `history` | object | `tradingDays`, `firstDate`, `lastDate`, `limited` (fewer than `minHistoryDays` = 250), `minHistoryDays` |
 | `price` | object | `open high low close` of the last bar, `changePct` vs the previous close, `volume` (shares), `valueTraded` (close x volume: the exchange's own value is not stored), `tickSize` at the close, `lotSize` (100) |
-| `notes` | string[] | why values are null (limited history, no macro data, no earnings dates, no suspension source, ...) |
+| `notes` | string[] | why values are null (limited history, no earnings dates, no suspension source, ...) |
 
 ## trend (Murphy, PTJ, Druckenmiller)
 
@@ -138,25 +140,6 @@ Coal (monthly) has no snapshot (422).
 | `indexSma200`, `indexAboveSma200`, `indexVsSma200Pct`, `indexSma200Slope20dPct` | IHSG against its 200-day SMA |
 | `breadthAbove200Pct`, `breadthCounted`, `breadthUniverse` | share of the stored active listings (with 200 bars and a bar in the last 10 days) closing above their own SMA 200 |
 
-## macro (Druckenmiller, PTJ)
-
-The macro series of Ingestion › Macro ([v1_docs/MACRO_DOCS.md](v1_docs/MACRO_DOCS.md)), **point in time**: only
-observations whose release date (the end of their period plus the publication lag) is on or before `asOfDate` are used.
-September CPI, public on 15 October, is unknown to a snapshot of 14 October.
-
-| Field | Meaning |
-|---|---|
-| `biRate` | Bank Indonesia rate: `value` (%), `asOf`, `changePoints` over `changeMonths` (6) |
-| `sbn10y` | 10-year government bond yield: `value` (%), `asOf`, `changePoints` over 3 months |
-| `usdIdr` | USD/IDR (the Forex pair `USDIDR` when stored, else the ECB reference rate of `fx_rate_daily`): `value`, `asOf`, `changePct` over 3 months |
-| `series` | every stored series by code (`BI_RATE`, `US_10Y`, `DXY`, ...): its latest known `value`, `date`, `released`, `stale` |
-| `signals` | the signals of the presets, each null when an input is missing or stale. Signals and their fields:<br>• `biPolicy` / `fedPolicy`: `value`, `change6mPoints`, `state` CUTTING / HOLDING / HIKING<br>• `idRealRate`: BI rate - CPI, `state` RESTRICTIVE / NEUTRAL / ACCOMMODATIVE<br>• `sbn10y`: `change3mPoints`, `trend`, `spreadVsUs10y`<br>• `usCurve`: 10Y - 2Y, `state` INVERTED / FLAT / NORMAL, `trend`, `us10yChange3mPoints`<br>• `usNetLiquidity`: USD bn, `change3mPct`, `direction` GROWING / SHRINKING, `basis`<br>• `creditStress`: HY spread, `percentile1y`, `change1mPoints`, `state` STRESSED / NORMAL / CALM<br>• `dollar`: `dxyChange3mPct`, `dxyTrend`, `usdIdrChange3mPct`, `rupiahTrend`<br>• `inflation`: Indonesian and US CPI YoY and their trend, `usBreakeven10y`, `usRealYield10y` and its 3-month change<br>• `riskAppetite`: VIX, `percentile1y`, `state` FEAR / NORMAL / CALM<br>• `foreignFlows`: IDX net buying over 20 sessions, foreign SBN holdings<br>• `idLiquidity`: reserves, M2 YoY<br>• `china`: PMI<br>• `positioning`: gold / crude / usd, net and `percentile3y`, `state` CROWDED_LONG / NEUTRAL / CROWDED_SHORT |
-| `regimes` | `liquidity` (Druckenmiller: EASING / NEUTRAL / TIGHTENING) and `risk` (PTJ: RISK_ON / NEUTRAL / RISK_OFF): `state` (null with fewer than 3 signals, and a `note`), `score`, `signals`, `components` (each `signal`, `vote` +1 / 0 / -1, `text`) |
-
-`biRate`, `sbn10y` and `usdIdr` keep their schema-1 meaning: the latest observation released on or before the as-of
-date, compared with the one known `changeMonths` earlier. The thresholds of the signals and regimes:
-[v1_docs/MACRO_DOCS.md](v1_docs/MACRO_DOCS.md), section 5.
-
 ## events (Gill, Druckenmiller)
 
 | Field | Meaning |
@@ -182,11 +165,11 @@ and the splits recorded from the filings (`corporate_action`).
 | `possiblySuspended` | 3 or more consecutive missing sessions within the last 60 bars, or no volume on the last 3 bars |
 | `specialMonitoringBoard`, `suspended` | null: no source of the special monitoring board (Papan Pemantauan Khusus) or of suspensions yet |
 
-## Example (MOLI, arrays shortened; the macro section of 2026-10-15)
+## Example (MOLI, arrays shortened)
 
 ```json
 {
-  "schemaVersion": 2, "exchange": "IDX", "ticker": "MOLI", "companyName": "Madusari Murni Indah",
+  "schemaVersion": 3, "exchange": "IDX", "ticker": "MOLI", "companyName": "Madusari Murni Indah",
   "sector": "Basic Materials", "currency": "IDR", "asOfDate": "2026-10-14",
   "history": { "tradingDays": 1858, "firstDate": "2018-08-31", "lastDate": "2026-10-14", "limited": false, "minHistoryDays": 250 },
   "price": { "open": 400.0, "high": 406.0, "low": 392.0, "close": 398.0, "changePct": -0.5, "volume": 1910000.0,
@@ -205,18 +188,6 @@ and the splits recorded from the filings (`corporate_action`).
     "allTimeHigh": { "price": 1160.0, "date": "2018-09-03", "drawdownPct": -65.6897, "since": "2018-08-31" },
     "base": { "detected": false }
   },
-  "macro": { "biRate": { "value": 5.75, "asOf": "2026-09-23", "changePoints": 1.0, "changeMonths": 6, "unit": "%" },
-             "sbn10y": { "value": 7.169, "asOf": "2026-10-14", "changePoints": -0.067, "changeMonths": 3, "unit": "%" },
-             "usdIdr": { "value": 17866.5, "asOf": "2026-10-14", "changePct": -1.35, "changeMonths": 3 },
-             "series": { "US_10Y": { "value": 5.21, "date": "2026-10-13", "released": "2026-10-14", "stale": false }, "...": {} },
-             "signals": { "fedPolicy": { "value": 3.88, "change6mPoints": 0.24, "state": "HIKING" },
-                          "usNetLiquidity": { "value": 5867.106, "change3mPct": -1.997, "direction": "SHRINKING" },
-                          "creditStress": { "value": 3.25, "percentile1y": 97.619, "change1mPoints": 0.54, "state": "STRESSED" },
-                          "...": {} },
-             "regimes": { "liquidity": { "state": "TIGHTENING", "score": -3.0, "signals": 6,
-                                         "components": [ { "signal": "fedPolicy", "vote": -1.0,
-                                                           "text": "Fed hiking rates (+0.24 points in 6 months)" }, "..." ] },
-                          "risk": { "state": "NEUTRAL", "score": -1.0, "signals": 6, "components": [ "..." ] } } },
   "risk": { "araCount60": 0, "arbCount60": 0, "missingSessions60": 0, "possiblySuspended": false,
             "specialMonitoringBoard": null, "suspended": null },
   "notes": [ "No earnings dates stored (the filings do not carry their publication date yet): events.lastEarnings is null", "..." ]

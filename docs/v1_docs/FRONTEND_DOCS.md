@@ -140,14 +140,32 @@ from `/api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|event
 
 | Element | Content |
 |---|---|
-| Controls | exchange or market (`GET /api/v1/technical/markets`: IDX, Forex, Commodities), ticker search (code or name, or IHSG for the index; with a market its currencies / commodities; arrows / Enter / Escape), Daily / Weekly / Monthly (a monthly series - coal - is shown monthly only), 3M .. Max, Split-adjusted / Total return (not for a currency or commodity), presets (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller: they toggle indicators), indicator checkboxes (side column; a sheet on a phone; for IHSG, a currency or commodity relative strength, the comparison line, events and ARA / ARB are disabled; for a monthly series the levels too), PNG export |
+| Controls | exchange or market (`GET /api/v1/technical/markets`: IDX, Forex, Commodities), ticker search (code or name, or IHSG / LQ45 for the indexes; with a market its currencies / commodities; arrows / Enter / Escape), Daily / Weekly / Monthly (a monthly series - coal - is shown monthly only), 3M .. Max, Split-adjusted / Total return (not for a currency or commodity), presets (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller: they toggle indicators), indicator checkboxes (side column; a sheet on a phone; for IHSG, a currency or commodity relative strength, the comparison line, events and ARA / ARB are disabled - for LQ45 only events and ARA / ARB: it is compared with IHSG; for a monthly series the levels too), PNG export |
 | Preset summaries | below the chart (`preset-summaries.tsx`): a card per preset, the selected one first - stance, buy / sell / stop with distance and basis (with the decimals of the instrument: `priceDecimals`), reward to risk, thesis, the evidence on request, "Show on chart"; caveats and the disclaimer. A monthly series shows a note instead (no daily bars) |
 | Main chart | candles, moving averages, Bollinger, channels, ATR bands, IHSG rebased; zones and the base as shaded bands (series primitive); retracement, 52-week and all-time-high lines; event and ARA / ARB markers; lower panes for volume, RSI, MACD, Stochastic, OBV, ADX, ATR %, RS vs IHSG, 12-1 month momentum |
-| Panels | key levels (CSV; a currency or commodity at its own tick), snapshot "data, not signals" (CSV; the liquidity and risk regimes), volume by price (hidden without volume), IHSG regime, macro (the liquidity and risk regimes with every vote, and the BI rate, SBN 10Y, USD/IDR, Indonesian CPI, Fed funds, US 10Y, DXY, US high-yield spread and VIX over a year) |
+| Panels | key levels (CSV; a currency or commodity at its own tick), snapshot "data, not signals" (CSV), volume by price (hidden without volume), IHSG regime. No macro panel: technical only (the macro view is the Macro page, 3.2b) |
 | Settings | saved per user (`PUT /api/technical/settings`, debounced), localStorage as fallback, and in the URL; the URL wins |
 | Other | limited-history warning, disclaimer "For information only. Not investment advice.", TradingView notice in the footer and on `/credits`; usable at phone width; colors from the theme's CSS variables |
 
 Details: [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md).
+
+### 3.2b Macro - `/macro?country=ID&index=IHSG&range=1Y` (`COMPANIES`)
+
+A sidebar entry of its own between Companies and Screening (no sub-pages). The server page loads the outlook
+(`GET /api/v1/macro/outlook`); the client component (`components/macro/macro-page-client.tsx`) reloads it through
+`/api/macro/outlook` when the country, index or range changes and keeps the choice in the URL (`router.replace`). An
+unknown country or index in the URL shows Indonesia / IHSG.
+
+| Element | Content |
+|---|---|
+| Controls | country (Indonesia; United States and China disabled, "coming later"), index (IHSG, LQ45), 6M .. MAX, the as-of date |
+| Index | a plain line chart (Recharts), no indicators; close, 1M / 3M / YTD / 1Y, 52-week range; the investability score and the action badge |
+| Macro panel | "Macro panel (liquidity and risk regimes, rates, dollar)": both regimes with every vote and their state 3 months before; a chart per series grouped Indonesia / Global liquidity and risk, each with its last value, a Supportive / Headwind / Neutral badge, the summary and the preset that reads it |
+| Preset summaries | Paul Tudor Jones and Druckenmiller: stance, label, score, thesis, buy when / sell when, the evidence on request |
+| Conclusion | the score (0 - 100) on a bar with the 40 / 60 marks, verdict and action, the summary, the buy / accumulate / sell conditions with met ones ticked (the group that applies now highlighted), what would change the call, the six parts of the score (weight, reading, points, why) |
+| Other | notes (series without data, an index not stored yet) and the disclaimer |
+
+Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6a.
 
 ### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news`, `/ingestion/macro` (`INGESTION`)
 
@@ -159,7 +177,7 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | Page                         | Card                                                                                  |
 |------------------------------|---------------------------------------------------------------------------------------|
 | IDX XBRL (`/ingestion/xbrl`) | Financial statement upload                                                            |
-| Price Ingestion (`/ingestion/prices`) | Left: price ingestion of one company, or with the market **Forex** / **Commodities** of one currency / commodity (the second dropdown becomes Currency / Commodity; `/api/markets/{market}/ingestions`). Right: "Update all companies to today" (`price-update-card.tsx`: companies up to date / behind / without prices against the last completed trading day, IHSG with them; with a market "Update all currencies / commodities to today": each instrument with its last date, `/api/markets/{market}/updates`) and the IHSG index (`index-price-card.tsx`: stored range, fetch, full history, link to its chart). Exchanges, stored companies, `GET /api/v1/prices/status` per exchange, `GET /api/v1/markets` and the price provider are loaded for this page only |
+| Price Ingestion (`/ingestion/prices`) | Left: price ingestion of one company, or with the market **Forex** / **Commodities** of one currency / commodity (the second dropdown becomes Currency / Commodity; `/api/markets/{market}/ingestions`). Right: "Update all companies to today" (`price-update-card.tsx`: companies up to date / behind / without prices against the last completed trading day, the IHSG and LQ45 indexes with them (each with its stored date); with a market "Update all currencies / commodities to today": each instrument with its last date, `/api/markets/{market}/updates`) and the IHSG and LQ45 indexes (`index-price-card.tsx`: the stored range of each, one fetch for both, full history, a link to each chart). Exchanges, stored companies, `GET /api/v1/prices/status` per exchange, `GET /api/v1/markets` and the price provider are loaded for this page only |
 | Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
 | PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload, then the stored PDF documents ([RAG_DOCS.md](RAG_DOCS.md)) |
 | News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |

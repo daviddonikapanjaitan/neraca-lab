@@ -19,10 +19,10 @@ APIs, without changes to the data or indicator layers; the rules-based summaries
 | Listings | the companies of an exchange (filter by exchange; IDX only today, other exchanges via `Exchange`) | `company` |
 | Daily bars | the existing price ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)); split-adjusted OHLC, dividend-adjusted close, volume | `price_daily` |
 | IHSG | Yahoo Finance `^JKSE`, daily from 1990 (8,891 bars on 2026-10-15), fetched by the IHSG ingestion (Ingestion › Price Ingestion, the "Update all companies" run, the price schedule) and the technical refresh | `index_daily` (new) |
+| LQ45 | Yahoo Finance `^JKLQ45`, from 1997 (7,200 bars on 2026-10-16), stored by the same index job as IHSG (`neracalab.technical.other-indexes`); read by the Macro page (MACRO_DOCS.md, section 6a), not by the snapshots | `index_daily` |
 | Corporate events | Yahoo Finance dividends and splits (one monthly-interval request per listing, refreshed after 7 days), and the splits recorded from the filings or by data scripts | `corporate_event` (new), `corporate_event_fetch` (new), `corporate_action` |
 | USD/IDR | the Forex price ingestion (Yahoo Finance `IDR=X`) when stored, else the ECB reference rates of the price ingestion | `instrument_daily`, `fx_rate_daily` |
 | Forex pairs, commodities | Price Ingestion with the market Forex / Commodities ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md), section 1b) | `market_instrument`, `instrument_daily` (V1.0.25) |
-| Macro series | Ingestion › Macro: FRED, Bank Indonesia, CNBC, CFTC, Yahoo Finance, CSV uploads ([MACRO_DOCS.md](MACRO_DOCS.md)) | `macro_series_def`, `macro_series` (V1.0.25 adds release dates) |
 | Snapshots | computed here | `indicator_snapshot` (new) |
 | Chart settings | the user's last settings on the page | `chart_setting` (new) |
 
@@ -99,7 +99,7 @@ company ("Company not found") or no prices ("No prices").
 | `GET .../snapshot` | the IndicatorSnapshot ([../indicator-snapshot.md](../indicator-snapshot.md)) |
 | `GET .../events` | corporate events with chart time, source and URL |
 | `GET .../summary` | the preset summaries (section 8): per preset `stance` (`BUY`, `ACCUMULATE`, `WAIT`, `AVOID`), `stanceLabel`, `score` / `maxScore`, `buy` / `sell` / `stopLoss` (`price`, `type` LIMIT or STOP, `basis`, `distancePct`), `rewardRisk`, `thesis`, `points` (the evidence, `tone` POSITIVE / NEGATIVE / NEUTRAL); `caveats` (limited history, thin liquidity, ARA / ARB, stale prices), `disclaimer` |
-| `GET /api/v1/technical/market?exchange=IDX&range=1Y` | IHSG regime (close, SMA 200, series), breadth, every macro series of the range (with `name`, `unit`, `country`, `frequency`, `source`) and `macroSignals`: the signals and the liquidity / risk regimes as of the latest market day ([MACRO_DOCS.md](MACRO_DOCS.md), section 5). A market (FOREX, COMMODITY) answers with the IDX context |
+| `GET /api/v1/technical/market?exchange=IDX&range=1Y` | IHSG regime (close, SMA 200, series) and breadth; no macro data (the Macro page has it). A market (FOREX, COMMODITY) answers with the IDX context |
 | `GET`, `PUT /api/v1/technical/settings` | the user's last chart settings (a JSON object up to 20,000 characters; 204 when none) |
 | `POST /api/v1/technical/refresh?exchange=IDX&ticker=&forceEvents=false` (INGESTION) | starts a refresh in the background (202): IHSG (the IHSG ingestion: from its last stored day; today's bar only after the price ingestion's session-close cutoff), the events that are due, then every snapshot. `GET` the same path for its status (`indexRows`, `eventCompanies`, `eventsStored`, `snapshots`, `errors`). A Yahoo rate limit stops the event fetches of that run |
 
@@ -107,6 +107,13 @@ company ("Company not found") or no prices ("No prices").
 rounded to 0.01 instead of IDX ticks, `type` = `INDEX` and `lotSize` = null in the header, no auto-rejection days, no
 events; its snapshot is computed on request and kept in memory only (`indicator_snapshot` belongs to companies), with
 relative strength vs itself, auto-rejection, lot size and value traded null.
+
+`{ticker}` = `LQ45` (or `^JKLQ45`) is an index the same way (`neracalab.technical.other-indexes`; listing id -2, IHSG
+-1): its own bars from `index_daily`, `source` / `priceBasis` "Yahoo Finance ^JKLQ45", levels at 0.01, no events, no
+auto-rejection, no lot, a snapshot in memory - but it **is compared with IHSG**: relative strength (`rs`, the snapshot's
+`ratio` / `ratioChange50Pct`) and the rebased IHSG line are available. Yahoo Finance publishes no volume for
+`^JKLQ45` (every bar 0): the volume indicators are empty and the snapshot says so. The ticker search lists the indexes
+first (IHSG, then LQ45; "composite" finds IHSG only). The preset summaries read it as an index (the market), like IHSG.
 
 Measured on 2026-10-14 (61 listings, cached): 0.04 - 0.13 s per call; the first `/levels` of a listing after new
 prices about 1 s.
@@ -130,7 +137,7 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
   return, indicator checkboxes (a side column; a sheet on a phone) and presets that toggle indicators:
   Murphy (SMA 50 / 200, zones, retracements, RSI, MACD, volume, OBV, RS vs IHSG), Keith Gill (SMA 200, volume,
   volume profile, base, 52-week range, events), Paul Tudor Jones (SMA 200, 20 / 50-bar channels, ADX, ATR bands),
-  Druckenmiller (RS vs IHSG, 12-1 month momentum, IHSG regime panel, macro panel with the liquidity and risk regimes).
+  Druckenmiller (RS vs IHSG, 12-1 month momentum, IHSG regime panel).
 - **Settings** persist per user on the server (`chart_setting`), with localStorage as a fallback, and in the URL
   (`?exchange=IDX&ticker=HRTA&interval=D&range=1Y&preset=murphy&ind=sma50,sma200,...`, shareable). The URL wins over the
   saved settings; a company page links to its chart (`Technicals` button in the company header).
@@ -149,7 +156,7 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 - **IHSG**: searched like a ticker; the header shows index points and an "Index" badge instead of the lot and the
   Fundamentals link; relative strength, the IHSG comparison line, events and ARA / ARB markers are disabled for it.
 - **Side panels**: key levels (CSV export), snapshot in readable form labeled "data, not signals" (CSV export), volume
-  by price (Recharts), IHSG regime and macro (Recharts).
+  by price (Recharts), IHSG regime (Recharts).
 - **Export**: the chart as PNG (`takeScreenshot`), key levels and snapshot as CSV.
 - Disclaimer on the page: "For information only. Not investment advice."
 
@@ -161,9 +168,8 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 | `IndicatorEngineTest` | SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, OBV, ROC, channels, momentum against reference formulas written in the test; warm-ups; weekly / monthly aggregation incl. an ISO week across the year end |
 | `StructureTest` | fractal pivots, zone clustering, volume-profile bucketing, retracement math (up and down swings), base detection, extremes |
 | `SnapshotCalculatorTest` | on about 300 real days of HRTA, SMSM and MYOR with IHSG (`src/test/resources/technical/*.csv`): the complete versioned schema, valid tick prices, determinism and the input hash, limited history, missing sessions vs stale prices, earnings reaction |
-| `TechnicalControllerTest` | every endpoint against the Docker Postgres (rolled back): search, bars, aggregation, indicators, levels, snapshot, events, market, settings, invalid parameters, unknown ticker, a 30-day listing and one without prices; IHSG as a listing (search, bars in points by `IHSG` and `^JKSE`, levels with 2 decimals, snapshot not stored, no events, summary); the summaries of a stock (valid IDX prices, stop < buy < sell) |
-| `PresetSummariesTest` | the four summaries on the real HRTA, SMSM and MYOR fixtures (stance, valid IDX prices, stop < buy < sell, reward to risk, thesis), determinism, an uptrend bought and a downtrend avoided (PTJ: a buy-stop above the close below the 200-day, 5:1 target), an index in points without relative strength vs itself, no prices with fewer than 15 bars; USD/JPY read through its macro drivers (prices at its 0.001 tick, no IHSG votes, the risk regime in PTJ), tighter liquidity lifting USD/IDR and weighing on gold |
-| `MacroSignalsTest` | the macro signals and regimes: a tightening, risk-off set; point in time (a CPI released after the as-of date not used); stale series; the BI rate held between decisions |
+| `TechnicalControllerTest` | every endpoint against the Docker Postgres (rolled back): search, bars, aggregation, indicators, levels, snapshot, events, market, settings, invalid parameters, unknown ticker, a 30-day listing and one without prices; IHSG as a listing (search, bars in points by `IHSG` and `^JKSE`, levels with 2 decimals, snapshot not stored, no events, summary); LQ45 as a listing (found after IHSG, its own bars by `LQ45` and `^JKLQ45`, relative strength vs IHSG, levels with 2 decimals, no events, summary); the summaries of a stock (valid IDX prices, stop < buy < sell) |
+| `PresetSummariesTest` | the four summaries on the real HRTA, SMSM and MYOR fixtures (stance, valid IDX prices, stop < buy < sell, reward to risk, thesis), determinism, an uptrend bought and a downtrend avoided (PTJ: a buy-stop above the close below the 200-day, 5:1 target), an index in points without relative strength vs itself, no prices with fewer than 15 bars; USD/JPY read through its own trend (prices at its 0.001 tick, no IHSG votes); no preset reads macro data |
 | `TechnicalControllerTest` (instruments) | a synthetic currency pair (markets dropdown, search, bars in its unit, levels at 0.001, no volume node, snapshot schema 2 with regimes, summary with `priceDecimals` 3, unknown instrument 404) and a monthly commodity (interval forced to M, 422 for levels / snapshot / summary) |
 | `IndexIngestionServiceTest` | the IHSG ingestion: from the latest stored day, today's bar only after the cutoff, no request when up to date, the whole history the first time and with `full` |
 
@@ -174,8 +180,7 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 
 - No earnings, RUPS / RUPSLB, rights-issue or private-placement dates: `reporting_period.filing_date` is not filled
   by the ingestion yet, and no event source exists for the others.
-- The special monitoring board and suspensions have no source. The macro limitations (no vintages, estimated release
-  dates, manual series) are in [MACRO_DOCS.md](MACRO_DOCS.md), section 7.
+- The special monitoring board and suspensions have no source.
 - Coal is monthly (World Bank): it has a chart, but no levels, snapshot or summaries.
 - Breadth and the relative-strength percentiles are over the listings stored in Neraca Lab (61 on 2026-10-14), not
   the whole exchange.
@@ -184,7 +189,7 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 
 ## 8. Preset summaries
 
-`technical.engine.PresetSummaries` (rules version `2026-10-16.1`), served by `GET .../summary` and shown below the chart.
+`technical.engine.PresetSummaries` (rules version `2026-10-16.2`, technical only), served by `GET .../summary` and shown below the chart.
 Input: the listing's snapshot and its daily indicators (the 20 / 50-day channels of the bars before the last one, EMA
 20). Each preset scores its own evidence (every vote is listed in `points`), takes a stance from the score, and derives
 three prices. Every price is a valid IDX price (an index: 0.01); stop < buy < sell always holds (a target at or below
@@ -195,8 +200,8 @@ bars) no prices are given. A missing indicator (limited history, no IHSG) does n
 |---|---|---|---|---|---|
 | Murphy (trend with confirmation) | close vs SMA 200 (primary trend), golden / death cross, close vs SMA 50, MACD histogram, RSI (overbought / oversold), OBV slope, relative strength vs IHSG | score ≥ 3 BUY, ≥ 1 ACCUMULATE, > -2 WAIT, else AVOID | BUY / ACCUMULATE: the nearest support below the close within 12 % (support zone top, retracement of the up swing, SMA 50 / 200); else 1 ATR below. WAIT / AVOID: the strongest support zone (most touches) or the 52-week low, only after a close back above the SMA 50 | the nearest resistance above the entry + ½ ATR (resistance zone bottom, retracement of a down swing, SMA 200 overhead, 52-week high) | ½ ATR below the support zone, else 1.5 ATR below the entry |
 | Keith Gill (contrarian accumulation) | a base (+1.5), position in the 52-week range, drawdown from the all-time high (≤ -50 %), up / down volume ratio, volume spikes on up vs down days, OBV, SMA 200 (back above / falling) | ≥ 3 BUY, ≥ 1.5 ACCUMULATE, ≥ -1 WAIT, else AVOID | in a base: its lower quarter (at the close when already there); above the base: a retest of the base high; no base: the heaviest volume node below the close, a support zone, the 52-week low | the 52-week high (prior peak) if 5 % above, else the all-time high, else the next resistance | ½ ATR below the base low / volume node / support zone, else 2 ATR |
-| Paul Tudor Jones (200-day rule, breakouts) | above / below the SMA 200 (±2), ADX ≥ 25 / ≥ 20 with +DI vs -DI, a break of the 20-day high / low, top of the 50-day channel, ATR in the top 20 % of the year, the macro risk regime (risk-off -1, risk-on +0.5) | below the SMA 200 AVOID; trending (ADX ≥ 20, +DI leads) BUY when score ≥ 2.5 else ACCUMULATE; ADX < 20 WAIT | a buy-stop one tick above the 20-day high (at the close when today broke it); AVOID: a buy-stop above the SMA 200 and the 20-day high | 5 times the risk (5:1) | the 20-day low when within 2 ATR, else 2 ATR below the entry; trail to the 20-day low |
-| Druckenmiller (liquidity and leadership) | IHSG vs its SMA 200, breadth (≥ 55 / ≤ 45 %), the macro liquidity regime (±1; without it USD/IDR 3-month change and the BI rate change), 6- and 12-month return percentile, relative strength vs IHSG, 12-1 month momentum, close vs SMA 50 (an index: no leadership votes; a Forex pair or commodity: its macro drivers instead of IHSG and leadership, section 9) | ≥ 3 BUY, ≥ 1 ACCUMULATE, ≥ -1 WAIT, else AVOID | a pullback within 10 % (EMA 20, SMA 50, support zone) else ½ ATR below the close; WAIT / AVOID below the SMA 50: a buy-stop above it | the 52-week high if 3 % above, else the all-time high, else 3 ATR above the close | 1 ATR below the SMA 50 when it is below the entry, else 2 ATR |
+| Paul Tudor Jones (200-day rule, breakouts) | above / below the SMA 200 (±2), ADX ≥ 25 / ≥ 20 with +DI vs -DI, a break of the 20-day high / low, top of the 50-day channel, ATR in the top 20 % of the year | below the SMA 200 AVOID; trending (ADX ≥ 20, +DI leads) BUY when score ≥ 2.5 else ACCUMULATE; ADX < 20 WAIT | a buy-stop one tick above the 20-day high (at the close when today broke it); AVOID: a buy-stop above the SMA 200 and the 20-day high | 5 times the risk (5:1) | the 20-day low when within 2 ATR, else 2 ATR below the entry; trail to the 20-day low |
+| Druckenmiller (leadership and the market) | IHSG vs its SMA 200 (±1), breadth (≥ 55 / ≤ 45 %: ±0.5), 6-month return percentile (±1), 12-month (±0.5), relative strength vs IHSG over 50 days (±1), 12-1 month momentum (±0.5), close vs SMA 50 (±0.5) (an index: no leadership votes; a Forex pair or commodity: its own SMA 200 instead of IHSG and leadership, section 9) | share of the maximum score: ≥ ½ BUY, ≥ ⅙ ACCUMULATE, ≥ -⅙ WAIT, else AVOID | a pullback within 10 % (EMA 20, SMA 50, support zone) else ½ ATR below the close; WAIT / AVOID below the SMA 50: a buy-stop above it | the 52-week high if 3 % above, else the all-time high, else 3 ATR above the close | 1 ATR below the SMA 50 when it is below the entry, else 2 ATR |
 
 Example (ANTM, 2026-10-15, close Rp 2,990): Murphy AVOID (buy 2,920 only after a close above the SMA 50, sell 3,060,
 stop 2,740); Keith Gill BUY (a 73-day base: buy 2,900, sell 4,970 at the 52-week high, stop 2,680); Paul Tudor Jones
@@ -222,27 +227,13 @@ the market as `{exchange}` and the instrument code as `{ticker}` (`/api/v1/techn
   - value traded;
   - the IDX session checks (the instrument trades on its own calendar).
 
-  The market regime and macro groups are those of IDX.
+  The market regime group is that of IDX.
 - **No volume.** A currency pair has no volume (over the counter). The volume indicators are empty, the volume profile
   has no node, and a caveat says so.
 - **Coal is monthly.** It is charted on the monthly interval whatever was asked; the interval toggle shows "Monthly
   series". Levels, the snapshot and the summaries need daily bars, so these APIs answer **422 "Monthly series"** for it.
   The page shows the chart and its indicators on monthly bars, and a note instead of the summaries.
-- **Druckenmiller** reads an instrument through its macro drivers instead of IHSG and leadership
-  ([MACRO_DOCS.md](MACRO_DOCS.md), section 5):
-
-  | Instrument | Drivers |
-  |---|---|
-  | USD/IDR | Tighter liquidity lifts it; a stronger dollar; rising US 10Y; a narrowing BI - Fed rate gap; foreign selling on IDX. |
-  | USD/JPY | Rising US 10Y; the dollar; risk-on. |
-  | Gold | Easier liquidity; falling US real yields; a weaker dollar; speculative crowding (contrarian). |
-  | Brent, coal, palm oil | Easier liquidity; a weaker dollar; risk-on; China's PMI; crude crowding for Brent. |
-
-  Momentum and the SMA 50 vote as for a stock. Murphy, Keith Gill and Paul Tudor Jones apply their rules to the bars
-  unchanged.
-
-Example (2026-10-14, the regime TIGHTENING: Fed hiking, US net liquidity shrinking, credit stress):
-- **USD/IDR** at 17,866: Druckenmiller ACCUMULATE. Tighter liquidity supports USD/IDR, and the US 10Y is up 0.59 points
-  in 3 months, against a BI - Fed gap that widened by 0.76 points.
-- **Gold** at 4,107.9: Druckenmiller AVOID. Tighter liquidity and a US real yield up 0.55 points weigh on it; Paul Tudor
-  Jones AVOID, 9.6 % below its 200-day.
+- **Druckenmiller** reads an instrument through its own trend instead of IHSG and leadership: above / below its
+  SMA 200 (±1.5), 12-1 month momentum (±1), the SMA 50 (±0.5). Murphy, Keith Gill and Paul Tudor Jones apply their rules
+  to the bars unchanged. No preset reads macro data (since 2026-10-16; the macro view is the Macro page,
+  [MACRO_DOCS.md](MACRO_DOCS.md), section 6a).

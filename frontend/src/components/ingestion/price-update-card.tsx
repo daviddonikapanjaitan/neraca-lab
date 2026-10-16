@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { requestJson } from "@/lib/client-api"
 import { formatDate } from "@/lib/format"
+import { indexesOf, indexNames } from "@/lib/ingestion"
 import type { Exchange, IngestionJob, MarketStatus, MarketUpdate, PriceStatus, PriceUpdate } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -69,12 +70,15 @@ export function PriceUpdateCard({
     if (body.upToDate > 0) parts.push(`${plural(body.upToDate, "company")} already up to date.`)
     if (body.alreadyActive > 0) parts.push(`${plural(body.alreadyActive, "company")} already queued or running.`)
     if (body.index) {
+      // the index job stores IHSG and LQ45 together
+      const names = status?.index ? indexNames(status.index) : body.index.code
+      const plural = names.includes(" and ")
       parts.push(
         body.index.outcome === "QUEUED"
-          ? `${body.index.code} queued.`
+          ? `${names} queued.`
           : body.index.outcome === "ALREADY_ACTIVE"
-            ? `${body.index.code} is already queued or running.`
-            : `${body.index.code} is already up to date.`
+            ? `${names} ${plural ? "are" : "is"} already queued or running.`
+            : `${names} ${plural ? "are" : "is"} already up to date.`
       )
     }
     setNotice({ tone: "success", text: parts.join(" ") })
@@ -216,12 +220,15 @@ export function PriceUpdateCard({
               className="mt-0.5 size-4 accent-primary"
             />
             <span>
-              Also update the {status.index.code} index
-              <span className="block text-xs text-muted-foreground">
-                {status.index.lastDate
-                  ? `Stored up to ${formatDate(status.index.lastDate)}${status.index.upToDate ? " (up to date)" : ""}.`
-                  : "Not stored yet: its whole history will be loaded."}
-              </span>
+              Also update the {indexNames(status.index)} {indexesOf(status.index).length > 1 ? "indexes" : "index"}
+              {indexesOf(status.index).map((i) => (
+                <span key={i.code} className="block text-xs text-muted-foreground">
+                  {i.code}:{" "}
+                  {i.lastDate
+                    ? `stored up to ${formatDate(i.lastDate)}${i.upToDate ? " (up to date)" : ""}.`
+                    : "not stored yet: its whole history will be loaded."}
+                </span>
+              ))}
             </span>
           </label>
         )}
