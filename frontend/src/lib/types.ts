@@ -194,6 +194,21 @@ export interface ShareSnapshot {
   treasuryShares: Amount
 }
 
+/**
+ * Prices as quoted on the exchange, for a company whose prices are stored converted into its reporting currency
+ * (CUAN, DSSA, INDY: USD reporters quoted in IDR): stored price x fxRate, to 2 decimals.
+ */
+export interface Quote {
+  currency: string
+  openPrice: Amount
+  highPrice: Amount
+  lowPrice: Amount
+  closePrice: Amount
+  /** exchange currency per reporting-currency unit (IDR per USD) */
+  fxRate: Amount
+  fxDate: string | null
+}
+
 export interface Price {
   tradingDate: string
   openPrice: Amount
@@ -202,6 +217,8 @@ export interface Price {
   closePrice: Amount
   adjustedClose: Amount
   volume: number | null
+  /** null when the company reports in the listing currency */
+  quote: Quote | null
 }
 
 export interface MarketSnapshot {
@@ -210,6 +227,8 @@ export interface MarketSnapshot {
   sharesOutstanding: Amount
   marketCap: Amount
   enterpriseValue: Amount
+  quoteCurrency: string | null
+  quotePrice: Amount
 }
 
 export interface Valuation {
@@ -233,6 +252,8 @@ export interface Valuation {
   evOp: Amount
   fcfYield: Amount
   earningsYield: Amount
+  quoteCurrency: string | null
+  quotePrice: Amount
 }
 
 export interface CorporateAction {

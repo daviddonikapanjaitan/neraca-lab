@@ -28,6 +28,7 @@ import com.neracalab.backend.ingestion.mapping.FilingInfo;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.PeriodRef;
 import com.neracalab.backend.ingestion.mapping.ShareCapital.ShareAt;
+import com.neracalab.backend.ingestion.mapping.WebSplit;
 import com.neracalab.backend.price.ValuationRepository;
 
 /**
@@ -142,6 +143,12 @@ public class IngestionRepository {
                 .param("currency", info.currency()).param("fye", fiscalYearEnd)
                 .query(COMPANY_ROW)
                 .single();
+    }
+
+    /** End of the company's latest stored reporting period, empty when it has none. */
+    public Optional<LocalDate> latestPeriodEnd(long companyId) {
+        return jdbc.sql("SELECT MAX(period_end) FROM reporting_period WHERE company_id = :c").param("c", companyId)
+                .query((rs, i) -> rs.getObject(1, LocalDate.class)).list().stream().filter(java.util.Objects::nonNull).findFirst();
     }
 
     /** Keeps company.fiscal_year_end at the most recent fiscal year end seen in any filing. */
@@ -436,8 +443,6 @@ public class IngestionRepository {
      * restates yet (RAJA split 1:5 on 2026-07-16, after its latest filing: V1.0.21). Read like a detected one.
      */
     static final String SEEDED_SPLIT = "Recorded from public sources: ";
-    /** A stored share count within this share of the count before a split is on the old basis. */
-    private static final BigDecimal OLD_BASIS_TOLERANCE = new BigDecimal("0.10");
 
     /**
      * A share split detected from the filings.
@@ -457,8 +462,10 @@ public class IngestionRepository {
 
     /**
      * Records a detected split in corporate_action (STOCK_SPLIT 1:k or REVERSE_SPLIT k:1), once: a split of the
-     * same ratio detected within a year of it is the same split, seen in another restated period, and only moves
-     * its date to the later period end. shares_issued holds the shares the split added (old count x (k - 1)).
+     * same ratio recorded from a year before to two years after it is the same split - seen in another restated
+     * period (its date moves to the later period end), or published with its real date, which is after the
+     * detected one (DSSA's FY2025 filing states FY2024's EPS before the 1:25 split of 2026-04-09). shares_issued
+     * holds the shares the split added (old count x (k - 1)).
      */
     private void recordSplit(long companyId, long periodId, BigDecimal factor, BigDecimal oldBasisShares) {
         LocalDate from = periodEnd(periodId).plusDays(1);
@@ -473,7 +480,7 @@ public class IngestionRepository {
                 .param("d", from).param("c", companyId).param("type", split ? "STOCK_SPLIT" : "REVERSE_SPLIT")
                 .param("rf", ratioFrom).param("rt", ratioTo).param("marker", DETECTED_SPLIT + "%")
                 .param("seeded", SEEDED_SPLIT + "%")
-                .param("lo", from.minusYears(1)).param("hi", from.plusYears(1)).update();
+                .param("lo", from.minusYears(1)).param("hi", from.plusYears(2)).update();
         if (moved > 0) {
             return;
         }
@@ -490,6 +497,59 @@ public class IngestionRepository {
                         + " for it; the split took effect after that date (exact date not in the filings). Share counts "
                         + "and per-share figures of earlier dates are stored split-adjusted, like the prices.")
                 .update();
+    }
+
+    /**
+     * Records a split a website publishes (Yahoo Finance's split events) with its real date, when a filing's EPS
+     * predates it: its published share counts, split-adjusted to today, fit the EPS only on the count of before the
+     * split (CUAN 1:10 on 2025-07-15; DSSA 1:10 on 2024-07-18 and 1:25 on 2026-04-09). Read like a split a data script
+     * records ({@link #SEEDED_SPLIT}), so {@link #applyDetectedSplits} brings the per-share figures of before it onto
+     * the count after it. Once: a split of the same ratio recorded from two years before to a year after it (also
+     * one detected from the filings, whose date is only the earliest it can have) is the same split and takes the
+     * published date.
+     *
+     * @return the note of the recording, empty when it was recorded already
+     */
+    @Transactional
+    public Optional<String> recordPublishedSplit(long companyId, WebSplit split, String source) {
+        boolean forward = split.factor().compareTo(BigDecimal.ONE) > 0;
+        BigDecimal k = forward ? split.factor().setScale(0, RoundingMode.HALF_UP)
+                : BigDecimal.ONE.divide(split.factor(), 0, RoundingMode.HALF_UP);
+        BigDecimal ratioFrom = forward ? BigDecimal.ONE : k;
+        BigDecimal ratioTo = forward ? k : BigDecimal.ONE;
+        String type = forward ? "STOCK_SPLIT" : "REVERSE_SPLIT";
+        String ratio = forward ? "1:" + plain(k) : plain(k) + ":1";
+        String sameSplit = """
+                company_id = :c AND action_type = :type AND ratio_from = :rf AND ratio_to = :rt
+                AND (description LIKE :marker OR description LIKE :seeded) AND action_date BETWEEN :lo AND :hi""";
+        List<LocalDate> same = jdbc.sql("SELECT action_date FROM corporate_action WHERE " + sameSplit)
+                .param("c", companyId).param("type", type).param("rf", ratioFrom).param("rt", ratioTo)
+                .param("marker", DETECTED_SPLIT + "%").param("seeded", SEEDED_SPLIT + "%")
+                .param("lo", split.date().minusYears(2)).param("hi", split.date().plusYears(1))
+                .query((rs, i) -> rs.getObject(1, LocalDate.class)).list();
+        if (same.contains(split.date())) {
+            return Optional.empty();
+        }
+        if (!same.isEmpty()) {
+            jdbc.sql("UPDATE corporate_action SET action_date = :d WHERE " + sameSplit)
+                    .param("d", split.date()).param("c", companyId).param("type", type).param("rf", ratioFrom)
+                    .param("rt", ratioTo).param("marker", DETECTED_SPLIT + "%").param("seeded", SEEDED_SPLIT + "%")
+                    .param("lo", split.date().minusYears(2)).param("hi", split.date().plusYears(1)).update();
+            return Optional.of("split " + ratio + " dated " + split.date() + " as " + source + " publishes it");
+        }
+        BigDecimal after = forward ? split.sharesBefore().multiply(k) : split.sharesBefore().divide(k, 0, RoundingMode.HALF_UP);
+        jdbc.sql("""
+                        INSERT INTO corporate_action (company_id, action_date, action_type, ratio_from, ratio_to,
+                                                      shares_issued, description)
+                        VALUES (:c, :d, :type, :rf, :rt, :issued, :description)""")
+                .param("c", companyId).param("d", split.date()).param("type", type).param("rf", ratioFrom)
+                .param("rt", ratioTo).param("issued", after.subtract(split.sharesBefore()))
+                .param("description", SEEDED_SPLIT + (forward ? "stock split " : "reverse split ") + ratio + " ("
+                        + split.sharesBefore().toPlainString() + " -> " + after.toPlainString() + " shares), effective "
+                        + split.date() + " (" + source + " split event; a filing's EPS is on the count of before it). Share "
+                        + "counts and per-share figures of earlier dates are stored split-adjusted, like the prices.")
+                .update();
+        return Optional.of("split " + ratio + " of " + split.date() + " recorded from " + source);
     }
 
     /** The splits recorded by {@link #recordSplit} or by a data script ({@link #SEEDED_SPLIT}), oldest first. */
@@ -522,8 +582,9 @@ public class IngestionRepository {
      * filings were stored in: the per-share figures of the earlier periods (EPS / k, share counts x k), the share
      * count of their balance sheets and the share snapshots. Prices are split-adjusted, so share counts of earlier
      * dates must be too (market cap = price x shares). Only rows still on the old basis are changed - their share
-     * count (for an income statement without one: profit / EPS) is within 10% of the count before the split - so
-     * running it again changes nothing and a period stored after the split is never touched.
+     * count (for an income statement without one: profit / EPS) is nearer to the count before the split than to the
+     * one after it ({@link #onOldBasis}) - so running it again changes nothing and a period stored after the split is
+     * never touched.
      *
      * @return what was adjusted
      */
@@ -596,10 +657,21 @@ public class IngestionRepository {
         return notes;
     }
 
-    private static boolean onOldBasis(BigDecimal shares, DetectedSplit split) {
+    /**
+     * A stored share count is on the count of before a split when it is nearer to it than to the count after it, in
+     * ratio: within a factor sqrt(k) of it (k = 10: 0.32 .. 3.2 times). A count moves between periods by buybacks and
+     * issues (DSSA: 770,552,320 shares in 2022, 616,446,993 at the end of 2023 after a buyback; its FY2022 EPS is 25%
+     * off the count before its split 1:25 of 2026), while a count already split-adjusted is k times off.
+     */
+    static boolean onOldBasis(BigDecimal shares, DetectedSplit split) {
         BigDecimal old = split.oldBasisShares();
-        return shares != null && shares.signum() > 0
-                && shares.subtract(old).abs().compareTo(old.abs().multiply(OLD_BASIS_TOLERANCE)) <= 0;
+        if (shares == null || shares.signum() <= 0 || old == null || old.signum() <= 0) {
+            return false;
+        }
+        double k = split.factor().doubleValue();
+        double window = Math.sqrt(k >= 1 ? k : 1 / k);
+        double ratio = shares.doubleValue() / old.doubleValue();
+        return ratio < window && ratio > 1 / window;
     }
 
     private void updatePerShare(long periodId, BigDecimal eps, BigDecimal diluted, BigDecimal shares, BigDecimal dilutedShares) {

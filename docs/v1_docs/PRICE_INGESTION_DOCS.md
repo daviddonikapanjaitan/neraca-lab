@@ -273,6 +273,7 @@ valuation query, view and API works unchanged:
 | Stored rates | only days before the last completed trading day; only rates of the active source are read |
 | Conversion | open, high, low, close, adjusted close / rate, half-up to the 8 decimals of `price_daily`; volume (shares) unchanged. INDY 2026-10-05: IDR 2,570 / 17,950 (2026-10-02) = USD 0.14317549 |
 | No rate | a bar without a rate in the 7 days before it is not stored (counted as skipped, `conversion.barsWithoutRate`), never guessed |
+| Back to the quote | the company API (`latestPrice.quote`, `quotePrice` of the market snapshot and the valuations) and the technical layer multiply a stored price by the same rate and round to 2 decimals: the 8 decimals of the USD price leave a residue (CUAN 2026-10-16: 0.03009362 x 17,944 = 539.9999), at most 0.0001 rupiah, so 2 decimals give the quote itself (540). Checked on 2026-10-16: every stored CUAN and DSSA close x its rate equals Yahoo's IDR close |
 | Result | `conversion`: listing and stored currency, `fxSource` (`ecb USD/IDR`), rates received, bars without a rate; shown in the job detail ("Currency") |
 
 Yahoo's own `USDIDR=X` is deliberately not used: its history has days off by a factor of 10

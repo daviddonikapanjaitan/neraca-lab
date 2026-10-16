@@ -288,7 +288,9 @@ hydration mismatches). Missing values show `—`. Compact amounts use `K / M / B
 (`IDR 33.81T`); dates are `30 Jun 2026` (parsed from ISO strings, no time-zone shifts). Share prices and
 per-share amounts (`formatPrice`: header, market panel, valuations, EPS and share rows of the
 statements) keep 2 decimals, 6 below 1, so prices converted into a reporting currency stay readable
-(INDY in USD: `0.143175`, not `0.14`).
+(INDY in USD: `0.143175`, not `0.14`). A converted listing (CUAN, DSSA, INDY) shows its IDX quote as the price: the
+header's last close, the Latest price card (open .. close in IDR, the USD close and the rate), the Market value card
+and a "Quoted price" column of the valuations table.
 
 ## 5. Structure
 

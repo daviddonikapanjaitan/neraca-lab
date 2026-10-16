@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -84,7 +85,41 @@ public class IngestionService {
         } catch (RuntimeException e) {
             throw new IdxWorkbookException("Cannot map '" + fileName + "': " + e.getMessage(), e);
         }
+        String conflict = currencyConflict(mapper.info());
+        if (conflict != null) {
+            throw new IdxWorkbookException(conflict);
+        }
         return new IngestionSession(mapper);
+    }
+
+    /**
+     * Why a filing cannot be stored beside the company's stored data because it presents its statements in another
+     * currency, {@code null} when it can. A company has one currency (company.currency): its statements, its prices
+     * (price_daily is converted into it) and every ratio are in it, so statements in two currencies cannot be mixed.
+     * CUAN presented in IDR up to FY2023 and in USD from FY2024 (its FY2024 filing restates FY2023 in USD): its
+     * FY2023 filing stored FY2022 and FY2023 in rupiah beside the dollar years (revenue 1,494,125,816,458 next to
+     * 801,723,000), and uploading it switched company.currency to IDR. An older filing in another currency is
+     * refused; its periods come from the comparative columns of the later filings. A newer one would mean the
+     * company changed its presentation currency, which is not converted automatically: refused as well.
+     */
+    String currencyConflict(FilingInfo info) {
+        var company = repository.findCompany(info.ticker()).orElse(null);
+        if (company == null || company.currency() == null || info.currency() == null
+                || company.currency().equalsIgnoreCase(info.currency())) {
+            return null;
+        }
+        LocalDate latest = repository.latestPeriodEnd(company.companyId()).orElse(null);
+        if (latest == null) {
+            return null;
+        }
+        String filing = "'" + info.fileName() + "' (" + info.current().key() + ") presents its statements in "
+                + info.currency() + ", but " + company.ticker() + "'s stored statements and prices are in "
+                + company.currency() + "; statements in two currencies cannot be combined, so the filing is not stored.";
+        return info.current().end().isAfter(latest)
+                ? filing + " " + company.ticker() + " seems to have changed its presentation currency after "
+                        + latest + "; stored data are not converted automatically."
+                : filing + " " + company.ticker() + " no longer reports in " + info.currency() + ": the periods of this "
+                        + "filing are taken from the " + company.currency() + " comparative columns of its later filings.";
     }
 
     /**

@@ -446,6 +446,10 @@ public class IngestionTools {
                 rows.add(s.date() + ": " + (s.sharesOutstanding() == null ? "n/a" : s.sharesOutstanding().toPlainString())
                         + " shares (" + s.source() + ")");
             }
+            // published counts are split-adjusted: a split the filing's EPS predates adjusts its per-share figures too
+            for (var split : shares.webSplits()) {
+                repository.recordPublishedSplit(company.companyId(), split, shares.webSource()).ifPresent(session::note);
+            }
             // counts of dates before a detected split are stored split-adjusted, like the prices
             repository.applyDetectedSplits(company.companyId()).forEach(session::note);
             session.sharesSaved();

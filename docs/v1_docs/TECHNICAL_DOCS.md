@@ -51,7 +51,8 @@ levels and the snapshot use these split-adjusted prices (tradable levels). The c
 **total-return** basis (`adjustment=total`: open / high / low / close scaled by adjusted close / close); the levels are
 then hidden, as they would not be tradable prices. Companies that report in USD (INDY, SMDR, PTSN, RAJA) have their
 prices stored in USD (`price_daily` is in `company.currency`); the technical layer converts them back to the IDR quote
-with the rate they were converted with (the last ECB day before the trading day), so charts and levels are IDX prices.
+with the rate they were converted with (the last ECB day before the trading day), rounded to 2 decimals (the USD
+price's 8 decimals leave a residue: CUAN 539.9999 -> 540), so charts and levels are IDX prices.
 
 **Value traded** is close x volume (the exchange's own value is not stored).
 

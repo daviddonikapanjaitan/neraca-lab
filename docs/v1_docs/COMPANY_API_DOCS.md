@@ -146,6 +146,14 @@ Conventions (same as the database):
 - Dates are ISO `yyyy-MM-dd`, timestamps ISO-8601 UTC.
 - Daily series are summarised, not listed: the price range is in `coverage`, the last day in
   `latestPrice` / `latestMarketSnapshot`.
+- Prices of a company that reports in another currency than its listing trades in (CUAN, DSSA, INDY: USD
+  reporters quoted in IDR) are stored converted into `company.currency` (the IDX quote / the ECB rate of the last FX
+  day before the trading day, 8 decimals). The quote as traded comes with them: `latestPrice.quote` (`currency`,
+  `openPrice` .. `closePrice`, `fxRate`, `fxDate`) and `quoteCurrency` / `quotePrice` on `latestMarketSnapshot` and
+  each valuation - the stored price x that rate, to 2 decimals (CUAN 2026-10-16: USD 0.03009362 x 17,944 = Rp 540;
+  unrounded 539.9999). `null` for a company that reports in the listing currency. The company page shows the quote
+  as the price, with the reporting-currency figure and the rate beside it; Technicals rounds converted bars the
+  same way.
 
 All queries of one response run in one read-only REPEATABLE READ transaction, so the response is
 a consistent snapshot even while an upload writes the same company.

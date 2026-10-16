@@ -162,6 +162,12 @@ neraca_lab/
 │                                entered twice, a 3 rupiah slip), DCII and UNVR (the same, also pdf/), BREN (2023 ..
 │                                2025 annual, 2026-II, also pdf/), DATA, DGWG, ERAL (2024, 2025 annual, 2026-II), BACH
 │                                (2026-II only: listed 2026-07-08, IPO share count from V1.0.24, no TTM yet)
+│                                BEST, BUKA, MAIN, NICL, PRDA, SMRA (2022 .. 2025 annual, 2026-II); BKSL (the same;
+│                                its 2024-Tahunan file is a ratio-analysis export, not XBRL: refused, FY2024 comes
+│                                from FY2025's comparative; shares of several par values, counts from Yahoo Finance);
+│                                DSSA (USD; splits 1:10 of 2024-07-18 and 1:25 of 2026-04-09 from Yahoo Finance);
+│                                CUAN (USD from FY2024; 2023-Tahunan is in IDR and refused, FY2023 comes from
+│                                FY2024's USD comparative, no FY2022; split 1:10 of 2025-07-15)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -314,8 +320,13 @@ Industry (`3xxxxxx` sheets, e.g. SMDR), which has the same statements under othe
 and Sharia Industry (`4xxxxxx` sheets, banks, e.g. BNGA), mapped with bank definitions (revenue =
 interest + non-interest operating income; current items, short-term debt and EBITDA left NULL).
 When a filing gives no share counts (several share classes, treasury shares, imprecise EPS), the
-ingestion takes Yahoo Finance's published counts, but only those that reproduce the filing's own EPS;
-they never replace a stored count (`neracalab.ingestion.web-share-counts`, on by default).
+ingestion takes Yahoo Finance's published counts, but only those that reproduce the filing's own EPS - also
+on the count of before a split Yahoo publishes after the filing (CUAN 1:10 in 2025, DSSA 1:10 in 2024 and 1:25 in
+2026; the split is then recorded with its date and earlier EPS split-adjusted), or, for a period with a buyback,
+when the EPS lies between profit / the start and the end count (BUKA FY2025);
+they never replace a stored count (`neracalab.ingestion.web-share-counts`, on by default). A par value only one
+column's EPS fits is not used (BKSL FY2025: par 50 gave 50% too many shares). A filing in another currency than the
+company's stored data is refused with 422 (CUAN's FY2023 filing in IDR; CUAN reports in USD from FY2024).
 Workbooks are not trusted blindly: a declared rounding level contradicted by the amounts (ASGR FY2023:
 "In Million" over full amounts) is corrected when the filing's own EPS confirms it, and an amount a
 filing reports twice in one column (ASGR H1 2025: "Other expenses" and "Other gains (losses)") is
@@ -374,6 +385,10 @@ Exchange and ticker are case-insensitive (`idx/hrta` works). Amounts are full cu
 database sign conventions; a statement that is not stored for a period is `null`. The detail is
 read in one REPEATABLE READ transaction, so it is consistent even while an upload is running.
 Daily prices are summarised (range in `coverage`, last day in `latestPrice`), not listed.
+A company reporting in USD whose listing trades in IDR (CUAN, DSSA, INDY) has its prices stored in USD; the
+IDX quote comes with them (`latestPrice.quote`, `quotePrice` on the market snapshot and the valuations: the stored
+price x the rate it was converted with, 2 decimals - CUAN: USD 0.03009362 x 17,944 = Rp 540), and the company
+page shows that quote as the price, with the USD figure and the rate beside it.
 
 | HTTP | Meaning                                                         |
 |------|-----------------------------------------------------------------|
@@ -432,7 +447,9 @@ the frontend only reads the database. Per job:
 IDR on IDX, reports in USD) is converted before it is stored: each day / the ECB USD/IDR reference
 rate of the previous FX day (Frankfurter API, stored in `fx_rate_daily`; one extra request), 8
 decimals; days without a rate in the 7 days before are not stored. Yahoo's own `USDIDR=X` is not used
-(days off by a factor of 10). The UI shows prices and EPS below 1 with 6 decimals. Details:
+(days off by a factor of 10). The UI shows prices and EPS below 1 with 6 decimals, and the IDX quote of a
+converted listing beside them (Company APIs above; Technicals rounds converted bars to 2 decimals, so CUAN's
+0.03009362 x 17,944 is 540, not 539.9999). Details:
 [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 2.
 
 Polite crawling: one request at a time with a random 1-2 s pause (shared by all workers), a browser
@@ -718,7 +735,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
-`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
+`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `FilingMapperWebSplitsTest` the filings behind the notes of 2026-10-16 (BKSL: a par value only one column's EPS fits; CUAN, DSSA: published counts on the count of before a later split; BUKA, DSSA: a period-end count after a buyback); `IngestionServiceCurrencyTest` that a filing in another currency than the company's stored data is refused (CUAN's IDR FY2023); `CompanyControllerTest` and `TechnicalControllerTest` also the IDX quote of a USD reporter (Rp 540.00, not 539.9999); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `ShareSplitTest` the share splits (also that a split-adjusted USD EPS keeps its decimals: RAJA 0.0054 / 5 = 0.00108); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a

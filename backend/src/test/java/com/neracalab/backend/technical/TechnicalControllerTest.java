@@ -158,6 +158,36 @@ class TechnicalControllerTest {
                 .andExpect(jsonPath("$.macro.USD_IDR.points").isArray());
     }
 
+    /**
+     * A USD reporter's bars are converted back to the IDX quote with the rate they were stored with; the 8 decimals
+     * of the stored USD price leave a residue (0.03009362 x 17,944 = 539.9999...), so a converted bar is rounded to
+     * 2 decimals: the quote itself.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void convertedBarsAreTheIdxQuote() throws Exception {
+        long id = jdbc.sql("""
+                        INSERT INTO company (ticker, exchange, company_name, currency, active)
+                        VALUES ('ZZUS', 'IDX', 'USD Reporter Test', 'USD', true) RETURNING company_id""")
+                .query(Long.class).single();
+        jdbc.sql("""
+                        INSERT INTO fx_rate_daily (base_currency, quote_currency, rate_date, rate, source)
+                        VALUES ('USD', 'IDR', DATE '2098-01-02', 17944, 'test')""").update();
+        jdbc.sql("""
+                        INSERT INTO price_daily (company_id, trading_date, open_price, high_price, low_price, close_price,
+                                                 adjusted_close, volume)
+                        VALUES (:id, DATE '2098-01-05', 0.03065195, 0.03093061, 0.02980597, 0.03009362, 0.03009362, 1000)""")
+                .param("id", id).update();
+
+        Map<String, Object> bars = getJson("/api/v1/technical/IDX/ZZUS/ohlcv?interval=D");
+
+        assertThat(bars.get("currency")).isEqualTo("IDR");
+        // columns: time, open, high, low, close, volume, value
+        List<?> bar = (List<?>) ((List<?>) bars.get("bars")).getFirst();
+        assertThat(((Number) bar.get(4)).doubleValue()).isEqualTo(540.0);
+        assertThat(((Number) bar.get(1)).doubleValue()).isEqualTo(550.02);
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void shortHistoryIsFlaggedAndStillServed() throws Exception {

@@ -134,8 +134,13 @@ public class TechnicalRepository {
                     // a provider bar can carry an open / close outside its high / low by a rounding; keep the bar sane
                     high = Math.max(high, Math.max(open, close));
                     low = Math.min(low, Math.min(open, close));
-                    return Candle.daily(rs.getObject("trading_date", LocalDate.class), round4(open), round4(high),
-                            round4(low), round4(close), round4(adj), volume);
+                    // a converted bar (USD stored with 8 decimals x the rate) is the quote within 0.0001: back to 2
+                    // decimals it is the quote itself (CUAN 2026-10-16: 0.03009362 x 17,944 = 539.9999 -> 540)
+                    java.util.function.DoubleUnaryOperator round = factor.compareTo(BigDecimal.ONE) == 0
+                            ? TechnicalRepository::round4 : TechnicalRepository::round2;
+                    return Candle.daily(rs.getObject("trading_date", LocalDate.class), round.applyAsDouble(open),
+                            round.applyAsDouble(high), round.applyAsDouble(low), round.applyAsDouble(close),
+                            round.applyAsDouble(adj), volume);
                 })
                 .list().stream().filter(java.util.Objects::nonNull).toList();
     }
@@ -147,6 +152,10 @@ public class TechnicalRepository {
     /** IDX quotes are whole rupiah for most bars; converted prices are brought back to 4 decimals (the provider's). */
     private static double round4(double v) {
         return Math.round(v * 10_000) / 10_000.0;
+    }
+
+    private static double round2(double v) {
+        return Math.round(v * 100) / 100.0;
     }
 
     /** Daily bars of an index, oldest first. */

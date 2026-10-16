@@ -20,6 +20,9 @@ import java.util.List;
  * @param webSource       {@code null} when the counts come from the filing; otherwise the website they were
  *                        fetched from (checked against the filing, see FilingMapper#withWebShareCounts),
  *                        stored only where no count is stored yet
+ * @param webSplits       splits the website publishes that this filing's EPS predates: its published counts
+ *                        (split-adjusted to today) fit the EPS only on the count of before them. Stored as
+ *                        corporate actions, so the per-share figures of before them are split-adjusted too.
  */
 public record ShareCapital(
         BigDecimal parValue,
@@ -28,7 +31,13 @@ public record ShareCapital(
         BigDecimal weightedCurrent,
         BigDecimal weightedPrior,
         List<Check> checks,
-        String webSource) {
+        String webSource,
+        List<WebSplit> webSplits) {
+
+    public ShareCapital(BigDecimal parValue, String basis, List<ShareAt> snapshots, BigDecimal weightedCurrent,
+                        BigDecimal weightedPrior, List<Check> checks, String webSource) {
+        this(parValue, basis, snapshots, weightedCurrent, weightedPrior, checks, webSource, List.of());
+    }
 
     /**
      * @param basicShares weighted shares of the period ending on {@code date}, if this filing reports it

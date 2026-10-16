@@ -19,6 +19,7 @@ import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.PeriodRef;
 import com.neracalab.backend.ingestion.mapping.ShareCapital.ShareAt;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
+import com.neracalab.backend.ingestion.mapping.WebSplit;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository.WriteOutcome;
 
 /**
@@ -190,6 +191,64 @@ class ShareSplitTest {
         assertThat(own.outcome()).isEqualTo(WriteOutcome.UPDATED);
         assertThat(stored(fy2097, "basic_eps")).isEqualByComparingTo("602.41");
         assertThat(repository.detectedSplits(company)).isEmpty();
+    }
+
+    /**
+     * Splits a website publishes with their dates, recorded when a filing's EPS predates them (DSSA: 1:10 on
+     * 2024-07-18 and 1:25 on 2026-04-09, here a thousand times its counts and 72 years later). The per-share figures
+     * of before each end on the count after both - also FY2096's, whose count is 25% above the count before the
+     * second split (a buyback in between) - and recording them again changes nothing.
+     */
+    @Test
+    void publishedSplitsAdjustThePerShareFiguresOfBeforeThem() {
+        long company = company();
+        long fy2096 = repository.upsertPeriod(company, FY2096, "test-2096.xlsx", true, true);
+        long fy2097 = repository.upsertPeriod(company, FY2097, "test-2097.xlsx", true, true);
+        long fy2098 = repository.upsertPeriod(company, FY2098, "test-2098.xlsx", true, true);
+        repository.writeStatement(company, fy2096, income(FY2096, "595264821000", "0.77", null), true);    // 773 billion
+        repository.writeStatement(company, fy2097, income(FY2097, "309084793000", "0.05", null), true);    // 6.2 trillion
+        repository.writeStatement(company, fy2098, income(FY2098, "174358486000", "0.0011", null), true);  // after both
+
+        var first = new WebSplit(LocalDate.parse("2097-07-18"), BigDecimal.TEN, new BigDecimal("616446993000"));
+        var second = new WebSplit(LocalDate.parse("2098-04-09"), BigDecimal.valueOf(25), new BigDecimal("6189284930000"));
+        assertThat(repository.recordPublishedSplit(company, first, "Yahoo Finance")).contains("split 1:10 of 2097-07-18 recorded from Yahoo Finance");
+        assertThat(repository.recordPublishedSplit(company, second, "Yahoo Finance")).isPresent();
+        List<String> adjusted = repository.applyDetectedSplits(company);
+
+        assertThat(stored(fy2096, "basic_eps")).isEqualByComparingTo("0.00308");
+        assertThat(stored(fy2097, "basic_eps")).isEqualByComparingTo("0.002");
+        assertThat(stored(fy2098, "basic_eps")).isEqualByComparingTo("0.0011");
+        assertThat(adjusted).anyMatch(d -> d.contains("2096 FY basic_eps 0.77 -> 0.077"))
+                .anyMatch(d -> d.contains("2096 FY basic_eps 0.077 -> 0.00308"))
+                .anyMatch(d -> d.contains("2097 FY basic_eps 0.05 -> 0.002"));
+        assertThat(repository.detectedSplits(company)).extracting(IngestionRepository.DetectedSplit::effectiveFrom)
+                .containsExactly(LocalDate.parse("2097-07-18"), LocalDate.parse("2098-04-09"));
+
+        assertThat(repository.recordPublishedSplit(company, first, "Yahoo Finance")).isEmpty();
+        assertThat(repository.applyDetectedSplits(company)).isEmpty();
+        assertThat(repository.detectedSplits(company)).hasSize(2);
+
+        // FY2097's own filing uploaded again states the EPS of before the second split: the adjusted one is kept, and
+        // the split it shows is the published one (its date only the earliest it can have), not a second split
+        var own = repository.writeStatement(company, fy2097, income(FY2097, "309084793000", "0.05", null), true, false);
+        assertThat(own.outcome()).isEqualTo(WriteOutcome.SPLIT_ADJUSTED);
+        assertThat(stored(fy2097, "basic_eps")).isEqualByComparingTo("0.002");
+        assertThat(stored(fy2096, "basic_eps")).isEqualByComparingTo("0.00308");
+        assertThat(repository.detectedSplits(company)).extracting(IngestionRepository.DetectedSplit::effectiveFrom)
+                .containsExactly(LocalDate.parse("2097-07-18"), LocalDate.parse("2098-04-09"));
+    }
+
+    @Test
+    void oldBasisIsTheNearerOfTheCountsBeforeAndAfterASplit() {
+        var split = new IngestionRepository.DetectedSplit(LocalDate.parse("2097-01-01"), BigDecimal.TEN, new BigDecimal("1000"));
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("1250"), split)).isTrue();     // a buyback / issue later
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("400"), split)).isTrue();
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("10000"), split)).isFalse();   // already split-adjusted
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("3500"), split)).isFalse();    // nearer to 10000
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("100"), split)).isFalse();
+        var reverse = new IngestionRepository.DetectedSplit(LocalDate.parse("2097-01-01"), new BigDecimal("0.2"), new BigDecimal("1000"));
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("900"), reverse)).isTrue();
+        assertThat(IngestionRepository.onOldBasis(new BigDecimal("200"), reverse)).isFalse();
     }
 
     @Test

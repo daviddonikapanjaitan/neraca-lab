@@ -26,6 +26,8 @@ function Fact({ label, value }: { label: string; value: string }) {
 export function MarketPanel({ detail }: { detail: CompanyDetail }) {
   const { latestPrice, latestMarketSnapshot, shareSnapshots, corporateActions, coverage, company } = detail
   const currency = company.currency ?? undefined
+  // a USD reporter on IDX: prices are stored in USD; the quote is the price as traded
+  const quote = latestPrice?.quote ?? null
 
   return (
     <div className="flex flex-col gap-4">
@@ -40,7 +42,20 @@ export function MarketPanel({ detail }: { detail: CompanyDetail }) {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {latestPrice ? (
+            {latestPrice && quote ? (
+              <dl className="divide-y text-sm">
+                <Fact label={`Open (${quote.currency})`} value={formatPrice(quote.openPrice)} />
+                <Fact label={`High (${quote.currency})`} value={formatPrice(quote.highPrice)} />
+                <Fact label={`Low (${quote.currency})`} value={formatPrice(quote.lowPrice)} />
+                <Fact label={`Close (${quote.currency})`} value={formatPrice(quote.closePrice)} />
+                <Fact label={`Close (${currency})`} value={formatPrice(latestPrice.closePrice)} />
+                <Fact
+                  label="Exchange rate"
+                  value={`${formatNumber(quote.fxRate, 2)} ${quote.currency}/${currency}${quote.fxDate ? ` (${formatDate(quote.fxDate)})` : ""}`}
+                />
+                <Fact label="Volume" value={formatNumber(latestPrice.volume, 0)} />
+              </dl>
+            ) : latestPrice ? (
               <dl className="divide-y text-sm">
                 <Fact label="Open" value={formatPrice(latestPrice.openPrice)} />
                 <Fact label="High" value={formatPrice(latestPrice.highPrice)} />
@@ -65,7 +80,16 @@ export function MarketPanel({ detail }: { detail: CompanyDetail }) {
           <CardContent>
             {latestMarketSnapshot ? (
               <dl className="divide-y text-sm">
-                <Fact label="Share price" value={formatPrice(latestMarketSnapshot.sharePrice)} />
+                {latestMarketSnapshot.quotePrice !== null && (
+                  <Fact
+                    label={`Share price (${latestMarketSnapshot.quoteCurrency})`}
+                    value={formatPrice(latestMarketSnapshot.quotePrice)}
+                  />
+                )}
+                <Fact
+                  label={latestMarketSnapshot.quotePrice !== null ? `Share price (${currency})` : "Share price"}
+                  value={formatPrice(latestMarketSnapshot.sharePrice)}
+                />
                 <Fact label="Shares outstanding" value={formatNumber(latestMarketSnapshot.sharesOutstanding, 0)} />
                 <Fact label="Market cap" value={formatCompact(latestMarketSnapshot.marketCap, currency)} />
                 <Fact label="Enterprise value" value={formatCompact(latestMarketSnapshot.enterpriseValue, currency)} />

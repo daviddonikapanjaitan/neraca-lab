@@ -50,10 +50,14 @@ export function CompanyHeader({ detail }: { detail: CompanyDetail }) {
           <div>
             <p className="text-xs text-muted-foreground">Last close</p>
             <p className="text-2xl font-semibold tracking-tight tabular-nums">
-              {latestPrice ? formatPrice(latestPrice.closePrice) : EMPTY}
+              {latestPrice ? formatPrice(latestPrice.quote?.closePrice ?? latestPrice.closePrice) : EMPTY}
             </p>
             <p className="text-[11px] text-muted-foreground">
-              {latestPrice ? `${company.currency ?? ""} · ${formatDate(latestPrice.tradingDate)}` : "No price data"}
+              {!latestPrice
+                ? "No price data"
+                : latestPrice.quote
+                  ? `${latestPrice.quote.currency} · ${formatDate(latestPrice.tradingDate)} · ${company.currency ?? ""} ${formatPrice(latestPrice.closePrice)}`
+                  : `${company.currency ?? ""} · ${formatDate(latestPrice.tradingDate)}`}
             </p>
           </div>
           <div>
