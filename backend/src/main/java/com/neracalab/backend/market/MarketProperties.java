@@ -6,10 +6,15 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * Forex and commodity prices ({@code neracalab.markets.*}).
  *
- * @param worldBank the World Bank Pink Sheet (monthly commodity prices; coal)
+ * @param worldBank the World Bank Pink Sheet (monthly commodity prices: coal, nickel, tin, rubber, LNG, fertilizers)
+ * @param imf       the IMF Primary Commodity Price System (monthly prices the Pink Sheet lacks: cobalt)
  */
 @ConfigurationProperties("neracalab.markets")
-public record MarketProperties(@DefaultValue WorldBank worldBank) {
+public record MarketProperties(@DefaultValue WorldBank worldBank, @DefaultValue Imf imf) {
+
+    /** @param baseUrl the IMF SDMX 3.0 API (no key) */
+    public record Imf(@DefaultValue("https://api.imf.org/external/sdmx/3.0") String baseUrl) {
+    }
 
     /**
      * @param pageUrl the Commodity Markets page; it links the current CMO-Historical-Data-Monthly.xlsx (the file's address

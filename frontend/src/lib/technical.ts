@@ -18,7 +18,7 @@ const point = z.tuple([num, num])
 const listingType = z.enum(["STOCK", "INDEX", "FOREX", "COMMODITY"]).catch("STOCK")
 export type ListingType = z.infer<typeof listingType>
 
-/** DAILY bars, or MONTHLY (coal: the World Bank monthly average; charted on the monthly interval only) */
+/** DAILY bars, or MONTHLY (the World Bank, IMF or FRED monthly series: coal, cobalt, urea, ...; charted on the monthly interval only) */
 const frequency = z.enum(["DAILY", "MONTHLY"]).catch("DAILY")
 
 export const tickerSchema = z.object({
@@ -408,8 +408,21 @@ export const INDEX_TICKERS = ["IHSG", "LQ45"]
 /** What an index other than the benchmark (LQ45) cannot show: events, auto-rejection; it is compared with IHSG. */
 export const NOT_FOR_OTHER_INDEX: IndicatorId[] = ["events", "autoRejection"]
 
-/** What a monthly series (coal) cannot show besides: the levels, the volume profile (they need daily bars). */
+/** What a monthly series (coal, cobalt, urea, ...) cannot show besides: the levels, the volume profile (they need daily bars). */
 export const NOT_FOR_MONTHLY: IndicatorId[] = [...NOT_FOR_INDEX, "zones", "retracements", "extremes", "base", "profile"]
+
+/**
+ * Daily commodities charted as a plain line of the close instead of candlesticks: palm oil, in US dollars and in
+ * ringgit. Every monthly series (the World Bank, IMF and FRED averages: coal, LNG, nickel, tin, cobalt, rubber, pulp,
+ * fertilizers) is a line too - it has no real open / high / low. The other daily commodities (Brent, WTI, natural gas,
+ * the metals, iron ore, steel, the grains, sugar) keep their candlesticks.
+ */
+export const LINE_CHART_COMMODITIES = ["PALM_OIL", "PALM_OIL_MYR"]
+
+/** Whether a listing's price is charted as a plain line of the close (see {@link LINE_CHART_COMMODITIES}). */
+export function chartsAsLine(type: ListingType, ticker: string, frequency?: "DAILY" | "MONTHLY"): boolean {
+  return type === "COMMODITY" && (frequency === "MONTHLY" || LINE_CHART_COMMODITIES.includes(ticker.toUpperCase()))
+}
 
 /** Decimals of a tick size: 25 -> 0, 0.01 -> 2, 0.001 -> 3, 0.25 -> 2 */
 export function decimalsOf(tick: number | null | undefined): number {

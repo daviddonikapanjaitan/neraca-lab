@@ -71,9 +71,11 @@ class MacroOutlookControllerTest {
         assertThat(out.get("range").asString()).isEqualTo("1Y");
         assertThat(out.get("index").get("code").asString()).isEqualTo("IHSG");
         assertThat(out.get("panels").isArray()).isTrue();
-        assertThat(out.get("presets").size()).isEqualTo(2);
+        assertThat(out.get("presets").size()).isEqualTo(4);
         assertThat(out.get("presets").get(0).get("preset").asString()).isEqualTo("ptj");
         assertThat(out.get("presets").get(1).get("preset").asString()).isEqualTo("druckenmiller");
+        assertThat(out.get("presets").get(2).get("preset").asString()).isEqualTo("soros");
+        assertThat(out.get("presets").get(3).get("preset").asString()).isEqualTo("dalio");
         assertThat(out.get("regimes").has("liquidity")).isTrue();
         JsonNode conclusion = out.get("conclusion");
         assertThat(conclusion.get("action").asString()).isIn("BUY", "ACCUMULATE", "WAIT", "SELL");

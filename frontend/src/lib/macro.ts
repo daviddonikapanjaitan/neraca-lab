@@ -55,7 +55,7 @@ export interface MacroPanel {
 }
 
 export interface MacroPreset {
-  preset: "ptj" | "druckenmiller"
+  preset: "ptj" | "druckenmiller" | "soros" | "dalio"
   name: string
   style: string
   stance: MacroStance

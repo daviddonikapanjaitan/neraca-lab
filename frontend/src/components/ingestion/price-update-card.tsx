@@ -205,7 +205,8 @@ export function PriceUpdateCard({
             ))}
             <li className="pt-1">
               A day is final once it is over in the market&apos;s time zone (London for currencies, New York for
-              futures); coal is final a month after.
+              futures); a monthly series (World Bank, IMF or FRED: coal, LNG, nickel, tin, cobalt, rubber, pulp, fertilizers) is
+              final a month after.
             </li>
           </ul>
         )}

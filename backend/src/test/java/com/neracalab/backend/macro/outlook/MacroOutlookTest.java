@@ -15,7 +15,8 @@ import com.neracalab.backend.technical.engine.Candle;
 import com.neracalab.backend.technical.engine.MarketContext.Observation;
 
 /**
- * The Macro page's rules: the summaries of the panels, the Paul Tudor Jones and Druckenmiller stances, the investability
+ * The Macro page's rules: the summaries of the panels, the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio
+ * stances, the investability
  * score with its verdict and action, the derived series, point in time. Synthetic data; pure.
  */
 class MacroOutlookTest {
@@ -145,6 +146,14 @@ class MacroOutlookTest {
         assertThat(preset(out, "ptj").get("stance")).isEqualTo("AVOID");
         assertThat(preset(out, "druckenmiller").get("stance")).isEqualTo("AVOID");
         assertThat((String) preset(out, "druckenmiller").get("thesis")).contains("Liquidity is tightening");
+        // Soros: rupiah weakening, BI hiking, the dollar strengthening, the country premium steady: -3 of 4, a bust
+        assertThat(preset(out, "soros").get("stance")).isEqualTo("AVOID");
+        assertThat(preset(out, "soros").get("score")).isEqualTo(-3.0);
+        assertThat(preset(out, "soros").get("maxScore")).isEqualTo(4);
+        assertThat((String) preset(out, "soros").get("stanceLabel")).contains("self-reinforcing bust");
+        // Dalio: the curve inverted (growth slowing), CPI 4.4% above the band and rising, credit stressed: stagflation
+        assertThat(preset(out, "dalio").get("stance")).isEqualTo("AVOID");
+        assertThat((String) preset(out, "dalio").get("thesis")).contains("Indonesia is in stagflation");
 
         assertThat(panel(out, "BI_RATE").get("tone")).isEqualTo("NEGATIVE");
         assertThat((String) panel(out, "BI_RATE").get("summary")).contains("Bank Indonesia is hiking");
@@ -170,6 +179,10 @@ class MacroOutlookTest {
 
         assertThat(preset(out, "ptj").get("stance")).isEqualTo("BUY");
         assertThat(preset(out, "druckenmiller").get("stance")).isEqualTo("BUY");
+        // Soros: rupiah strengthening, BI cutting, reserves growing, the dollar weakening, the premium steady: +4 of 5
+        assertThat(preset(out, "soros").get("stance")).isEqualTo("BUY");
+        assertThat(preset(out, "soros").get("score")).isEqualTo(4.0);
+        assertThat(preset(out, "soros").get("maxScore")).isEqualTo(5);
         assertThat(panel(out, "BI_RATE").get("tone")).isEqualTo("POSITIVE");
         assertThat(panel(out, "SBN_10Y").get("tone")).isEqualTo("POSITIVE");
         assertThat(panel(out, "ID_FX_RESERVES").get("tone")).isEqualTo("POSITIVE");
@@ -188,6 +201,44 @@ class MacroOutlookTest {
         String action = (String) conclusion(out).get("action");
         assertThat(action).isIn("ACCUMULATE", "WAIT");
         assertThat(action).isNotEqualTo("BUY");
+    }
+
+    /**
+     * Dalio: China's PMI in expansion and a normal US curve (growth expanding), CPI falling inside BI's band (Goldilocks),
+     * calm credit, but a restrictive Indonesian real rate (5.25% - 2.4%): +2 of 4, and the index above its average.
+     */
+    @Test
+    void goldilocksWithCalmCreditIsBoughtByDalio() {
+        Map<String, List<Observation>> macro = bullish();
+        macro.put("ID_CPI_YOY", monthly(3.4, 3.3, 3.0, 2.7, 2.4, 2.2));      // August 2.4, -0.6 in 3 months
+        macro.put("CN_PMI_MFG", monthly(50.5, 50.8, 51.0, 51.2, 51.4, 51.6));
+        Map<String, Object> out = MacroOutlook.compute("IHSG", "IDX Composite Index (IHSG)", index(6000, 8000), macro,
+                AS_OF, null);
+
+        Map<String, Object> dalio = preset(out, "dalio");
+        assertThat(dalio.get("stance")).isEqualTo("BUY");
+        assertThat(dalio.get("score")).isEqualTo(2.0);
+        assertThat(dalio.get("maxScore")).isEqualTo(4);
+        assertThat((String) dalio.get("thesis")).contains("Indonesia is in Goldilocks (growth up, inflation contained)");
+        assertThat(list(dalio, "points")).anyMatch(p -> p.get("tone").equals("NEGATIVE")
+                && ((String) p.get("text")).startsWith("Indonesian real rate 2.85% (restrictive)"));
+        assertThat((List<?>) dalio.get("buyWhen")).hasSize(3);
+        assertThat((List<?>) dalio.get("sellWhen")).hasSize(3);
+    }
+
+    /** Stagflation never leads to buying: growth slowing and inflation rising, with everything else easy. */
+    @Test
+    void stagflationIsNeverBoughtByDalio() {
+        Map<String, List<Observation>> macro = bullish();
+        macro.put("ID_CPI_YOY", monthly(2.0, 2.4, 2.9, 3.4, 3.9, 4.3));      // August 3.9, above the band, rising
+        macro.put("CN_PMI_MFG", monthly(49.8, 49.5, 49.2, 49.0, 48.8, 48.6));
+        macro.put("US_2Y", daily(4.4, 4.3));                                  // 10Y 4.0 - 2Y 4.3: inverted
+        Map<String, Object> out = MacroOutlook.compute("IHSG", "IDX Composite Index (IHSG)", index(6000, 8000), macro,
+                AS_OF, null);
+
+        Map<String, Object> dalio = preset(out, "dalio");
+        assertThat((String) dalio.get("thesis")).contains("Indonesia is in stagflation");
+        assertThat(dalio.get("stance")).isIn("WAIT", "AVOID");
     }
 
     @Test
@@ -229,6 +280,10 @@ class MacroOutlookTest {
         assertThat(c.get("action")).isEqualTo("WAIT");
         assertThat(preset(out, "ptj").get("stance")).isEqualTo("WAIT");
         assertThat(preset(out, "druckenmiller").get("stance")).isEqualTo("WAIT");
+        assertThat(preset(out, "soros").get("stance")).isEqualTo("WAIT");
+        assertThat(preset(out, "soros").get("score")).isNull();
+        assertThat(preset(out, "dalio").get("stance")).isEqualTo("WAIT");
+        assertThat(preset(out, "dalio").get("score")).isNull();
     }
 
     @Test

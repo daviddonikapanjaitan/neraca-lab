@@ -16,13 +16,16 @@ import com.neracalab.backend.technical.engine.MarketContext.Observation;
 
 /**
  * The Macro page (Macro, {@code GET /api/v1/macro/outlook}): a country's stock index read through the macro data of the
- * Druckenmiller and Paul Tudor Jones presets. Fixed rules over {@link MacroSignals} (no AI model), deterministic:
+ * Druckenmiller, Paul Tudor Jones, George Soros and Ray Dalio presets. Fixed rules over {@link MacroSignals} (no AI
+ * model), deterministic:
  * <ul>
  *   <li><b>index</b>: the index as a plain line, its changes and its 200-day average (used by the rules, not drawn);</li>
  *   <li><b>panels</b>: one chart per macro series with a summary of what it says for the country's equities, and its
  *       tone (POSITIVE / NEGATIVE / NEUTRAL) - the summaries read the same signals as the regimes, so they agree;</li>
- *   <li><b>presets</b>: Druckenmiller (liquidity) and Paul Tudor Jones (risk regime and the 200-day rule), each with a
- *       stance, the thesis, the evidence and when to buy and when to sell - the macro side, not the chart;</li>
+ *   <li><b>presets</b>: Druckenmiller (liquidity), Paul Tudor Jones (risk regime and the 200-day rule), George Soros
+ *       (reflexivity: the loop of foreign money, the rupiah and Bank Indonesia) and Ray Dalio (the growth / inflation
+ *       quadrant, real rates and credit), each with a stance, the thesis, the evidence and when to buy and when to
+ *       sell - the macro side, not the chart;</li>
  *   <li><b>conclusion</b>: an investability score (0 - 100) from six weighted parts, the verdict, the action and the
  *       conditions of buying and selling with whether each is met.</li>
  * </ul>
@@ -30,7 +33,7 @@ import com.neracalab.backend.technical.engine.MarketContext.Observation;
  */
 public final class MacroOutlook {
 
-    public static final String RULES_VERSION = "2026-10-16.1";
+    public static final String RULES_VERSION = "2026-10-17.1";
 
     /** BI's inflation target for 2025 - 2027: 2.5 % +/- 1. */
     static final double BI_TARGET_LOW = 1.5;
@@ -80,6 +83,8 @@ public final class MacroOutlook {
     private final Map<String, String> sources;
     private final List<String> notes = new ArrayList<>();
     private Map<String, Object> signals;
+    /** The signals three months before the as-of date (the Soros loop's turn). */
+    private Map<String, Object> signalsThen;
     private Map<String, Object> regimes;
     private Map<String, Object> regimesThen;
     private IndexRead read;
@@ -134,6 +139,7 @@ public final class MacroOutlook {
         regimes = (Map<String, Object>) now.get("regimes");
         Map<String, Object> then = MacroSignals.compute(macro, asOf.minusMonths(3), new ArrayList<>());
         regimesThen = (Map<String, Object>) then.get("regimes");
+        signalsThen = (Map<String, Object>) then.get("signals");
         read = IndexRead.of(index, asOf);
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -144,7 +150,7 @@ public final class MacroOutlook {
         reg.put("risk", regimeWithThen("risk"));
         out.put("regimes", reg);
         out.put("panels", panels());
-        out.put("presets", List.of(tudorJones(), druckenmiller()));
+        out.put("presets", List.of(tudorJones(), druckenmiller(), soros(), dalio()));
         out.put("conclusion", conclusion());
         notes.addAll(signalNotes);
         out.put("notes", notes);
@@ -929,6 +935,364 @@ public final class MacroOutlook {
         sell.add("Inflation re-accelerates (US or Indonesian CPI rising over 3 months) while SBN yields rise");
         return preset("ptj", "Paul Tudor Jones", "Defence first: the 200-day rule, then the macro regime - inflation, "
                 + "bonds, the dollar, volatility and credit", stance, label, score, n, thesis, points, buy, sell);
+    }
+
+    /** A vote of a preset's reading: +1 for the country's equities, -1 against, 0 neither. */
+    record Vote(String signal, int vote, String text) {
+    }
+
+    /** How far above its 200-day average the index is stretched: the late stage of a boom (Soros). */
+    static final double STRETCHED_PCT = 15;
+
+    /**
+     * The reflexive loop of the Soros preset, from the given signals: foreign money in IDX stocks and in SBN, the
+     * rupiah, Bank Indonesia's reaction, its reserves, the dollar and the country premium each vote +1 (the loop feeds
+     * a boom) / -1 (it feeds a bust).
+     */
+    List<Vote> sorosLoop(Map<String, Object> from) {
+        List<Vote> votes = new ArrayList<>();
+        Map<String, Object> flows = map(from, "foreignFlows");
+        String idx = str(flows, "idxState");
+        Double idxSum = dbl(flows, "idxNetBuy20dBn");
+        if (idx != null && idxSum != null) {
+            votes.add(new Vote("idxFlows", idx.equals("INFLOW") ? 1 : idx.equals("OUTFLOW") ? -1 : 0, "Foreigners net "
+                    + (idxSum >= 0 ? "buyers" : "sellers") + " of Rp " + f(Math.abs(idxSum), 0) + " bn on IDX over 20 sessions"));
+        }
+        String sbnState = str(flows, "sbnState");
+        if (sbnState != null) {
+            votes.add(new Vote("sbnFlows", sbnState.equals("INFLOW") ? 1 : sbnState.equals("OUTFLOW") ? -1 : 0,
+                    "Foreign holdings of SBN " + sp(dbl(flows, "sbnForeignChange1mTn"), 1) + " tn in a month"));
+        }
+        Map<String, Object> dollar = map(from, "dollar");
+        String rupiah = str(dollar, "rupiahTrend");
+        if (rupiah != null) {
+            votes.add(new Vote("rupiah", rupiah.equals("STRENGTHENING") ? 1 : rupiah.equals("WEAKENING") ? -1 : 0,
+                    "Rupiah " + lower(rupiah) + " (USD/IDR " + sp(dbl(dollar, "usdIdrChange3mPct"), 1) + "% in 3 months)"));
+        }
+        Map<String, Object> bi = map(from, "biPolicy");
+        String biState = str(bi, "state");
+        if (biState != null) {
+            votes.add(new Vote("biPolicy", biState.equals("CUTTING") ? 1 : biState.equals("HIKING") ? -1 : 0,
+                    "BI " + (biState.equals("CUTTING") ? "cutting" : biState.equals("HIKING") ? "hiking" : "on hold") + " ("
+                            + f(dbl(bi, "value"), 2) + "%, " + sp(dbl(bi, "change6mPoints"), 2) + " points in 6 months)"));
+        }
+        Double reserves = dbl(map(from, "idLiquidity"), "fxReservesChange3mPct");
+        if (reserves != null) {
+            votes.add(new Vote("reserves", reserves >= 1 ? 1 : reserves <= -2 ? -1 : 0, "BI reserves " + sp(reserves, 1)
+                    + "% in 3 months" + (reserves <= -2 ? ": spent to hold the rupiah" : "")));
+        }
+        String dxy = str(dollar, "dxyTrend");
+        if (dxy != null) {
+            votes.add(new Vote("dollar", dxy.equals("WEAKENING") ? 1 : dxy.equals("STRENGTHENING") ? -1 : 0,
+                    "Dollar " + lower(dxy) + " (DXY " + sp(dbl(dollar, "dxyChange3mPct"), 1) + "% in 3 months)"));
+        }
+        Map<String, Object> sbn = map(from, "sbn10y");
+        Double premiumChange = dbl(sbn, "spreadChange3mPoints");
+        if (premiumChange != null) {
+            votes.add(new Vote("countryPremium", premiumChange <= -0.25 ? 1 : premiumChange >= 0.25 ? -1 : 0,
+                    "Country premium (SBN 10Y over the US 10Y) " + f(dbl(sbn, "spreadVsUs10y"), 2) + " points, "
+                            + sp(premiumChange, 2) + " in 3 months: " + (premiumChange <= -0.25 ? "narrowing"
+                            : premiumChange >= 0.25 ? "widening" : "steady")));
+        }
+        return votes;
+    }
+
+    private static int total(List<Vote> votes) {
+        return votes.stream().mapToInt(Vote::vote).sum();
+    }
+
+    /** VIRTUOUS at +2, VICIOUS at -2, else NEUTRAL; null with fewer than 3 votes. */
+    private static String loopState(List<Vote> votes) {
+        if (votes.size() < 3) {
+            return null;
+        }
+        int score = total(votes);
+        return score >= 2 ? "VIRTUOUS" : score <= -2 ? "VICIOUS" : "NEUTRAL";
+    }
+
+    /** "Against: Rupiah weakening (...); BI hiking (...). For: Dollar weakening (...). " */
+    private static String votesText(List<Vote> votes) {
+        List<String> against = votes.stream().filter(v -> v.vote() < 0).map(Vote::text).toList();
+        List<String> forList = votes.stream().filter(v -> v.vote() > 0).map(Vote::text).toList();
+        StringBuilder t = new StringBuilder();
+        if (!against.isEmpty()) {
+            t.append("Against: ").append(String.join("; ", against)).append(". ");
+        }
+        if (!forList.isEmpty()) {
+            t.append("For: ").append(String.join("; ", forList)).append(". ");
+        }
+        return t.toString();
+    }
+
+    private static Map<String, Object> point(Vote v) {
+        return point(v.vote() > 0 ? POSITIVE : v.vote() < 0 ? NEGATIVE : NEUTRAL, v.text());
+    }
+
+    /**
+     * George Soros: reflexivity. Prices change the fundamentals they are meant to reflect; in Indonesia the loop runs
+     * through foreign money, the rupiah and Bank Indonesia. A virtuous loop with the index in an uptrend is a boom to
+     * ride; a loop that weakens while the index is stretched is a boom running out of fuel; a vicious loop is a bust.
+     */
+    private Map<String, Object> soros() {
+        List<Vote> loop = sorosLoop(signals);
+        String state = loopState(loop);
+        int n = loop.size();
+        Integer score = state == null ? null : total(loop);
+        List<Vote> loopThen = sorosLoop(signalsThen);
+        Integer then = loopState(loopThen) == null ? null : total(loopThen);
+        boolean improving = score != null && then != null && score - then >= 2;
+        boolean fading = score != null && then != null && then - score >= 2;
+        Boolean above = read.aboveSma200();
+        Double vs = read.vsSma200Pct();
+        boolean stretched = vs != null && vs >= STRETCHED_PCT;
+        String stance;
+        String label;
+        if (state == null) {
+            stance = "WAIT";
+            label = "Wait: too few signals to read the loop of foreign money, the rupiah and BI";
+        } else if (state.equals("VIRTUOUS")) {
+            if (fading) {
+                stance = "WAIT";
+                label = "Wait: the loop is still virtuous but weakening - the boom is losing its fuel";
+            } else if (Boolean.TRUE.equals(above)) {
+                stance = "BUY";
+                label = "Buy: a self-reinforcing boom - foreign money, the rupiah and BI feed the trend";
+            } else if (Boolean.FALSE.equals(above)) {
+                stance = "ACCUMULATE";
+                label = "Accumulate: the loop turned virtuous before the index - the bust's premise is failing";
+            } else {
+                stance = "ACCUMULATE";
+                label = "Accumulate: the loop is virtuous (no 200-day average of " + indexCode + " to confirm)";
+            }
+        } else if (state.equals("NEUTRAL")) {
+            if (improving) {
+                stance = "ACCUMULATE";
+                label = "Accumulate: the loop is turning virtuous";
+            } else if (fading && stretched) {
+                stance = "AVOID";
+                label = "Avoid: " + indexCode + " is stretched above its 200-day average while the flows turn - a boom "
+                        + "running out of fuel";
+            } else {
+                stance = "WAIT";
+                label = "Wait: no reflexive loop - foreign money, the rupiah and BI give no direction";
+            }
+        } else if (improving) {
+            stance = "WAIT";
+            label = "Wait: still a bust, but turning - watch for foreign money to come back";
+        } else if (Boolean.TRUE.equals(above)) {
+            stance = "AVOID";
+            label = "Avoid: money is leaving while " + indexCode + " still holds its 200-day average - the trend's "
+                    + "premise is failing";
+        } else {
+            stance = "AVOID";
+            label = "Avoid: a self-reinforcing bust - outflows, a weaker rupiah and a defensive BI feed each other";
+        }
+        List<Map<String, Object>> points = new ArrayList<>();
+        loop.forEach(v -> points.add(point(v)));
+        if (read.sma200() != null) {
+            points.add(point(Boolean.TRUE.equals(above) ? (stretched ? NEUTRAL : POSITIVE) : NEGATIVE, trendText()
+                    + (stretched ? ": stretched, the late stage of a boom" : "") + " (the trend the loop feeds or undoes)"));
+        }
+        String loopText = state == null ? "unknown" : lower(state) + " (" + sp(score.doubleValue(), 0) + " from " + n
+                + " signals" + (then == null ? "" : "; " + sp(then.doubleValue(), 0) + " three months ago") + ")";
+        String thesis = "Soros reads markets through reflexivity: prices change the fundamentals they are meant to reflect. "
+                + "In Indonesia the loop runs through foreign money, the rupiah and Bank Indonesia - inflows firm the rupiah, a "
+                + "firm rupiah lets BI cut, cuts lift stocks and draw more money in, and the same loop runs in reverse, "
+                + "faster. The loop is " + loopText + ". " + votesText(loop) + trendText() + ". " + label + '.';
+        String now = state == null ? "unknown" : lower(state) + " (" + sp(score.doubleValue(), 0) + " of " + n + ")";
+        List<String> buy = new ArrayList<>();
+        List<String> sell = new ArrayList<>();
+        buy.add("The loop turns virtuous (+2 or more; now " + now + "): foreigners buy IDX stocks and SBN, the rupiah "
+                + "firms, BI cuts, reserves grow");
+        buy.add("The loop improves by 2 points or more within 3 months" + (score == null || then == null ? ""
+                : " (now " + sp((double) (score - then), 0) + ")") + " while " + indexCode + " is below its 200-day "
+                + "average: the bust's premise is failing - buy early");
+        buy.add("The country premium narrows: SBN 10Y over the US 10Y down 0.25 points or more in 3 months");
+        sell.add("The loop turns vicious (-2 or lower; now " + now + "): foreign selling, a weaker rupiah, BI hiking to "
+                + "defend it");
+        sell.add("The loop weakens by 2 points or more within 3 months while " + indexCode + " is stretched "
+                + f(STRETCHED_PCT, 0) + "% or more above its 200-day average" + (vs == null ? "" : " (now " + sp(vs, 1) + "%)")
+                + ": the boom is running out of fuel");
+        sell.add("BI spends reserves (down 2% or more in 3 months) to hold the rupiah: the defence that comes before a "
+                + "break");
+        return preset("soros", "George Soros", "Reflexivity: ride a self-reinforcing boom, get out when the loop of "
+                + "foreign money, the rupiah and BI turns", stance, label, score == null ? null : score.doubleValue(), n,
+                thesis, points, buy, sell);
+    }
+
+    /** Ray Dalio's growth / inflation quadrant and its text. */
+    record Quadrant(String growth, String inflation, String quadrant, List<Vote> growthParts, List<Vote> inflationParts) {
+    }
+
+    /**
+     * Growth from the proxies stored (no GDP series): China's PMI, the US curve and Indonesian M2, each +1 / -1 / 0;
+     * EXPANDING at a mean of +1/3 or more, SLOWING at -1/3 or less. Inflation from the 3-month trend of Indonesian and US
+     * CPI and Indonesian CPI against BI's band: RISING at a mean of +1/2 or more, FALLING at -1/2 or less.
+     */
+    Quadrant quadrant() {
+        List<Vote> growth = new ArrayList<>();
+        Map<String, Object> china = signal("china");
+        if (str(china, "state") != null) {
+            boolean expansion = "EXPANSION".equals(str(china, "state"));
+            growth.add(new Vote("china", expansion ? 1 : -1, "China PMI " + f(dbl(china, "pmi"), 1) + " ("
+                    + (expansion ? "expansion" : "contraction") + ")"));
+        }
+        Map<String, Object> curve = signal("usCurve");
+        if (str(curve, "state") != null) {
+            String s = str(curve, "state");
+            growth.add(new Vote("usCurve", s.equals("NORMAL") ? 1 : s.equals("INVERTED") ? -1 : 0, "US curve "
+                    + sp(dbl(curve, "value"), 2) + " points (" + lower(s) + ")"));
+        }
+        Double m2 = dbl(signal("idLiquidity"), "m2YoyPct");
+        if (m2 != null) {
+            growth.add(new Vote("idM2", m2 >= 8 ? 1 : m2 < 5 ? -1 : 0, "Indonesian M2 " + sp(m2, 1) + "% YoY"));
+        }
+        List<Vote> inflation = new ArrayList<>();
+        Map<String, Object> inf = signal("inflation");
+        Double cpi = dbl(inf, "idCpiYoy");
+        if (cpi != null) {
+            inflation.add(new Vote("idCpiLevel", cpi > BI_TARGET_HIGH ? 1 : cpi < BI_TARGET_LOW ? -1 : 0, "Indonesian CPI "
+                    + f(cpi, 2) + "% " + (cpi > BI_TARGET_HIGH ? "above" : cpi < BI_TARGET_LOW ? "below" : "inside")
+                    + " BI's " + f(BI_TARGET_LOW, 1) + " - " + f(BI_TARGET_HIGH, 1) + "% band"));
+        }
+        for (String[] t : List.of(new String[] {"idTrend", "Indonesian CPI"}, new String[] {"usTrend", "US CPI"})) {
+            String trend = str(inf, t[0]);
+            if (trend != null) {
+                inflation.add(new Vote(t[0], trend.equals("RISING") ? 1 : trend.equals("FALLING") ? -1 : 0,
+                        t[1] + " " + lower(trend) + " over 3 months"));
+            }
+        }
+        // the inflation votes say up (+1) or down (-1), not good or bad for equities
+        Double g = growth.isEmpty() ? null : growth.stream().mapToInt(Vote::vote).average().orElse(0);
+        Double i = inflation.isEmpty() ? null : inflation.stream().mapToInt(Vote::vote).average().orElse(0);
+        String gs = g == null ? null : g >= 1.0 / 3 - 1e-9 ? "EXPANDING" : g <= -1.0 / 3 + 1e-9 ? "SLOWING" : "STEADY";
+        String is = i == null ? null : i >= 0.5 ? "RISING" : i <= -0.5 ? "FALLING" : "STABLE";
+        String q = gs == null || is == null ? null : switch (gs) {
+            case "EXPANDING" -> is.equals("RISING") ? "REFLATION" : "GOLDILOCKS";
+            case "SLOWING" -> is.equals("RISING") ? "STAGFLATION" : "DISINFLATIONARY_SLOWDOWN";
+            default -> "MIXED";
+        };
+        return new Quadrant(gs, is, q, growth, inflation);
+    }
+
+    static String quadrantText(String quadrant) {
+        if (quadrant == null) {
+            return "no quadrant yet (too few growth or inflation signals)";
+        }
+        return switch (quadrant) {
+            case "GOLDILOCKS" -> "Goldilocks (growth up, inflation contained) - the best quadrant for equities";
+            case "REFLATION" -> "reflation (growth and inflation up) - equities and commodities over bonds";
+            case "STAGFLATION" -> "stagflation (growth down, inflation up) - the worst quadrant for equities";
+            case "DISINFLATIONARY_SLOWDOWN" -> "a disinflationary slowdown (growth and inflation down) - bonds over equities";
+            default -> "no clear quadrant (growth steady)";
+        };
+    }
+
+    /**
+     * Ray Dalio: the economic machine. Growth and inflation against BI's band place the economy in a quadrant; the
+     * cost of money (Indonesian and US real rates) and credit say whether the debt cycle helps or squeezes. Votes:
+     * growth, inflation (falling is good for equities), the Indonesian real rate, the US real yield's 3-month change,
+     * credit spreads. Without a clear case for equities: balanced (All Weather), no tilt.
+     */
+    private Map<String, Object> dalio() {
+        Quadrant q = quadrant();
+        List<Vote> votes = new ArrayList<>();
+        if (q.growth() != null) {
+            votes.add(new Vote("growth", q.growth().equals("EXPANDING") ? 1 : q.growth().equals("SLOWING") ? -1 : 0,
+                    "Growth " + lower(q.growth()) + ": " + String.join(", ", q.growthParts().stream().map(Vote::text).toList())));
+        }
+        if (q.inflation() != null) {
+            votes.add(new Vote("inflation", q.inflation().equals("FALLING") ? 1 : q.inflation().equals("RISING") ? -1 : 0,
+                    "Inflation " + lower(q.inflation()) + ": " + String.join(", ",
+                            q.inflationParts().stream().map(Vote::text).toList())));
+        }
+        Map<String, Object> real = signal("idRealRate");
+        Double realRate = dbl(real, "value");
+        if (str(real, "state") != null) {
+            String s = str(real, "state");
+            votes.add(new Vote("idRealRate", s.equals("ACCOMMODATIVE") ? 1 : s.equals("RESTRICTIVE") ? -1 : 0,
+                    "Indonesian real rate " + f(realRate, 2) + "% (" + lower(s) + ")"));
+        }
+        Map<String, Object> inf = signal("inflation");
+        Double usReal = dbl(inf, "usRealYield10y");
+        Double usRealChange = dbl(inf, "usRealYieldChange3mPoints");
+        if (usRealChange != null) {
+            votes.add(new Vote("usRealYield", usRealChange <= -0.25 ? 1 : usRealChange >= 0.25 ? -1 : 0,
+                    "US 10Y real yield " + f(usReal, 2) + "% (" + sp(usRealChange, 2) + " points in 3 months): "
+                            + (usRealChange <= -0.25 ? "money getting cheaper" : usRealChange >= 0.25 ? "money getting dearer"
+                            : "steady")));
+        }
+        Map<String, Object> credit = signal("creditStress");
+        if (str(credit, "state") != null) {
+            String s = str(credit, "state");
+            votes.add(new Vote("credit", s.equals("CALM") ? 1 : s.equals("STRESSED") ? -1 : 0, "US high-yield spread "
+                    + f(dbl(credit, "value"), 2) + "% (" + lower(s) + ")"));
+        }
+        int n = votes.size();
+        Integer score = n < 3 ? null : total(votes);
+        Boolean above = read.aboveSma200();
+        String quad = q.quadrant();
+        String stance;
+        String label;
+        if (score == null || quad == null) {
+            stance = "WAIT";
+            label = "Wait: too few growth and inflation signals to place Indonesia in a quadrant";
+        } else if (quad.equals("STAGFLATION")) {
+            stance = score <= -2 ? "AVOID" : "WAIT";
+            label = score <= -2 ? "Avoid: stagflation with tight money - the worst quadrant for equities; hold the "
+                    + "balanced mix" : "Wait: growth slowing while inflation rises - no tilt toward equities";
+        } else if (score >= 2 && quad.equals("DISINFLATIONARY_SLOWDOWN")) {
+            stance = "ACCUMULATE";
+            label = "Accumulate: growth is slowing, but falling inflation and cheaper money let policy ease - equities "
+                    + "follow once growth turns";
+        } else if (score >= 2) {
+            stance = Boolean.TRUE.equals(above) ? "BUY" : "ACCUMULATE";
+            label = Boolean.TRUE.equals(above) ? "Buy: " + quadrantName(quad) + " with cheap money and calm credit - the "
+                    + "environment equities do best in"
+                    : "Accumulate: the environment favours equities ahead of " + indexCode + "'s trend"
+                    + (above == null ? " (no 200-day average to confirm)" : " (still below its 200-day average)");
+        } else if (score <= -2) {
+            stance = "AVOID";
+            label = "Avoid: " + quadrantName(quad) + " with dear money or stressed credit - underweight equities against "
+                    + "the balanced mix";
+        } else {
+            stance = "WAIT";
+            label = "Wait: a mixed environment - stay balanced (All Weather), no tilt toward equities";
+        }
+        List<Map<String, Object>> points = new ArrayList<>();
+        points.add(point(quad == null ? NEUTRAL : switch (quad) {
+            case "GOLDILOCKS", "REFLATION" -> POSITIVE;
+            case "STAGFLATION", "DISINFLATIONARY_SLOWDOWN" -> NEGATIVE;
+            default -> NEUTRAL;
+        }, "Quadrant: " + quadrantText(quad)));
+        votes.forEach(v -> points.add(point(v)));
+        if (read.sma200() != null) {
+            points.add(point(Boolean.TRUE.equals(above) ? POSITIVE : NEGATIVE, trendText() + " (confirmation, not the signal)"));
+        }
+        String thesis = "Dalio reads the economic machine: growth and inflation decide which assets do well, and the cost of "
+                + "money - real interest rates - and credit decide whether the debt cycle helps or squeezes. Indonesia is "
+                + "in " + quadrantText(quad) + ". The machine scores " + (score == null ? "unknown" : sp(score.doubleValue(), 0)
+                + " from " + n + " signals") + " (growth from China's PMI, the US curve and Indonesian M2: no GDP series "
+                + "is stored). " + votesText(votes) + label + '.';
+        List<String> buy = new ArrayList<>();
+        List<String> sell = new ArrayList<>();
+        buy.add("Growth turns up while inflation stays contained (Goldilocks; now " + quadrantName(quad) + ")");
+        buy.add("Money gets cheaper: the US 10Y real yield down 0.25 points or more in 3 months, the Indonesian real rate "
+                + "not restrictive" + (realRate == null ? "" : " (now " + f(realRate, 2) + "%)"));
+        buy.add("The machine scores +2 or more (now " + (score == null ? "unknown" : sp(score.doubleValue(), 0) + " of " + n)
+                + ") with " + indexCode + " above its 200-day average");
+        sell.add("Stagflation: growth slowing while inflation rises (Indonesian or US CPI rising over 3 months)");
+        sell.add("Money gets dearer into slowing growth: real rates up as central banks tighten - the squeeze of the "
+                + "short-term debt cycle");
+        sell.add("Credit stress: the US high-yield spread above its 80th percentile of the year - the debt cycle turning");
+        return preset("dalio", "Ray Dalio", "The economic machine: growth and inflation quadrants, real rates and credit - "
+                + "balanced (All Weather) unless the environment clearly favours equities", stance, label,
+                score == null ? null : score.doubleValue(), n, thesis, points, buy, sell);
+    }
+
+    /** "Goldilocks", "stagflation", ... ("unknown" without a quadrant) */
+    private static String quadrantName(String quadrant) {
+        return quadrant == null ? "unknown" : quadrant.equals("GOLDILOCKS") ? "Goldilocks" : lower(quadrant);
     }
 
     private Map<String, Object> preset(String id, String name, String style, String stance, String label, Double score,

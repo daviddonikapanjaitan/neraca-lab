@@ -64,7 +64,7 @@ const navMarket: NavItem[] = [
     pages: COMPANIES_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
   },
   {
-    // the country's index read through its macro data (Druckenmiller, Paul Tudor Jones); market data like Companies
+    // the country's index read through its macro data (Druckenmiller, Paul Tudor Jones, Soros, Dalio); market data like Companies
     title: "Macro",
     url: MACRO_HREF,
     icon: <GlobeIcon />,

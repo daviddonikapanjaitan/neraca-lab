@@ -246,8 +246,10 @@ public class TechnicalService {
 
     private static String sourceLabel(Instrument i) {
         return switch (i.source()) {
-            case "yahoo" -> "Yahoo Finance " + i.symbol();
+            case "yahoo" -> "Yahoo Finance " + i.symbol().replace("*", " x ");
             case "worldbank" -> "World Bank Pink Sheet, " + i.symbol();
+            case "imf" -> "IMF Primary Commodity Prices, " + i.symbol();
+            case "fred" -> "FRED " + i.symbol();
             default -> i.source();
         };
     }

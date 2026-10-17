@@ -37,8 +37,9 @@ import tools.jackson.databind.JsonNode;
  * Technical analysis charts (Companies > Technicals). Read-only, deterministic data: no model is called. The preset
  * summaries give a stance with buy / sell prices by fixed rules over the indicators; everything else is data. Exchange
  * and ticker codes are case-insensitive; the ticker IHSG (or ^JKSE) is the exchange's index. Besides an exchange, the
- * "exchange" may be a market: FOREX (USDIDR, USDJPY) or COMMODITY (BRENT, GOLD, COAL, PALM_OIL). Series are compact
- * arrays of {@code [time, value]}, time in seconds since the epoch at 00:00 UTC of the trading day.
+ * "exchange" may be a market: FOREX (USDIDR, USDJPY) or COMMODITY (BRENT, NATURAL_GAS, GOLD, COPPER, PALM_OIL, CORN,
+ * ...: the catalog market_instrument). Series are compact arrays of {@code [time, value]}, time in seconds since the
+ * epoch at 00:00 UTC of the trading day.
  * <ul>
  *   <li>{@code GET /api/v1/technical/markets} - the exchanges and markets of the page's dropdown</li>
  *   <li>{@code GET /api/v1/technical/tickers?exchange=IDX&query=} - ticker search (code and company name; a market:

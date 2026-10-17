@@ -40,7 +40,11 @@ public class FredSource implements MacroSource {
 
     @Override
     public List<Observation> fetch(MacroSeries series, LocalDate from, LocalDate today) {
-        String id = series.sourceRef();
+        return observations(series.sourceRef(), from);
+    }
+
+    /** The observations of the FRED series {@code id} from {@code from}: a commodity of Price Ingestion (wood pulp). */
+    public List<Observation> observations(String id, LocalDate from) {
         URI uri = URI.create(properties.fredBaseUrl() + "/graph/fredgraph.csv?id="
                 + URLEncoder.encode(id, StandardCharsets.UTF_8) + "&cosd=" + from);
         return parse(http.getText(uri), id);

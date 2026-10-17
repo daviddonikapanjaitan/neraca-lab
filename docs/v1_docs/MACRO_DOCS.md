@@ -1,12 +1,14 @@
 # Macro data (Ingestion › Macro)
 
-The macro data of the **Macro page** (section 6a), read the way **Druckenmiller** and **Paul Tudor Jones** read
-markets. The requirements are in [`macro.md`](../../macro.md); this document describes what is built. Companies ›
+The macro data of the **Macro page** (section 6a), read the way **Druckenmiller**, **Paul Tudor Jones**, **George
+Soros** and **Ray Dalio** read markets. The requirements are in [`macro.md`](../../macro.md); this document describes what is built. Companies ›
 Technicals reads **no** macro data since 2026-10-16: its presets and panels are technical only.
 
 - **Druckenmiller** reads markets through liquidity: the direction of the Fed and Bank Indonesia, US net liquidity,
   credit, the dollar, the rupiah and foreign money.
 - **Tudor Jones** reads the regime: volatility, credit, the US yield curve, the dollar, inflation and Indonesian yields.
+- **Soros** reads reflexivity: the loop of foreign money, the rupiah and Bank Indonesia that feeds a boom or a bust.
+- **Dalio** reads the economic machine: the growth / inflation quadrant, real rates and credit.
 
 Both read **direction and change** (cutting or hiking, steepening or flattening, liquidity growing or shrinking), not
 levels. The series are stored as they are published. Signals and regimes are computed from them when the Macro page
@@ -238,6 +240,8 @@ rules (`macro.outlook.MacroOutlook`, rules version `2026-10-16.1`), no AI model;
    |---|---|
    | **Paul Tudor Jones** (defence first) | Below the 200-day average: AVOID ("nothing below the 200-day average"; WAIT when the risk regime is risk-on). Above it: BUY when risk-on, ACCUMULATE when neutral with a score of 0 or more, else WAIT; risk-off: WAIT (tighten stops). |
    | **Druckenmiller** (liquidity first, 12 - 24 months ahead) | Liquidity EASING: BUY above the 200-day average, ACCUMULATE below it (liquidity leads prices). NEUTRAL: ACCUMULATE when the liquidity score rose by 2 or more in 3 months (turning), else WAIT. TIGHTENING: AVOID, WAIT when turning. |
+   | **George Soros** (reflexivity) | The loop: foreign net buying on IDX (20 sessions), foreign SBN holdings (1 month), the rupiah, BI's direction, BI reserves (+1 at +1 % in 3 months, -1 at -2 %), the DXY and the country premium (SBN 10Y over the US 10Y, +/- 0.25 points in 3 months) each vote +1 / -1 / 0; VIRTUOUS at +2, VICIOUS at -2, unknown with fewer than 3 votes; compared with the loop 3 months before (turning: 2 points or more). VIRTUOUS: BUY above the 200-day average, ACCUMULATE below it, WAIT when it weakened by 2 or more (the boom losing its fuel). NEUTRAL: ACCUMULATE when it improved by 2 or more, AVOID when it weakened by 2 or more with the index stretched 15 % or more above its average, else WAIT. VICIOUS: AVOID (a bust, or a trend whose premise is failing), WAIT when it improved by 2 or more. |
+   | **Ray Dalio** (the economic machine) | The quadrant: growth from the proxies stored (China PMI, the US curve, Indonesian M2; no GDP series) - EXPANDING at a mean of +1/3, SLOWING at -1/3; inflation from Indonesian CPI against BI's band and the 3-month trend of Indonesian and US CPI - RISING at +1/2, FALLING at -1/2. Goldilocks (growth up, inflation not rising), reflation (both up), stagflation (growth down, inflation up), disinflationary slowdown (both down or inflation stable), else no clear quadrant. Votes: growth, inflation (falling +1), the Indonesian real rate, the US 10Y real yield (+/- 0.25 points in 3 months), credit; unknown with fewer than 3. +2 or more: BUY above the 200-day average, ACCUMULATE below it (a disinflationary slowdown: ACCUMULATE at most); -2 or less: AVOID; else WAIT (balanced, All Weather). Stagflation is never bought: AVOID at -2 or less, else WAIT. |
 
    Each has its thesis, the evidence (every vote, the real rate, reserves, the trend) and **buy when / sell when**.
 4. **Conclusion: is the country investable?** A score from 0 to 100 = 50 + 50 x the weighted mean of six readings
@@ -266,12 +270,12 @@ rules (`macro.outlook.MacroOutlook`, rules version `2026-10-16.1`), no AI model;
 
 On 2026-10-16 (IHSG 5,185, 26 % below its 200-day average of 7,033): liquidity tightening (-3 of 6), risk neutral (-1 of
 6), BI hiking with a restrictive real rate, inflation inside the band, a firmer rupiah - **36 / 100, not investable now,
-sell / reduce**; both presets AVOID.
+sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
 
 | Endpoint (permission COMPANIES) | Returns |
 |---|---|
 | `GET /api/v1/macro/outlook/countries` | the countries (`available`) and their indexes (`rows`, `lastDate`) |
-| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
+| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros`, `dalio`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
 
 ## 7. Limitations
 
@@ -297,6 +301,6 @@ sell / reduce**; both presets AVOID.
 | `MacroSignalsTest` | A tightening, risk-off set of series; point in time (September CPI unknown on 14 October); stale series; the BI rate held between decisions; the real rate. |
 | `MacroControllerTest` | The catalog and states, the history, a manual series refused, the CSV upload checked then stored (release date by the lag, a MACRO job). |
 | `IngestionJobTypeConstraintTest` | Every script that re-creates the job-type check lists `MACRO`. |
-| `MacroOutlookTest` | The Macro page's rules on synthetic data: tight money, risk-off and a downtrend not investable (SELL, both presets AVOID, the panels' tones); easy money, risk-on and an uptrend investable (BUY); good macro below the 200-day average accumulated, not bought; the derived series (curve, net liquidity, CPI YoY) and point in time; missing data noted, not guessed. |
+| `MacroOutlookTest` | The Macro page's rules on synthetic data: tight money, risk-off and a downtrend not investable (SELL, all four presets AVOID, the panels' tones); easy money, risk-on and an uptrend investable (BUY); good macro below the 200-day average accumulated, not bought; the derived series (curve, net liquidity, CPI YoY) and point in time; missing data noted, not guessed; Soros's loop (-3 of 4 a bust, +4 of 5 a boom); Dalio's Goldilocks bought, stagflation never. |
 | `MacroOutlookControllerTest` | The countries (Indonesia with IHSG and LQ45; the US and China later), the outlook's sections on the stored data, USD/IDR = the latest Forex close (date, value, source), the refusals (400), a login required. |
 | `IndexIngestionServiceTest` | LQ45 ingested with IHSG from its own latest day, its failure not failing IHSG; up to date only when both are. |

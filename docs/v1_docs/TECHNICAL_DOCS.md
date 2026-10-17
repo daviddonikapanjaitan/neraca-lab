@@ -142,7 +142,9 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
   (`?exchange=IDX&ticker=HRTA&interval=D&range=1Y&preset=murphy&ind=sma50,sma200,...`, shareable). The URL wins over the
   saved settings; a company page links to its chart (`Technicals` button in the company header).
 - **Main chart**: TradingView Lightweight Charts 5.2.1 through a small wrapper (`price-chart.tsx`: `useRef` +
-  `useEffect`, `autoSize`, `chart.remove()` on cleanup), loaded with `next/dynamic` (`ssr: false`). Candles with SMA /
+  `useEffect`, `autoSize`, `chart.remove()` on cleanup), loaded with `next/dynamic` (`ssr: false`). Candles (palm oil in
+  USD and in ringgit and every monthly series: a plain line of the close, `chartsAsLine` in `lib/technical.ts`; the other
+  daily commodities keep candles) with SMA /
   EMA, Bollinger, channels, ATR bands, IHSG rebased to the stock's first close; zones and the base range as shaded
   bands (a series primitive, `band-primitive.ts`); retracement, 52-week and all-time-high price lines; event markers
   (D dividend, S split, ...) and ARA / ARB arrows. Lower panes (v5 panes): volume colored by up / down day with its
@@ -181,7 +183,8 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 - No earnings, RUPS / RUPSLB, rights-issue or private-placement dates: `reporting_period.filing_date` is not filled
   by the ingestion yet, and no event source exists for the others.
 - The special monitoring board and suspensions have no source.
-- Coal is monthly (World Bank): it has a chart, but no levels, snapshot or summaries.
+- The monthly series (coal, LNG, nickel, tin, rubber, urea, DAP, potash from the World Bank; cobalt from the IMF; the wood
+  pulp index from FRED) have a chart, but no levels, snapshot or summaries.
 - Breadth and the relative-strength percentiles are over the listings stored in Neraca Lab (61 on 2026-10-14), not
   the whole exchange.
 - `value` (value traded) is approximated by close x volume.
@@ -211,7 +214,9 @@ AVOID (below the 200-day: buy-stop 3,420, target 4,570 = 5:1, stop 3,190); Druck
 ## 9. Forex pairs and commodities
 
 The dropdown of the page lists the exchanges, then **Forex** and **Commodities** (`GET /api/v1/technical/markets`).
-With a market, the search finds its currencies (USD/IDR, USD/JPY) or commodities (Brent, gold, coal, palm oil): the
+With a market, the search finds its currencies (USD/IDR, USD/JPY) or commodities (26: Brent, WTI, natural gas, LNG, coal, gold, silver, copper, aluminium, iron ore, steel hot-rolled coil,
+nickel, tin, cobalt, palm oil in USD and in ringgit, soybean oil, soybean meal, corn, wheat, sugar, rubber, wood pulp
+index, urea, DAP, potash): the
 instruments of Price Ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md), section 1b). Every API above takes
 the market as `{exchange}` and the instrument code as `{ticker}` (`/api/v1/technical/FOREX/USDIDR/summary`).
 
@@ -219,7 +224,7 @@ the market as `{exchange}` and the instrument code as `{ticker}` (`/api/v1/techn
   `type` FOREX / COMMODITY, `unit`, `frequency` and `source`, and `lotSize` null. There is nothing to adjust, so the page
   hides the price-basis toggle.
 - **Levels and preset prices** are rounded to the instrument's tick (USD/IDR 1, USD/JPY 0.001, Brent 0.01, gold 0.1,
-  palm oil 0.25). The summary returns `priceDecimals` and `unit` for the page.
+  palm oil 0.25, palm oil in ringgit 1, corn and wheat 0.25 US cents, copper 0.0005). The summary returns `priceDecimals` and `unit` for the page.
 - **What does not apply** (as for IHSG): relative strength vs IHSG and the comparison line, events, auto-rejection, the
   lot.
 - **The snapshot** is computed on request and kept in memory. These fields are null, with a note:
@@ -230,7 +235,7 @@ the market as `{exchange}` and the instrument code as `{ticker}` (`/api/v1/techn
   The market regime group is that of IDX.
 - **No volume.** A currency pair has no volume (over the counter). The volume indicators are empty, the volume profile
   has no node, and a caveat says so.
-- **Coal is monthly.** It is charted on the monthly interval whatever was asked; the interval toggle shows "Monthly
+- **The World Bank, IMF and FRED series are monthly.** They are charted on the monthly interval whatever was asked; the interval toggle shows "Monthly
   series". Levels, the snapshot and the summaries need daily bars, so these APIs answer **422 "Monthly series"** for it.
   The page shows the chart and its indicators on monthly bars, and a note instead of the summaries.
 - **Druckenmiller** reads an instrument through its own trend instead of IHSG and leadership: above / below its

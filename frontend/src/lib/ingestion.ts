@@ -72,6 +72,10 @@ export function providerLabel(provider: string | null | undefined): string {
       return "EODHD"
     case "worldbank":
       return "the World Bank Pink Sheet"
+    case "imf":
+      return "the IMF Primary Commodity Prices"
+    case "fred":
+      return "FRED"
     default:
       return provider || "the price provider"
   }

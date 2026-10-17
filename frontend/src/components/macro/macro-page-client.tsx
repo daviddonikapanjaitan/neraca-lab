@@ -87,8 +87,8 @@ function signed(value: number | null | undefined, digits = 1, suffix = "%"): str
 
 /**
  * The Macro page: the country and index dropdowns and the range, the index as a plain line, the macro panel (a chart and
- * a summary per series, the liquidity and risk regimes), the Paul Tudor Jones and Druckenmiller summaries and the
- * conclusion. A change reloads the outlook and keeps the choice in the URL.
+ * a summary per series, the liquidity and risk regimes), the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio
+ * summaries and the conclusion. A change reloads the outlook and keeps the choice in the URL.
  */
 export function MacroPageClient({ initial }: { initial: MacroOutlook }) {
   const router = useRouter()
@@ -396,8 +396,8 @@ function PresetsCard({ data }: { data: MacroOutlook }) {
       <CardHeader>
         <CardTitle>Preset summaries</CardTitle>
         <CardDescription>
-          {data.index.code} read the way Paul Tudor Jones and Stanley Druckenmiller read markets: the macro side - money,
-          rates, inflation, the dollar, credit and volatility - not the chart.
+          {data.index.code} read the way Paul Tudor Jones, Stanley Druckenmiller, George Soros and Ray Dalio read markets: the
+          macro side - money, rates, inflation, growth, the dollar, foreign flows, credit and volatility - not the chart.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 xl:grid-cols-2">

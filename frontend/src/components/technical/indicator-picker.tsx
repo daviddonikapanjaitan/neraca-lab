@@ -22,7 +22,7 @@ export function IndicatorPicker({
   index?: boolean
   /** an index compared with IHSG (LQ45): relative strength and the rebased line stay available */
   comparable?: boolean
-  /** a monthly series (coal): no levels or volume profile either */
+  /** a monthly series (coal, LNG, nickel, tin, cobalt, rubber, pulp, fertilizers): no levels or volume profile either */
   monthly?: boolean
 }) {
   const unavailable = monthly ? NOT_FOR_MONTHLY : index ? (comparable ? NOT_FOR_OTHER_INDEX : NOT_FOR_INDEX) : []

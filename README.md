@@ -120,7 +120,7 @@ neraca_lab/
 │               ├── V1.0.22__data_TUGU_shares.sql  (TUGU's 1:2 stock split of 2023-05-24, no filing restates it)
 │               ├── V1.0.24__data_BACH_shares.sql  (BACH share count after its IPO of 2026-07-08)
 │               ├── V1.0.6__data_metrics_valuation.sql
-│               └── V1.0.26__data_markets_macro.sql (catalog: 6 instruments, 25 macro series)
+│               └── V1.0.26__data_markets_macro.sql (catalog: 28 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
@@ -168,6 +168,10 @@ neraca_lab/
 │                                DSSA (USD; splits 1:10 of 2024-07-18 and 1:25 of 2026-04-09 from Yahoo Finance);
 │                                CUAN (USD from FY2024; 2023-Tahunan is in IDR and refused, FY2023 comes from
 │                                FY2024's USD comparative, no FY2022; split 1:10 of 2025-07-15)
+│                                BAJA (also pdf/), KRAS (USD; also pdf/), BULL (USD), GJTL, GMFI (USD), JKON, PNLF (insurer,
+│                                decided by the full-text extraction), RISE (Property Industry taxonomy), SMBR
+│                                (2022 .. 2025 annual, 2026-II), DOOH, INET (2023 .. 2025 annual, 2026-II), FORE
+│                                (2025 annual, 2026-II); BBCA's pdf/ (2022 .. 2025 annual, 2026-II)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -416,7 +420,7 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                 
 | `GET /api/v1/prices/status?exchange=IDX`                      | how far the stored prices reach: last completed trading day, companies up to date / behind / without prices, the IHSG index            |
 | `POST /api/v1/prices/updates?exchange=IDX[&index=true]`       | **"Update all companies to today"**: queues every active company whose prices end before the last completed trading day - only its missing days (ANTM stored up to 9 Oct: 9 Oct to today) - and the IHSG and LQ45 indexes (one job; queued unless both are up to date); up-to-date companies are skipped |
 | `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | the IHSG index (Yahoo Finance `^JKSE`) into `index_daily` through the same queue: **202** new job, **200** job already active          |
-| `GET /api/v1/markets`                                          | **Forex and Commodities**: the markets with their instruments (USD/IDR, USD/JPY; Brent, gold, coal, palm oil) and how far their bars reach |
+| `GET /api/v1/markets`                                          | **Forex and Commodities**: the markets with their instruments (USD/IDR, USD/JPY; 26 commodities: energy, metals, agriculture, materials, fertilizers) and how far their bars reach |
 | `POST /api/v1/markets/{FOREX\|COMMODITY}/ingestions?code=USDIDR[&full=true]` | one Forex pair / commodity through the same queue (`PRICE` job, exchange = the market): **202** / **200** |
 | `POST /api/v1/markets/{FOREX\|COMMODITY}/updates`              | "Update all currencies / commodities to today": every instrument whose bars end before its last completed day |
 
@@ -424,8 +428,14 @@ On the page (Ingestion › Price Ingestion) the left card fetches one company, o
 **Commodities** one currency / commodity (the second dropdown becomes Currency / Commodity). The right-hand cards update
 every company of the exchange to today (IDX for now) - or every currency / commodity of the market - and ingest IHSG.
 
-Forex and commodities come from Yahoo Finance (`IDR=X`, `JPY=X`, `BZ=F`, `GC=F`, `CPO=F`). Coal has no current free daily
-source, so it is the **World Bank Pink Sheet monthly average** (Newcastle). Bad prints of the Yahoo history (USD/IDR
+Forex and commodities come from Yahoo Finance (`IDR=X`, `JPY=X`; Brent `BZ=F`, WTI `CL=F`, natural gas `NG=F`, gold `GC=F`,
+silver `SI=F`, copper `HG=F`, aluminium `ALI=F`, iron ore `TIO=F`, steel hot-rolled coil `HRC=F`, palm oil `CPO=F`,
+soybean oil `ZL=F`, soybean meal `ZM=F`, corn `ZC=F`, wheat `ZW=F`, sugar `SB=F`; corn, wheat, sugar and soybean oil in US
+cents as quoted). Coal, LNG (Japan), nickel, tin, rubber (TSR 20), urea, DAP and potash have no free daily source, so
+they are the **World Bank Pink Sheet monthly average**; cobalt is the **IMF Primary Commodity Prices** monthly average
+(LME), and wood pulp - which has no free price - the US producer price index of wood pulp (FRED `WPU0911`, an index).
+Bauxite has no free source and is not included. Palm oil in ringgit is `CPO=F` x `MYR=X` of
+the same day: an approximation of Bursa Malaysia FCPO, which has no free source. Bad prints of the Yahoo history (USD/IDR
 888.11 between 8,923 and 8,906 on 2010-11-01) are dropped: a close that jumps more than the instrument's threshold away
 and straight back. Details: [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 1b.
 
@@ -470,7 +480,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
-| `neracalab.markets.world-bank.file-url` / `WORLD_BANK_PINK_SHEET_URL` | empty     | the Pink Sheet workbook of coal; empty = the link on the World Bank Commodity Markets page |
+| `neracalab.markets.world-bank.file-url` / `WORLD_BANK_PINK_SHEET_URL` | empty     | the Pink Sheet workbook (coal, LNG, nickel, tin, rubber, urea, DAP, potash); empty = the link on the World Bank Commodity Markets page |
 | `neracalab.macro.schedule.enabled` / `MACRO_SCHEDULE_ENABLED` | `false`              | evening run (20:00 WIB): every macro series whose next release is due |
 | `neracalab.crawl.min-delay`                           | `2s`                        | pause between two requests to the same host (World Bank, FRED, Bank Indonesia, CNBC, CFTC) |
 
@@ -653,7 +663,8 @@ The signals and regimes are described in [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_
 **The Macro page** (sidebar › Macro, between Companies and Screening; permission COMPANIES) reads a country's index
 through this data: Indonesia (the United States and China later), the index IHSG or LQ45 as a plain line, the macro
 panel (the liquidity and risk regimes and a chart per series, each with a summary of what it says for Indonesian
-equities), the Paul Tudor Jones and Druckenmiller summaries (macro side: stance, thesis, buy when / sell when) and the
+equities), the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, thesis, buy
+when / sell when) and the
 conclusion: an investability score from 0 to 100 (six weighted parts), the verdict (investable / selective / not
 investable now) and the action (buy, accumulate, wait, sell / reduce) with the buy and sell conditions met or not.
 Fixed rules in Java, no AI model (`MacroOutlook`). LQ45 (`^JKLQ45`) is stored with IHSG by the same index job.
@@ -683,8 +694,8 @@ npm run dev                   # http://localhost:3000
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
-| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
-| `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones and Druckenmiller summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
+| `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
+| `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
 | `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
@@ -742,11 +753,12 @@ inventory, investment properties as capex, a restated FY2024);
 taxonomy, banks; BMRI's insurance claims shown for information; BRIS's syirkah share filed negative is a cost); `ReclassificationTest` that the agent can revise its own
 classification while the column still fails;
 `FilingMapperWifiTpiaTest` the WIFI cash flows (a financing total that leaves out the dividends, amounts entered
-twice, a 3 rupiah slip) and TPIA's self-contradicting comparatives; `IngestionVerifierSegmentsTest` a refused comparative
+twice, a 3 rupiah slip) and TPIA's self-contradicting comparatives; `FilingMapperRiseSmbrTest` an FX effect the filed
+cash roll-forward leaves out (RISE) and SMBR's comparative that counts investing flows twice; `IngestionVerifierSegmentsTest` a refused comparative
 breakdown of a period already stored as a note; `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism; a currency pair read through its own trend; no macro data); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
-`InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories, coal monthly from the World Bank workbook, the markets API);
+`InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
 `MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
@@ -833,7 +845,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.22__data_TUGU_shares.sql`       | TUGU's 1:2 stock split of 2023-05-24 (par Rp 100 -> Rp 50), which no filing restates: counts 3,555,575,600 split-adjusted from 2021-12-31, the per-share figures before it (/ 2) |
 | `V1.0.24__data_BACH_shares.sql`       | BACH's IPO of 2026-07-08 (615,000,000 new shares at Rp 442), after its only filing: 4,084,430,000 shares from the listing (the filing gives 3,469,430,000 before it) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
-| `V1.0.26__data_markets_macro.sql`     | the catalogs: 6 instruments (USD/IDR, USD/JPY, Brent, gold, coal, palm oil) and 25 macro series with their sources |
+| `V1.0.26__data_markets_macro.sql`     | the catalogs: 28 instruments (USD/IDR, USD/JPY and 26 commodities) and 25 macro series with their sources |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).
 
@@ -862,7 +874,7 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
 | `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series` | technical analysis inputs: IHSG daily bars, dividends / splits (Yahoo), macro observations (with release dates) |
-| `market_instrument`, `instrument_daily` | Forex pairs and commodities and their bars (daily; coal monthly) |
+| `market_instrument`, `instrument_daily` | Forex pairs and commodities and their bars (daily; the World Bank, IMF and FRED series monthly) |
 | `macro_series_def`    | the macro series: source, unit, frequency, publication lag, sanity range     |
 | `indicator_snapshot`, `chart_setting` | the latest technical snapshot per company (versioned JSON); a user's last chart settings |
 | `news_article`, `news_article_ticker`, `news_source_fetch`, `news_brief` | news cache of the screening research agent |

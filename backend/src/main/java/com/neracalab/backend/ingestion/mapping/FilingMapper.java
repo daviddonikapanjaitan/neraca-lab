@@ -1595,6 +1595,17 @@ public final class FilingMapper {
                         + "(beginning cash + net change + FX / other effects = ending cash without it); not counted"));
                 deconsolidated = ZERO;
             }
+            // The same for the FX / other effects: RISE's H1 2025 comparative (H1 2026 filing) shows an exchange-rate
+            // effect of 398,002 that its ending cash leaves out - beginning 260,777,639,668 + net change -36,001,003,868
+            // = 224,776,635,800, the ending cash as filed, and every section adds up to its total. Only when the
+            // roll-forward fails with the effects and holds exactly without them.
+            if (other.signum() != 0 && equal("cash_rollforward", "", beginning.add(change).add(other).add(deconsolidated), ending).isError()
+                    && beginning.add(change).add(deconsolidated).compareTo(ending) == 0) {
+                checks.add(Check.warning("cash_rollforward", "FX / other effects " + other.stripTrailingZeros().toPlainString()
+                        + " are not part of the roll-forward as filed (beginning cash + net change = ending cash without "
+                        + "them); not counted"));
+                other = ZERO;
+            }
             checks.add(equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
                     beginning.add(change).add(other).add(deconsolidated), ending));
         }

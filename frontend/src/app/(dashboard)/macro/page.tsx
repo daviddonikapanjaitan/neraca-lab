@@ -17,8 +17,8 @@ function first(value: string | string[] | undefined): string | undefined {
 
 /**
  * Macro: a country's stock index read through its macro data - the index as a line, the macro panel (a chart and a
- * summary per series, the liquidity and risk regimes), the Paul Tudor Jones and Druckenmiller summaries and the
- * conclusion (investability score, when to buy and when to sell). The choice is in the URL
+ * summary per series, the liquidity and risk regimes), the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio
+ * summaries and the conclusion (investability score, when to buy and when to sell). The choice is in the URL
  * (?country=ID&index=IHSG&range=1Y). Permission COMPANIES, as the macro panel of Companies > Technicals.
  */
 export default async function Page({

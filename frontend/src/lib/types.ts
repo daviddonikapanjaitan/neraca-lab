@@ -530,7 +530,7 @@ export interface InstrumentStatus {
   name: string
   /** at the source: IDR=X; the World Bank column of coal */
   symbol: string
-  /** yahoo | worldbank */
+  /** yahoo | worldbank | imf | fred */
   source: string
   /** "IDR per USD", "USD per barrel" */
   unit: string

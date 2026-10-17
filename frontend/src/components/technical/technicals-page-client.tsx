@@ -186,7 +186,7 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
   const adjustment = isMarket ? "split" : settings.adjustment
   const has = (id: IndicatorId) => indicators.includes(id)
 
-  // the frequency of the series once known (coal is monthly: charted on the monthly interval only)
+  // the frequency of the series once known (a monthly series - coal, cobalt, urea, ... - is charted on the monthly interval only)
   const [monthlyTicker, setMonthlyTicker] = useState<string | null>(null)
   const monthly = !!ticker && monthlyTicker === `${exchange}:${ticker}`
   const interval = monthly ? "M" : settings.interval
@@ -504,7 +504,10 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
         <p>
           Indicators are computed by Neraca Lab from stored daily prices (split-adjusted; IDX tick sizes and auto-rejection
           limits applied). Events: Yahoo Finance dividends and splits, and splits recorded from the filings. Currency pairs
-          and commodities: Yahoo Finance daily bars (coal: the World Bank monthly average), levels at their own tick size.
+          and commodities: Yahoo Finance daily bars (coal, LNG, nickel, tin, rubber and the fertilizers: the World Bank monthly
+          average; cobalt: the IMF monthly average; wood pulp: the US producer price index, FRED; palm
+          oil in ringgit: CME CPO=F x USD/MYR, an approximation of Bursa Malaysia FCPO), levels at their own tick size; palm
+          oil and the monthly series are drawn as a plain line of the close, not candlesticks.
           The presets read the chart only; the macro view is on the Macro page.
         </p>
         <p>
