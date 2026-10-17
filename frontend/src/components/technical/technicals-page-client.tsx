@@ -18,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { IndicatorPicker } from "@/components/technical/indicator-picker"
 import type { PriceChartHandle } from "@/components/technical/price-chart"
 import { PresetSummariesCard } from "@/components/technical/preset-summaries"
-import { KeyLevelsCard, MacroCard, RegimeCard, SnapshotCard, VolumeProfileCard } from "@/components/technical/side-panels"
+import { KeyLevelsCard, RegimeCard, SnapshotCard, VolumeProfileCard } from "@/components/technical/side-panels"
 import { TickerSearch } from "@/components/technical/ticker-search"
 import { jsonBody, RequestError } from "@/lib/client-api"
 import { EMPTY, formatDate, formatNumber, formatPrice } from "@/lib/format"
@@ -31,7 +31,10 @@ import {
   INTERVALS,
   levelsSchema,
   marketSchema,
+  BENCHMARK_INDEX,
+  INDEX_TICKERS,
   NOT_FOR_INDEX,
+  NOT_FOR_OTHER_INDEX,
   NOT_FOR_MONTHLY,
   ohlcvSchema,
   parseSettings,
@@ -183,7 +186,7 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
   const adjustment = isMarket ? "split" : settings.adjustment
   const has = (id: IndicatorId) => indicators.includes(id)
 
-  // the frequency of the series once known (coal is monthly: charted on the monthly interval only)
+  // the frequency of the series once known (a monthly series - coal, cobalt, urea, ... - is charted on the monthly interval only)
   const [monthlyTicker, setMonthlyTicker] = useState<string | null>(null)
   const monthly = !!ticker && monthlyTicker === `${exchange}:${ticker}`
   const interval = monthly ? "M" : settings.interval
@@ -194,19 +197,21 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "ohlcv", params), ohlcvSchema, signal),
     enabled: !!ticker,
   })
-  const type = ohlcv.data ? ohlcv.data.type : isMarket ? (exchange === "FOREX" ? "FOREX" : "COMMODITY") : ticker === "IHSG" ? "INDEX" : "STOCK"
+  const type = ohlcv.data ? ohlcv.data.type : isMarket ? (exchange === "FOREX" ? "FOREX" : "COMMODITY")
+    : ticker && INDEX_TICKERS.includes(ticker) ? "INDEX" : "STOCK"
   if (ohlcv.data && ticker && ohlcv.data.ticker === ticker && (ohlcv.data.frequency === "MONTHLY") !== monthly) {
     // learnt from the answer: a monthly series re-queries on the monthly interval
     setMonthlyTicker(ohlcv.data.frequency === "MONTHLY" ? `${exchange}:${ticker}` : null)
   }
-  // the index (IHSG) is charted in points, a currency pair or commodity in its unit: no comparison with IHSG, no events,
-  // no auto-rejection
+  // an index (IHSG, LQ45) is charted in points, a currency pair or commodity in its unit: no events, no auto-rejection,
+  // and no comparison with IHSG - except LQ45, which is compared with IHSG
   const isIndex = type !== "STOCK"
   const isInstrument = type === "FOREX" || type === "COMMODITY"
+  const comparable = type === "INDEX" && ticker !== BENCHMARK_INDEX
   const shown = useMemo(
     () => (monthly ? indicators.filter((id) => !NOT_FOR_MONTHLY.includes(id))
-      : isIndex ? indicators.filter((id) => !NOT_FOR_INDEX.includes(id)) : indicators),
-    [indicators, isIndex, monthly]
+      : isIndex ? indicators.filter((id) => !(comparable ? NOT_FOR_OTHER_INDEX : NOT_FOR_INDEX).includes(id)) : indicators),
+    [indicators, isIndex, comparable, monthly]
   )
   // levels, the snapshot and the summaries need daily bars: not asked for a monthly series
   const daily = !!ticker && ohlcv.isSuccess && !monthly
@@ -237,7 +242,7 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
     queryFn: ({ signal }) => fetchValidated(technicalUrl(exchange, ticker!, "summary"), summarySchema, signal),
     enabled: daily,
   })
-  const showMarket = has("regime") || has("macro")
+  const showMarket = has("regime")
   const market = useQuery({
     queryKey: ["technical", "market", exchange],
     queryFn: ({ signal }) => fetchValidated(`/api/technical/market?${new URLSearchParams({ exchange, range: "1Y" })}`, marketSchema, signal),
@@ -265,7 +270,7 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
   const levelsDisabled = adjustment === "total"
 
   const picker = (
-    <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} index={isIndex} monthly={monthly} />
+    <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} index={isIndex} comparable={comparable} monthly={monthly} />
   )
   // decimals of the header price: an index 2, an instrument by its size (USD/JPY 3), a stock as the price formatter
   const priceText = (value: number) =>
@@ -363,7 +368,7 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
               description={
                 isMarket
                   ? `Search a ${selected!.itemLabel.toLowerCase()} of ${selected!.name} to open its chart (its prices come from Ingestion › Price Ingestion).`
-                  : `Search a ticker or company name of ${exchange}, or IHSG for the composite index, to open its chart.`
+                  : `Search a ticker or company name of ${exchange}, or IHSG / LQ45 for the indexes, to open its chart.`
               }
             />
           </CardContent>
@@ -399,7 +404,7 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
                       <span>
                         {formatDate(data!.lastDate)} · {data!.tradingDays.toLocaleString("en-US")}{" "}
                         {data!.frequency === "MONTHLY" ? "months" : "trading days"} since {formatDate(data!.firstDate)}
-                        {data!.lotSize !== null ? ` · lot ${data!.lotSize} shares` : ` · ${data!.source ?? "Yahoo Finance ^JKSE"}`}
+                        {data!.lotSize !== null ? ` · lot ${data!.lotSize} shares` : ` · ${data!.source ?? "Yahoo Finance"}`}
                       </span>
                     </>
                   ) : (
@@ -465,16 +470,13 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
               <Skeleton className="h-[320px] w-full" />
             )}
 
-            {(has("regime") || has("macro")) && (
+            {has("regime") && (
               market.isError ? (
                 <ErrorNote error={market.error} onRetry={() => market.refetch()} />
               ) : !market.data ? (
                 <Skeleton className="h-[220px] w-full" />
               ) : (
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {has("regime") && <RegimeCard market={market.data} />}
-                  {has("macro") && <MacroCard market={market.data} />}
-                </div>
+                <RegimeCard market={market.data} />
               )
             )}
 
@@ -502,8 +504,11 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
         <p>
           Indicators are computed by Neraca Lab from stored daily prices (split-adjusted; IDX tick sizes and auto-rejection
           limits applied). Events: Yahoo Finance dividends and splits, and splits recorded from the filings. Currency pairs
-          and commodities: Yahoo Finance daily bars (coal: the World Bank monthly average), levels at their own tick size.
-          Macro: FRED, Bank Indonesia, CNBC, the CFTC and Yahoo Finance (Ingestion › Macro).
+          and commodities: Yahoo Finance daily bars (coal, LNG, nickel, tin, rubber and the fertilizers: the World Bank monthly
+          average; cobalt: the IMF monthly average; wood pulp: the US producer price index, FRED; palm
+          oil in ringgit: CME CPO=F x USD/MYR, an approximation of Bursa Malaysia FCPO), levels at their own tick size; palm
+          oil and the monthly series are drawn as a plain line of the close, not candlesticks.
+          The presets read the chart only; the macro view is on the Macro page.
         </p>
         <p>
           Charts: {TRADINGVIEW_NOTICE.replace(" https://www.tradingview.com/", "")}{" "}

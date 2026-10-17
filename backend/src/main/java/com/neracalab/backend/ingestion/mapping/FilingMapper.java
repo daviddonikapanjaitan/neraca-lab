@@ -7,6 +7,7 @@ import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -14,6 +15,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 import com.neracalab.backend.ingestion.mapping.MappedStatement.UnclassifiedLine;
 import com.neracalab.backend.ingestion.mapping.SegmentExtraction.SegmentLine;
@@ -1169,6 +1171,41 @@ public final class FilingMapper {
                 + " fits par value " + plain(prior) + inUnit + "; no share counts are derived from this filing";
     }
 
+    /**
+     * Why a par value inferred from one column's EPS does not fit the other column's ({@link #supportedPars}, also in
+     * the rounding unit), {@code null} when it does or that column gives no evidence. A coarse EPS fits several share
+     * counts: BKSL's FY2025 workbook files FY2024's EPS as 0.10 (17,355 million profit: 116 .. 347 billion shares),
+     * which par 50 fits (12,562,189 million share capital = 251 billion shares), while FY2025's 4.95 (830,295 million
+     * profit: 167.7 billion shares) fits no standard par value - its shares have several par values. Par 50 made
+     * every count 50% too high; without a par value the published counts, checked against the EPS, are used.
+     * Only a column whose share capital did not change in the period is evidence: OMED's FY2021 capital went from
+     * 4,500 to 575,000 million and its EPS is restated for that, beyond the counts the capital gives.
+     */
+    private String parMisfit(BigDecimal par, StatementColumn column, BigDecimal[] startEnd) {
+        if (startEnd == null || startEnd[0] == null || startEnd[1] == null || startEnd[0].compareTo(startEnd[1]) != 0) {
+            return null;
+        }
+        List<BigDecimal> fits = supportedPars(column, startEnd, BigDecimal.ONE);
+        if (fits == null || fits.stream().anyMatch(p -> p.compareTo(par) == 0)) {
+            return null;
+        }
+        if (unit.compareTo(BigDecimal.ONE) > 0) {
+            List<BigDecimal> inUnit = supportedPars(column, startEnd, unit);
+            if (inUnit != null && inUnit.stream().anyMatch(p -> p.compareTo(par) == 0)) {
+                return null;
+            }
+        }
+        BigDecimal shares = startEnd[1].divide(par, 0, RoundingMode.HALF_UP);
+        BigDecimal parent = amount(income.value(PROFIT_PARENT, durationIndex(column)));
+        BigDecimal eps = eps(EPS_BASIC, durationIndex(column));
+        return "Par value " + par.toPlainString() + " fits only one column's EPS: " + period(column).key()
+                + " share capital " + startEnd[1].toPlainString() + " / " + par.toPlainString() + " = "
+                + shares.toPlainString() + " shares give profit attributable to the parent / shares = "
+                + parent.divide(shares, Math.max(0, eps.scale()) + 2, RoundingMode.HALF_UP).toPlainString()
+                + ", but the filed basic EPS is " + eps.toPlainString() + " (fits par value " + plain(fits)
+                + "); no par value is used";
+    }
+
     private static String plain(List<BigDecimal> values) {
         return values.stream().map(BigDecimal::toPlainString).toList().toString();
     }
@@ -1557,6 +1594,17 @@ public final class FilingMapper {
                         + deconsolidated.stripTrailingZeros().toPlainString() + " is not part of the roll-forward as filed "
                         + "(beginning cash + net change + FX / other effects = ending cash without it); not counted"));
                 deconsolidated = ZERO;
+            }
+            // The same for the FX / other effects: RISE's H1 2025 comparative (H1 2026 filing) shows an exchange-rate
+            // effect of 398,002 that its ending cash leaves out - beginning 260,777,639,668 + net change -36,001,003,868
+            // = 224,776,635,800, the ending cash as filed, and every section adds up to its total. Only when the
+            // roll-forward fails with the effects and holds exactly without them.
+            if (other.signum() != 0 && equal("cash_rollforward", "", beginning.add(change).add(other).add(deconsolidated), ending).isError()
+                    && beginning.add(change).add(deconsolidated).compareTo(ending) == 0) {
+                checks.add(Check.warning("cash_rollforward", "FX / other effects " + other.stripTrailingZeros().toPlainString()
+                        + " are not part of the roll-forward as filed (beginning cash + net change = ending cash without "
+                        + "them); not counted"));
+                other = ZERO;
             }
             checks.add(equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
                     beginning.add(change).add(other).add(deconsolidated), ending));
@@ -2294,8 +2342,16 @@ public final class FilingMapper {
         }
         BigDecimal par = contradiction != null ? null
                 : inferParValue(StatementColumn.CURRENT_PERIOD, currentYear == null ? null : currentYear[1], checks);
+        StatementColumn other = StatementColumn.PRIOR_PERIOD;
         if (par == null && contradiction == null) {
             par = inferParValue(StatementColumn.PRIOR_PERIOD, priorYear == null ? null : priorYear[1], checks);
+            other = StatementColumn.CURRENT_PERIOD;
+        }
+        String misfit = par == null ? null
+                : parMisfit(par, other, other == StatementColumn.CURRENT_PERIOD ? currentYear : priorYear);
+        if (misfit != null) {
+            checks.add(Check.warning("par_value", misfit));
+            par = null;
         }
         EpsShares epsShares = null;
         String basis = null;
@@ -2353,6 +2409,13 @@ public final class FilingMapper {
 
     /** Largest relative gap accepted between the filing's basic EPS and profit / a published period-end count. */
     static final BigDecimal WEB_SHARES_EPS_TOLERANCE = new BigDecimal("0.02");
+    /** Largest relative change of the shares issued over a period in which only treasury shares may have moved. */
+    static final BigDecimal WEB_SHARES_ISSUED_DRIFT = new BigDecimal("0.01");
+
+    /** {@link #withWebShareCounts(ShareCapital, List, List, String)} without published splits. */
+    public ShareCapital withWebShareCounts(ShareCapital filing, List<WebShareCount> counts, String source) {
+        return withWebShareCounts(filing, counts, List.of(), source);
+    }
 
     /**
      * Share counts published on a website, for a filing whose statements give none ({@link ShareCapital#resolved()}
@@ -2365,6 +2428,21 @@ public final class FilingMapper {
      *       share, so a period-end count differs slightly (BNGA FY2022: 0.2%); a wrong company, unit or a stock
      *       split not reflected in this filing is off by far more and is rejected.</li>
      * </ul>
+     * Two cases the website's own figures explain:
+     * <ul>
+     *   <li>A split after the filing. Published counts are split-adjusted to today, while a filing of before a split
+     *       states its EPS on the count of before it (CUAN FY2024: 160,785,000 / 0.014 = 11.5 billion shares; Yahoo
+     *       Finance: 112,418,900,000 after the split 1:10 of 2025-07-15). A count that misses the EPS as published
+     *       is also checked on the count of before the latest published split after its date, the latest two, ...
+     *       (a filing reflects the splits before it was issued, not those after), and used when exactly one of
+     *       these fits. It is stored as published - split-adjusted, like the prices - and the splits it needed are
+     *       returned ({@link ShareCapital#webSplits()}), so the per-share figures of before them are adjusted too.</li>
+     *   <li>A buyback in the period. With treasury shares bought during the period the end count is below the
+     *       weighted one the EPS uses (BUKA FY2025: 92,970,828,660 shares at the end, 103,121,636,167 at the start,
+     *       EPS 31.91 = 98.5 billion weighted shares). A period-end count that misses the EPS is accepted when the
+     *       EPS lies between profit / the published count at the start of the period and profit / the end count,
+     *       both consistent, with the shares issued unchanged (within 1%): only treasury shares moved.</li>
+     * </ul>
      * A website publishes only a few year ends (Yahoo Finance: four), so the opening dates of an older filing have
      * no count of their own (BBCA's FY2022 filing: 2022-12-31 published, 2021-12-31 and 2020-12-31 not) and the
      * periods ending there had no market cap and no valuation. An accepted count is therefore carried to another
@@ -2374,33 +2452,43 @@ public final class FilingMapper {
      * <p>
      * The result keeps the filing's share capital; weighted shares stay unknown. Without an accepted count the
      * filing's own (unresolved) share capital is returned with the reasons.
+     *
+     * @param splits the website's splits (any order; {@link WebSplit#sharesBefore()} is derived here)
      */
-    public ShareCapital withWebShareCounts(ShareCapital filing, List<WebShareCount> counts, String source) {
+    public ShareCapital withWebShareCounts(ShareCapital filing, List<WebShareCount> counts, List<WebSplit> splits,
+                                           String source) {
         if (filing.resolved()) {
             return filing;
         }
         Map<LocalDate, WebShareCount> byDate = new LinkedHashMap<>();
         counts.forEach(c -> byDate.putIfAbsent(c.date(), c));
+        List<WebSplit> ordered = splits.stream().filter(s -> s.factor() != null && s.factor().signum() > 0
+                        && s.factor().compareTo(BigDecimal.ONE) != 0)
+                .sorted(Comparator.comparing(WebSplit::date)).toList();
         List<Check> checks = new ArrayList<>();
         List<ShareAt> snapshots = new ArrayList<>();
         List<String> accepted = new ArrayList<>();
+        Set<LocalDate> unreflected = new TreeSet<>();
         for (ShareAt p : filing.snapshots()) {
             WebShareCount c = byDate.get(p.date());
-            String rejection = c == null ? null : webShareCountProblem(c, p.date());
-            if (c == null || rejection != null) {
-                if (rejection != null) {
-                    checks.add(Check.warning("web_shares", source + " count at " + p.date() + " not used: " + rejection));
-                }
+            if (c == null) {
+                snapshots.add(p);
+                continue;
+            }
+            WebShareFit fit = webShareCountFit(c, p.date(), ordered, byDate);
+            if (fit.problem() != null) {
+                checks.add(Check.warning("web_shares", source + " count at " + p.date() + " not used: " + fit.problem()));
                 snapshots.add(p);
                 continue;
             }
             BigDecimal treasury = c.treasury() != null ? c.treasury()
                     : c.issued() != null ? c.issued().subtract(c.outstanding()) : null;
             snapshots.add(new ShareAt(p.date(), p.commonStock(), c.outstanding(), treasury, null,
-                    source + " count at " + p.date() + ", checked against the filing's EPS"));
-            accepted.add(p.date() + ": " + c.outstanding().toPlainString());
+                    source + " count at " + p.date() + ", checked against the filing's EPS" + fit.basis()));
+            accepted.add(p.date() + ": " + c.outstanding().toPlainString() + fit.basis());
+            fit.splits().forEach(s -> unreflected.add(s.date()));
         }
-        accepted.addAll(carryWebShareCounts(filing.snapshots(), snapshots, byDate.keySet(), source));
+        accepted.addAll(carryWebShareCounts(filing.snapshots(), snapshots, byDate, ordered, unreflected, source));
         if (accepted.isEmpty()) {
             List<Check> unresolved = new ArrayList<>(filing.checks());
             unresolved.addAll(checks);
@@ -2413,9 +2501,65 @@ public final class FilingMapper {
         filing.checks().stream()
                 .filter(c -> !(c.severity() == Check.Severity.WARNING && List.of("par_value", "treasury").contains(c.rule())))
                 .forEach(checks::add);
+        List<WebSplit> used = new ArrayList<>();
+        for (WebSplit s : ordered) {
+            if (!unreflected.contains(s.date())) {
+                continue;
+            }
+            BigDecimal before = sharesBefore(s, ordered, byDate);
+            if (before == null) {
+                checks.add(Check.warning("web_shares", source + " split at " + s.date() + ": no published count before "
+                        + "it, so the per-share figures of before it are not adjusted"));
+                continue;
+            }
+            used.add(new WebSplit(s.date(), s.factor(), before));
+        }
         String basis = "shares outstanding from " + source + " (checked against the filing's EPS): " + String.join(", ", accepted);
         checks.add(Check.ok("web_shares", basis));
-        return new ShareCapital(null, basis, List.copyOf(snapshots), null, null, checks, source);
+        return new ShareCapital(null, basis, List.copyOf(snapshots), null, null, checks, source, List.copyOf(used));
+    }
+
+    /**
+     * How a published count fits the filing: {@code problem} null when it does, with the splits after its date the
+     * filing's EPS predates (empty: the count fits as published).
+     */
+    private record WebShareFit(String problem, List<WebSplit> splits) {
+
+        /** " (the filing's EPS is on the count of before the split 1:10 of 2025-07-15)", or "" */
+        String basis() {
+            return splits.isEmpty() ? "" : " (the filing's EPS is on the count of before the split"
+                    + (splits.size() > 1 ? "s " : " ")
+                    + String.join(" and ", splits.stream().map(s -> ratio(s.factor()) + " of " + s.date()).toList()) + ")";
+        }
+    }
+
+    /** "1:10" for a split into ten shares, "5:1" for a reverse split of five shares into one. */
+    private static String ratio(BigDecimal factor) {
+        return factor.compareTo(BigDecimal.ONE) >= 0 ? "1:" + factor.stripTrailingZeros().toPlainString()
+                : BigDecimal.ONE.divide(factor, 0, RoundingMode.HALF_UP).toPlainString() + ":1";
+    }
+
+    private static BigDecimal product(List<WebSplit> splits) {
+        BigDecimal f = BigDecimal.ONE;
+        for (WebSplit s : splits) {
+            f = f.multiply(s.factor());
+        }
+        return f;
+    }
+
+    /**
+     * Shares outstanding just before a split, on the count of before it: the latest published count before the split
+     * divided by that split and every later one. {@code null} when nothing is published before it.
+     */
+    private static BigDecimal sharesBefore(WebSplit split, List<WebSplit> ordered, Map<LocalDate, WebShareCount> byDate) {
+        WebShareCount latest = byDate.values().stream()
+                .filter(c -> c.date().isBefore(split.date()) && c.outstanding() != null && c.outstanding().signum() > 0)
+                .max(Comparator.comparing(WebShareCount::date)).orElse(null);
+        if (latest == null) {
+            return null;
+        }
+        BigDecimal factor = product(ordered.stream().filter(s -> !s.date().isBefore(split.date())).toList());
+        return latest.outstanding().divide(factor, 0, RoundingMode.HALF_UP);
     }
 
     /**
@@ -2423,14 +2567,15 @@ public final class FilingMapper {
      * no treasury stock at either date, and the EPS of the period that date opens or closes reproduced
      * ({@link #withWebShareCounts}). Two accepted counts that differ for the same share capital carry nothing.
      *
-     * @param filed     the filing's dates as {@link #shareCapital} read them (a treasury share count of zero: the
-     *                  statement of changes in equity shows no treasury stock at that date)
-     * @param snapshots the same dates in the same order, with the accepted counts; completed in place
-     * @param published dates the website has a figure for (accepted or rejected: never carried over)
+     * @param filed       the filing's dates as {@link #shareCapital} read them (a treasury share count of zero: the
+     *                    statement of changes in equity shows no treasury stock at that date)
+     * @param snapshots   the same dates in the same order, with the accepted counts; completed in place
+     * @param byDate      the published counts (a date with a figure, accepted or rejected, is never carried to)
+     * @param unreflected dates of the splits the carried counts need; completed in place
      * @return what was carried, e.g. "2021-12-31: 123275050000 (as at 2022-12-31)"
      */
-    private List<String> carryWebShareCounts(List<ShareAt> filed, List<ShareAt> snapshots, Set<LocalDate> published,
-                                             String source) {
+    private List<String> carryWebShareCounts(List<ShareAt> filed, List<ShareAt> snapshots, Map<LocalDate, WebShareCount> byDate,
+                                             List<WebSplit> ordered, Set<LocalDate> unreflected, String source) {
         List<String> carried = new ArrayList<>();
         List<ShareAt> accepted = new ArrayList<>();
         for (int i = 0; i < snapshots.size(); i++) {
@@ -2443,7 +2588,7 @@ public final class FilingMapper {
         }
         for (int i = 0; i < snapshots.size(); i++) {
             ShareAt p = snapshots.get(i);
-            if (p.sharesOutstanding() != null || published.contains(p.date()) || !noTreasuryStock(filed.get(i))) {
+            if (p.sharesOutstanding() != null || byDate.containsKey(p.date()) || !noTreasuryStock(filed.get(i))) {
                 continue;
             }
             List<ShareAt> same = accepted.stream().filter(a -> a.commonStock().compareTo(p.commonStock()) == 0).toList();
@@ -2451,13 +2596,16 @@ public final class FilingMapper {
                 continue;
             }
             ShareAt from = same.getFirst();
-            if (webShareCountProblem(new WebShareCount(p.date(), from.sharesOutstanding(), null, null), p.date()) != null) {
+            WebShareFit fit = webShareCountFit(new WebShareCount(p.date(), from.sharesOutstanding(), null, null), p.date(),
+                    ordered, Map.of());
+            if (fit.problem() != null) {
                 continue;
             }
             snapshots.set(i, new ShareAt(p.date(), p.commonStock(), from.sharesOutstanding(), ZERO, null,
                     source + " count at " + from.date() + ", carried to " + p.date()
-                            + " (share capital unchanged, no treasury stock), checked against the filing's EPS"));
-            carried.add(p.date() + ": " + from.sharesOutstanding().toPlainString() + " (as at " + from.date() + ")");
+                            + " (share capital unchanged, no treasury stock), checked against the filing's EPS" + fit.basis()));
+            carried.add(p.date() + ": " + from.sharesOutstanding().toPlainString() + " (as at " + from.date() + ")" + fit.basis());
+            fit.splits().forEach(s -> unreflected.add(s.date()));
         }
         return carried;
     }
@@ -2466,8 +2614,8 @@ public final class FilingMapper {
         return filed.treasuryShares() != null && filed.treasuryShares().signum() == 0;
     }
 
-    /** Why a published count does not fit this filing, {@code null} when it does. */
-    private String webShareCountProblem(WebShareCount c, LocalDate date) {
+    /** Why a published count is not consistent in itself, {@code null} when it is. */
+    private static String inconsistency(WebShareCount c) {
         if (c.outstanding() == null || c.outstanding().signum() <= 0) {
             return "no positive shares-outstanding figure";
         }
@@ -2478,6 +2626,53 @@ public final class FilingMapper {
         if (c.issued() != null && c.issued().compareTo(c.outstanding()) < 0) {
             return "issued " + c.issued().toPlainString() + " < outstanding " + c.outstanding().toPlainString();
         }
+        return null;
+    }
+
+    /**
+     * How a published count fits this filing: as published, else on the count of before the published splits after
+     * its date that the filing may predate - the latest, the latest two, ... - when exactly one of these fits.
+     */
+    private WebShareFit webShareCountFit(WebShareCount c, LocalDate date, List<WebSplit> ordered,
+                                         Map<LocalDate, WebShareCount> byDate) {
+        String inconsistent = inconsistency(c);
+        if (inconsistent != null) {
+            return new WebShareFit(inconsistent, List.of());
+        }
+        String asPublished = webShareCountProblem(c, date, BigDecimal.ONE, ordered, byDate);
+        if (asPublished == null) {
+            return new WebShareFit(null, List.of());
+        }
+        List<WebSplit> after = ordered.stream().filter(s -> s.date().isAfter(date)).toList();
+        List<List<WebSplit>> fitting = new ArrayList<>();
+        for (int j = after.size() - 1; j >= 0; j--) {
+            List<WebSplit> predated = after.subList(j, after.size());
+            if (webShareCountProblem(c, date, product(predated), ordered, byDate) == null) {
+                fitting.add(List.copyOf(predated));
+            }
+        }
+        if (fitting.size() == 1) {
+            return new WebShareFit(null, fitting.getFirst());
+        }
+        if (fitting.size() > 1) {
+            return new WebShareFit(asPublished + "; it fits on the count of before more than one choice of the published "
+                    + "splits" + fitting.stream().map(f -> new WebShareFit(null, f).basis()).toList()
+                    + ", so which ones the filing predates is not decidable", List.of());
+        }
+        return new WebShareFit(asPublished + (after.isEmpty() ? "" : " (nor on the count of before the published split"
+                + (after.size() > 1 ? "s " : " ") + String.join(", ", after.stream()
+                .map(s -> ratio(s.factor()) + " of " + s.date()).toList()) + ")"), List.of());
+    }
+
+    /**
+     * Why a consistent published count does not fit this filing's EPS, {@code null} when it does.
+     *
+     * @param factor the splits the filing predates: the filing's count is the published one / factor
+     * @param byDate the published counts, for the count at the start of a period the date ends (buybacks; not across
+     *               a published split in the period)
+     */
+    private String webShareCountProblem(WebShareCount c, LocalDate date, BigDecimal factor, List<WebSplit> ordered,
+                                        Map<LocalDate, WebShareCount> byDate) {
         StatementColumn column = date.equals(info.current().end()) ? StatementColumn.CURRENT_PERIOD
                 : date.equals(info.prior().end()) ? StatementColumn.PRIOR_PERIOD
                 : date.equals(info.current().start().minusDays(1)) ? StatementColumn.CURRENT_PERIOD
@@ -2495,14 +2690,32 @@ public final class FilingMapper {
         if (parent == null || eps == null || parent.signum() == 0 || eps.signum() == 0 || parent.signum() != eps.signum()) {
             return "the " + period(column).key() + " profit attributable to the parent and basic EPS do not allow a check";
         }
-        BigDecimal implied = parent.divide(c.outstanding(), MathContext.DECIMAL64);
+        BigDecimal implied = parent.divide(c.outstanding().divide(factor, MathContext.DECIMAL64), MathContext.DECIMAL64);
         BigDecimal halfUlp = BigDecimal.ONE.movePointLeft(Math.max(0, eps.stripTrailingZeros().scale())).divide(BigDecimal.valueOf(2));
         BigDecimal tolerance = halfUlp.add(eps.abs().multiply(WEB_SHARES_EPS_TOLERANCE));
-        if (implied.subtract(eps).abs().compareTo(tolerance) > 0) {
-            return "profit attributable to the parent / count = " + implied.setScale(Math.max(0, eps.scale()) + 2, RoundingMode.HALF_UP)
-                    .toPlainString() + " but the " + period(column).key() + " basic EPS is " + eps.toPlainString();
+        if (implied.subtract(eps).abs().compareTo(tolerance) <= 0) {
+            return null;
         }
-        return null;
+        String scaled = factor.compareTo(BigDecimal.ONE) == 0 ? "count" : "(count / " + factor.stripTrailingZeros().toPlainString() + ")";
+        String problem = "profit attributable to the parent / " + scaled + " = "
+                + implied.setScale(Math.max(0, eps.scale()) + 2, RoundingMode.HALF_UP).toPlainString()
+                + " but the " + period(column).key() + " basic EPS is " + eps.toPlainString();
+        // a buyback in the period the date ends: the EPS lies between profit / the start count and profit / the end count
+        PeriodRef ended = period(column);
+        WebShareCount opening = date.equals(ended.end()) ? byDate.get(ended.start().minusDays(1)) : null;
+        WebShareCount start = opening != null
+                && ordered.stream().noneMatch(s -> s.date().isAfter(opening.date()) && !s.date().isAfter(date)) ? opening : null;
+        if (start != null && inconsistency(start) == null && c.issued() != null && start.issued() != null
+                && c.issued().subtract(start.issued()).abs().compareTo(start.issued().multiply(WEB_SHARES_ISSUED_DRIFT)) <= 0
+                && start.outstanding().compareTo(c.outstanding()) != 0) {
+            BigDecimal atStart = parent.divide(start.outstanding().divide(factor, MathContext.DECIMAL64), MathContext.DECIMAL64);
+            if (eps.compareTo(implied.min(atStart).subtract(tolerance)) >= 0 && eps.compareTo(implied.max(atStart).add(tolerance)) <= 0) {
+                return null;
+            }
+            problem += ", nor between it and profit / the count at " + start.date() + " = "
+                    + atStart.setScale(Math.max(0, eps.scale()) + 2, RoundingMode.HALF_UP).toPlainString();
+        }
+        return problem;
     }
 
     /**

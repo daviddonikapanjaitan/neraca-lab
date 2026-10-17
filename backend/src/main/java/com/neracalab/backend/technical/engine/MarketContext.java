@@ -5,16 +5,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * What every snapshot of an exchange shares: the benchmark index, the universe of listings (for breadth and the
- * relative-strength percentiles) and the macro series. Computed once per run and reused for every ticker.
+ * What every snapshot of an exchange shares: the benchmark index and the universe of listings (for breadth and the
+ * relative-strength percentiles). Computed once per run and reused for every ticker. Technical only: no macro data.
  *
  * @param asOfDate          the latest index day (else the latest price day of the universe)
  * @param indexBars         daily bars of the benchmark index (IHSG), oldest first; empty when not loaded yet
  * @param universe          listing id -> its returns and trend at its latest bar on or before {@code asOfDate}
- * @param macro             series code -> observations, oldest first (USD_IDR and the series of macro_series_def)
  */
 public record MarketContext(String exchange, LocalDate asOfDate, String indexCode, List<Candle> indexBars,
-                            Map<Long, Member> universe, Map<String, List<Observation>> macro) {
+                            Map<Long, Member> universe) {
 
     /**
      * A listing of the universe at its latest bar on or before the as-of date.
@@ -28,7 +27,7 @@ public record MarketContext(String exchange, LocalDate asOfDate, String indexCod
     }
 
     /**
-     * A macro observation.
+     * A macro observation (the Macro page: {@link MacroSignals}, {@code macro.outlook.MacroOutlook}).
      *
      * @param date     the observation date (the 1st of the month for a monthly series)
      * @param released the day it became public; a snapshot as of an earlier day does not use it

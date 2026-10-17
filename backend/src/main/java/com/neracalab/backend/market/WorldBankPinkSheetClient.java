@@ -3,6 +3,9 @@ package com.neracalab.backend.market;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +19,7 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.crawl.PoliteHttpClient;
@@ -25,7 +29,9 @@ import com.neracalab.backend.crawl.SourceException;
  * Monthly commodity prices of the World Bank Pink Sheet (CMO-Historical-Data-Monthly.xlsx, sheet "Monthly Prices"): one
  * value per month and commodity, the monthly average in nominal US dollars. The workbook's address changes with every
  * release, so it is taken from the link on the Commodity Markets page. A layout the parser does not know (no column of
- * that name, no month in the first column) fails loudly; nothing is guessed.
+ * that name, no month in the first column) fails loudly; nothing is guessed. One workbook serves every monthly
+ * commodity (coal, nickel, tin, rubber, LNG): it is kept for {@link #CACHE_FOR}, so "Update all commodities" downloads it
+ * once.
  */
 @Component
 public class WorldBankPinkSheetClient {
@@ -41,20 +47,43 @@ public class WorldBankPinkSheetClient {
     public record MonthlyValue(LocalDate month, double value) {
     }
 
+    /** How long a downloaded workbook is reused (it changes once a month). */
+    static final Duration CACHE_FOR = Duration.ofMinutes(10);
+
     private final PoliteHttpClient http;
     private final MarketProperties properties;
+    private final Clock clock;
+    private byte[] workbook;
+    private Instant downloadedAt;
 
+    @Autowired
     public WorldBankPinkSheetClient(PoliteHttpClient http, MarketProperties properties) {
+        this(http, properties, Clock.systemUTC());
+    }
+
+    WorldBankPinkSheetClient(PoliteHttpClient http, MarketProperties properties, Clock clock) {
         this.http = http;
         this.properties = properties;
+        this.clock = clock;
     }
 
     /** Every month of the column {@code column} ("Coal, Australian"), oldest first; months without a value are left out. */
     public List<MonthlyValue> monthly(String column) {
+        return parse(workbook(), properties.worldBank().sheet(), column);
+    }
+
+    /** The workbook, downloaded again when older than {@link #CACHE_FOR}. */
+    private synchronized byte[] workbook() {
+        Instant now = clock.instant();
+        if (workbook != null && downloadedAt.plus(CACHE_FOR).isAfter(now)) {
+            return workbook;
+        }
         URI file = fileUri();
         PoliteHttpClient.Response response = http.get(file);
         PoliteHttpClient.requireOk(file, response);
-        return parse(response.body(), properties.worldBank().sheet(), column);
+        workbook = response.body();
+        downloadedAt = now;
+        return workbook;
     }
 
     private URI fileUri() {

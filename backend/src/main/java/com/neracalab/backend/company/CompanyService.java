@@ -61,9 +61,9 @@ public class CompanyService {
 
         return new CompanyDetailResponse(company, repository.coverage(companyId), periods,
                 repository.segments(companyId), repository.shareSnapshots(companyId),
-                repository.latestPrice(companyId).orElse(null),
-                repository.latestMarketSnapshot(companyId).orElse(null),
-                repository.valuations(companyId), repository.corporateActions(companyId));
+                repository.latestPrice(companyId, exchange.currency()).orElse(null),
+                repository.latestMarketSnapshot(companyId, exchange.currency()).orElse(null),
+                repository.valuations(companyId, exchange.currency()), repository.corporateActions(companyId));
     }
 
     private static Period period(PeriodRow p, List<SegmentFigures> segments, Map<String, Metric> metrics) {

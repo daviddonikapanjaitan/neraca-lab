@@ -35,14 +35,19 @@ CREATE TABLE IF NOT EXISTS market_instrument (
 
     CONSTRAINT uq_market_instrument_id UNIQUE (instrument_id),
     CONSTRAINT ck_market_instrument_market CHECK (market IN ('FOREX', 'COMMODITY')),
-    CONSTRAINT ck_market_instrument_source CHECK (source IN ('yahoo', 'worldbank')),
+    CONSTRAINT ck_market_instrument_source CHECK (source IN ('yahoo', 'worldbank', 'imf', 'fred')),
     CONSTRAINT ck_market_instrument_frequency CHECK (frequency IN ('DAILY', 'MONTHLY')),
     CONSTRAINT ck_market_instrument_tick CHECK (tick_size > 0),
     CONSTRAINT ck_market_instrument_spike CHECK (max_spike IS NULL OR max_spike > 0),
     CONSTRAINT ck_market_instrument_code CHECK (instrument_code ~ '^[A-Z0-9_]+$')
 );
 
-COMMENT ON TABLE market_instrument IS 'Forex pairs and commodities that can be ingested (Price Ingestion) and charted (Technicals). source_symbol: Yahoo Finance symbol, or the World Bank Pink Sheet column. tick_size: rounding of chart levels and preset prices. max_spike: a daily close that jumps more than this fraction away from the bars on both sides and comes back (a bad print of the source) is not stored, and a high / low further than it from the open and close is cut back (NULL: no cleaning).';
+-- the sources of a database created before 2026-10-17 (yahoo, worldbank): the IMF (cobalt) and FRED (wood pulp)
+ALTER TABLE market_instrument DROP CONSTRAINT IF EXISTS ck_market_instrument_source;
+ALTER TABLE market_instrument ADD CONSTRAINT ck_market_instrument_source
+    CHECK (source IN ('yahoo', 'worldbank', 'imf', 'fred'));
+
+COMMENT ON TABLE market_instrument IS 'Forex pairs and commodities that can be ingested (Price Ingestion) and charted (Technicals). source_symbol: Yahoo Finance symbol (a product PRICE*RATE: the price times the rate of the day), the World Bank Pink Sheet column, the IMF PCPS indicator or the FRED series id. tick_size: rounding of chart levels and preset prices. max_spike: a daily close that jumps more than this fraction away from the bars on both sides and comes back (a bad print of the source) is not stored, and a high / low further than it from the open and close is cut back (NULL: no cleaning).';
 
 CREATE TABLE IF NOT EXISTS instrument_daily (
     instrument_daily_id BIGSERIAL PRIMARY KEY,

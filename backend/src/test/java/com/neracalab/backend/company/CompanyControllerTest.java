@@ -16,7 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.WebApplicationContext;
 
 import com.neracalab.backend.auth.TestLogins;
@@ -53,6 +55,9 @@ class CompanyControllerTest {
 
     @Autowired
     private JsonMapper json;
+
+    @Autowired
+    private JdbcClient jdbc;
 
     // ------------------------------------------------------------------ exchanges
 
@@ -178,6 +183,53 @@ class CompanyControllerTest {
                 detail.periods().stream().filter(p -> p.incomeStatement() != null).count());
         assertThat(detail.coverage().balanceSheets()).isEqualTo(
                 detail.periods().stream().filter(p -> p.balanceSheet() != null).count());
+    }
+
+    /**
+     * A company reporting in USD whose listing trades in IDR (CUAN, DSSA, INDY) has its prices stored converted; the
+     * price as quoted on IDX comes with them: stored price x the rate of the last FX day before the day, to 2
+     * decimals (CUAN 2026-10-16: USD 0.03009362 x 17,944 = Rp 539.9999 -> 540.00). Rolled back.
+     */
+    @Test
+    @Transactional
+    void pricesOfAUsdReporterComeWithTheirIdrQuote() throws Exception {
+        long id = jdbc.sql("""
+                        INSERT INTO company (ticker, exchange, company_name, currency, active)
+                        VALUES ('ZZUS', 'IDX', 'USD Reporter Test', 'USD', true) RETURNING company_id""")
+                .query(Long.class).single();
+        jdbc.sql("""
+                        INSERT INTO fx_rate_daily (base_currency, quote_currency, rate_date, rate, source)
+                        VALUES ('USD', 'IDR', DATE '2098-01-02', 17944, 'test'), ('USD', 'IDR', DATE '2098-01-05', 18000, 'test')""")
+                .update();
+        jdbc.sql("""
+                        INSERT INTO price_daily (company_id, trading_date, open_price, high_price, low_price, close_price,
+                                                 adjusted_close, volume)
+                        VALUES (:id, DATE '2098-01-05', 0.03065195, 0.03093061, 0.02980597, 0.03009362, 0.03009362, 1000)""")
+                .param("id", id).update();
+        jdbc.sql("""
+                        INSERT INTO market_snapshot (company_id, snapshot_date, share_price, shares_outstanding, market_cap)
+                        VALUES (:id, DATE '2098-01-05', 0.03009362, 112399199400, 3382498795.05)""")
+                .param("id", id).update();
+
+        CompanyDetailResponse detail = getJson("/api/v1/companies/IDX/ZZUS", CompanyDetailResponse.class);
+
+        // the rate of 2098-01-02 (the last FX day before the trading day), not the one of the day itself
+        assertThat(detail.latestPrice().closePrice()).isEqualByComparingTo("0.03009362");
+        assertThat(detail.latestPrice().quote()).satisfies(q -> {
+            assertThat(q.currency()).isEqualTo("IDR");
+            assertThat(q.closePrice()).isEqualByComparingTo("540.00");
+            assertThat(q.openPrice()).isEqualByComparingTo("550.02");
+            assertThat(q.fxRate()).isEqualByComparingTo("17944");
+            assertThat(q.fxDate()).isEqualTo(LocalDate.parse("2098-01-02"));
+        });
+        assertThat(detail.latestMarketSnapshot().quoteCurrency()).isEqualTo("IDR");
+        assertThat(detail.latestMarketSnapshot().quotePrice()).isEqualByComparingTo("540.00");
+
+        // a company reporting in the listing currency has no separate quote
+        CompanyDetailResponse hrta = getJson("/api/v1/companies/IDX/HRTA", CompanyDetailResponse.class);
+        assertThat(hrta.latestPrice().quote()).isNull();
+        assertThat(hrta.latestMarketSnapshot().quotePrice()).isNull();
+        assertThat(hrta.valuations()).allSatisfy(v -> assertThat(v.quotePrice()).isNull());
     }
 
     @Test

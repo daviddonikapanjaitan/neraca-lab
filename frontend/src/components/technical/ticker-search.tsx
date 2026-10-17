@@ -23,7 +23,7 @@ export function TickerSearch({
   itemLabel?: string
 }) {
   const market = itemLabel !== "Ticker"
-  const prompt = market ? `Search ${itemLabel.toLowerCase()}` : "Search ticker, company or IHSG"
+  const prompt = market ? `Search ${itemLabel.toLowerCase()}` : "Search ticker, company, IHSG or LQ45"
   const [text, setText] = useState("")
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)

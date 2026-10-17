@@ -110,6 +110,8 @@ public class PriceIngestionTracker implements PriceIngestionQueue.Listener {
             case "yahoo" -> "Yahoo Finance";
             case "eodhd" -> "EODHD";
             case "worldbank" -> "the World Bank Pink Sheet";
+            case "imf" -> "the IMF Primary Commodity Prices";
+            case "fred" -> "FRED";
             default -> name;
         };
     }

@@ -1,5 +1,7 @@
 package com.neracalab.backend.company;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -19,6 +21,7 @@ import com.neracalab.backend.company.CompanyDetailResponse.IncomeStatement;
 import com.neracalab.backend.company.CompanyDetailResponse.MarketSnapshot;
 import com.neracalab.backend.company.CompanyDetailResponse.Metric;
 import com.neracalab.backend.company.CompanyDetailResponse.Price;
+import com.neracalab.backend.company.CompanyDetailResponse.Quote;
 import com.neracalab.backend.company.CompanyDetailResponse.Segment;
 import com.neracalab.backend.company.CompanyDetailResponse.SegmentFigures;
 import com.neracalab.backend.company.CompanyDetailResponse.ShareSnapshot;
@@ -264,49 +267,102 @@ public class CompanyQueryRepository {
                 .list();
     }
 
-    public Optional<Price> latestPrice(long companyId) {
+    /**
+     * The rate a day's prices were converted with when the company reports in another currency than its listing
+     * trades in ({@code :listing}): the last FX day before {@code day}, at most 7 days before it (as the price
+     * ingestion and the technical analysis). No row for a company that reports in the listing currency.
+     */
+    private static String fxRate(String day) {
+        return """
+                LEFT JOIN company c ON c.company_id = :c
+                LEFT JOIN LATERAL (
+                    SELECT fx.rate, fx.rate_date FROM fx_rate_daily fx
+                    WHERE fx.base_currency = c.currency AND fx.quote_currency = :listing
+                      AND fx.rate_date < %1$s AND fx.rate_date >= %1$s - 7
+                    ORDER BY fx.rate_date DESC LIMIT 1) fx ON c.currency <> :listing""".formatted(day);
+    }
+
+    /** A converted price as quoted on the exchange, rounded to its 2 decimals (the conversion keeps 8 in USD). */
+    private static BigDecimal quoted(BigDecimal price, BigDecimal rate) {
+        return price == null || rate == null ? null : price.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** @param listing the currency the company's listing trades in (its exchange's) */
+    public Optional<Price> latestPrice(long companyId, String listing) {
         return jdbc.sql("""
-                        SELECT trading_date, open_price, high_price, low_price, close_price, adjusted_close, volume
-                        FROM price_daily WHERE company_id = :c ORDER BY trading_date DESC LIMIT 1""")
-                .param("c", companyId)
-                .query((rs, i) -> new Price(date(rs, "trading_date"), rs.getBigDecimal("open_price"),
-                        rs.getBigDecimal("high_price"), rs.getBigDecimal("low_price"),
-                        rs.getBigDecimal("close_price"), rs.getBigDecimal("adjusted_close"),
-                        rs.getObject("volume", Long.class)))
+                        SELECT p.trading_date, p.open_price, p.high_price, p.low_price, p.close_price, p.adjusted_close,
+                               p.volume, fx.rate, fx.rate_date
+                        FROM price_daily p
+                        """ + fxRate("p.trading_date") + """
+
+                        WHERE p.company_id = :c ORDER BY p.trading_date DESC LIMIT 1""")
+                .param("c", companyId).param("listing", listing)
+                .query((rs, i) -> {
+                    BigDecimal rate = rs.getBigDecimal("rate");
+                    return new Price(date(rs, "trading_date"), rs.getBigDecimal("open_price"),
+                            rs.getBigDecimal("high_price"), rs.getBigDecimal("low_price"),
+                            rs.getBigDecimal("close_price"), rs.getBigDecimal("adjusted_close"),
+                            rs.getObject("volume", Long.class),
+                            rate == null ? null : new Quote(listing, quoted(rs.getBigDecimal("open_price"), rate),
+                                    quoted(rs.getBigDecimal("high_price"), rate), quoted(rs.getBigDecimal("low_price"), rate),
+                                    quoted(rs.getBigDecimal("close_price"), rate), rate, date(rs, "rate_date")));
+                })
                 .optional();
     }
 
-    public Optional<MarketSnapshot> latestMarketSnapshot(long companyId) {
+    public Optional<MarketSnapshot> latestMarketSnapshot(long companyId, String listing) {
         return jdbc.sql("""
-                        SELECT snapshot_date, share_price, shares_outstanding, market_cap, enterprise_value
-                        FROM market_snapshot WHERE company_id = :c ORDER BY snapshot_date DESC LIMIT 1""")
-                .param("c", companyId)
-                .query((rs, i) -> new MarketSnapshot(date(rs, "snapshot_date"), rs.getBigDecimal("share_price"),
-                        rs.getBigDecimal("shares_outstanding"), rs.getBigDecimal("market_cap"),
-                        rs.getBigDecimal("enterprise_value")))
+                        SELECT m.snapshot_date, m.share_price, m.shares_outstanding, m.market_cap, m.enterprise_value,
+                               fx.rate
+                        FROM market_snapshot m
+                        """ + fxRate("m.snapshot_date") + """
+
+                        WHERE m.company_id = :c ORDER BY m.snapshot_date DESC LIMIT 1""")
+                .param("c", companyId).param("listing", listing)
+                .query((rs, i) -> {
+                    BigDecimal rate = rs.getBigDecimal("rate");
+                    return new MarketSnapshot(date(rs, "snapshot_date"), rs.getBigDecimal("share_price"),
+                            rs.getBigDecimal("shares_outstanding"), rs.getBigDecimal("market_cap"),
+                            rs.getBigDecimal("enterprise_value"), rate == null ? null : listing,
+                            quoted(rs.getBigDecimal("share_price"), rate));
+                })
                 .optional();
     }
 
-    public List<Valuation> valuations(long companyId) {
+    /**
+     * Valuations, most recent first. The quoted price is the one of the trading day the valuation's price is from
+     * (the last close on or before the valuation date).
+     */
+    public List<Valuation> valuations(long companyId, String listing) {
         return jdbc.sql("""
                         SELECT vs.valuation_date, vs.period_id, rp.fiscal_year || ' ' || rp.period_type AS period,
                                vs.share_price, vs.market_cap, vs.enterprise_value, vs.eps_ttm, vs.revenue_ttm,
                                vs.ebitda_ttm, vs.operating_income_ttm, vs.fcf_ttm, vs.book_value, vs.pe_ratio,
                                vs.ps_ratio, vs.pb_ratio, vs.ev_ebitda, vs.ev_sales, vs.ev_op, vs.fcf_yield,
-                               vs.earnings_yield
+                               vs.earnings_yield, fx.rate
                         FROM valuation_snapshot vs
                         LEFT JOIN reporting_period rp ON rp.period_id = vs.period_id
+                        LEFT JOIN LATERAL (
+                            SELECT max(pd.trading_date) AS trading_date FROM price_daily pd
+                            WHERE pd.company_id = vs.company_id AND pd.trading_date <= vs.valuation_date
+                              AND pd.close_price IS NOT NULL) px ON TRUE
+                        """ + fxRate("px.trading_date") + """
+
                         WHERE vs.company_id = :c
                         ORDER BY vs.valuation_date DESC""")
-                .param("c", companyId)
-                .query((rs, i) -> new Valuation(date(rs, "valuation_date"), rs.getObject("period_id", Long.class),
-                        rs.getString("period"), rs.getBigDecimal("share_price"), rs.getBigDecimal("market_cap"),
-                        rs.getBigDecimal("enterprise_value"), rs.getBigDecimal("eps_ttm"),
-                        rs.getBigDecimal("revenue_ttm"), rs.getBigDecimal("ebitda_ttm"),
-                        rs.getBigDecimal("operating_income_ttm"), rs.getBigDecimal("fcf_ttm"),
-                        rs.getBigDecimal("book_value"), rs.getBigDecimal("pe_ratio"), rs.getBigDecimal("ps_ratio"),
-                        rs.getBigDecimal("pb_ratio"), rs.getBigDecimal("ev_ebitda"), rs.getBigDecimal("ev_sales"),
-                        rs.getBigDecimal("ev_op"), rs.getBigDecimal("fcf_yield"), rs.getBigDecimal("earnings_yield")))
+                .param("c", companyId).param("listing", listing)
+                .query((rs, i) -> {
+                    BigDecimal rate = rs.getBigDecimal("rate");
+                    return new Valuation(date(rs, "valuation_date"), rs.getObject("period_id", Long.class),
+                            rs.getString("period"), rs.getBigDecimal("share_price"), rs.getBigDecimal("market_cap"),
+                            rs.getBigDecimal("enterprise_value"), rs.getBigDecimal("eps_ttm"),
+                            rs.getBigDecimal("revenue_ttm"), rs.getBigDecimal("ebitda_ttm"),
+                            rs.getBigDecimal("operating_income_ttm"), rs.getBigDecimal("fcf_ttm"),
+                            rs.getBigDecimal("book_value"), rs.getBigDecimal("pe_ratio"), rs.getBigDecimal("ps_ratio"),
+                            rs.getBigDecimal("pb_ratio"), rs.getBigDecimal("ev_ebitda"), rs.getBigDecimal("ev_sales"),
+                            rs.getBigDecimal("ev_op"), rs.getBigDecimal("fcf_yield"), rs.getBigDecimal("earnings_yield"),
+                            rate == null ? null : listing, quoted(rs.getBigDecimal("share_price"), rate));
+                })
                 .list();
     }
 

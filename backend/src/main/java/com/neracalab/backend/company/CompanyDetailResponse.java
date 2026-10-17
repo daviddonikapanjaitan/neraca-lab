@@ -109,21 +109,43 @@ public record CompanyDetailResponse(
                                 BigDecimal sharesOutstanding, BigDecimal publicFloat, BigDecimal treasuryShares) {
     }
 
+    /**
+     * The latest daily prices, in {@code company.currency} like every amount. A company that reports in another
+     * currency than its listing trades in (CUAN, DSSA, INDY: USD reporters quoted in IDR) has its prices stored
+     * converted; {@code quote} gives them as quoted on the exchange.
+     */
     public record Price(LocalDate tradingDate, BigDecimal openPrice, BigDecimal highPrice, BigDecimal lowPrice,
-                        BigDecimal closePrice, BigDecimal adjustedClose, Long volume) {
+                        BigDecimal closePrice, BigDecimal adjustedClose, Long volume, Quote quote) {
     }
 
+    /**
+     * Prices as quoted on the exchange, for a company whose prices are stored converted into its reporting currency:
+     * the stored price x the rate the price ingestion converted it with (the last FX day before the trading day),
+     * rounded to the exchange's 2 decimals (CUAN 2026-10-16: USD 0.03009362 x 17,944 = Rp 540.00).
+     *
+     * @param currency the exchange's currency (IDR)
+     * @param fxRate   exchange currency per reporting-currency unit (IDR per USD)
+     */
+    public record Quote(String currency, BigDecimal openPrice, BigDecimal highPrice, BigDecimal lowPrice,
+                        BigDecimal closePrice, BigDecimal fxRate, LocalDate fxDate) {
+    }
+
+    /** @param quotePrice the share price as quoted on the exchange ({@link Quote}); {@code null} when it is sharePrice */
     public record MarketSnapshot(LocalDate snapshotDate, BigDecimal sharePrice, BigDecimal sharesOutstanding,
-                                 BigDecimal marketCap, BigDecimal enterpriseValue) {
+                                 BigDecimal marketCap, BigDecimal enterpriseValue, String quoteCurrency,
+                                 BigDecimal quotePrice) {
     }
 
-    /** @param period reporting period whose trailing-twelve-month figures and balance sheet are used, e.g. "2026 H1" */
+    /**
+     * @param period     reporting period whose trailing-twelve-month figures and balance sheet are used, e.g. "2026 H1"
+     * @param quotePrice the share price as quoted on the exchange ({@link Quote}); {@code null} when it is sharePrice
+     */
     public record Valuation(LocalDate valuationDate, Long periodId, String period, BigDecimal sharePrice,
                             BigDecimal marketCap, BigDecimal enterpriseValue, BigDecimal epsTtm,
                             BigDecimal revenueTtm, BigDecimal ebitdaTtm, BigDecimal operatingIncomeTtm,
                             BigDecimal fcfTtm, BigDecimal bookValue, BigDecimal peRatio, BigDecimal psRatio,
                             BigDecimal pbRatio, BigDecimal evEbitda, BigDecimal evSales, BigDecimal evOp,
-                            BigDecimal fcfYield, BigDecimal earningsYield) {
+                            BigDecimal fcfYield, BigDecimal earningsYield, String quoteCurrency, BigDecimal quotePrice) {
     }
 
     public record CorporateAction(LocalDate actionDate, String actionType, BigDecimal ratioFrom, BigDecimal ratioTo,

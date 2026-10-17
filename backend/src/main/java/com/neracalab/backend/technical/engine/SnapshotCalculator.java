@@ -26,10 +26,10 @@ public final class SnapshotCalculator {
 
     /**
      * Version of the snapshot JSON; raise it on any incompatible change and document it. 2: the macro section gained
-     * {@code series}, {@code signals} and {@code regimes} (macro.md), and macro values are point in time (only those
-     * released by the as-of date).
+     * {@code series}, {@code signals} and {@code regimes}. 3: no macro section - the snapshot is technical only (the
+     * macro view is the Macro page).
      */
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
 
     /**
      * Revision of the computation (part of the input hash): change it when a value is computed differently without a
@@ -120,7 +120,6 @@ public final class SnapshotCalculator {
         doc.put("structure", structure(ind, bars));
         doc.put("relativeStrength", relativeStrength(bars, market, notes));
         doc.put("marketRegime", marketRegime(market, notes));
-        doc.put("macro", macro(market, last.date(), notes));
         doc.put("events", events(bars, events, notes));
         doc.put("risk", risk(ind, bars, market, notes));
         doc.put("notes", notes);
@@ -480,59 +479,6 @@ public final class SnapshotCalculator {
         return r;
     }
 
-    /**
-     * The macro section: the BI rate, SBN 10Y and USD/IDR with their change (as in schema 1), then every stored series,
-     * the signals and the liquidity / risk regimes ({@link MacroSignals}). Only observations released by {@code asOf}.
-     */
-    private Map<String, Object> macro(MarketContext market, LocalDate asOf, List<String> notes) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("biRate", macroChange(market.macro().get("BI_RATE"), asOf, 6, false, "%", "BI_RATE", notes));
-        m.put("sbn10y", macroChange(market.macro().get("SBN_10Y"), asOf, 3, false, "%", "SBN_10Y", notes));
-        m.put("usdIdr", macroChange(market.macro().get("USD_IDR"), asOf, 3, true, "IDR per USD", "USD_IDR", notes));
-        m.putAll(MacroSignals.compute(market.macro(), asOf, notes));
-        m.put("usedBy", List.of("druckenmiller", "ptj"));
-        return m;
-    }
-
-    /** The latest observation on or before {@code asOf} and its change over {@code months}: points, or % when {@code pct}. */
-    private static Map<String, Object> macroChange(List<MarketContext.Observation> obs, LocalDate asOf, int months, boolean pct,
-                                                   String unit, String code, List<String> notes) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("unit", unit);
-        m.put("changeMonths", months);
-        MarketContext.Observation now = latest(obs, asOf);
-        MarketContext.Observation then = latest(obs, asOf.minusMonths(months));
-        if (now == null) {
-            notes.add("No " + code + " observations stored: macro." + code + " is null");
-            m.put("value", null);
-            m.put("asOf", null);
-            m.put(pct ? "changePct" : "changePoints", null);
-            return m;
-        }
-        m.put("value", num(now.value()));
-        m.put("asOf", now.date().toString());
-        Double change = then == null ? null : pct ? num(Stats.pctChange(now.value(), then.value())) : num(now.value() - then.value());
-        m.put(pct ? "changePct" : "changePoints", change);
-        return m;
-    }
-
-    /** The latest observation dated on or before {@code onOrBefore} that was released by then (point in time). */
-    private static MarketContext.Observation latest(List<MarketContext.Observation> obs, LocalDate onOrBefore) {
-        if (obs == null) {
-            return null;
-        }
-        MarketContext.Observation found = null;
-        for (MarketContext.Observation o : obs) {
-            if (o.date().isAfter(onOrBefore)) {
-                break;
-            }
-            if (!o.released().isAfter(onOrBefore)) {
-                found = o;
-            }
-        }
-        return found;
-    }
-
     private Map<String, Object> events(List<Candle> bars, List<EventInfo> events, List<String> notes) {
         Map<String, Object> e = new LinkedHashMap<>();
         LocalDate asOf = bars.getLast().date();
@@ -702,7 +648,6 @@ public final class SnapshotCalculator {
         input.put("asOf", market.asOfDate());
         input.put("index", market.indexBars().isEmpty() ? null : market.indexBars().getLast());
         input.put("universe", market.universe().hashCode());
-        input.put("macro", market.macro().hashCode());
         input.put("settings", settings.hashCode());
         try {
             var digest = java.security.MessageDigest.getInstance("SHA-256");

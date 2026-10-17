@@ -2,15 +2,20 @@ package com.neracalab.backend.market;
 
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.neracalab.backend.macro.source.FredSource;
 import com.neracalab.backend.market.InstrumentRepository.Instrument;
 import com.neracalab.backend.price.InstrumentIngestion;
 import com.neracalab.backend.price.PriceIngestionService.Result;
@@ -26,7 +31,12 @@ import com.neracalab.backend.technical.engine.Candle;
  *       trades around the clock, so today's bar is unfinished. No request when that day is stored already. The first run,
  *       or {@code full}, fetches the whole history from the instrument's {@code history_from}. Bad prints are cleaned
  *       ({@link BarCleaner}, {@code max_spike}): a dropped day that was stored is deleted.</li>
- *   <li>Monthly (World Bank Pink Sheet, coal): the workbook holds the whole history, so every run reads it all; months
+ *   <li>A product of two Yahoo Finance symbols ({@code "CPO=F*MYR=X"}, palm oil in ringgit): the bars of the first
+ *       times the close of the second on the same day (or the last one up to {@link #RATE_GAP_DAYS} before it); a day
+ *       without a rate is not stored.</li>
+ *   <li>Monthly (World Bank Pink Sheet: coal, nickel, tin, rubber, LNG, urea, DAP, potash; IMF PCPS: cobalt; FRED:
+ *       the wood pulp price index): the World Bank and the IMF send the whole history, so every run reads it all (FRED
+ *       from the month asked for); months
  *       up to the month before the current one are stored (open = high = low = close = the monthly average, dated on the
  *       1st). No request when that month is stored already.</li>
  *   <li>Upserts: a bar the source corrected is updated.</li>
@@ -39,23 +49,31 @@ public class InstrumentIngestionService implements InstrumentIngestion {
 
     /** Days before the latest stored bar an incremental fetch starts at (the cleaning needs neighbours). */
     static final int OVERLAP_DAYS = 14;
+    /** Separates the two Yahoo Finance symbols of a product ({@code "CPO=F*MYR=X"}). */
+    static final String PRODUCT = "*";
+    /** Days a product's rate may be older than its price (a holiday of the currency market). */
+    static final int RATE_GAP_DAYS = 5;
 
     private final InstrumentRepository repository;
     private final YahooChartClient yahoo;
     private final WorldBankPinkSheetClient worldBank;
+    private final ImfPcpsClient imf;
+    private final FredSource fred;
     private final Clock clock;
 
     @Autowired
     public InstrumentIngestionService(InstrumentRepository repository, YahooChartClient yahoo,
-                                      WorldBankPinkSheetClient worldBank) {
-        this(repository, yahoo, worldBank, Clock.systemUTC());
+                                      WorldBankPinkSheetClient worldBank, ImfPcpsClient imf, FredSource fred) {
+        this(repository, yahoo, worldBank, imf, fred, Clock.systemUTC());
     }
 
     InstrumentIngestionService(InstrumentRepository repository, YahooChartClient yahoo, WorldBankPinkSheetClient worldBank,
-                               Clock clock) {
+                               ImfPcpsClient imf, FredSource fred, Clock clock) {
         this.repository = repository;
         this.yahoo = yahoo;
         this.worldBank = worldBank;
+        this.imf = imf;
+        this.fred = fred;
         this.clock = clock;
     }
 
@@ -105,10 +123,15 @@ public class InstrumentIngestionService implements InstrumentIngestion {
         LocalDate from = fullHistory ? instrument.historyFrom()
                 : instrument.monthly() ? latest.get() : latest.get().minusDays(OVERLAP_DAYS);
         List<Candle> received = switch (instrument.source()) {
-            case "yahoo" -> yahoo.dailyBars(instrument.symbol(), market.zone(), from, today);
-            case WorldBankPinkSheetClient.SOURCE -> worldBank.monthly(instrument.symbol()).stream()
-                    .map(v -> Candle.daily(v.month(), v.value(), v.value(), v.value(), v.value(), v.value(), 0))
-                    .toList();
+            case "yahoo" -> instrument.symbol().contains(PRODUCT) ? product(instrument.symbol(), market.zone(), from, today)
+                    : yahoo.dailyBars(instrument.symbol(), market.zone(), from, today);
+            case WorldBankPinkSheetClient.SOURCE -> monthlyBars(worldBank.monthly(instrument.symbol()));
+            case ImfPcpsClient.SOURCE -> monthlyBars(imf.monthly(instrument.symbol()));
+            // a monthly FRED series is dated on the 1st of its month
+            case "fred" -> fred.observations(instrument.symbol(), from).stream()
+                    .map(o -> new WorldBankPinkSheetClient.MonthlyValue(o.date().withDayOfMonth(1), o.value().doubleValue()))
+                    .collect(java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.toList(),
+                            InstrumentIngestionService::monthlyBars));
             default -> throw new IllegalStateException("Unknown source '" + instrument.source() + "' of " + instrument.code());
         };
         // the whole workbook comes with every request: keep what is newer than the stored months (all of it in full)
@@ -141,6 +164,46 @@ public class InstrumentIngestionService implements InstrumentIngestion {
                 bars.size() - changed, after, null, null);
         log.info("{} {}: {}", market, instrument.code(), result);
         return result;
+    }
+
+    /**
+     * The bars of {@code "PRICE*RATE"}: open, high, low and close of PRICE times the close of RATE on that day, or on the
+     * last day before it with a rate (up to {@link #RATE_GAP_DAYS}); the volume is PRICE's. CPO=F*MYR=X: the CME USD
+     * Malaysian crude palm oil future (cash-settled on Bursa Malaysia's FCPO) in ringgit per tonne.
+     */
+    List<Candle> product(String symbol, ZoneId zone, LocalDate from, LocalDate to) {
+        String[] parts = symbol.split(java.util.regex.Pattern.quote(PRODUCT), 2);
+        if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            throw new IllegalStateException("A product symbol is PRICE" + PRODUCT + "RATE, not '" + symbol + "'");
+        }
+        List<Candle> prices = yahoo.dailyBars(parts[0].trim(), zone, from, to);
+        if (prices.isEmpty()) {
+            return prices;
+        }
+        TreeMap<LocalDate, Double> rates = new TreeMap<>();
+        yahoo.dailyBars(parts[1].trim(), zone, from.minusDays(RATE_GAP_DAYS), to).forEach(b -> rates.put(b.date(), b.close()));
+        List<Candle> out = new ArrayList<>();
+        for (Candle p : prices) {
+            Map.Entry<LocalDate, Double> rate = rates.floorEntry(p.date());
+            if (rate == null || rate.getKey().isBefore(p.date().minusDays(RATE_GAP_DAYS))) {
+                continue;
+            }
+            double k = rate.getValue();
+            out.add(Candle.daily(p.date(), round4(p.open() * k), round4(p.high() * k), round4(p.low() * k),
+                    round4(p.close() * k), round4(p.close() * k), p.volume()));
+        }
+        return out;
+    }
+
+    /** One bar per month, dated on the 1st: open = high = low = close = the monthly value. */
+    private static List<Candle> monthlyBars(List<WorldBankPinkSheetClient.MonthlyValue> months) {
+        return months.stream()
+                .map(v -> Candle.daily(v.month(), v.value(), v.value(), v.value(), v.value(), v.value(), 0))
+                .toList();
+    }
+
+    private static double round4(double v) {
+        return Math.round(v * 10_000) / 10_000.0;
     }
 
     private Instrument load(InstrumentRef ref) {

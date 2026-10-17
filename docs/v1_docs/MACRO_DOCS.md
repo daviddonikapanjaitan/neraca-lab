@@ -1,15 +1,18 @@
 # Macro data (Ingestion › Macro)
 
-The macro data of the **Druckenmiller** and **Paul Tudor Jones** presets of Companies › Technicals. The requirements
-are in [`macro.md`](../../macro.md); this document describes what is built.
+The macro data of the **Macro page** (section 6a), read the way **Druckenmiller**, **Paul Tudor Jones**, **George
+Soros** and **Ray Dalio** read markets. The requirements are in [`macro.md`](../../macro.md); this document describes what is built. Companies ›
+Technicals reads **no** macro data since 2026-10-16: its presets and panels are technical only.
 
 - **Druckenmiller** reads markets through liquidity: the direction of the Fed and Bank Indonesia, US net liquidity,
   credit, the dollar, the rupiah and foreign money.
 - **Tudor Jones** reads the regime: volatility, credit, the US yield curve, the dollar, inflation and Indonesian yields.
+- **Soros** reads reflexivity: the loop of foreign money, the rupiah and Bank Indonesia that feeds a boom or a bust.
+- **Dalio** reads the economic machine: the growth / inflation quadrant, real rates and credit.
 
 Both read **direction and change** (cutting or hiking, steepening or flattening, liquidity growing or shrinking), not
-levels. The series are stored as they are published. Signals and regimes are computed from them when a snapshot or
-summary is computed (section 5).
+levels. The series are stored as they are published. Signals and regimes are computed from them when the Macro page
+is requested (section 5).
 
 ## 1. Series
 
@@ -48,7 +51,9 @@ USD/IDR is not a macro series of its own; it is read for the macro view as `USD_
 - from the **Forex** price ingestion (`instrument_daily` USDIDR, Yahoo Finance) when stored;
 - otherwise from the ECB reference rates in `fx_rate_daily`.
 
-Either way it is public the day after its date, because both close after the IDX session.
+Either way a rate is public on its own date: the Forex ingestion stores a day only once it is complete, and the ECB
+fixes its rate the same afternoon. So the Macro page shows the latest Forex close as soon as the price ingestion has
+stored it (Ingestion › Price Ingestion, market Forex, or its update of all currencies); its chart names the source.
 
 Gold, crude oil, coal and palm oil are prices (Price Ingestion with the market Commodities, `PRICE_INGESTION_DOCS.md`),
 not macro series.
@@ -84,8 +89,9 @@ These can be added as manual series with a CSV.
 **Point in time**
 - Every observation gets `period_end` (the last day of its month for a monthly series) and
   **`release_date` = `period_end` + `release_lag_days`**.
-- The snapshot and the presets only use observations whose release date is on or before their as-of date. For
-  example, September CPI (public on 15 October) is not known to a snapshot of 14 October.
+- The signals only use observations whose release date is on or before their as-of date. For example, September CPI
+  (public on 15 October) is not known as of 14 October. The Macro page reads as of today, so everything public by now
+  counts.
 - The lags are publication estimates. FRED does not carry the vintage of each value.
 
 **Revisions**
@@ -147,13 +153,12 @@ The jobs are listed by `GET /api/v1/ingestions?type=MACRO`; the result is `Macro
 The evening run (`neracalab.macro.schedule.enabled` / `MACRO_SCHEDULE_ENABLED`, default `false`, cron `0 0 20 * * *` WIB)
 does "Update all macro data".
 
-The Technicals market panel (`GET /api/v1/technical/market`, permission COMPANIES) returns the last year of every series
-and the signals and regimes as of the latest market day (`macroSignals`).
+The Macro page (`GET /api/v1/macro/outlook`, permission COMPANIES, section 6a) returns the series, signals and regimes.
 
 ## 5. Signals and regimes (`technical.engine.MacroSignals`)
 
-Computed for each snapshot (the `macro` section, schema 2; `docs/indicator-snapshot.md`) from the observations released
-by its as-of date.
+Computed for the Macro page from the observations released by its as-of date (today). The Technicals snapshot had a
+`macro` section with them until schema 2; schema 3 (2026-10-16) has none.
 
 A series older than its frequency allows is **stale**. Its signals are null, with a note:
 - daily: 10 days;
@@ -185,23 +190,6 @@ signals. Each vote is listed with its reason.
 - **Risk (Tudor Jones)**: the votes are the VIX, credit, the US curve (inverted: -1), the DXY, US inflation and the
   SBN 10Y yield. `RISK_ON` at +2, `RISK_OFF` at -2, else `NEUTRAL`.
 
-How the preset summaries use them (`PresetSummaries`, rules version 2026-10-16.1):
-
-**Druckenmiller**
-- A stock or IHSG: the liquidity regime votes ±1, listing the signals behind it. It replaces the separate USD/IDR and
-  BI-rate votes, which stay as the fallback while there is no regime.
-- A **currency pair or commodity** has no IHSG regime and no leadership among the stocks; it is read through its own
-  drivers:
-
-  | Instrument | Drivers |
-  |---|---|
-  | USD/IDR | The regime with the opposite sign (tighter liquidity lifts USD/IDR); the dollar; the US 10Y; the BI - Fed rate gap; foreign flows. |
-  | USD/JPY | The US 10Y; the dollar; the risk regime (the yen is a haven). |
-  | Gold | The regime; the US real yield; the dollar; speculative crowding. |
-  | Brent, coal, palm oil | The regime; the dollar; the risk regime; China's PMI; crude crowding for Brent. |
-
-**Tudor Jones**: risk-off votes -1, risk-on +0.5. The 200-day rule stays first.
-
 ## 6. Ingestion › Macro page
 
 - **"Update all macro data to today"**: counts per state and one button.
@@ -216,11 +204,78 @@ How the preset summaries use them (`PresetSummaries`, rules version 2026-10-16.1
   - **Chart**: a sheet with the whole history and the latest observations with their release dates.
 - The shared jobs table opens on the Macro tab.
 
-Companies › Technicals shows the macro panel, with:
-- the liquidity and risk regimes and every vote;
-- the BI rate, SBN 10Y, USD/IDR, Indonesian CPI, Fed funds, US 10Y, DXY, US high-yield spread and VIX over the last year.
+The macro panel, the regimes and the macro preset summaries are on the Macro page (section 6a); Companies › Technicals no
+longer shows them (2026-10-16).
 
-The snapshot card lists both regimes.
+## 6a. The Macro page (sidebar › Macro, permission COMPANIES)
+
+A country's stock index read through its macro data, between Companies and Screening in the sidebar
+(`/macro?country=ID&index=IHSG&range=1Y`; the choice is kept in the URL). Everything is computed in Java by fixed
+rules (`macro.outlook.MacroOutlook`, rules version `2026-10-16.1`), no AI model; the page only draws it.
+
+**Choices**
+- **As of today** (Jakarta): every observation stored and public by now is read - the latest Forex close of USD/IDR as
+  soon as it is stored, not only data up to the index's last trading day. Each chart names its source (USD/IDR: "Forex
+  price ingestion (Yahoo Finance IDR=X)", else the ECB rates).
+- **Country**: Indonesia. The United States and China are listed as "coming later" (disabled); the API answers 400.
+- **Index** of the country: IHSG (`^JKSE`) and LQ45 (`^JKLQ45`, from 1997). LQ45 is stored in `index_daily` with IHSG,
+  in the same index job of the price queue (`neracalab.technical.other-indexes`); the index job counts as up to date
+  only when both reach the last completed trading day, so a missing LQ45 queues it.
+- **Range** of the charts: 6M, 1Y (default), 3Y, 5Y, 10Y, MAX. The rules always read the whole history.
+
+**Sections, top to bottom**
+1. **The index** as a plain line (no indicators): close, 1M / 3M / YTD / 1Y change, 52-week range, the investability
+   score and the action in the header. Its 200-day average and the average's slope (against a month before) are used
+   by the rules, not drawn.
+2. **Macro panel (liquidity and risk regimes, rates, dollar)**: the two regimes of section 5 with every vote and their
+   state three months before, then one chart per series - Indonesia (BI rate, CPI, SBN 10Y, USD/IDR, reserves in USD bn,
+   M2 YoY, and the CSV series when uploaded) and global (Fed funds, US 10Y, the US curve 10Y - 2Y, US net liquidity, the
+   high-yield spread, DXY, VIX, US CPI YoY, China PMI). Under each chart a **summary** of what it says for the country's
+   equities and a tone (Supportive / Headwind / Neutral). The summaries read the same signals as the regimes, so they
+   agree with the votes; a stale series says so instead of guessing. Derived charts: the curve (10Y - 2Y by date), net
+   liquidity (Fed assets - TGA - reverse repo, weekly), CPI and M2 YoY (month against the same month a year before).
+3. **Preset summaries** - the macro side, not the chart:
+
+   | Preset | Stance |
+   |---|---|
+   | **Paul Tudor Jones** (defence first) | Below the 200-day average: AVOID ("nothing below the 200-day average"; WAIT when the risk regime is risk-on). Above it: BUY when risk-on, ACCUMULATE when neutral with a score of 0 or more, else WAIT; risk-off: WAIT (tighten stops). |
+   | **Druckenmiller** (liquidity first, 12 - 24 months ahead) | Liquidity EASING: BUY above the 200-day average, ACCUMULATE below it (liquidity leads prices). NEUTRAL: ACCUMULATE when the liquidity score rose by 2 or more in 3 months (turning), else WAIT. TIGHTENING: AVOID, WAIT when turning. |
+   | **George Soros** (reflexivity) | The loop: foreign net buying on IDX (20 sessions), foreign SBN holdings (1 month), the rupiah, BI's direction, BI reserves (+1 at +1 % in 3 months, -1 at -2 %), the DXY and the country premium (SBN 10Y over the US 10Y, +/- 0.25 points in 3 months) each vote +1 / -1 / 0; VIRTUOUS at +2, VICIOUS at -2, unknown with fewer than 3 votes; compared with the loop 3 months before (turning: 2 points or more). VIRTUOUS: BUY above the 200-day average, ACCUMULATE below it, WAIT when it weakened by 2 or more (the boom losing its fuel). NEUTRAL: ACCUMULATE when it improved by 2 or more, AVOID when it weakened by 2 or more with the index stretched 15 % or more above its average, else WAIT. VICIOUS: AVOID (a bust, or a trend whose premise is failing), WAIT when it improved by 2 or more. |
+   | **Ray Dalio** (the economic machine) | The quadrant: growth from the proxies stored (China PMI, the US curve, Indonesian M2; no GDP series) - EXPANDING at a mean of +1/3, SLOWING at -1/3; inflation from Indonesian CPI against BI's band and the 3-month trend of Indonesian and US CPI - RISING at +1/2, FALLING at -1/2. Goldilocks (growth up, inflation not rising), reflation (both up), stagflation (growth down, inflation up), disinflationary slowdown (both down or inflation stable), else no clear quadrant. Votes: growth, inflation (falling +1), the Indonesian real rate, the US 10Y real yield (+/- 0.25 points in 3 months), credit; unknown with fewer than 3. +2 or more: BUY above the 200-day average, ACCUMULATE below it (a disinflationary slowdown: ACCUMULATE at most); -2 or less: AVOID; else WAIT (balanced, All Weather). Stagflation is never bought: AVOID at -2 or less, else WAIT. |
+
+   Each has its thesis, the evidence (every vote, the real rate, reserves, the trend) and **buy when / sell when**.
+4. **Conclusion: is the country investable?** A score from 0 to 100 = 50 + 50 x the weighted mean of six readings
+   (each -1 .. +1; a part without data is left out and the weights re-normalised):
+
+   | Part | Weight | Reading |
+   |---|---|---|
+   | Liquidity regime (Druckenmiller) | 25 | its score / its number of signals |
+   | Risk regime (Tudor Jones) | 20 | its score / its number of signals |
+   | Indonesian monetary policy | 15 | mean of BI cutting +1 / holding 0 / hiking -1 and the real rate accommodative +1 / neutral 0 / restrictive -0.5 |
+   | Inflation vs BI's target (2.5 % +/- 1) | 10 | inside the band and not rising +1, above it or rising -1, below it 0 |
+   | Rupiah and external buffers | 15 | mean of the rupiah (strengthening +1 / weakening -1), reserves over 3 months (>= +1 % +1, <= -2 % -1) and the SBN 10Y (falling +1 / rising -1) |
+   | Index trend | 15 | mean of above / below the 200-day average (+1 / -1) and the average rising / falling (+1 / -1) |
+
+   **Verdict**: 60 and more INVESTABLE, 40 - 59 SELECTIVE, below 40 NOT INVESTABLE. **Action**:
+
+   | Score | Index above its 200-day average | Below it |
+   |---|---|---|
+   | 60 + | BUY | ACCUMULATE (in steps) |
+   | 40 - 59 | ACCUMULATE on dips (WAIT when liquidity is tightening) | WAIT |
+   | < 40 | WAIT (no new money, tighten stops) | SELL / reduce |
+
+   The page lists the conditions with whether each is met now - **buy** when the score is 60+ and the index closes above
+   its 200-day average; **accumulate** in the two cases above; **sell / reduce** when the score is below 40 and the index
+   closes below its average - and "what would change the call": the parts against, heaviest first.
+
+On 2026-10-16 (IHSG 5,185, 26 % below its 200-day average of 7,033): liquidity tightening (-3 of 6), risk neutral (-1 of
+6), BI hiking with a restrictive real rate, inflation inside the band, a firmer rupiah - **36 / 100, not investable now,
+sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
+
+| Endpoint (permission COMPANIES) | Returns |
+|---|---|
+| `GET /api/v1/macro/outlook/countries` | the countries (`available`) and their indexes (`rows`, `lastDate`) |
+| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros`, `dalio`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
 
 ## 7. Limitations
 
@@ -244,6 +299,8 @@ The snapshot card lists both regimes.
 | `MacroSeriesTest` | Period end, release date, "up to date" for every frequency. |
 | `MacroIngestionServiceTest` | Overlap window, the first full run, revisions, out of range / twice / future storing nothing, warnings, a manual series not fetched. |
 | `MacroSignalsTest` | A tightening, risk-off set of series; point in time (September CPI unknown on 14 October); stale series; the BI rate held between decisions; the real rate. |
-| `PresetSummariesTest` | USD/JPY read through its drivers (decimals of its 0.001 tick); tighter liquidity lifting USD/IDR and weighing on gold. |
 | `MacroControllerTest` | The catalog and states, the history, a manual series refused, the CSV upload checked then stored (release date by the lag, a MACRO job). |
 | `IngestionJobTypeConstraintTest` | Every script that re-creates the job-type check lists `MACRO`. |
+| `MacroOutlookTest` | The Macro page's rules on synthetic data: tight money, risk-off and a downtrend not investable (SELL, all four presets AVOID, the panels' tones); easy money, risk-on and an uptrend investable (BUY); good macro below the 200-day average accumulated, not bought; the derived series (curve, net liquidity, CPI YoY) and point in time; missing data noted, not guessed; Soros's loop (-3 of 4 a bust, +4 of 5 a boom); Dalio's Goldilocks bought, stagflation never. |
+| `MacroOutlookControllerTest` | The countries (Indonesia with IHSG and LQ45; the US and China later), the outlook's sections on the stored data, USD/IDR = the latest Forex close (date, value, source), the refusals (400), a login required. |
+| `IndexIngestionServiceTest` | LQ45 ingested with IHSG from its own latest day, its failure not failing IHSG; up to date only when both are. |

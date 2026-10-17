@@ -44,9 +44,19 @@ public class PriceUpdateService {
                          String provider, int pending) {
     }
 
-    /** The stored bars of an exchange's index against the last completed trading day. */
+    /**
+     * The stored bars of an exchange's index against the last completed trading day.
+     *
+     * @param upToDate the index and the indexes stored with it ({@code indexes}) all reach the last completed day
+     * @param indexes  every index its job stores (IHSG first, then LQ45), each with its own range and state
+     */
     public record IndexStatus(String code, String symbol, String name, String source, int rows, LocalDate firstDate,
-                              LocalDate lastDate, boolean upToDate) {
+                              LocalDate lastDate, boolean upToDate, List<IndexEntry> indexes) {
+    }
+
+    /** One index of an index job: its stored bars against the last completed trading day. */
+    public record IndexEntry(String code, String symbol, String name, int rows, LocalDate firstDate, LocalDate lastDate,
+                             boolean upToDate) {
     }
 
     /**
@@ -117,9 +127,15 @@ public class PriceUpdateService {
 
     private IndexStatus indexStatus(IndexRef index, LocalDate lastCompleted) {
         IndexIngestion.Stored stored = indexIngestion.stored(index);
+        List<IndexEntry> indexes = new java.util.ArrayList<>();
+        for (IndexRef ref : java.util.stream.Stream.concat(java.util.stream.Stream.of(index),
+                indexIngestion.companions(index).stream()).toList()) {
+            IndexIngestion.Stored s = ref == index ? stored : indexIngestion.stored(ref);
+            indexes.add(new IndexEntry(ref.code(), ref.symbol(), ref.name(), s.rows(), s.firstDate(), s.lastDate(),
+                    s.lastDate() != null && !s.lastDate().isBefore(lastCompleted)));
+        }
         return new IndexStatus(index.code(), index.symbol(), index.name(), indexIngestion.sourceName(), stored.rows(),
-                stored.firstDate(), stored.lastDate(),
-                stored.lastDate() != null && !stored.lastDate().isBefore(lastCompleted));
+                stored.firstDate(), stored.lastDate(), indexIngestion.upToDate(index, lastCompleted), List.copyOf(indexes));
     }
 
     /**
@@ -173,8 +189,7 @@ public class PriceUpdateService {
     }
 
     private IndexUpdate updateIndex(IndexRef index, LocalDate lastCompleted, Requester requestedBy) {
-        LocalDate last = indexIngestion.stored(index).lastDate();
-        if (last != null && !last.isBefore(lastCompleted)) {
+        if (indexIngestion.upToDate(index, lastCompleted)) {
             return new IndexUpdate(index.code(), "UP_TO_DATE", null);
         }
         Submission submission = queue.submitIndex(index, false, requestedBy);

@@ -37,8 +37,9 @@ import tools.jackson.databind.JsonNode;
  * Technical analysis charts (Companies > Technicals). Read-only, deterministic data: no model is called. The preset
  * summaries give a stance with buy / sell prices by fixed rules over the indicators; everything else is data. Exchange
  * and ticker codes are case-insensitive; the ticker IHSG (or ^JKSE) is the exchange's index. Besides an exchange, the
- * "exchange" may be a market: FOREX (USDIDR, USDJPY) or COMMODITY (BRENT, GOLD, COAL, PALM_OIL). Series are compact
- * arrays of {@code [time, value]}, time in seconds since the epoch at 00:00 UTC of the trading day.
+ * "exchange" may be a market: FOREX (USDIDR, USDJPY) or COMMODITY (BRENT, NATURAL_GAS, GOLD, COPPER, PALM_OIL, CORN,
+ * ...: the catalog market_instrument). Series are compact arrays of {@code [time, value]}, time in seconds since the
+ * epoch at 00:00 UTC of the trading day.
  * <ul>
  *   <li>{@code GET /api/v1/technical/markets} - the exchanges and markets of the page's dropdown</li>
  *   <li>{@code GET /api/v1/technical/tickers?exchange=IDX&query=} - ticker search (code and company name; a market:
@@ -50,8 +51,8 @@ import tools.jackson.databind.JsonNode;
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/summary} - the preset summaries (stance, buy / sell / stop,
  *       thesis by fixed rules)</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/events} - corporate events for chart markers</li>
- *   <li>{@code GET /api/v1/technical/market?exchange=IDX&range=} - index regime, breadth, macro series, signals and
- *       regimes</li>
+ *   <li>{@code GET /api/v1/technical/market?exchange=IDX&range=} - index regime and breadth (no macro data: the
+ *       Macro page has them)</li>
  *   <li>{@code GET / PUT /api/v1/technical/settings} - the user's last chart settings</li>
  *   <li>{@code POST /api/v1/technical/refresh?exchange=IDX&ticker=&forceEvents=} (INGESTION) - refresh the index, the
  *       corporate events and the snapshots in the background; {@code GET} the same path for its status</li>

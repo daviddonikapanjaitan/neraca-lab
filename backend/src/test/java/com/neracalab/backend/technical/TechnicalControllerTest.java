@@ -132,7 +132,8 @@ class TechnicalControllerTest {
     void snapshotIsVersionedAndComplete() throws Exception {
         mvc.perform(get("/api/v1/technical/IDX/HRTA/snapshot"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.schemaVersion").value(2))
+                .andExpect(jsonPath("$.schemaVersion").value(3))
+                .andExpect(jsonPath("$.macro").doesNotExist())
                 .andExpect(jsonPath("$.ticker").value("HRTA"))
                 .andExpect(jsonPath("$.trend.sma200").isNumber())
                 .andExpect(jsonPath("$.momentum.macd.histogram").isNumber())
@@ -155,7 +156,40 @@ class TechnicalControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.index").value("IHSG"))
                 .andExpect(jsonPath("$.breadth.universe").isNumber())
-                .andExpect(jsonPath("$.macro.USD_IDR.points").isArray());
+                .andExpect(jsonPath("$.regime").exists())
+                // technical only: the macro data are on the Macro page
+                .andExpect(jsonPath("$.macro").doesNotExist())
+                .andExpect(jsonPath("$.macroSignals").doesNotExist());
+    }
+
+    /**
+     * A USD reporter's bars are converted back to the IDX quote with the rate they were stored with; the 8 decimals
+     * of the stored USD price leave a residue (0.03009362 x 17,944 = 539.9999...), so a converted bar is rounded to
+     * 2 decimals: the quote itself.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void convertedBarsAreTheIdxQuote() throws Exception {
+        long id = jdbc.sql("""
+                        INSERT INTO company (ticker, exchange, company_name, currency, active)
+                        VALUES ('ZZUS', 'IDX', 'USD Reporter Test', 'USD', true) RETURNING company_id""")
+                .query(Long.class).single();
+        jdbc.sql("""
+                        INSERT INTO fx_rate_daily (base_currency, quote_currency, rate_date, rate, source)
+                        VALUES ('USD', 'IDR', DATE '2098-01-02', 17944, 'test')""").update();
+        jdbc.sql("""
+                        INSERT INTO price_daily (company_id, trading_date, open_price, high_price, low_price, close_price,
+                                                 adjusted_close, volume)
+                        VALUES (:id, DATE '2098-01-05', 0.03065195, 0.03093061, 0.02980597, 0.03009362, 0.03009362, 1000)""")
+                .param("id", id).update();
+
+        Map<String, Object> bars = getJson("/api/v1/technical/IDX/ZZUS/ohlcv?interval=D");
+
+        assertThat(bars.get("currency")).isEqualTo("IDR");
+        // columns: time, open, high, low, close, volume, value
+        List<?> bar = (List<?>) ((List<?>) bars.get("bars")).getFirst();
+        assertThat(((Number) bar.get(4)).doubleValue()).isEqualTo(540.0);
+        assertThat(((Number) bar.get(1)).doubleValue()).isEqualTo(550.02);
     }
 
     @Test
@@ -195,20 +229,83 @@ class TechnicalControllerTest {
 
     /** 300 weekday IHSG bars up to 2026-10-14, rising from 6,500 (the stored bars are replaced; rolled back). */
     private void syntheticIhsg() {
-        jdbc.sql("DELETE FROM index_daily WHERE index_code = 'IHSG'").update();
+        syntheticIndex("IHSG", 6500, 3.17);
+    }
+
+    /** 300 weekday bars of an index up to 2026-10-14, rising from {@code base} by {@code step} a day (rolled back). */
+    private void syntheticIndex(String code, double base, double step) {
+        jdbc.sql("DELETE FROM index_daily WHERE index_code = :code").param("code", code).update();
         LocalDate d = LocalDate.of(2026, 10, 14);
         for (int i = 0; i < 300; i++) {
             while (d.getDayOfWeek().getValue() > 5) {
                 d = d.minusDays(1);
             }
-            double close = 6500 + (299 - i) * 3.17 + (i % 7) * 11.5;
+            double close = base + (299 - i) * step + (i % 7) * base / 565;
             jdbc.sql("""
                             INSERT INTO index_daily (index_code, exchange, trading_date, open_price, high_price, low_price,
                                                      close_price, volume, source)
-                            VALUES ('IHSG', 'IDX', :d, :p - 5, :p + 20.25, :p - 20.25, :p, 300000000, 'test')""")
-                    .param("d", d).param("p", BigDecimal.valueOf(close).setScale(2, java.math.RoundingMode.HALF_UP)).update();
+                            VALUES (:code, 'IDX', :d, :p - 0.5, :p + 2.25, :p - 2.25, :p, 300000000, 'test')""")
+                    .param("code", code).param("d", d)
+                    .param("p", BigDecimal.valueOf(close).setScale(2, java.math.RoundingMode.HALF_UP)).update();
             d = d.minusDays(1);
         }
+    }
+
+    /**
+     * LQ45 (^JKLQ45) is a listing like IHSG - in index points, levels at 0.01, no events, no lot - found after IHSG, by
+     * its code or its Yahoo symbol, and compared with IHSG (relative strength), which IHSG is not with itself.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void lq45IsAnIndexListingComparedWithIhsg() throws Exception {
+        syntheticIhsg();
+        syntheticIndex("LQ45", 900, 0.6);
+        mvc.perform(get("/api/v1/technical/tickers?exchange=IDX&query=lq45"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].ticker").value("LQ45"))
+                .andExpect(jsonPath("$[0].type").value("INDEX"))
+                .andExpect(jsonPath("$[0].companyName").value("IDX LQ45 Index (LQ45)"));
+        mvc.perform(get("/api/v1/technical/tickers?exchange=IDX&query=index"))
+                .andExpect(jsonPath("$[0].ticker").value("IHSG"))
+                .andExpect(jsonPath("$[1].ticker").value("LQ45"));
+        mvc.perform(get("/api/v1/technical/tickers?exchange=IDX&query=composite"))
+                .andExpect(jsonPath("$[0].ticker").value("IHSG"))
+                .andExpect(jsonPath("$[?(@.ticker == 'LQ45')]").isEmpty());
+
+        Map<String, Object> bars = getJson("/api/v1/technical/IDX/LQ45/ohlcv?interval=D&range=1Y");
+        assertThat(bars.get("type")).isEqualTo("INDEX");
+        assertThat(bars.get("ticker")).isEqualTo("LQ45");
+        assertThat(bars.get("lotSize")).isNull();
+        assertThat((String) bars.get("priceBasis")).contains("^JKLQ45");
+        assertThat(bars.get("source")).isEqualTo("Yahoo Finance ^JKLQ45");
+        List<List<Object>> rows = (List<List<Object>>) bars.get("bars");
+        assertThat(((Number) rows.getLast().get(4)).doubleValue()).as("LQ45's own bars, not IHSG's").isLessThan(1200);
+        mvc.perform(get(java.net.URI.create("/api/v1/technical/IDX/%5EJKLQ45/ohlcv?interval=W")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ticker").value("LQ45"));
+
+        Map<String, Object> rs = (Map<String, Object>) getJson("/api/v1/technical/IDX/LQ45/indicators?set=rs&range=1Y")
+                .get("series");
+        assertThat((List<?>) rs.get("rs")).isNotEmpty();
+        Map<String, Object> levels = getJson("/api/v1/technical/IDX/LQ45/levels");
+        for (Map<String, Object> level : (List<Map<String, Object>>) levels.get("keyLevels")) {
+            BigDecimal price = new BigDecimal(String.valueOf(level.get("price")));
+            assertThat(price.stripTrailingZeros().scale()).as(level.toString()).isLessThanOrEqualTo(2);
+        }
+        Map<String, Object> snapshot = getJson("/api/v1/technical/IDX/LQ45/snapshot");
+        assertThat(((Map<String, Object>) snapshot.get("relativeStrength")).get("ratio")).as("vs IHSG").isNotNull();
+        assertThat(((Map<String, Object>) snapshot.get("price")).get("lotSize")).isNull();
+        assertThat((String) snapshot.get("priceBasis")).contains("^JKLQ45");
+        assertThat((List<String>) snapshot.get("notes")).noneMatch(n -> n.startsWith("No volume"));
+        assertThat(jdbc.sql("SELECT count(*) FROM indicator_snapshot WHERE company_id < 0").query(Long.class).single()).isZero();
+        assertThat((List<?>) getJson("/api/v1/technical/IDX/LQ45/events").get("events")).isEmpty();
+        Map<String, Object> summary = getJson("/api/v1/technical/IDX/LQ45/summary");
+        assertThat(summary.get("type")).isEqualTo("INDEX");
+        assertThat(summary.get("ticker")).isEqualTo("LQ45");
+        assertSummaries(summary, null);
+        // IHSG is still compared with nothing
+        Map<String, Object> ihsg = getJson("/api/v1/technical/IDX/IHSG/snapshot");
+        assertThat(((Map<String, Object>) ihsg.get("relativeStrength")).get("ratio")).isNull();
     }
 
     @Test
@@ -325,11 +422,11 @@ class TechnicalControllerTest {
         assertThat((List<?>) ((Map<String, Object>) levels.get("volumeProfile")).get("topNodes")).isEmpty();
 
         Map<String, Object> snapshot = getJson("/api/v1/technical/FOREX/ZZFX/snapshot");
-        assertThat(snapshot.get("schemaVersion")).isEqualTo(2);
+        assertThat(snapshot.get("schemaVersion")).isEqualTo(3);
         assertThat(((Map<String, Object>) snapshot.get("relativeStrength")).get("ratio")).isNull();
         assertThat(((Map<String, Object>) snapshot.get("relativeStrength")).get("percentile6m")).isNull();
         assertThat(((Map<String, Object>) snapshot.get("risk")).get("araCount60")).isNull();
-        assertThat(((Map<String, Object>) snapshot.get("macro")).get("regimes")).isNotNull();
+        assertThat(snapshot).doesNotContainKey("macro");
         assertThat((List<String>) snapshot.get("notes")).anyMatch(n -> n.contains("No traded volume"));
         Map<String, Object> events = getJson("/api/v1/technical/FOREX/ZZFX/events");
         assertThat((List<?>) events.get("events")).isEmpty();

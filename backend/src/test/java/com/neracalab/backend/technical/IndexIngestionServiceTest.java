@@ -98,6 +98,7 @@ class IndexIngestionServiceTest {
     void upToDateMakesNoRequest() {
         IndexIngestionService service = service("10:30");     // the last completed day is 14 Oct
         when(repository.latestIndexDate("IHSG")).thenReturn(Optional.of(LocalDate.of(2026, 10, 14)));
+        when(repository.latestIndexDate("LQ45")).thenReturn(Optional.of(LocalDate.of(2026, 10, 14)));
 
         Result result = service.ingest(ihsg(service), false);
 
@@ -120,6 +121,50 @@ class IndexIngestionServiceTest {
         Result full = service.ingest(ihsg(service), true);
         assertThat(full.fullHistory()).isTrue();
         assertThat(full.requests()).isEqualTo(1);
+    }
+
+    /**
+     * LQ45 (the Macro page) is stored in the same run as IHSG, from its own latest day; its failure is logged and the
+     * IHSG result stands.
+     */
+    @Test
+    void theOtherIndexesOfTheExchangeComeWithIt() {
+        IndexIngestionService service = service("18:00");
+        when(repository.latestIndexDate("IHSG")).thenReturn(Optional.of(LocalDate.of(2026, 10, 15)));
+        when(repository.latestIndexDate("LQ45")).thenReturn(Optional.of(LocalDate.of(2026, 10, 13)));
+        when(yahoo.dailyBars(eq("^JKLQ45"), any(), eq(LocalDate.of(2026, 10, 13)), eq(LocalDate.of(2026, 10, 15))))
+                .thenReturn(List.of(bar("2026-10-13", 600), bar("2026-10-14", 590), bar("2026-10-15", 585)));
+        when(repository.indexDates(eq("LQ45"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 13)));
+        when(repository.upsertIndexBars(eq("LQ45"), eq("IDX"), eq("yahoo"), anyList())).thenReturn(2);
+
+        Result result = service.ingest(ihsg(service), false);
+
+        assertThat(result.requests()).as("IHSG was up to date").isZero();
+        verify(repository).upsertIndexBars(eq("LQ45"), eq("IDX"), eq("yahoo"), anyList());
+
+        when(repository.latestIndexDate("LQ45")).thenReturn(Optional.empty());
+        when(yahoo.dailyBars(eq("^JKLQ45"), any(), eq(LocalDate.of(1997, 1, 1)), any()))
+                .thenThrow(new com.neracalab.backend.price.provider.PriceProviderException("HTTP 500"));
+        assertThat(service.ingest(ihsg(service), false).latestTradingDate()).isEqualTo(LocalDate.of(2026, 10, 15));
+    }
+
+    /** Up to date only when IHSG and LQ45 both reach the last completed day: a missing LQ45 queues the index job. */
+    @Test
+    void upToDateCoversTheOtherIndexes() {
+        IndexIngestionService service = service("18:00");
+        LocalDate day = LocalDate.of(2026, 10, 15);
+        when(repository.indexStats("IHSG")).thenReturn(new TechnicalRepository.IndexStats(9000, LocalDate.of(1990, 1, 2), day));
+        when(repository.indexStats("LQ45")).thenReturn(new TechnicalRepository.IndexStats(0, null, null));
+        assertThat(service.upToDate(ihsg(service), day)).isFalse();
+        when(repository.indexStats("LQ45")).thenReturn(new TechnicalRepository.IndexStats(7000, LocalDate.of(1997, 1, 2), day));
+        assertThat(service.upToDate(ihsg(service), day)).isTrue();
+        assertThat(service.upToDate(ihsg(service), day.plusDays(1))).isFalse();
+        assertThat(service.companions(ihsg(service))).singleElement().satisfies(lq45 -> {
+            assertThat(lq45.code()).isEqualTo("LQ45");
+            assertThat(lq45.symbol()).isEqualTo("^JKLQ45");
+            assertThat(lq45.name()).isEqualTo("IDX LQ45 Index (LQ45)");
+            assertThat(lq45.exchange()).isEqualTo(Exchange.IDX);
+        });
     }
 
     @Test

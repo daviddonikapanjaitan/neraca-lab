@@ -1,7 +1,7 @@
 // Ingestion page helpers shared by the client components and the route handlers.
 
 import { EMPTY } from "@/lib/format"
-import type { IngestionJobCreator, IngestionJobStatus, IngestionJobType } from "@/lib/types"
+import type { IndexEntry, IndexPriceStatus, IngestionJobCreator, IngestionJobStatus, IngestionJobType } from "@/lib/types"
 
 /** Backend upload limit (spring.servlet.multipart.max-file-size: 20MB). */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -72,6 +72,10 @@ export function providerLabel(provider: string | null | undefined): string {
       return "EODHD"
     case "worldbank":
       return "the World Bank Pink Sheet"
+    case "imf":
+      return "the IMF Primary Commodity Prices"
+    case "fred":
+      return "FRED"
     default:
       return provider || "the price provider"
   }
@@ -104,4 +108,18 @@ const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** A job id is a UUID. */
 export function isJobId(id: string): boolean {
   return JOB_ID.test(id)
+}
+
+/** The indexes an index job stores (an older backend: the index alone). */
+export function indexesOf(index: IndexPriceStatus): IndexEntry[] {
+  return index.indexes && index.indexes.length > 0
+    ? index.indexes
+    : [{ code: index.code, symbol: index.symbol, name: index.name, rows: index.rows, firstDate: index.firstDate,
+        lastDate: index.lastDate, upToDate: index.upToDate }]
+}
+
+/** "IHSG and LQ45" */
+export function indexNames(index: IndexPriceStatus): string {
+  const codes = indexesOf(index).map((i) => i.code)
+  return codes.length <= 1 ? codes.join("") : `${codes.slice(0, -1).join(", ")} and ${codes[codes.length - 1]}`
 }

@@ -1,6 +1,7 @@
 package com.neracalab.backend.price;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 import com.neracalab.backend.company.Exchange;
@@ -37,7 +38,21 @@ public interface IndexIngestion {
     /** The index of an exchange (empty: the exchange has none configured). */
     Optional<IndexRef> index(Exchange exchange);
 
+    /** The other indexes its job ingests with it (LQ45 with IHSG); none by default. */
+    default List<IndexRef> companions(IndexRef index) {
+        return List.of();
+    }
+
     Stored stored(IndexRef index);
+
+    /**
+     * Whether everything this index's job ingests is stored up to {@code lastCompleted}: the index, and the other
+     * indexes ingested with it (LQ45 with IHSG).
+     */
+    default boolean upToDate(IndexRef index, LocalDate lastCompleted) {
+        LocalDate last = stored(index).lastDate();
+        return last != null && !last.isBefore(lastCompleted);
+    }
 
     /** Source of the index bars (the price queue reports it in the job's stage). */
     String sourceName();

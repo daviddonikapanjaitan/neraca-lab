@@ -134,8 +134,13 @@ public class TechnicalRepository {
                     // a provider bar can carry an open / close outside its high / low by a rounding; keep the bar sane
                     high = Math.max(high, Math.max(open, close));
                     low = Math.min(low, Math.min(open, close));
-                    return Candle.daily(rs.getObject("trading_date", LocalDate.class), round4(open), round4(high),
-                            round4(low), round4(close), round4(adj), volume);
+                    // a converted bar (USD stored with 8 decimals x the rate) is the quote within 0.0001: back to 2
+                    // decimals it is the quote itself (CUAN 2026-10-16: 0.03009362 x 17,944 = 539.9999 -> 540)
+                    java.util.function.DoubleUnaryOperator round = factor.compareTo(BigDecimal.ONE) == 0
+                            ? TechnicalRepository::round4 : TechnicalRepository::round2;
+                    return Candle.daily(rs.getObject("trading_date", LocalDate.class), round.applyAsDouble(open),
+                            round.applyAsDouble(high), round.applyAsDouble(low), round.applyAsDouble(close),
+                            round.applyAsDouble(adj), volume);
                 })
                 .list().stream().filter(java.util.Objects::nonNull).toList();
     }
@@ -147,6 +152,10 @@ public class TechnicalRepository {
     /** IDX quotes are whole rupiah for most bars; converted prices are brought back to 4 decimals (the provider's). */
     private static double round4(double v) {
         return Math.round(v * 10_000) / 10_000.0;
+    }
+
+    private static double round2(double v) {
+        return Math.round(v * 100) / 100.0;
     }
 
     /** Daily bars of an index, oldest first. */
@@ -300,15 +309,16 @@ public class TechnicalRepository {
     /**
      * Observations of a macro series, oldest first, with the day each became public (a series without a stored
      * release date: its observation date). {@code USD_IDR} reads the USD/IDR pair of the Forex price ingestion (Yahoo
-     * Finance, London close) when it is stored, else the ECB reference rates of fx_rate_daily (16:00 CET); both close
-     * after the IDX session, so a rate is public in Jakarta the day after.
+     * Finance IDR=X, the latest stored day) when it is stored, else the ECB reference rates of fx_rate_daily (16:00 CET).
+     * A rate is public on its own date: the Forex ingestion stores a day only once it is complete, and the ECB fixes
+     * its rate the same afternoon (read by the Macro page only).
      */
     public List<Observation> macro(String seriesCode) {
         if ("USD_IDR".equals(seriesCode)) {
             List<Observation> pair = jdbc.sql("""
                             SELECT trading_date, close_price FROM instrument_daily
                             WHERE instrument_code = 'USDIDR' ORDER BY trading_date""")
-                    .query((rs, i) -> nextDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                    .query((rs, i) -> sameDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
                     .list();
             if (!pair.isEmpty()) {
                 return pair;
@@ -316,7 +326,7 @@ public class TechnicalRepository {
             return jdbc.sql("""
                             SELECT rate_date, rate FROM fx_rate_daily
                             WHERE base_currency = 'USD' AND quote_currency = 'IDR' ORDER BY rate_date""")
-                    .query((rs, i) -> nextDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
+                    .query((rs, i) -> sameDay(rs.getObject(1, LocalDate.class), rs.getBigDecimal(2).doubleValue()))
                     .list();
         }
         return jdbc.sql("""
@@ -332,11 +342,11 @@ public class TechnicalRepository {
     public String usdIdrSource() {
         Integer rows = jdbc.sql("SELECT count(*) FROM instrument_daily WHERE instrument_code = 'USDIDR'")
                 .query(Integer.class).single();
-        return rows != null && rows > 0 ? "Yahoo Finance IDR=X (Forex price ingestion)" : "ECB reference rates (fx_rate_daily)";
+        return rows != null && rows > 0 ? "Forex price ingestion (Yahoo Finance IDR=X)" : "ECB reference rates (fx_rate_daily)";
     }
 
-    private static Observation nextDay(LocalDate date, double value) {
-        return new Observation(date, value, date.plusDays(1));
+    private static Observation sameDay(LocalDate date, double value) {
+        return new Observation(date, value, date);
     }
 
     /** The active macro series of the catalog, in display order. */

@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { formatCompact, formatDate, formatMultiple, formatPercent, formatPrice } from "@/lib/format"
+import { EMPTY, formatCompact, formatDate, formatMultiple, formatPercent, formatPrice } from "@/lib/format"
 import type { Valuation } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -37,7 +37,16 @@ const COLUMNS: Column[] = [
   { label: "Earnings yield", title: "EPS TTM / price", render: (v) => formatPercent(v.earningsYield), numeric: (v) => v.earningsYield },
 ]
 
+/** The price as quoted on the exchange, for a company whose prices are stored converted (a USD reporter on IDX). */
+const QUOTE: Column = {
+  label: "Quoted price",
+  title: "Last close on or before the valuation date as quoted on the exchange",
+  render: (v) => (v.quotePrice === null ? EMPTY : `${v.quoteCurrency} ${formatPrice(v.quotePrice)}`),
+}
+
 export function ValuationsTable({ valuations, currency }: { valuations: Valuation[]; currency: string | null }) {
+  const quoted = valuations.find((v) => v.quotePrice !== null)
+  const columns = quoted ? [QUOTE, ...COLUMNS] : COLUMNS
   if (valuations.length === 0) {
     return (
       <EmptyState
@@ -55,7 +64,7 @@ export function ValuationsTable({ valuations, currency }: { valuations: Valuatio
           <TableRow>
             <TableHead className="sticky left-0 z-10 bg-card pl-4">Date</TableHead>
             <TableHead>Based on</TableHead>
-            {COLUMNS.map((c) => (
+            {columns.map((c) => (
               <TableHead key={c.label} className="text-right last:pr-4" title={c.title}>
                 {c.label}
               </TableHead>
@@ -69,7 +78,7 @@ export function ValuationsTable({ valuations, currency }: { valuations: Valuatio
                 {formatDate(v.valuationDate)}
               </TableCell>
               <TableCell className="font-mono text-xs">{v.period ?? "—"}</TableCell>
-              {COLUMNS.map((c) => {
+              {columns.map((c) => {
                 const n = c.numeric ? c.numeric(v) : null
                 return (
                   <TableCell
@@ -88,7 +97,11 @@ export function ValuationsTable({ valuations, currency }: { valuations: Valuatio
         </TableBody>
       </Table>
       <p className="px-4 pt-3 text-xs text-muted-foreground">
-        Amounts in {currency ?? "the company currency"}. Hover a column header for its definition.
+        Amounts in {currency ?? "the company currency"}
+        {quoted
+          ? `, also the price: the ${quoted.quoteCurrency} quote converted at the rate of the day before`
+          : ""}
+        . Hover a column header for its definition.
       </p>
     </div>
   )

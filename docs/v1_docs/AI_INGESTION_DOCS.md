@@ -29,7 +29,7 @@ in a background thread. Details of storage, job statuses and the job API:
 |------|--------------------------------------------------------------------------------------|
 | 202  | job queued (`Location: /api/v1/ingestions/{id}`)                                     |
 | 200  | the same file is already queued / being stored: that job                             |
-| 422  | not an .xlsx / not an IDX XBRL workbook (ProblemDetail body; logged in `ingestion_error`). An IDX workbook the standard extraction cannot map is accepted (202) and stored by the full-text extraction, section 6 |
+| 422  | not an .xlsx / not an IDX XBRL workbook, or a filing in another currency than the company's stored data (ProblemDetail body; logged in `ingestion_error`). An IDX workbook the standard extraction cannot map is accepted (202) and stored by the full-text extraction, section 6 |
 | 413  | file larger than 20 MB                                                               |
 
 Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
@@ -188,6 +188,17 @@ are uploaded together, each looks it up, finds nothing and registers it: the one
 company the first one registered (`registered: false`) instead of a refusal. The database enforces the
 same rule independently: `uq_company_ticker_exchange`, `exchange NOT NULL`, and the upper-case
 checks `ck_company_ticker` / `ck_company_exchange`.
+
+**One currency per company.** `company.currency` is the presentation currency of the filings (sheet `1000000`):
+statements, prices (`price_daily` is converted into it) and every ratio are in it, so a filing in another currency
+than the company's stored statements is refused with 422 before anything is stored (`IngestionService.currencyConflict`,
+also when a stored file is run again). CUAN presented in IDR up to FY2023 and in USD from FY2024 (its FY2024 filing
+restates FY2023 in USD): its FY2023 filing stored FY2022 and FY2023 in rupiah beside the dollar years (revenue
+1,494,125,816,458 next to 801,723,000) and switched `company.currency` to IDR until the next USD upload. An older
+filing in a former currency is refused; its periods come from the comparative columns of the later filings (CUAN
+FY2023 from FY2024's; FY2022 exists only in rupiah). A newer filing in another currency - a change of presentation
+currency - is refused too: stored statements and prices are not converted automatically. A company without stored
+periods takes the currency of its first filing.
 
 ## 4. Workbook structure and mapping
 
@@ -382,6 +393,23 @@ Rules:
   point (outstanding = issued although 336,000 treasury shares are published). A failed fetch (network,
   HTTP 429) leaves the counts empty with a note; the ingestion itself continues. Switch off with
   `neracalab.ingestion.web-share-counts: false`.
+  **A split after the filing.** Yahoo's counts are split-adjusted to today, so a filing of before a split
+  states its EPS on a count k times smaller (CUAN FY2024: 160,785,000 / 0.014 = 11.5 billion shares; Yahoo
+  112,418,900,000 after the 1:10 split of 2025-07-15). `WebShareCounts` also reads Yahoo's split events
+  (`YahooChartClient.events`, `/v8/finance/chart?events=split`); a count that misses the EPS as published is
+  checked on the count of before the latest split after its date, the latest two, ... (a filing reflects the
+  splits before it was issued, not those after) and used when exactly one of these fits. It is stored as
+  published - split-adjusted, like the prices - and each split it needed is recorded in `corporate_action` with
+  its real date (`IngestionRepository.recordPublishedSplit`, read like a seeded split; a split of the same ratio
+  detected from the filings within a year takes that date), so `applyDetectedSplits` brings the EPS of before it
+  onto the count after it. A row is on the count of before a split when it is nearer to it than to the count
+  after it (within a factor sqrt(k)): DSSA's counts moved 25% by a buyback between its splits.
+  **A buyback in the period.** EPS is per weighted share; with treasury shares bought during the period the
+  end count is below it (BUKA FY2025: 92,970,828,660 at the end, 103,121,636,167 at the start, EPS 31.91 =
+  98.5 billion weighted shares). A period-end count that misses the EPS is accepted when the EPS lies between
+  profit / the published start count and profit / the end count, both consistent, with the shares issued
+  unchanged within 1% (only treasury shares moved; a rights issue - BKSL 2023 - gives no range) and no split in
+  the period.
   **Dates the website does not publish.** Yahoo Finance publishes four year ends, so the opening dates of an
   older filing have no count of their own: BBCA's FY2022 filing got 123,275,050,000 at 2022-12-31 and nothing
   at 2021-12-31 and 2020-12-31, and FY2021 had no market cap and no valuation. An accepted count is carried
@@ -503,7 +531,14 @@ Rules:
   comparative was "corrected" to 0.0475 and a 1:100 share split that never was recorded; every MOLI market cap was
   100 times too large (P/E 1,105 .. 7,626). Now the filing gives no share counts and no EPS (FY2025's EPS stays
   empty); MOLI's other filings give 2,724,036,580 shares (par 100). The full-text extraction applies the same
-  rejection to the EPS the model names. (2) Within a column, with
+  rejection to the EPS the model names. A par value inferred from one column must also fit the other column's
+  EPS when that column's share capital did not change in its period (`FilingMapper.parMisfit`): a coarse EPS fits
+  several counts. BKSL's FY2025 workbook files FY2024's EPS as 0.10 (17,355 million profit: 116 .. 347 billion
+  shares), which par 50 fits, while FY2025's 4.95 (830,295 million profit: 167.7 billion shares) fits no standard
+  par value - BKSL's shares have several par values. Before, par 50 gave 251,243,773,287 shares at 2023-12-31 ..
+  2025-12-31, 50% too many (market cap and every per-share figure); now the filing gives no par value and Yahoo
+  Finance's 167,708,902,705, which fits both EPS, is used. A column whose capital changed is no evidence (OMED's
+  FY2021: 4,500 -> 575,000 million, its EPS restated beyond that range). (2) Within a column, with
   the share count known: an EPS off by exactly a power of ten is corrected when profit / shares confirms
   it within 2% (INDF's H1 2025 workbook files the H1 2024 EPS in millions, 0.000439, stored as 439); any
   other mismatch of 3x or more is not stored.
@@ -610,11 +645,12 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `SmdrShareSeedTest`              | the SMDR share-count script fills 16,375,600,000 at eight dates from 2020-12-31 and the 2023-01-31 1:5 split, runs idempotently and never replaces a count already stored (rolled back) |
 | `FilingMapperFinancialTest` (unit) | the Financial and Sharia Industry taxonomy: all five BNGA filings and all four BTPN filings map without errors, warnings or unclassified lines; all five BMRI filings map without errors; BMRI FY2025's FY2024 column ignores "Claim expenses" shown for information (operating income 76,059,595 million, revenue 186,767,596), never against an agent classification; FY2025 bank income statement (revenue 30,631,359 million, operating income 8,782,085), balance sheet (cash equivalents from the cash flow, debt 8,140,477, current items NULL) and cash flow (capex -820,540, net securities issued in debt issued); the 2026 H1 prior year end; every comparative column equals the previous filing's current column; no share count is guessed |
 | `StatementGapFillTest` (Docker Postgres, rolled back) | a comparative fills an empty revenue (`FILLED_GAPS`) but not a stored gross profit, nothing left to fill is `KEPT_EXISTING`, and the period's own filing does not wipe the filled revenue |
-| `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; the other upload order (comparative first, then the period's own filing: MAPA 1:10) ends the same, with balance sheet shares and share snapshots adjusted, the split recorded once and the own filing uploaded again changing nothing; a restatement that is no split is replaced by the own filing; split factors |
+| `ShareSplitTest` (Docker Postgres, rolled back) | a 2:1 split restated by a comparative (`SPLIT_ADJUSTED`): the period and an earlier period on the old basis adjusted, a period on another basis not, nothing adjusted twice; a restated (non-split) EPS never gets the comparative's share count; the other upload order (comparative first, then the period's own filing: MAPA 1:10) ends the same, with balance sheet shares and share snapshots adjusted, the split recorded once and the own filing uploaded again changing nothing; a restatement that is no split is replaced by the own filing; split factors; published splits (DSSA's two) recorded with their dates adjust the EPS of before them once, also one 25% off the count before the split; the old basis is the nearer of the counts before and after a split |
 | `FilingMapperTinsTest` (unit) | the TINS filings: FY2025's comparative counts its residual profit or loss lines once and its cash flow's residual investing line not at all, the current year still counts every line, every statement of FY2025 is storable; FY2024 as published has no current-year figures; FY2023's loss per share is scaled and gets its sign (-60) |
 | `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned; MSIN FY2025 (by nature): profit from operations left empty is asked for again and stored from the rows that compute it, and is an open item of the upload when the last answer leaves it empty too |
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
 | `FilingMapperWifiTpiaTest` (unit) | WIFI FY2025: the financing total that leaves out the dividends is counted at the sum of its lines (10,904,384,108,332), the FY2024 comparative unchanged; WIFI H1 2025 (in the H1 2026 filing): three amounts entered twice counted once, debt issued 784,086,901,997 and repaid -15,495,302,170, which line of a pair is dropped; WIFI FY2022: a 3 rupiah slip is a warning; TPIA's self-contradicting H1 2025 income statement and FY2024 breakdown are still refused |
+| `FilingMapperRiseSmbrTest` (unit) | RISE H1 2025 (in the H1 2026 filing): an FX effect of 398,002 the filed roll-forward leaves out is not counted, ending cash 224,776,635,800, every check passes; FY2025's FX effect still counted; SMBR's FY2024 comparative (investing flows counted twice) still refused, its own filing reconciles |
 | `IngestionVerifierSegmentsTest` (unit) | TPIA FY2025: a refused comparative breakdown of a period whose stored breakdown adds up to its revenue is a note, not an open item; without a stored breakdown, or with one that does not add up, it stays open |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
 | `IngestionServiceFallbackTest` (unit, scripted stages) | when the full-text extraction takes over: unsupported workbook (agent not started), INCOMPLETE, past the 3 minutes, failed; never after a clean result; its own failure leaves what the standard extraction reached, its own timeout fails the upload; switched off; the upload endpoint accepts an unsupported workbook and refuses an unreadable one |
@@ -623,6 +659,8 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperAuditedTickersTest` (unit) | ULTJ: no weighted shares for FY2022 (treasury stock), kept for years without; MAPA: FY2022 as EPS 412 / 2,850,400,000 shares in its own filing and 41 / 28,504,000,000 in the FY2023 comparative; BBCA: lines filed as 0 need no classification, "Other insurance expenses" with an amount is left to the agent and reconciles as an operating expense |
 | `FilingMapperAsgrTest` (unit) | all five ASGR filings map without errors; the H1 2025 loss reported twice in the H1 2026 filing is counted once (profit before tax 139,690, operating income 116,372), not in the current column, never against an agent classification; the FY2023 workbook's full amounts under an "In Million" label are read as full amounts (total assets 2,682,813 million, as in the FY2022 workbook); SIMP: FY2023 full amounts without revenue (gross profit 3,358,216 million, revenue from the FY2024 comparative), H1 2026 EPS filed in millions (56.35), every SIMP filing without errors |
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not; BBCA FY2022: the count accepted at 2022-12-31 is carried to 2021-12-31 and 2020-12-31 (share capital unchanged, no treasury stock, the FY2021 EPS confirms it), never to a date the website publishes itself, never with treasury stock (BFIN), never where the EPS contradicts it |
+| `FilingMapperWebSplitsTest` (unit) | the share counts of the error log of 2026-10-16: BKSL FY2025 uses no par value (par 50 fits only FY2024's EPS) and gets Yahoo's 167,708,902,705; CUAN FY2024 accepts Yahoo's split-adjusted count only with the 1:10 split of 2025-07-15 (11,241,890,000 before it), CUAN H1 2026 has dates on both sides of it; DSSA FY2023 predates both splits and its end count fits between the start and end counts (buyback), FY2024 needs only the 2026 split, H1 2026's EPS fits no count; BUKA FY2025's end count 92,970,828,660 with 10,177,877,407 treasury shares (buyback), H1 2026's EPS outside the counts refused; BKSL FY2023's rights issue gives no range |
+| `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
 | `FilingMapperTuguMoliCnmaTest` (unit) | the filings behind the error rows of 2026-10-14: TUGU read in the Insurance Industry taxonomy with 3,555,575,600 shares at par 50 (EPS in millions in FY2024, an unrestated split in FY2023), MOLI's EPS in thousands (H1 2026) and its contradicting FY2025 columns (no par 1), CNMA's depreciation with its balance sheet by order of liquidity |
 | `FilingMapperTotlMidiTest` (unit) | the filings behind the error rows of 2026-10-13: TOTL's breakdowns with "Jasa Konstruksi" on several lines of one kind are one segment equal to the line its FY2024 filing shows (lines of different kinds stay apart); MIDI's H1 2025 cash roll-forward holds without the deconsolidation line its ending cash excludes |
@@ -888,6 +926,43 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-10-16 (errors 510, 511, 523): share counts and currencies of BKSL, CUAN, DSSA and BUKA
+
+Two open rows - 510 (BBNI FY2025, the full-text extraction took over and stored it: `SUCCEEDED`) and 511 (BKSL's
+2024-Tahunan file is a ratio-analysis export, not an XBRL workbook: rightly `REJECTED`; FY2024 is stored from the
+FY2025 filing's comparative) - and four companies whose data looked wrong. All fixed in code; the wrong rows were
+deleted and the filings uploaded again (all `SUCCEEDED`; row 523 is CUAN's IDR filing, now refused).
+
+| Cause | Fix |
+|---|---|
+| **BKSL: a par value only one column fits.** FY2024's EPS 0.10 fits par 50, FY2025's 4.95 no standard par value (shares of several par values): 251,243,773,287 shares at 2023-12-31 .. 2025-12-31, 50% too many - market cap and every per-share figure. | `FilingMapper.parMisfit`: a par value must fit the other column's EPS when that column's capital is unchanged. A sweep of all 434 workbooks changes only BKSL FY2025. The wrong counts cleared; Yahoo Finance's 167,708,902,705 (fits both EPS) from 2023-12-31: FY2025 market cap Rp 23.3 trillion, P/E 28.1. |
+| **CUAN, DSSA: no share counts.** Yahoo's counts are split-adjusted to today; the filings' EPS predate CUAN's 1:10 split of 2025-07-15 and DSSA's 1:10 of 2024-07-18 and 1:25 of 2026-04-09, so every count was refused. DSSA had no valuation at all, CUAN none before FY2025. | `WebShareCounts` reads Yahoo's split events; a count is also checked on the count of before the splits after its date (exactly one choice must fit), stored split-adjusted, and the split recorded with its date (`recordPublishedSplit`) so earlier EPS are adjusted. A row is on the old basis when nearer to the count before the split than after it (DSSA's buyback moved its count 25%). A split detected from the filings merges into the published one up to two years later. |
+| **BUKA, DSSA: buybacks.** A period-end count after a buyback misses the weighted EPS by more than 2% (BUKA FY2025: 92,970,828,660 vs 98.5 billion weighted), so BUKA kept 103.1 billion shares from mid-2025: market cap about 10% too high. | The end count is accepted when the EPS lies between profit / the start count and profit / the end count, shares issued unchanged within 1% and no split in the period. |
+| **CUAN: two currencies.** CUAN presents in IDR up to FY2023 and in USD from FY2024; its FY2023 filing stored FY2022 and FY2023 in rupiah beside the dollar years (revenue 1,494,125,816,458 next to 801,723,000) and switched `company.currency` to IDR until the next upload. | `IngestionService.currencyConflict`: a filing in another currency than the company's stored data is refused (422, `UPLOAD_REJECTED`). The rupiah periods deleted; FY2023 stored in USD from FY2024's comparative (revenue 97,943,000); FY2022 exists only in rupiah. |
+| **CUAN: the price shown in USD.** The stored prices are right (every close = Yahoo's IDR close / the rate of the day before), but the company page showed 0.03009362 as the price and Technicals 539.9999. | The company API returns the IDX quote beside the stored price (`latestPrice.quote`, `quotePrice`), rounded to 2 decimals; the page shows Rp 540 with the USD figure and the rate; Technicals rounds converted bars to 2 decimals. |
+
+Not fixed (the filings): DSSA's H1 2026 EPS 0.04 fits no share count (stored as filed; its period uses the count of
+2025-12-31, unchanged treasury stock); BUKA's H1 2026 EPS -8.53 lies outside its start and end counts (it uses
+2025-12-31's 92,970,828,660; Yahoo 91,833,653,260 at 2026-06-30); BUKA FY2021 has no count (Yahoo publishes none).
+
+Tests: `FilingMapperWebSplitsTest`, `IngestionServiceCurrencyTest`, `ShareSplitTest`, `CompanyControllerTest`,
+`TechnicalControllerTest`.
+
+### The uploads of 2026-10-17 (errors 579 - 582): an FX line outside the roll-forward, a sign the model kept
+
+Four rows from SMBR, RISE and PNLF (an insurer). Two fixed in code and uploaded again on 2026-10-17 (`SUCCEEDED`, no
+row); two are comparatives that contradict themselves, closed without a rule.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **FX / other effects the filed roll-forward leaves out.** RISE's H1 2026 filing, H1 2025 column: beginning cash 260,777,639,668 + net change -36,001,003,868 = 224,776,635,800, the ending cash as filed, and every section adds up to its total; the effect of exchange rate changes (398,002) is not in it. The roll-forward check failed by 398,002 and the column went to the full-text extraction. | 580 | Like the deconsolidated cash of MIDI (321): when the roll-forward fails with the FX / other effects and holds exactly without them, they are not counted (warning `cash_rollforward`). Uploaded again: the standard extraction stores the column, ending cash 224,776,635,800. |
+| **A sign the model was shown and kept.** PNLF FY2024: its profit before tax adds 'Decrease (increase) in unearned premiums' as filed (3,269 million in FY2024, -760 in FY2023). The model deducted it, was shown the only reversal that closes the gap (6,538 = 2 x 3,269) and answered the same: revenue 13,685,508 instead of 13,692,046, operating income 4,248,950 beside a profit before tax of 4,255,488, the upload `INCOMPLETE`. | 582 | `FullTextExtractor`: after the last round, when exactly one reversal (one row, or two) reconciles an insurer's profit before tax and the statement then has no open check, the row's sign is reversed for the model in every field that names it (warning `full_text`, a note in the report); otherwise the answer is stored as before, with the open item. Uploaded again: revenue 13,692,046, operating income 4,255,488 million. The model left gross profit empty this time, so the earlier 11,995,130 stayed (a field a filing does not report keeps its stored value); set to revenue - cost (12,001,668) and the derived data refreshed. |
+| **A comparative restated in part (closed without a rule).** PNLF's FY2025 filing restates its FY2024 column only in part (net investment income, other underwriting income, G&A and profit before tax 3,986,888) beside insurance lines as filed a year before; no choice of signs of its lines gives the profit before tax. | 581 | None: FY2024 is stored from its own filing (582). |
+| **Investing flows counted twice (closed without a rule).** SMBR's FY2025 filing, FY2024 column: PP&E 37,289,552 thousand already includes the other non-financial assets 20,131,637 also on their own line, and 14,581,729 is placed in both short-term investments and restricted funds: the lines give -86,664,147 for a filed total of -51,950,781. | 579 | None: rightly refused; FY2024 is stored from its own filing, which reconciles (investing -51,950,781). |
+
+Tests: `FilingMapperRiseSmbrTest` (RISE's FX line, SMBR's comparative still refused), `FullTextExtractorTest` (PNLF: the
+reversal made when the model keeps the sign, none made when no reversal reconciles).
 
 ### The uploads of 2026-10-15 (errors 415 - 420, 432): a total without its dividends, amounts entered twice, a 3 rupiah slip
 

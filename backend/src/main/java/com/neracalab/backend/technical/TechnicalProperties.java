@@ -28,6 +28,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param volume          volume spike threshold and windows
  * @param events          corporate events from Yahoo Finance
  * @param schedule        nightly job: index, events, snapshots
+ * @param otherIndexes    more indexes stored with the benchmark (same exchange, fetched in the same run) for the Macro
+ *                        page: LQ45 ({@code ^JKLQ45})
  */
 @ConfigurationProperties("neracalab.technical")
 public record TechnicalProperties(
@@ -45,9 +47,12 @@ public record TechnicalProperties(
         @DefaultValue Base base,
         @DefaultValue Volume volume,
         @DefaultValue Events events,
-        @DefaultValue Schedule schedule) {
+        @DefaultValue Schedule schedule,
+        List<Index> otherIndexes) {
 
     public TechnicalProperties {
+        otherIndexes = otherIndexes == null ? List.of(new Index("LQ45", "^JKLQ45", "IDX", LocalDate.of(1997, 1, 1)))
+                : List.copyOf(otherIndexes);
         tickSizes = tickSizes == null || tickSizes.isEmpty() ? defaultTickSizes() : List.copyOf(tickSizes);
         autoRejection = autoRejection == null || autoRejection.isEmpty() ? defaultAutoRejection()
                 : autoRejection.stream().sorted(Comparator.comparing(AutoRejectionRule::from)).toList();

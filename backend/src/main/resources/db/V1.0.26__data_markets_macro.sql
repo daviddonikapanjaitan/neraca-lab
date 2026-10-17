@@ -9,6 +9,38 @@
 --                             currency; USD/JPY 5 %, its real 2008 moves are larger)
 --   World Bank Pink Sheet     coal: Yahoo has no current coal future (MTF=F stopped in 2025), so coal is the
 --                             monthly "Coal, Australian" (Newcastle, USD/mt) of CMO-Historical-Data-Monthly.xlsx
+--
+-- Commodities added on 2026-10-17 (every source checked that day):
+--   Yahoo Finance chart API   HG=F copper, SI=F silver, NG=F natural gas (Henry Hub), ZC=F corn, ZM=F soybean meal,
+--                             ZW=F wheat, SB=F sugar #11, ZL=F soybean oil (all 2000-), and MYR=X (2003-). ZC, ZW, SB
+--                             and ZL are quoted in US cents (Yahoo currency USX) and stored as quoted. max_spike is
+--                             set so that no real day of the whole history is touched (the cleaner was run on each):
+--                             NG=F 27 Jan 2022 (the February contract's expiry squeeze, 6.265 between 4.277 and 4.639),
+--                             SB=F 28 Apr 2000 (the May expiry, 5.16 between 6.18 and 6.53), COMEX copper's 30 Jul
+--                             2025 low of 4.49 (the tariff exemption), CBOT wheat on 27 Feb 2008 (1,065 - 1,334.5).
+--   World Bank Pink Sheet     no free daily source: nickel and tin (LME; Yahoo has no NI=F / TIN=F), rubber (TSR 20,
+--                             the grade Indonesia exports; no rubber future on Yahoo), LNG (Japan; JKM=F on Yahoo is
+--                             an alternative symbol with a fifth of its days empty and almost no volume)
+--   Palm oil in ringgit       Bursa Malaysia's FCPO has no free source a program may read (not on Yahoo; MPOB's prices
+--                             are a paid subscription). PALM_OIL_MYR is CPO=F (CME, cash-settled on Bursa Malaysia's
+--                             FCPO) x MYR=X on the same day: an approximation of FCPO in ringgit (2022 peak RM 6,913,
+--                             2024 average RM 4,110), not Bursa's own price
+--
+-- Commodities added on 2026-10-17, second batch (every source checked that day):
+--   Yahoo Finance chart API   CL=F WTI (2000-), ALI=F COMEX aluminium (2014-; a month missing in Sep 2016), TIO=F iron
+--                             ore 62% Fe CFR China (2010-), HRC=F US Midwest hot-rolled coil steel (2008-). WTI settled
+--                             at -37.63 on 20 Apr 2020: a close must be positive, so that day is not stored and the
+--                             negative open / low of 21 Apr are cut back by the cleaner; max_spike 30 % keeps every
+--                             other real day (18 Mar 2020: 20.37 between 26.95 and 25.22)
+--   World Bank Pink Sheet     urea, DAP and potassium chloride (fertilizers): monthly averages
+--   IMF PCPS                  cobalt (LME spot, minimum 99.80 %, USD per tonne, 1992-): the SDMX API of the IMF Primary
+--                             Commodity Price System (G001.PCOBA.USD.M); not in the Pink Sheet, not on Yahoo (COB=F has
+--                             one day) nor on FRED
+--   FRED                      wood pulp: no free price exists (the IMF's wood pulp series is empty, the Pink Sheet has
+--                             none, the price indexes FOEX / Fastmarkets are paid), so PULP is the US producer price index
+--                             of wood pulp (BLS WPU0911, 1982 = 100): an index, not a price
+--   Bauxite                   no free source: no exchange trades it, the Pink Sheet and the IMF have no bauxite price,
+--                             and FRED's producer price index of bauxite (PCU2122992122992) stopped in 1990. Not added
 --   FRED                      fredgraph.csv?id=... (no API key)
 --   Bank Indonesia            BI-Rate and inflation pages (their "Download" export), SEKI tables (.xls)
 --   CNBC                      ID10Y-ID daily bars (2011-)
@@ -26,14 +58,62 @@ VALUES
      'US dollar in Indonesian rupiah (Yahoo Finance IDR=X, London close)'),
     ('USDJPY',   'FOREX',     'USD/JPY',             'yahoo',     'JPY=X',            'JPY', 'JPY per USD',          'DAILY',   0.001, 0.05, DATE '1996-01-01', 20,
      'US dollar in Japanese yen (Yahoo Finance JPY=X, London close)'),
-    ('BRENT',    'COMMODITY', 'Crude Oil (Brent)',   'yahoo',     'BZ=F',             'USD', 'USD per barrel',       'DAILY',   0.01,  0.15, DATE '2007-01-01', 10,
+    -- energy
+    ('BRENT',        'COMMODITY', 'Crude Oil (Brent)',       'yahoo',     'BZ=F',             'USD', 'USD per barrel',       'DAILY',   0.01,   0.15, DATE '2007-01-01', 10,
      'Brent crude oil front-month future (ICE / NYMEX BZ=F); the benchmark of Indonesian crude (ICP)'),
-    ('GOLD',     'COMMODITY', 'Gold',                'yahoo',     'GC=F',             'USD', 'USD per troy ounce',   'DAILY',   0.1,   0.08, DATE '2000-01-01', 20,
-     'Gold front-month future (COMEX GC=F)'),
-    ('COAL',     'COMMODITY', 'Coal (Newcastle)',    'worldbank', 'Coal, Australian', 'USD', 'USD per metric ton',   'MONTHLY', 0.01,  NULL, DATE '1979-01-01', 30,
+    ('WTI',          'COMMODITY', 'Crude Oil (WTI)',         'yahoo',     'CL=F',             'USD', 'USD per barrel',       'DAILY',   0.01,   0.30, DATE '2000-09-01', 15,
+     'West Texas Intermediate crude oil front-month future (NYMEX CL=F); the US benchmark'),
+    ('NATURAL_GAS',  'COMMODITY', 'Natural Gas (Henry Hub)', 'yahoo',     'NG=F',             'USD', 'USD per MMBtu',        'DAILY',   0.001,  0.40, DATE '2000-09-01', 20,
+     'US natural gas front-month future (NYMEX NG=F, Henry Hub)'),
+    ('LNG',          'COMMODITY', 'LNG (Japan)',             'worldbank', 'Liquefied natural gas, Japan', 'USD', 'USD per MMBtu', 'MONTHLY', 0.01, NULL, DATE '1980-01-01', 30,
+     'Liquefied natural gas imported by Japan, the benchmark of Asian LNG (Indonesia''s export market): monthly average of the World Bank Pink Sheet (no free daily source)'),
+    ('COAL',         'COMMODITY', 'Coal (Newcastle)',        'worldbank', 'Coal, Australian', 'USD', 'USD per metric ton',   'MONTHLY', 0.01,   NULL, DATE '1979-01-01', 40,
      'Australian thermal coal, Newcastle 6,000 kcal/kg: monthly average of the World Bank Pink Sheet (no free daily source)'),
-    ('PALM_OIL', 'COMMODITY', 'Palm Oil',            'yahoo',     'CPO=F',            'USD', 'USD per metric ton',   'DAILY',   0.25,  0.10, DATE '2010-01-01', 40,
-     'USD Malaysian crude palm oil calendar future (CME CPO=F)')
+    -- metals
+    ('GOLD',         'COMMODITY', 'Gold',                    'yahoo',     'GC=F',             'USD', 'USD per troy ounce',   'DAILY',   0.1,    0.08, DATE '2000-01-01', 50,
+     'Gold front-month future (COMEX GC=F)'),
+    ('SILVER',       'COMMODITY', 'Silver',                  'yahoo',     'SI=F',             'USD', 'USD per troy ounce',   'DAILY',   0.005,  0.15, DATE '2000-09-01', 60,
+     'Silver front-month future (COMEX SI=F)'),
+    ('COPPER',       'COMMODITY', 'Copper',                  'yahoo',     'HG=F',             'USD', 'USD per pound',        'DAILY',   0.0005, 0.25, DATE '2000-09-01', 70,
+     'Copper front-month future (COMEX HG=F)'),
+    ('ALUMINIUM',    'COMMODITY', 'Aluminium',               'yahoo',     'ALI=F',            'USD', 'USD per metric ton',   'DAILY',   0.25,   0.10, DATE '2014-05-01', 72,
+     'Aluminium front-month future (COMEX ALI=F), tracks the LME price'),
+    ('IRON_ORE',     'COMMODITY', 'Iron Ore (62% Fe)',       'yahoo',     'TIO=F',            'USD', 'USD per dry metric ton', 'DAILY', 0.01,   0.15, DATE '2010-11-01', 74,
+     'Iron ore 62% Fe, CFR China (TSI) front-month future (CME / SGX TIO=F), the seaborne benchmark'),
+    ('STEEL_HRC',    'COMMODITY', 'Steel (Hot-Rolled Coil)', 'yahoo',     'HRC=F',            'USD', 'USD per short ton',    'DAILY',   1,      0.15, DATE '2008-11-01', 76,
+     'US Midwest domestic hot-rolled coil steel front-month future (COMEX HRC=F)'),
+    ('NICKEL',       'COMMODITY', 'Nickel',                  'worldbank', 'Nickel',           'USD', 'USD per metric ton',   'MONTHLY', 0.01,   NULL, DATE '1980-01-01', 80,
+     'Nickel (LME cash): monthly average of the World Bank Pink Sheet (no free daily source)'),
+    ('TIN',          'COMMODITY', 'Tin',                     'worldbank', 'Tin',              'USD', 'USD per metric ton',   'MONTHLY', 0.01,   NULL, DATE '1980-01-01', 90,
+     'Tin (LME cash): monthly average of the World Bank Pink Sheet (no free daily source)'),
+    ('COBALT',       'COMMODITY', 'Cobalt',                  'imf',       'PCOBA',            'USD', 'USD per metric ton',   'MONTHLY', 0.01,   NULL, DATE '1992-01-01', 95,
+     'Cobalt, minimum 99.80% purity, LME spot: monthly average of the IMF Primary Commodity Prices (no free daily source)'),
+    -- agriculture
+    ('PALM_OIL',     'COMMODITY', 'Palm Oil (USD)',          'yahoo',     'CPO=F',            'USD', 'USD per metric ton',   'DAILY',   0.25,   0.10, DATE '2010-01-01', 100,
+     'USD Malaysian crude palm oil calendar future (CME CPO=F)'),
+    ('PALM_OIL_MYR', 'COMMODITY', 'Palm Oil (MYR)',          'yahoo',     'CPO=F*MYR=X',      'MYR', 'MYR per metric ton',   'DAILY',   1,      0.10, DATE '2010-06-01', 110,
+     'Crude palm oil in ringgit: CME CPO=F (cash-settled on Bursa Malaysia''s FCPO) x USD/MYR (MYR=X) of the same day. An approximation of Bursa Malaysia FCPO, which has no free source; not Bursa''s own price'),
+    ('SOYBEAN_OIL',  'COMMODITY', 'Soybean Oil',             'yahoo',     'ZL=F',             'USD', 'US cents per pound',   'DAILY',   0.01,   0.10, DATE '2000-04-01', 120,
+     'Soybean oil front-month future (CBOT ZL=F), in US cents per pound as quoted'),
+    ('SOYBEAN_MEAL', 'COMMODITY', 'Soybean Meal',            'yahoo',     'ZM=F',             'USD', 'USD per short ton',    'DAILY',   0.1,    0.15, DATE '2000-06-01', 130,
+     'Soybean meal front-month future (CBOT ZM=F)'),
+    ('CORN',         'COMMODITY', 'Corn',                    'yahoo',     'ZC=F',             'USD', 'US cents per bushel',  'DAILY',   0.25,   0.12, DATE '2000-08-01', 140,
+     'Corn front-month future (CBOT ZC=F), in US cents per bushel as quoted'),
+    ('WHEAT',        'COMMODITY', 'Wheat',                   'yahoo',     'ZW=F',             'USD', 'US cents per bushel',  'DAILY',   0.25,   0.15, DATE '2000-08-01', 150,
+     'Chicago soft red winter wheat front-month future (CBOT ZW=F), in US cents per bushel as quoted'),
+    ('SUGAR',        'COMMODITY', 'Sugar',                   'yahoo',     'SB=F',             'USD', 'US cents per pound',   'DAILY',   0.01,   0.18, DATE '2000-04-01', 160,
+     'Raw sugar #11 front-month future (ICE SB=F), in US cents per pound as quoted'),
+    ('RUBBER',       'COMMODITY', 'Rubber (TSR 20)',         'worldbank', 'Rubber, TSR20',    'USD', 'USD per kg',           'MONTHLY', 0.01,   NULL, DATE '1999-01-01', 170,
+     'Natural rubber TSR 20, the grade Indonesia exports as SIR 20: monthly average of the World Bank Pink Sheet (no free daily source)'),
+    ('PULP',         'COMMODITY', 'Wood Pulp (US PPI)',      'fred',      'WPU0911',          'USD', 'index, 1982 = 100',    'MONTHLY', 0.001,  NULL, DATE '1990-01-01', 180,
+     'US producer price index of wood pulp (BLS, FRED WPU0911), 1982 = 100: an index, not a price - no free pulp price exists'),
+    -- fertilizers
+    ('UREA',         'COMMODITY', 'Urea',                    'worldbank', 'Urea',             'USD', 'USD per metric ton',   'MONTHLY', 0.01,   NULL, DATE '1980-01-01', 190,
+     'Urea: monthly average of the World Bank Pink Sheet (no free daily source)'),
+    ('DAP',          'COMMODITY', 'DAP (Diammonium Phosphate)', 'worldbank', 'DAP',           'USD', 'USD per metric ton',   'MONTHLY', 0.01,   NULL, DATE '1980-01-01', 200,
+     'Diammonium phosphate fertilizer: monthly average of the World Bank Pink Sheet (no free daily source)'),
+    ('POTASH',       'COMMODITY', 'Potash (Potassium Chloride)', 'worldbank', 'Potassium chloride', 'USD', 'USD per metric ton', 'MONTHLY', 0.01, NULL, DATE '1980-01-01', 210,
+     'Potassium chloride (muriate of potash) fertilizer: monthly average of the World Bank Pink Sheet (no free daily source)')
 ON CONFLICT (instrument_code) DO UPDATE SET
     market = EXCLUDED.market, name = EXCLUDED.name, source = EXCLUDED.source, source_symbol = EXCLUDED.source_symbol,
     quote_currency = EXCLUDED.quote_currency, unit = EXCLUDED.unit, frequency = EXCLUDED.frequency,

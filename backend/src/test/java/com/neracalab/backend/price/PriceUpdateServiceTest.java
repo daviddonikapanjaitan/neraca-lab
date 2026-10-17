@@ -36,7 +36,10 @@ class PriceUpdateServiceTest {
     private final PriceIngestionQueue queue = mock(PriceIngestionQueue.class);
     private final PriceIngestionService service = mock(PriceIngestionService.class);
     private final PriceDailyRepository prices = mock(PriceDailyRepository.class);
-    private final IndexIngestion index = mock(IndexIngestion.class);
+    /** the interface's own upToDate (from stored) */
+    private final IndexIngestion index = mock(IndexIngestion.class, org.mockito.Mockito.withSettings()
+            .defaultAnswer(invocation -> invocation.getMethod().isDefault() ? invocation.callRealMethod()
+                    : org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation)));
     private final PriceUpdateService updates = new PriceUpdateService(queue, service, prices, index);
 
     private final CompanyRef antm = company(1, "ANTM");

@@ -137,12 +137,17 @@ neracalab:
       exchange: IDX
 
   # Forex pairs and commodities (Price Ingestion with the market Forex / Commodities, /api/v1/markets; charted on
-  # Technicals). The catalog is market_instrument (V1.0.26__data_markets_macro.sql): USD/IDR, USD/JPY, Brent, gold and
-  # palm oil from Yahoo Finance through the price queue; coal monthly from the World Bank Pink Sheet.
+  # Technicals). The catalog is market_instrument (V1.0.26__data_markets_macro.sql): USD/IDR, USD/JPY and the daily
+  # commodities (Brent, WTI, natural gas, gold, silver, copper, aluminium, iron ore, steel, palm oil in USD and in
+  # ringgit, soybean oil and meal, corn, wheat, sugar) from Yahoo Finance through the price queue; coal, LNG, nickel,
+  # tin, rubber, urea, DAP and potash monthly from the World Bank Pink Sheet, cobalt from the IMF and the wood pulp price
+  # index from FRED (neracalab.macro.fred-base-url).
   markets:
     world-bank:
       page-url: https://www.worldbank.org/en/research/commodity-markets   # links the current CMO-Historical-Data-Monthly.xlsx
       file-url: ${WORLD_BANK_PINK_SHEET_URL:}                             # the workbook itself; empty = the link on page-url
+    imf:
+      base-url: https://api.imf.org/external/sdmx/3.0                     # IMF Primary Commodity Prices (SDMX, no key)
 
   # Macro data of the Druckenmiller and Paul Tudor Jones views (Ingestion > Macro, /api/v1/macro; macro.md). The catalog
   # is macro_series_def (V1.0.26__data_markets_macro.sql): FRED, Bank Indonesia (indicator pages and SEKI tables), CNBC
@@ -168,6 +173,11 @@ neracalab:
       yahoo-symbol: "^JKSE"          # Jakarta Composite Index on Yahoo Finance
       exchange: IDX
       history-from: "1990-01-01"     # start of the first index fetch
+    other-indexes:                   # stored with the benchmark, in the same run (the Macro page's index dropdown)
+      - code: LQ45
+        yahoo-symbol: "^JKLQ45"      # IDX LQ45 on Yahoo Finance (monthly from 1997)
+        exchange: IDX
+        history-from: "1997-01-01"
     min-history-days: 250            # fewer trading days: "limited history" warning
     cache-size: 200                  # chart series kept in memory (ticker x interval x price basis)
     cache-ttl: 12h

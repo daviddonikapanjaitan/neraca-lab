@@ -34,7 +34,6 @@ import com.neracalab.backend.technical.engine.Candle;
 import com.neracalab.backend.technical.engine.IndicatorEngine;
 import com.neracalab.backend.technical.engine.IndicatorSet;
 import com.neracalab.backend.technical.engine.Interval;
-import com.neracalab.backend.technical.engine.MacroSignals;
 import com.neracalab.backend.technical.engine.MarketContext;
 import com.neracalab.backend.technical.engine.PresetSummaries;
 import com.neracalab.backend.technical.engine.RelativeStrength;
@@ -53,14 +52,16 @@ import tools.jackson.databind.json.JsonMapper;
  * and the refresh of the data it needs beyond the daily prices (the index, corporate events). No model is called
  * anywhere: every value is computed in Java from stored data.
  * <p>
- * The exchange's index (IHSG) is a listing too ({@link #INDEX_ID}): its bars come from {@code index_daily}, its levels
- * are rounded to 0.01 index points instead of IDX price ticks, and it has no corporate events, no auto-rejection limits
- * and no stored snapshot (the snapshot table belongs to companies).
+ * The exchange's indexes are listings too: the benchmark IHSG ({@link #INDEX_ID}) and the other indexes of
+ * {@code neracalab.technical.other-indexes} (LQ45: {@link #INDEX_ID} - 1, ...). Their bars come from {@code index_daily},
+ * their levels are rounded to 0.01 index points instead of IDX price ticks, and they have no corporate events, no
+ * auto-rejection limits and no stored snapshot (the snapshot table belongs to companies). LQ45 is compared with IHSG
+ * (relative strength); IHSG with itself (null).
  * <p>
  * So are the Forex pairs and commodities ({@link Market}: the "exchange" FOREX or COMMODITY, the ticker the instrument
  * code, e.g. USDIDR, GOLD): bars from {@code instrument_daily} in their quote currency, levels rounded to the
  * instrument's tick size, no events, no auto-rejection, no lot, no comparison with IHSG, a snapshot kept in memory and
- * summaries read through their macro drivers. A monthly instrument (coal, World Bank) is charted on the monthly
+ * summaries read from their own trend. A monthly instrument (coal, World Bank) is charted on the monthly
  * interval only; levels, snapshot and summaries need daily bars and are refused for it.
  * <p>
  * Daily bars, indicator series and the market context are cached in memory (Caffeine). A cache key carries a
@@ -168,15 +169,24 @@ public class TechnicalService {
         return ticks;
     }
 
-    /** The company id of the index listing (no company has it). */
+    /** The company id of the benchmark index listing (no company has it); the other indexes count down from it. */
     public static final long INDEX_ID = -1L;
+    /** Listing ids from here down are instruments ({@link #instrumentListingId}). */
+    private static final long LAST_INDEX_ID = -999L;
 
     /** Display name of an index: "IDX Composite Index (IHSG)". */
     public static String indexName(String code) {
-        return "IHSG".equalsIgnoreCase(code) ? "IDX Composite Index (IHSG)" : code + " index";
+        return "IHSG".equalsIgnoreCase(code) ? "IDX Composite Index (IHSG)"
+                : "LQ45".equalsIgnoreCase(code) ? "IDX LQ45 Index (LQ45)" : code + " index";
     }
 
+    /** An index (IHSG, LQ45): its listing id lies between {@link #INDEX_ID} and the instruments'. */
     static boolean isIndex(Listing listing) {
+        return listing.companyId() <= INDEX_ID && listing.companyId() >= LAST_INDEX_ID;
+    }
+
+    /** The benchmark index (IHSG): relative strength against it is null. */
+    static boolean isBenchmark(Listing listing) {
         return listing.companyId() == INDEX_ID;
     }
 
@@ -212,7 +222,7 @@ public class TechnicalService {
                 + " in " + market.displayName()));
     }
 
-    /** The exchange whose market context (IHSG, breadth, macro) a listing is read with: an instrument uses the index's. */
+    /** The exchange whose market context (IHSG, breadth) a listing is read with: an instrument uses the index's. */
     private Exchange contextExchange(Listing listing) {
         return isInstrument(listing) ? Exchange.of(properties.index().exchange()) : Exchange.of(listing.exchange());
     }
@@ -236,29 +246,65 @@ public class TechnicalService {
 
     private static String sourceLabel(Instrument i) {
         return switch (i.source()) {
-            case "yahoo" -> "Yahoo Finance " + i.symbol();
+            case "yahoo" -> "Yahoo Finance " + i.symbol().replace("*", " x ");
             case "worldbank" -> "World Bank Pink Sheet, " + i.symbol();
+            case "imf" -> "IMF Primary Commodity Prices, " + i.symbol();
+            case "fred" -> "FRED " + i.symbol();
             default -> i.source();
         };
     }
 
-    /** The exchange's index as a listing (empty: the exchange has no index configured). */
-    java.util.Optional<Listing> indexListing(Exchange exchange) {
-        TechnicalProperties.Index index = properties.index();
-        if (!Exchange.of(index.exchange()).equals(exchange)) {
-            return java.util.Optional.empty();
+    /**
+     * The indexes of an exchange, the benchmark first (IHSG, then LQ45), with their listing ids: the benchmark
+     * {@link #INDEX_ID}, the others counting down from it in configuration order.
+     */
+    Map<Long, TechnicalProperties.Index> indexes(Exchange exchange) {
+        Map<Long, TechnicalProperties.Index> out = new LinkedHashMap<>();
+        if (Exchange.of(properties.index().exchange()).equals(exchange)) {
+            out.put(INDEX_ID, properties.index());
         }
-        TechnicalRepository.IndexStats stats = repository.indexStats(index.code());
-        return java.util.Optional.of(new Listing(INDEX_ID, exchange.code(), index.code(), indexName(index.code()), null,
-                null, exchange.currency(), true, stats.rows(), stats.firstDate(), stats.lastDate()));
+        long id = INDEX_ID - 1;
+        for (TechnicalProperties.Index other : properties.otherIndexes()) {
+            if (Exchange.of(other.exchange()).equals(exchange) && !other.code().equalsIgnoreCase(properties.index().code())) {
+                out.put(id, other);
+            }
+            id--;
+        }
+        return out;
+    }
+
+    /** The exchange's indexes as listings, the benchmark first (empty: none configured). */
+    List<Listing> indexListings(Exchange exchange) {
+        List<Listing> out = new ArrayList<>();
+        indexes(exchange).forEach((id, index) -> {
+            TechnicalRepository.IndexStats stats = repository.indexStats(index.code());
+            out.add(new Listing(id, exchange.code(), index.code(), indexName(index.code()), null, null,
+                    exchange.currency(), true, stats.rows(), stats.firstDate(), stats.lastDate()));
+        });
+        return out;
+    }
+
+    /** The benchmark index as a listing (empty: the exchange has none configured). */
+    java.util.Optional<Listing> indexListing(Exchange exchange) {
+        return indexListings(exchange).stream().filter(TechnicalService::isBenchmark).findFirst();
+    }
+
+    /** The configuration of an index listing (its code and Yahoo symbol). */
+    private TechnicalProperties.Index indexOf(Listing listing) {
+        TechnicalProperties.Index index = indexes(Exchange.of(listing.exchange())).get(listing.companyId());
+        if (index == null) {
+            throw new ListingNotFoundException("No index " + listing.ticker() + " on " + listing.exchange());
+        }
+        return index;
     }
 
     private boolean indexMatches(Listing index, String query) {
         String q = query == null ? "" : query.trim().toUpperCase(Locale.ROOT);
         return q.isEmpty() || index.ticker().toUpperCase(Locale.ROOT).contains(q)
                 || index.companyName().toUpperCase(Locale.ROOT).contains(q)
-                || properties.index().yahooSymbol().toUpperCase(Locale.ROOT).contains(q)
-                || "INDEX".contains(q) || "INDEKS".contains(q) || "COMPOSITE".contains(q);
+                || indexOf(index).yahooSymbol().toUpperCase(Locale.ROOT).contains(q)
+                || "INDEX".contains(q) || "INDEKS".contains(q)
+                || (isBenchmark(index) && "COMPOSITE".contains(q));
     }
 
     private SnapshotCalculator calculator(Listing listing) {
@@ -287,8 +333,8 @@ public class TechnicalService {
         Exchange exchange = Exchange.of(exchangeCode);
         int max = Math.max(1, Math.min(limit, 200));
         List<Listing> listings = new ArrayList<>();
-        // the index first: it is what the market is compared with
-        indexListing(exchange).filter(ix -> indexMatches(ix, query)).ifPresent(listings::add);
+        // the indexes first (IHSG, then LQ45): what the market is compared with
+        indexListings(exchange).stream().filter(ix -> indexMatches(ix, query)).forEach(listings::add);
         listings.addAll(repository.search(exchange, query, max));
         List<Map<String, Object>> out = new ArrayList<>();
         for (Listing l : listings.subList(0, Math.min(listings.size(), max))) {
@@ -371,11 +417,13 @@ public class TechnicalService {
                             + market.get().displayName()));
         }
         Exchange exchange = Exchange.of(exchangeCode);
-        if (ticker != null && (ticker.trim().equalsIgnoreCase(properties.index().code())
-                || ticker.trim().equalsIgnoreCase(properties.index().yahooSymbol()))) {
-            java.util.Optional<Listing> index = indexListing(exchange);
-            if (index.isPresent()) {
-                return index.get();
+        if (ticker != null) {
+            String code = ticker.trim();
+            for (Map.Entry<Long, TechnicalProperties.Index> e : indexes(exchange).entrySet()) {
+                if (code.equalsIgnoreCase(e.getValue().code()) || code.equalsIgnoreCase(e.getValue().yahooSymbol())) {
+                    long id = e.getKey();
+                    return indexListings(exchange).stream().filter(l -> l.companyId() == id).findFirst().orElseThrow();
+                }
             }
         }
         String t = Tickers.normalize(ticker);
@@ -396,10 +444,10 @@ public class TechnicalService {
             return bars;
         }
         if (isIndex(listing)) {
-            List<Candle> bars = indexBars();
+            List<Candle> bars = indexBars(listing.ticker());
             if (bars.isEmpty()) {
-                throw new NoPricesException("No " + listing.ticker() + " bars stored (run the IHSG ingestion on Ingestion "
-                        + "> Price Ingestion first)");
+                throw new NoPricesException("No " + listing.ticker() + " bars stored (run the index ingestion on Ingestion "
+                        + "> Price Ingestion first: 'Update all companies to today' or the index card)");
             }
             return bars;
         }
@@ -422,10 +470,14 @@ public class TechnicalService {
     }
 
     private String indexFingerprint() {
+        return indexFingerprint(properties.index().code());
+    }
+
+    private String indexFingerprint(String code) {
         return jdbc.sql("""
                         SELECT count(*) || ':' || coalesce(max(trading_date)::text, '') || ':' || coalesce(sum(close_price), 0)
                         FROM index_daily WHERE index_code = :code""")
-                .param("code", properties.index().code()).query(String.class).single();
+                .param("code", code).query(String.class).single();
     }
 
     private String exchangeFingerprint(Exchange exchange) {
@@ -434,18 +486,21 @@ public class TechnicalService {
                         FROM price_daily p JOIN company c ON c.company_id = p.company_id
                         WHERE c.exchange = :exchange AND c.active""")
                 .param("exchange", exchange.code()).query(String.class).single()
+                // a company reporting in another currency has its bars converted with these rates
                 + ":" + jdbc.sql("SELECT count(*) || ':' || coalesce(max(rate_date)::text, '') FROM fx_rate_daily")
-                .query(String.class).single()
-                + ":" + jdbc.sql("""
-                        SELECT count(*) || ':' || coalesce(max(obs_date)::text, '') || ':' || coalesce(max(updated_at)::text, '')
-                        FROM macro_series""").query(String.class).single()
-                + ":" + instruments.fingerprint("USDIDR");
+                .query(String.class).single();
     }
 
+    /** The benchmark's bars (IHSG): relative strength, the market regime. */
     List<Candle> indexBars() {
+        return indexBars(properties.index().code());
+    }
+
+    /** An index's bars (cached by its fingerprint). */
+    List<Candle> indexBars(String code) {
         @SuppressWarnings("unchecked")
-        List<Candle> bars = (List<Candle>) cache.get("index:" + indexFingerprint(),
-                k -> repository.indexBars(properties.index().code()));
+        List<Candle> bars = (List<Candle>) cache.get("index:" + code + ":" + indexFingerprint(code),
+                k -> repository.indexBars(code));
         return bars;
     }
 
@@ -489,7 +544,7 @@ public class TechnicalService {
         Map<String, Object> out = header(listing, interval, daily);
         out.put("adjustment", adjustment.name().toLowerCase(Locale.ROOT));
         out.put("priceBasis", isInstrument(listing) ? instrumentBasis(instrument(listing))
-                : isIndex(listing) ? "index points (Yahoo Finance " + properties.index().yahooSymbol() + ")"
+                : isIndex(listing) ? "index points (Yahoo Finance " + indexOf(listing).yahooSymbol() + ")"
                 : adjustment == Adjustment.SPLIT
                 ? "split-adjusted, as traded since the last split (raw prices before a split are not stored)"
                 : "adjusted for splits and cash dividends (total return); not tradable prices");
@@ -735,9 +790,9 @@ public class TechnicalService {
         return out;
     }
 
-    /** IHSG regime, breadth and macro series for the market panel. */
+    /** IHSG regime and breadth for the market panel (technical only: the macro data are on the Macro page). */
     public Map<String, Object> market(String exchangeCode, LocalDate from) {
-        // Forex and Commodities are read with the IDX context (IHSG regime, the macro data)
+        // Forex and Commodities are read with the IDX context (the IHSG regime)
         Exchange exchange = Market.isMarket(exchangeCode) ? Exchange.of(properties.index().exchange())
                 : Exchange.of(exchangeCode);
         MarketContext context = marketContext(exchange);
@@ -776,43 +831,10 @@ public class TechnicalService {
         breadth.put("universe", context.universe().size());
         breadth.put("note", "share of the stored active listings of " + exchange.code() + " above their SMA 200 (not the whole exchange)");
         out.put("breadth", breadth);
-        Map<String, Object> macro = new LinkedHashMap<>();
-        Map<String, TechnicalRepository.MacroDef> defs = new LinkedHashMap<>();
-        for (TechnicalRepository.MacroDef def : repository.macroDefs()) {
-            defs.put(def.code(), def);
-        }
-        List<String> codes = new ArrayList<>(List.of("BI_RATE", "SBN_10Y", "USD_IDR"));
-        defs.keySet().stream().filter(c -> !codes.contains(c)).forEach(codes::add);
-        for (String code : codes) {
-            List<List<Object>> points = new ArrayList<>();
-            for (MarketContext.Observation o : context.macro().getOrDefault(code, List.of())) {
-                if (from == null || !o.date().isBefore(from)) {
-                    points.add(List.of(time(o.date()), r6(o.value())));
-                }
-            }
-            TechnicalRepository.MacroDef def = defs.get(code);
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("points", points);
-            m.put("source", code.equals("USD_IDR") ? repository.usdIdrSource()
-                    : def == null ? "macro_series" : def.source());
-            m.put("name", code.equals("USD_IDR") ? "USD/IDR" : def == null ? code : def.name());
-            m.put("unit", code.equals("USD_IDR") ? "IDR per USD" : def == null ? null : def.unit());
-            m.put("country", code.equals("USD_IDR") ? "ID" : def == null ? null : def.country());
-            m.put("frequency", code.equals("USD_IDR") ? "DAILY" : def == null ? null : def.frequency());
-            macro.put(code, m);
-        }
-        out.put("macro", macro);
-        // the signals and regimes as of the latest market day (or today, before any price is stored)
-        List<String> notes = new ArrayList<>();
-        Map<String, Object> signals = MacroSignals.compute(context.macro(),
-                context.asOfDate() == null ? LocalDate.now(exchange.zone()) : context.asOfDate(), notes);
-        signals.remove("series");
-        signals.put("notes", notes);
-        out.put("macroSignals", signals);
         return out;
     }
 
-    /** The market context of an exchange (cached by the fingerprint of its prices, the index and the macro data). */
+    /** The market context of an exchange (cached by the fingerprint of its prices and the index). */
     MarketContext marketContext(Exchange exchange) {
         String key = "market:" + exchange.code() + ":" + exchangeFingerprint(exchange) + ":" + indexFingerprint();
         return (MarketContext) cache.get(key, k -> buildMarketContext(exchange));
@@ -858,15 +880,7 @@ public class TechnicalService {
             members.put(l.companyId(), new MarketContext.Member(l.companyId(), l.ticker(), l.sector(), upTo.getLast().date(),
                     r6, r12, above));
         }
-        Map<String, List<MarketContext.Observation>> macro = new LinkedHashMap<>();
-        List<String> codes = new ArrayList<>(List.of("BI_RATE", "SBN_10Y", "USD_IDR"));
-        repository.macroDefs().stream().map(TechnicalRepository.MacroDef::code).filter(c -> !codes.contains(c))
-                .forEach(codes::add);
-        for (String code : codes) {
-            macro.put(code, repository.macro(code).stream()
-                    .map(o -> new MarketContext.Observation(o.date(), o.value(), o.released())).toList());
-        }
-        return new MarketContext(exchange.code(), asOf, properties.index().code(), index, members, macro);
+        return new MarketContext(exchange.code(), asOf, properties.index().code(), index, members);
     }
 
     private static LocalDate max(LocalDate a, LocalDate b) {
@@ -907,27 +921,31 @@ public class TechnicalService {
     }
 
     /**
-     * The snapshot of the index: the same groups on its bars (levels in index points), kept in memory only. What does
-     * not apply to an index is null, with a note: relative strength against itself, auto-rejection limits, lot size
-     * and value traded (index points x shares is no value).
+     * The snapshot of an index: the same groups on its bars (levels in index points), kept in memory only. What does
+     * not apply to an index is null, with a note: auto-rejection limits, lot size and value traded (index points x
+     * shares is no value), and for the benchmark (IHSG) relative strength against itself; LQ45 keeps its relative
+     * strength against IHSG.
      */
     @SuppressWarnings("unchecked")
     private String indexSnapshotJson(Listing listing) {
         List<Candle> daily = dailyBars(listing);
         MarketContext market = marketContext(Exchange.of(listing.exchange()));
-        String key = "indexSnapshot:" + SnapshotCalculator.inputHash(daily, List.of(), market, properties);
+        String key = "indexSnapshot:" + listing.ticker() + ":" + SnapshotCalculator.inputHash(daily, List.of(), market,
+                properties);
         return (String) cache.get(key, unused -> {
             Map<String, Object> doc = indexCalculator.snapshot(listing.exchange(), listing.ticker(), listing.companyName(),
                     null, Exchange.of(listing.exchange()).currency(), daily, List.of(), market);
-            doc.put("priceBasis", "index points (Yahoo Finance " + properties.index().yahooSymbol()
+            doc.put("priceBasis", "index points (Yahoo Finance " + indexOf(listing).yahooSymbol()
                     + "), daily bars; levels rounded to 0.01");
             Map<String, Object> price = (Map<String, Object>) doc.get("price");
             price.put("valueTraded", null);
             price.put("tickSize", 0.01);
             price.put("lotSize", null);
-            Map<String, Object> rs = (Map<String, Object>) doc.get("relativeStrength");
-            rs.put("ratio", null);
-            rs.put("ratioChange50Pct", null);
+            if (isBenchmark(listing)) {
+                Map<String, Object> rs = (Map<String, Object>) doc.get("relativeStrength");
+                rs.put("ratio", null);
+                rs.put("ratioChange50Pct", null);
+            }
             Map<String, Object> risk = (Map<String, Object>) doc.get("risk");
             for (String k : List.of("avgValueTraded20", "araCount60", "arbCount60", "lastAra", "lastArb")) {
                 risk.put(k, null);
@@ -936,9 +954,17 @@ public class TechnicalService {
             volume.put("avgValue20", null);
             volume.put("avgValue50", null);
             List<String> notes = (List<String>) doc.get("notes");
-            notes.add("An index: relative strength vs " + properties.index().code() + " (itself), auto-rejection "
+            notes.add(isBenchmark(listing)
+                    ? "An index: relative strength vs " + properties.index().code() + " (itself), auto-rejection "
                     + "limits, lot size and value traded do not apply and are null; the percentiles compare its returns "
-                    + "with the stored listings");
+                    + "with the stored listings"
+                    : "An index: relative strength is against " + properties.index().code() + "; auto-rejection limits, "
+                    + "lot size and value traded do not apply and are null; the percentiles compare its returns with the "
+                    + "stored listings");
+            if (daily.stream().allMatch(c -> c.volume() == 0)) {
+                notes.add("No volume: Yahoo Finance publishes none for " + indexOf(listing).yahooSymbol()
+                        + "; the volume indicators are empty");
+            }
             return json.writeValueAsString(doc);
         });
     }
@@ -981,7 +1007,7 @@ public class TechnicalService {
             notes.add("A " + Market.of(listing.exchange()).itemLabel().toLowerCase(Locale.ROOT) + " (" + instrument.unit()
                     + "): relative strength vs " + properties.index().code() + ", the percentiles among the listed stocks, "
                     + "auto-rejection limits, lot size, value traded and the IDX session checks do not apply and are null; "
-                    + "the market regime and the macro groups are those of " + properties.index().exchange());
+                    + "the market regime is that of " + properties.index().exchange());
             if (daily.stream().allMatch(c -> c.volume() == 0)) {
                 notes.add("No traded volume (an over-the-counter market): the volume indicators are empty");
             }
@@ -1154,7 +1180,8 @@ public class TechnicalService {
         Instrument instrument = isInstrument(listing) ? instrument(listing) : null;
         out.put("unit", instrument == null ? null : instrument.unit());
         out.put("frequency", instrument == null ? "DAILY" : instrument.frequency());
-        out.put("source", instrument == null ? null : sourceLabel(instrument));
+        out.put("source", instrument != null ? sourceLabel(instrument)
+                : isIndex(listing) ? "Yahoo Finance " + indexOf(listing).yahooSymbol() : null);
         return out;
     }
 

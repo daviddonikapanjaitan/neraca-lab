@@ -118,8 +118,10 @@ export function PriceCard({
             <>
               <li>Only the days after the latest stored day are fetched. The first run loads the full history.</li>
               <li>
-                Daily bars up to the last completed day (today&apos;s bar is still forming). Coal is the World Bank
-                monthly average, one bar per month.
+                Daily bars up to the last completed day (today&apos;s bar is still forming). Coal, LNG, nickel, tin,
+                rubber and the fertilizers are the World Bank monthly average, cobalt the IMF&apos;s and wood pulp the US
+                producer price index (FRED), one bar per month; palm oil in ringgit is CME CPO=F x USD/MYR (an
+                approximation of Bursa Malaysia FCPO).
               </li>
               <li>Bad prints of the source (a price that jumps away and straight back) are not stored.</li>
             </>
@@ -187,7 +189,7 @@ export function PriceCard({
             {instrument.lastDate
               ? `${instrument.rows.toLocaleString("en-US")} ${instrument.frequency === "MONTHLY" ? "months" : "days"} stored, ${formatDate(instrument.firstDate)} to ${formatDate(instrument.lastDate)}${instrument.upToDate ? " (up to date)" : ""}.`
               : "No prices stored yet: the full history will be loaded."}{" "}
-            Source: {providerLabel(instrument.source)} ({instrument.symbol}).
+            Source: {providerLabel(instrument.source)} ({instrument.symbol.replace("*", " x ")}).
           </p>
         )}
 

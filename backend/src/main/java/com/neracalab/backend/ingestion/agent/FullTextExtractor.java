@@ -386,6 +386,9 @@ public class FullTextExtractor {
         Map<Target, MappedStatement> statements = new LinkedHashMap<>();
         Map<Target, List<String>> open = new LinkedHashMap<>();
         Map<Target, List<String>> hints = new LinkedHashMap<>();
+        // the model's terms of each stored statement, and the rows whose reversed sign would reconcile it
+        Map<Target, Map<String, List<Term>>> termsOf = new LinkedHashMap<>();
+        Map<Target, List<Term>> reversals = new LinkedHashMap<>();
         List<String> errors = new ArrayList<>();
         for (int round = 1; round <= properties.rounds(); round++) {
             trace.deadline().check("the full-text extraction's model call");
@@ -417,6 +420,8 @@ public class FullTextExtractor {
             hints.clear();
             for (Target target : targets) {
                 List<String> issues = new ArrayList<>();
+                termsOf.remove(target);
+                reversals.remove(target);
                 if (mapping.adopt().contains(target.key()) && target.adoptable()) {
                     statements.put(target, adopted(target));
                     continue;
@@ -425,12 +430,15 @@ public class FullTextExtractor {
                     errors.add("\"" + target.key() + "\" cannot be adopted: the rule-based extraction did not read it without "
                             + "failed checks; map its fields");
                 }
-                MappedStatement statement = statement(session, text, target, mapping.of(target), issues);
+                List<Term> reversal = new ArrayList<>();
+                MappedStatement statement = statement(session, text, target, mapping.of(target), issues, reversal);
                 // a value the model's rows gave (not one filled in from the notes)
                 if (MODEL_FIELDS.get(target.kind()).stream().map(Field::name)
                         .anyMatch(f -> statement.values().get(f) != null
                                 && String.valueOf(statement.derivations().get(f)).startsWith("full-text extraction: "))) {
                     statements.put(target, statement);
+                    termsOf.put(target, mapping.of(target));
+                    reversals.put(target, reversal);
                 } else if (!text.hasFigures(target.kind(), target.valueColumn())) {
                     statements.remove(target);
                     continue;       // nothing in the file for this statement's column: reported once, per column
@@ -466,6 +474,29 @@ public class FullTextExtractor {
             }));
             history.add(new AssistantMessage(answer));
             history.add(new UserMessage(feedback(mapper, points, errors)));
+        }
+        // a reversed sign the model was shown and kept: when it is the only choice that reconciles an insurer's profit
+        // before tax exactly and the statement then has no open check, it is reversed for the model - not stored known wrong
+        for (Target target : List.copyOf(open.keySet())) {
+            List<Term> rows = reversals.getOrDefault(target, List.of());
+            if (rows.isEmpty() || !statements.containsKey(target)) {
+                continue;
+            }
+            List<String> issues = new ArrayList<>();
+            MappedStatement corrected = statement(session, text, target, reversed(termsOf.get(target), rows), issues, new ArrayList<>());
+            if (!issues.isEmpty()) {
+                continue;
+            }
+            String which = String.join(" and ", rows.stream().map(t -> "'" + t.row().label() + "' (" + t.row().ref() + ")").toList());
+            List<Check> checks = new ArrayList<>(corrected.checks());
+            checks.add(Check.warning("full_text", "The sign of " + which + " reversed from the model's answer: only so do "
+                    + "revenue - costs equal the filed profit before tax"));
+            statements.put(target, new MappedStatement(corrected.table(), corrected.column(), corrected.period(),
+                    corrected.sourceSheet(), corrected.values(), corrected.derivations(), checks, corrected.unclassified(),
+                    corrected.rejected()));
+            open.remove(target);
+            notes.add("Full-text extraction of " + target.name(mapper) + ": the sign of " + which + " reversed from the "
+                    + "model's answer, the only choice that makes revenue - costs equal the filed profit before tax");
         }
         // a field left empty because its rows cannot be read is an open item; the rest is for the audit trail
         errors.forEach(e -> (e.endsWith(LEFT_EMPTY) ? problems : notes).add("Full-text extraction: " + e));
@@ -792,10 +823,11 @@ public class FullTextExtractor {
     /**
      * The statement of a target from the model's terms. Where the mapping contradicts itself - an identity that
      * does not hold, a required total without rows - is added to {@code issues} (shown to the model, and kept in
-     * the statement as warnings); it never keeps the statement from being stored.
+     * the statement as warnings); it never keeps the statement from being stored. The rows whose reversed sign
+     * reconciles an insurer's profit before tax, when exactly one choice does, are added to {@code reversal}.
      */
     private MappedStatement statement(IngestionSession session, WorkbookText text, Target target, Map<String, List<Term>> terms,
-                                      List<String> issues) {
+                                      List<String> issues, List<Term> reversal) {
         FilingMapper mapper = session.mapper();
         String table = target.kind().table();
         boolean bank = mapper.financial();
@@ -927,7 +959,10 @@ public class FullTextExtractor {
                             values.get("revenue"), values.get("cost_of_revenue"), values.get("operating_expenses"));
                     if (issues.size() > before) {
                         signHint(counted, values.get("pretax_income").subtract(fromLines), tolerance, columnName(target))
-                                .ifPresent(issues::add);
+                                .ifPresent(hint -> {
+                                    issues.add(hint.getKey());
+                                    reversal.addAll(hint.getValue());
+                                });
                     }
                 }
                 BigDecimal afterTax = sum(values.get("pretax_income"), negate(values.get("income_tax")));
@@ -1059,11 +1094,14 @@ public class FullTextExtractor {
      * makes revenue - costs equal profit before tax exactly; only when exactly one such choice exists. A hint for the
      * model, which decides: TUGU's 'Decrease (increase) in premium income ceded to reinsurancer' reads like a row signed
      * already, but its profit before tax deducts the amount as filed (FY2023: 261,564,001 thousand added instead of
-     * deducted, revenue - costs 2,155,458,543 for a profit before tax of 1,632,330,541).
+     * deducted, revenue - costs 2,155,458,543 for a profit before tax of 1,632,330,541). When the model's last answer
+     * keeps the sign all the same, the rows are reversed for it (see {@link #reversed}).
      *
      * @param gap profit before tax - (revenue - costs), full units
+     * @return the hint and the terms whose sign is to be reversed
      */
-    private static Optional<String> signHint(Map<String, List<Counted>> counted, BigDecimal gap, BigDecimal tolerance, String column) {
+    private static Optional<Map.Entry<String, List<Term>>> signHint(Map<String, List<Counted>> counted, BigDecimal gap,
+                                                                    BigDecimal tolerance, String column) {
         record Candidate(String field, Counted row, BigDecimal effect) {
         }
         List<Candidate> candidates = new ArrayList<>();
@@ -1093,10 +1131,26 @@ public class FullTextExtractor {
         if (fits.size() != 1) {
             return Optional.empty();
         }
-        return Optional.of("revenue - costs equal profit before tax in " + column + " exactly when the sign of "
+        return Optional.of(Map.entry("revenue - costs equal profit before tax in " + column + " exactly when the sign of "
                 + String.join(" and of ", fits.getFirst().stream().map(c -> "'" + c.row().term().row().label() + "' ("
                 + c.row().term().row().ref() + ") in " + c.field()).toList())
-                + " is reversed: check how the filing's profit before tax counts it");
+                + " is reversed: check how the filing's profit before tax counts it",
+                fits.getFirst().stream().map(c -> c.row().term()).toList()));
+    }
+
+    /**
+     * The terms of a statement with the sign of the given rows reversed in every field that names them (revenue and
+     * the gross profit or operating income built from the same rows). PNLF FY2024 (error 582): its profit before tax
+     * adds 'Decrease (increase) in unearned premiums' as filed (3,269 million in FY2024, -760 in FY2023); the model
+     * deducted it, was shown the only reversal that closes the gap (6,538 = 2 x 3,269) and answered the same, so revenue
+     * was stored 6,538 million short and operating income 4,248,950 beside a profit before tax of 4,255,488.
+     */
+    private static Map<String, List<Term>> reversed(Map<String, List<Term>> terms, List<Term> rows) {
+        Set<String> refs = rows.stream().map(t -> t.row().ref()).collect(java.util.stream.Collectors.toSet());
+        Map<String, List<Term>> result = new LinkedHashMap<>();
+        terms.forEach((field, list) -> result.put(field, list.stream()
+                .map(t -> refs.contains(t.row().ref()) ? new Term(t.row(), -t.sign()) : t).toList()));
+        return result;
     }
 
     /** An identity that must hold when both sides are known (and every operand in {@code needed} was mapped). */

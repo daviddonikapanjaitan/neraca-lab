@@ -1,7 +1,8 @@
 "use client"
 
-// The candlestick chart of the Technicals page: a small wrapper around TradingView Lightweight Charts v5 (no third-party
-// React wrapper). The chart is rebuilt when its data, indicators or theme change, and removed on unmount.
+// The price chart of the Technicals page: a small wrapper around TradingView Lightweight Charts v5 (no third-party
+// React wrapper). Candlesticks, or a plain line of the close for palm oil and the monthly series (chartsAsLine). The
+// chart is rebuilt when its data, indicators or theme change, and removed on unmount.
 import { useEffect, useImperativeHandle, useRef, type Ref } from "react"
 import {
   CandlestickSeries,
@@ -20,7 +21,7 @@ import {
 } from "lightweight-charts"
 
 import { BandPrimitive, type PriceBand, type PriceBox } from "@/components/technical/band-primitive"
-import type { Events, IndicatorId, IndicatorSeries, Levels, Ohlcv } from "@/lib/technical"
+import { chartsAsLine, type Events, type IndicatorId, type IndicatorSeries, type Levels, type Ohlcv } from "@/lib/technical"
 
 export interface PriceChartHandle {
   /** PNG of the chart as shown (all panes), or null before the chart exists */
@@ -187,19 +188,34 @@ export default function PriceChart({ ohlcv, indicators, levels, events, selected
     })
     chartRef.current = chart
 
-    // ---- price pane
-    const candles = chart.addSeries(CandlestickSeries, {
-      upColor: p.up,
-      downColor: p.down,
-      wickUpColor: p.up,
-      wickDownColor: p.down,
-      borderVisible: false,
-      priceFormat,
-      title: ohlcv.ticker,
-    })
-    candles.setData(
-      ohlcv.bars.map(([t, o, h, l, c]) => ({ time: t as UTCTimestamp, open: o, high: h, low: l, close: c }))
-    )
+    // ---- price pane: candlesticks, or a plain line of the close (coal, palm oil)
+    let candles: ISeriesApi<"Candlestick"> | ISeriesApi<"Line">
+    if (chartsAsLine(ohlcv.type, ohlcv.ticker, ohlcv.frequency)) {
+      const closeLine = chart.addSeries(LineSeries, {
+        color: p.lines.primary,
+        lineWidth: 2,
+        priceLineVisible: true,
+        lastValueVisible: true,
+        priceFormat,
+        title: ohlcv.ticker,
+      })
+      closeLine.setData(ohlcv.bars.map(([t, , , , c]) => ({ time: t as UTCTimestamp, value: c })))
+      candles = closeLine
+    } else {
+      const candleSeries = chart.addSeries(CandlestickSeries, {
+        upColor: p.up,
+        downColor: p.down,
+        wickUpColor: p.up,
+        wickDownColor: p.down,
+        borderVisible: false,
+        priceFormat,
+        title: ohlcv.ticker,
+      })
+      candleSeries.setData(
+        ohlcv.bars.map(([t, o, h, l, c]) => ({ time: t as UTCTimestamp, open: o, high: h, low: l, close: c }))
+      )
+      candles = candleSeries
+    }
 
     const overlay = (points: Point[] | undefined, color: string, title: string, style: LineStyle = LineStyle.Solid, width = 1) => {
       if (!points || points.length === 0) return
@@ -383,13 +399,14 @@ export default function PriceChart({ ohlcv, indicators, levels, events, selected
   }, [ohlcv, indicators, levels, events, selected, dark])
 
   const paneCount = 1 + PANES.filter((d) => selected.includes(d.id)).length
+  const kind = chartsAsLine(ohlcv.type, ohlcv.ticker, ohlcv.frequency) ? "line" : "candlestick"
   return (
     <div
       ref={containerRef}
       className="w-full"
       style={{ height: Math.min(1100, 420 + (paneCount - 1) * 130) }}
       role="img"
-      aria-label={`${ohlcv.ticker} ${ohlcv.interval === "D" ? "daily" : ohlcv.interval === "W" ? "weekly" : "monthly"} candlestick chart`}
+      aria-label={`${ohlcv.ticker} ${ohlcv.interval === "D" ? "daily" : ohlcv.interval === "W" ? "weekly" : "monthly"} ${kind} chart`}
     />
   )
 }

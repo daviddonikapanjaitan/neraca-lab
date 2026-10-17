@@ -103,11 +103,16 @@ class MarketControllerTest {
         String body = mvc.perform(get("/api/v1/markets/commodity")).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         JsonNode commodities = json.readTree(body);
-        assertThat(commodities.get("items").size()).isEqualTo(4);
+        assertThat(commodities.get("items").size()).isEqualTo(26);
         assertThat(commodities.get("upToDate").asInt() + commodities.get("behind").asInt()
-                + commodities.get("withoutPrices").asInt()).isEqualTo(4);
-        assertThat(commodities.get("items").get(2).get("code").asString()).isEqualTo("COAL");
-        assertThat(commodities.get("items").get(2).get("frequency").asString()).isEqualTo("MONTHLY");
+                + commodities.get("withoutPrices").asInt()).isEqualTo(26);
+        // energy, metals, agriculture and materials (sort_order): Brent, WTI, natural gas, LNG, coal, gold, ...
+        assertThat(commodities.get("items").get(4).get("code").asString()).isEqualTo("COAL");
+        assertThat(commodities.get("items").get(4).get("frequency").asString()).isEqualTo("MONTHLY");
+        assertThat(commodities.get("items").get(13).get("code").asString()).isEqualTo("COBALT");
+        assertThat(commodities.get("items").get(13).get("source").asString()).isEqualTo("imf");
+        assertThat(commodities.get("items").get(15).get("code").asString()).isEqualTo("PALM_OIL_MYR");
+        assertThat(commodities.get("items").get(15).get("unit").asString()).isEqualTo("MYR per metric ton");
         mvc.perform(get("/api/v1/markets/NYSE")).andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.title").value("Unsupported market"));
     }

@@ -10,7 +10,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { EMPTY, formatCompact, formatDate, formatNumber, formatPercent, formatPrice } from "@/lib/format"
-import { decimalsOf, downloadCsv, flatten, formatLevel, type Levels, type MacroRegime, type Market, type Snapshot } from "@/lib/technical"
+import { decimalsOf, downloadCsv, flatten, formatLevel, type Levels, type Market, type Snapshot } from "@/lib/technical"
 import { cn } from "@/lib/utils"
 
 function signed(value: number | null | undefined, digits = 2): string {
@@ -179,12 +179,7 @@ export function SnapshotCard({ snapshot }: { snapshot: Snapshot }) {
   const rs = snapshot.relativeStrength as Group
   const sector = rs.sector as Group | undefined
   const regime = snapshot.marketRegime as Group
-  const macro = snapshot.macro as Group
   const risk = snapshot.risk as Group
-  const usd = macro.usdIdr as Group | undefined
-  const bi = macro.biRate as Group | undefined
-  const sbn = macro.sbn10y as Group | undefined
-  const regimes = (macro.regimes ?? {}) as Record<string, MacroRegime | undefined>
   const exportCsv = () =>
     downloadCsv(`${snapshot.ticker}-snapshot-${snapshot.asOfDate}.csv`, ["field", "value"], flatten(snapshot).map(([k, v]) => [k, v]))
   const pct = (v: number | null) => (v === null ? EMPTY : formatPercent(v / 100))
@@ -239,13 +234,6 @@ export function SnapshotCard({ snapshot }: { snapshot: Snapshot }) {
           <Row label="IHSG vs SMA 200" value={regime.indexVsSma200Pct === null || regime.indexVsSma200Pct === undefined ? EMPTY : `${signed(regime.indexVsSma200Pct as number, 1)} (${regime.indexAboveSma200 ? "above" : "below"})`} />
           <Row label="Breadth above SMA 200" hint={String(regime.breadthNote ?? "")} value={`${pct(n(regime, "breadthAbove200Pct"))} of ${regime.breadthCounted ?? EMPTY}`} />
         </Section>
-        <Section title="Macro">
-          <Row label="BI rate (6M change)" value={bi?.value === null || bi?.value === undefined ? "no data" : `${formatNumber(bi.value as number, 2)}% (${signed(bi.changePoints as number | null, 2).replace("%", " pts")})`} />
-          <Row label="SBN 10Y (3M change)" value={sbn?.value === null || sbn?.value === undefined ? "no data" : `${formatNumber(sbn.value as number, 2)}% (${signed(sbn.changePoints as number | null, 2).replace("%", " pts")})`} />
-          <Row label="USD/IDR (3M change)" value={usd?.value === null || usd?.value === undefined ? "no data" : `${formatNumber(usd.value as number, 0)} (${signed(usd.changePct as number | null, 1)})`} />
-          <Row label="Liquidity regime" hint="Druckenmiller: the Fed and BI, US net liquidity, credit, the dollar, the rupiah, foreign flows" value={regimeText(regimes.liquidity)} />
-          <Row label="Risk regime" hint="Tudor Jones: VIX, credit, the US curve, the dollar, US inflation, SBN yields" value={regimeText(regimes.risk)} />
-        </Section>
         <Section title="Risk flags">
           <Row label="ARA / ARB days (60)" value={`${risk.araCount60 ?? EMPTY} / ${risk.arbCount60 ?? EMPTY}`} />
           <Row label="Gap days (60)" value={`${risk.gapDays60 ?? EMPTY} (${formatNumber(n(risk, "gapFrequency60Pct"), 0)}%)`} />
@@ -278,10 +266,6 @@ export function SnapshotCard({ snapshot }: { snapshot: Snapshot }) {
 const regimeConfig = {
   close: { label: "IHSG", theme: { light: "oklch(0.371 0 0)", dark: "oklch(0.87 0 0)" } },
   sma200: { label: "SMA 200", color: "oklch(0.637 0.237 25.331)" },
-} satisfies ChartConfig
-
-const macroConfig = {
-  value: { label: "Value", theme: { light: "oklch(0.371 0 0)", dark: "oklch(0.87 0 0)" } },
 } satisfies ChartConfig
 
 function dateOf(t: number) {
@@ -319,114 +303,5 @@ export function RegimeCard({ market }: { market: Market }) {
         )}
       </CardContent>
     </Card>
-  )
-}
-
-/** "Easing (+3 of 6 signals)", "Unknown: fewer than 3 signals" */
-function regimeText(regime: MacroRegime | undefined): string {
-  if (!regime) return "no data"
-  if (!regime.state) return `unknown (${regime.signals} of at least 3 signals)`
-  const score = regime.score ?? 0
-  return `${regime.state.replace("_", " ").toLowerCase()} (${score > 0 ? "+" : ""}${formatNumber(score, 1)} from ${regime.signals} signals)`
-}
-
-/** The series of the macro panel, in this order (each shown when stored) */
-const MACRO_PANEL: { code: string; label: string; digits: number }[] = [
-  { code: "BI_RATE", label: "BI rate (%)", digits: 2 },
-  { code: "SBN_10Y", label: "SBN 10Y yield (%)", digits: 2 },
-  { code: "USD_IDR", label: "USD/IDR", digits: 0 },
-  { code: "ID_CPI_YOY", label: "Indonesia CPI (YoY %)", digits: 2 },
-  { code: "US_FED_FUNDS", label: "Fed funds (%)", digits: 2 },
-  { code: "US_10Y", label: "US 10Y yield (%)", digits: 2 },
-  { code: "DXY", label: "Dollar index (DXY)", digits: 2 },
-  { code: "US_HY_SPREAD", label: "US high-yield spread (%)", digits: 2 },
-  { code: "VIX", label: "VIX", digits: 2 },
-]
-
-export function MacroCard({ market }: { market: Market }) {
-  const regimes = (market.macroSignals?.regimes ?? {}) as Record<string, MacroRegime | undefined>
-  const panels = MACRO_PANEL.filter((p) => (market.macro[p.code]?.points.length ?? 0) > 0)
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Macro</CardTitle>
-        <CardDescription>
-          Last year · regimes of the Druckenmiller and Tudor Jones presets as of {formatDate(market.asOfDate)} · data from
-          Ingestion › Macro
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <RegimeBox title="Liquidity (Druckenmiller)" regime={regimes.liquidity} good="EASING" bad="TIGHTENING" />
-          <RegimeBox title="Risk (Tudor Jones)" regime={regimes.risk} good="RISK_ON" bad="RISK_OFF" />
-        </div>
-        {panels.length === 0 ? (
-          <EmptyState variant="chart" title="No macro data" description="Run the macro ingestion on Ingestion › Macro." />
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-3">
-            {panels.map(({ code, label, digits }) => {
-              const series = market.macro[code]
-              const data = (series?.points ?? []).map(([t, v]) => ({ date: dateOf(t), value: v }))
-              const last = data[data.length - 1]
-              return (
-                <div key={code} className="min-w-0 space-y-1">
-                  <p className="text-sm font-medium">{label}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {last ? `${formatNumber(last.value, digits)} on ${formatDate(last.date)}` : "No data"}
-                  </p>
-                  {data.length > 1 ? (
-                    <ChartContainer config={macroConfig} className="aspect-auto h-[110px] w-full">
-                      <LineChart data={data} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
-                        <XAxis dataKey="date" hide />
-                        <YAxis hide domain={["auto", "auto"]} />
-                        <ChartTooltip content={<ChartTooltipContent labelFormatter={(v) => formatDate(String(v))} />} />
-                        <Line dataKey="value" stroke="var(--color-value)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
-                      </LineChart>
-                    </ChartContainer>
-                  ) : (
-                    <div className="flex h-[110px] items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
-                      {series?.source ?? "no source"}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-/** A regime with its state and the signals that voted for and against it. */
-function RegimeBox({ title, regime, good, bad }: { title: string; regime: MacroRegime | undefined; good: string; bad: string }) {
-  const state = regime?.state ?? null
-  return (
-    <div className="space-y-1.5 rounded-lg border p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium">{title}</p>
-        <Badge
-          variant="outline"
-          className={cn(
-            state === good && "border-emerald-600/40 text-emerald-700 dark:text-emerald-400",
-            state === bad && "border-rose-600/40 text-rose-700 dark:text-rose-400"
-          )}
-        >
-          {regimeText(regime)}
-        </Badge>
-      </div>
-      {regime && regime.components.length > 0 ? (
-        <ul className="space-y-0.5 text-xs text-muted-foreground">
-          {regime.components.map((c) => (
-            <li key={c.signal} className={cn(c.vote > 0 && "text-emerald-700 dark:text-emerald-400", c.vote < 0 && "text-rose-700 dark:text-rose-400")}>
-              {c.vote > 0 ? "+ " : c.vote < 0 ? "− " : "· "}
-              {c.text}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-xs text-muted-foreground">{regime?.note ?? "No macro signals yet: run the macro ingestion."}</p>
-      )}
-    </div>
   )
 }

@@ -12,13 +12,13 @@ const nullableNum = z.number().nullable()
 const point = z.tuple([num, num])
 
 /**
- * STOCK: a listed company; INDEX: the exchange's index (IHSG), charted in index points; FOREX / COMMODITY: a currency
+ * STOCK: a listed company; INDEX: an index of the exchange (IHSG, LQ45), charted in index points; FOREX / COMMODITY: a currency
  * pair or commodity (Price Ingestion with the market Forex or Commodities), in its quote currency and unit
  */
 const listingType = z.enum(["STOCK", "INDEX", "FOREX", "COMMODITY"]).catch("STOCK")
 export type ListingType = z.infer<typeof listingType>
 
-/** DAILY bars, or MONTHLY (coal: the World Bank monthly average; charted on the monthly interval only) */
+/** DAILY bars, or MONTHLY (the World Bank, IMF or FRED monthly series: coal, cobalt, urea, ...; charted on the monthly interval only) */
 const frequency = z.enum(["DAILY", "MONTHLY"]).catch("DAILY")
 
 export const tickerSchema = z.object({
@@ -176,7 +176,7 @@ export type Events = z.infer<typeof eventsSchema>
 /** The agent-ready snapshot (docs/indicator-snapshot.md); groups are kept loose: the panel shows them as data. */
 export const snapshotSchema = z
   .object({
-    /** 2: the macro section has series, signals and regimes (docs/indicator-snapshot.md) */
+    /** 3: technical only, no macro section (docs/indicator-snapshot.md) */
     schemaVersion: z.number().int().min(1),
     exchange: z.string(),
     ticker: z.string(),
@@ -191,7 +191,6 @@ export const snapshotSchema = z
     structure: z.record(z.string(), z.unknown()),
     relativeStrength: z.record(z.string(), z.unknown()),
     marketRegime: z.record(z.string(), z.unknown()),
-    macro: z.record(z.string(), z.unknown()),
     events: z.record(z.string(), z.unknown()),
     risk: z.record(z.string(), z.unknown()),
     notes: z.array(z.string()),
@@ -265,37 +264,8 @@ export const marketSchema = z.object({
     })
     .partial(),
   breadth: z.object({ above200Pct: nullableNum, counted: num, universe: num, note: z.string() }),
-  macro: z.record(
-    z.string(),
-    z.object({
-      points: z.array(point),
-      source: z.string(),
-      name: z.string().optional(),
-      unit: z.string().nullable().optional(),
-      country: z.string().nullable().optional(),
-      frequency: z.string().nullable().optional(),
-    })
-  ),
-  /** the macro signals and the liquidity / risk regimes as of the latest market day (kept loose: shown as data) */
-  macroSignals: z
-    .object({
-      signals: z.record(z.string(), z.unknown()),
-      regimes: z.record(z.string(), z.unknown()),
-      notes: z.array(z.string()),
-    })
-    .partial()
-    .optional(),
 })
 export type Market = z.infer<typeof marketSchema>
-
-/** A macro regime: its state, score and the signals that voted */
-export interface MacroRegime {
-  state: string | null
-  score: number | null
-  signals: number
-  components: { signal: string; vote: number; text: string }[]
-  note?: string
-}
 
 // ------------------------------------------------------------------ fetching
 
@@ -340,7 +310,7 @@ export type IndicatorId =
   | "sma20" | "sma50" | "sma100" | "sma200" | "ema20" | "ema50" | "bb" | "channel20" | "channel50" | "atrBands"
   | "zones" | "retracements" | "extremes" | "base" | "events" | "autoRejection" | "ihsg"
   | "volume" | "rsi" | "macd" | "stoch" | "obv" | "adx" | "atrPct" | "rs" | "mom"
-  | "profile" | "regime" | "macro"
+  | "profile" | "regime"
 
 export interface IndicatorDef {
   id: IndicatorId
@@ -380,7 +350,6 @@ export const INDICATORS: IndicatorDef[] = [
   { id: "mom", label: "12-1 month momentum", series: ["mom12_1"], kind: "pane" },
   { id: "profile", label: "Volume-by-price profile", kind: "panel" },
   { id: "regime", label: "IHSG regime panel", kind: "panel" },
-  { id: "macro", label: "Macro panel (liquidity and risk regimes, rates, dollar)", kind: "panel" },
 ]
 
 export const INDICATOR_GROUPS: { title: string; ids: IndicatorId[] }[] = [
@@ -389,7 +358,7 @@ export const INDICATOR_GROUPS: { title: string; ids: IndicatorId[] }[] = [
   { title: "Levels", ids: ["zones", "retracements", "extremes", "base"] },
   { title: "Markers & comparison", ids: ["events", "autoRejection", "ihsg"] },
   { title: "Lower panes", ids: ["volume", "rsi", "macd", "stoch", "obv", "adx", "atrPct", "rs", "mom"] },
-  { title: "Panels", ids: ["profile", "regime", "macro"] },
+  { title: "Panels", ids: ["profile", "regime"] },
 ]
 
 export type PresetId = "murphy" | "gill" | "ptj" | "druckenmiller"
@@ -417,8 +386,8 @@ export const PRESETS: { id: PresetId; label: string; description: string; indica
   {
     id: "druckenmiller",
     label: "Druckenmiller",
-    description: "Leadership and liquidity: RS vs IHSG, 12-1 month momentum, IHSG regime, macro",
-    indicators: ["rs", "mom", "regime", "macro"],
+    description: "Leadership and the market: RS vs IHSG, 12-1 month momentum, IHSG regime",
+    indicators: ["rs", "mom", "regime"],
   },
 ]
 
@@ -430,8 +399,30 @@ export const DEFAULT_INDICATORS: IndicatorId[] = ["sma50", "sma200", "volume", "
  */
 export const NOT_FOR_INDEX: IndicatorId[] = ["rs", "ihsg", "events", "autoRejection"]
 
-/** What a monthly series (coal) cannot show besides: the levels, the volume profile (they need daily bars). */
+/** The index every listing is compared with (relative strength, the rebased line, the regime panel). */
+export const BENCHMARK_INDEX = "IHSG"
+
+/** The indexes of IDX, listed first by the ticker search: IHSG and LQ45. */
+export const INDEX_TICKERS = ["IHSG", "LQ45"]
+
+/** What an index other than the benchmark (LQ45) cannot show: events, auto-rejection; it is compared with IHSG. */
+export const NOT_FOR_OTHER_INDEX: IndicatorId[] = ["events", "autoRejection"]
+
+/** What a monthly series (coal, cobalt, urea, ...) cannot show besides: the levels, the volume profile (they need daily bars). */
 export const NOT_FOR_MONTHLY: IndicatorId[] = [...NOT_FOR_INDEX, "zones", "retracements", "extremes", "base", "profile"]
+
+/**
+ * Daily commodities charted as a plain line of the close instead of candlesticks: palm oil, in US dollars and in
+ * ringgit. Every monthly series (the World Bank, IMF and FRED averages: coal, LNG, nickel, tin, cobalt, rubber, pulp,
+ * fertilizers) is a line too - it has no real open / high / low. The other daily commodities (Brent, WTI, natural gas,
+ * the metals, iron ore, steel, the grains, sugar) keep their candlesticks.
+ */
+export const LINE_CHART_COMMODITIES = ["PALM_OIL", "PALM_OIL_MYR"]
+
+/** Whether a listing's price is charted as a plain line of the close (see {@link LINE_CHART_COMMODITIES}). */
+export function chartsAsLine(type: ListingType, ticker: string, frequency?: "DAILY" | "MONTHLY"): boolean {
+  return type === "COMMODITY" && (frequency === "MONTHLY" || LINE_CHART_COMMODITIES.includes(ticker.toUpperCase()))
+}
 
 /** Decimals of a tick size: 25 -> 0, 0.01 -> 2, 0.001 -> 3, 0.25 -> 2 */
 export function decimalsOf(tick: number | null | undefined): number {

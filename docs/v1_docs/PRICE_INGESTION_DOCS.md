@@ -76,6 +76,13 @@ curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/prices/index-ingestions?ex
 | `POST /api/v1/prices/updates?exchange=IDX[&index=true]` | **202**: `queued`, `alreadyActive` (their job is kept), `upToDate` (skipped), `withoutPrices` (of the queued), `index` (`outcome` QUEUED / ALREADY_ACTIVE / UP_TO_DATE), `firstJob` |
 | `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | **202** new job, **200** the job already queued / running (`ticker` = IHSG, `index` = true); 404 when the exchange has no index |
 
+The index job also stores the exchange's other indexes (`neracalab.technical.other-indexes`: LQ45 = Yahoo Finance
+`^JKLQ45` for the Macro page), each from its own latest stored day; a failure of one of them is logged and does not fail
+the job. The index counts as up to date (`index.upToDate`, the `UP_TO_DATE` outcome) only when IHSG and LQ45 both reach
+the last completed trading day, so a missing LQ45 queues the job. `index.indexes` lists every index of the job (`code`,
+`symbol`, `name`, `rows`, `firstDate`, `lastDate`, `upToDate` each); Ingestion › Price Ingestion shows both in
+"Update all companies to today" ("Also update the IHSG and LQ45 indexes") and in the index card.
+
 "Update all companies" (Ingestion › Price Ingestion, right-hand card) queues every active company whose latest stored
 day is before the last completed trading day as an ordinary `full=false` job: only the missing days are fetched, from
 the company's latest stored day (re-fetched as the overlap check) to that day - ANTM stored up to 9 Oct is fetched from
@@ -107,9 +114,61 @@ stored in `instrument_daily`, in the quote currency and the unit of each instrum
 | Forex | `USDIDR` | USD/IDR (IDR per USD) | Yahoo Finance `IDR=X` (London close) | 2001- | 1 | 3 % |
 | Forex | `USDJPY` | USD/JPY (JPY per USD) | Yahoo Finance `JPY=X` | 1996- | 0.001 | 5 % |
 | Commodities | `BRENT` | Crude Oil (Brent), USD per barrel | Yahoo Finance `BZ=F` (front month) | 2007- | 0.01 | 15 % |
-| Commodities | `GOLD` | Gold, USD per troy ounce | Yahoo Finance `GC=F` | 2000- | 0.1 | 8 % |
+| Commodities | `WTI` | Crude Oil (WTI), USD per barrel | Yahoo Finance `CL=F` (front month) | 2000- | 0.01 | 30 % |
+| Commodities | `NATURAL_GAS` | Natural Gas (Henry Hub), USD per MMBtu | Yahoo Finance `NG=F` | 2000- | 0.001 | 40 % |
+| Commodities | `LNG` | LNG (Japan), USD per MMBtu | **World Bank Pink Sheet**, "Liquefied natural gas, Japan", **monthly** | 1980- | 0.01 | - |
 | Commodities | `COAL` | Coal (Newcastle), USD per metric ton | **World Bank Pink Sheet**, "Coal, Australian", **monthly** | 1979- | 0.01 | - |
-| Commodities | `PALM_OIL` | Palm Oil, USD per metric ton | Yahoo Finance `CPO=F` (CME USD Malaysian crude palm oil) | 2010- | 0.25 | 10 % |
+| Commodities | `GOLD` | Gold, USD per troy ounce | Yahoo Finance `GC=F` | 2000- | 0.1 | 8 % |
+| Commodities | `SILVER` | Silver, USD per troy ounce | Yahoo Finance `SI=F` | 2000- | 0.005 | 15 % |
+| Commodities | `COPPER` | Copper, USD per pound | Yahoo Finance `HG=F` | 2000- | 0.0005 | 25 % |
+| Commodities | `NICKEL` | Nickel, USD per metric ton | **World Bank Pink Sheet**, "Nickel" (LME), **monthly** | 1980- | 0.01 | - |
+| Commodities | `ALUMINIUM` | Aluminium, USD per metric ton | Yahoo Finance `ALI=F` (COMEX; September 2016 missing) | 2014- | 0.25 | 10 % |
+| Commodities | `IRON_ORE` | Iron Ore (62% Fe, CFR China), USD per dry metric ton | Yahoo Finance `TIO=F` | 2010- | 0.01 | 15 % |
+| Commodities | `STEEL_HRC` | Steel (US Midwest hot-rolled coil), USD per short ton | Yahoo Finance `HRC=F` | 2008- | 1 | 15 % |
+| Commodities | `TIN` | Tin, USD per metric ton | **World Bank Pink Sheet**, "Tin" (LME), **monthly** | 1980- | 0.01 | - |
+| Commodities | `COBALT` | Cobalt, USD per metric ton | **IMF Primary Commodity Prices**, `PCOBA` (LME spot, 99.80 %), **monthly** | 1992- | 0.01 | - |
+| Commodities | `PALM_OIL` | Palm Oil (USD), USD per metric ton | Yahoo Finance `CPO=F` (CME USD Malaysian crude palm oil) | 2010- | 0.25 | 10 % |
+| Commodities | `PALM_OIL_MYR` | Palm Oil (MYR), MYR per metric ton | Yahoo Finance `CPO=F` x `MYR=X` (an approximation of Bursa Malaysia FCPO) | 2010- | 1 | 10 % |
+| Commodities | `SOYBEAN_OIL` | Soybean Oil, US cents per pound | Yahoo Finance `ZL=F` | 2000- | 0.01 | 10 % |
+| Commodities | `SOYBEAN_MEAL` | Soybean Meal, USD per short ton | Yahoo Finance `ZM=F` | 2000- | 0.1 | 15 % |
+| Commodities | `CORN` | Corn, US cents per bushel | Yahoo Finance `ZC=F` | 2000- | 0.25 | 12 % |
+| Commodities | `WHEAT` | Wheat (Chicago SRW), US cents per bushel | Yahoo Finance `ZW=F` | 2000- | 0.25 | 15 % |
+| Commodities | `SUGAR` | Sugar #11, US cents per pound | Yahoo Finance `SB=F` | 2000- | 0.01 | 18 % |
+| Commodities | `RUBBER` | Rubber (TSR 20), USD per kg | **World Bank Pink Sheet**, "Rubber, TSR20", **monthly** | 1999- | 0.01 | - |
+| Commodities | `PULP` | Wood Pulp (US PPI), index 1982 = 100 | **FRED** `WPU0911` (BLS producer price index), **monthly** | 1990- | 0.001 | - |
+| Commodities | `UREA` | Urea, USD per metric ton | **World Bank Pink Sheet**, "Urea", **monthly** | 1980- | 0.01 | - |
+| Commodities | `DAP` | DAP (diammonium phosphate), USD per metric ton | **World Bank Pink Sheet**, "DAP", **monthly** | 1980- | 0.01 | - |
+| Commodities | `POTASH` | Potash (potassium chloride), USD per metric ton | **World Bank Pink Sheet**, "Potassium chloride", **monthly** | 1980- | 0.01 | - |
+
+**Units.** Corn, wheat, sugar and soybean oil are stored in US cents, as the exchanges and Yahoo Finance (currency
+`USX`) quote them; the unit says so ("US cents per bushel"). The page shows every commodity as value and unit.
+
+**Bad-print thresholds** were set by running `BarCleaner` over each whole history (2026-10-17): none touches a real day.
+Natural gas keeps 27 Jan 2022 (the February contract's expiry squeeze, 6.265 between 4.277 and 4.639), sugar 28 Apr
+2000 (the May expiry, 5.16 between 6.18 and 6.53), copper the 4.49 low of 30 Jul 2025 (the US tariff exemption), wheat
+the 1,065 - 1,334.5 range of 27 Feb 2008. The silver squeeze of 1 Feb 2021 and wheat on 5 Aug 2010 (Russia's export
+ban) and 25 Feb 2022 (the invasion of Ukraine) are below the thresholds.
+
+**Palm oil in ringgit.** Bursa Malaysia's crude palm oil future (FCPO) has no free source a program may read: Yahoo
+Finance does not serve it, MPOB's price data are a paid subscription. `PALM_OIL_MYR` is therefore `CPO=F` (the CME
+USD Malaysian crude palm oil future, cash-settled on Bursa Malaysia's FCPO) times USD/MYR (`MYR=X`) of the same day - the
+last rate up to 5 days before on a Malaysian holiday; a day without one is not stored. It follows FCPO closely (2022 peak
+RM 6,913, 2024 average RM 4,110) but is not Bursa's own settlement price.
+
+**Monthly series.** Coal, LNG, nickel, tin, rubber, urea, DAP and potash share one workbook: it is downloaded once and
+kept for 10 minutes, so "Update all commodities" fetches it once.
+- **Cobalt** is in neither the Pink Sheet nor Yahoo Finance (`COB=F` has one day) nor FRED. It comes from the IMF Primary
+  Commodity Price System through its SDMX API, no key: `https://api.imf.org/external/sdmx/3.0/data/dataflow/IMF.RES/PCPS/+/G001.PCOBA.USD.M`
+  (world, cobalt, US dollars, monthly; `ImfPcpsClient`, `neracalab.markets.imf.base-url`).
+- **Wood pulp** has no free price: the IMF's wood pulp series (`PWPULP`) is empty, the Pink Sheet has none, and the
+  market prices (FOEX, Fastmarkets) are paid. `PULP` is therefore the US producer price index of wood pulp (BLS, FRED
+  `WPU0911`, 1982 = 100): it follows pulp prices, but it is an index, and the page shows its unit as such.
+- **Bauxite** is not included: no exchange trades it, neither the Pink Sheet nor the IMF has a bauxite price, and FRED's
+  producer price index of bauxite (`PCU2122992122992`) stopped in 1990.
+
+**WTI** settled at -37.63 on 20 April 2020. A stored close must be positive, so that day is not stored, and the cleaner
+cuts the negative open and low of 21 April back to the close; 30 % keeps every other real day of the history (18 March
+2020: 20.37 between 26.95 and 25.22).
 
 **Why coal is monthly.** Yahoo Finance has no current coal future: `MTF=F` (API2 Rotterdam) stopped updating in 2025,
 and the Newcastle future is not served. A daily coal price has no free source a program may read (investing.com and
@@ -127,7 +186,7 @@ its ticker the code:
   futures). A currency or future trades around the clock, so today's bar is still forming.
 - **No request** when that day is stored already.
 - **First run, or `full=true`:** the whole history from the instrument's `history_from`.
-- **Stage text:** "Stored 2 new and 0 updated price days, latest 2026-10-14" ("months" for coal).
+- **Stage text:** "Stored 2 new and 0 updated price days, latest 2026-10-14" ("months" for a monthly series).
 
 **Bad prints** (`BarCleaner`, threshold `max_spike`). The Yahoo history of USD/IDR has impossible prints: 888.11
 between 8,923 and 8,906 on 2010-11-01, a stale 9,612.45 on nine days of 2013, 15,069 on 2024-12-26. The cleaning:
@@ -273,6 +332,7 @@ valuation query, view and API works unchanged:
 | Stored rates | only days before the last completed trading day; only rates of the active source are read |
 | Conversion | open, high, low, close, adjusted close / rate, half-up to the 8 decimals of `price_daily`; volume (shares) unchanged. INDY 2026-10-05: IDR 2,570 / 17,950 (2026-10-02) = USD 0.14317549 |
 | No rate | a bar without a rate in the 7 days before it is not stored (counted as skipped, `conversion.barsWithoutRate`), never guessed |
+| Back to the quote | the company API (`latestPrice.quote`, `quotePrice` of the market snapshot and the valuations) and the technical layer multiply a stored price by the same rate and round to 2 decimals: the 8 decimals of the USD price leave a residue (CUAN 2026-10-16: 0.03009362 x 17,944 = 539.9999), at most 0.0001 rupiah, so 2 decimals give the quote itself (540). Checked on 2026-10-16: every stored CUAN and DSSA close x its rate equals Yahoo's IDR close |
 | Result | `conversion`: listing and stored currency, `fxSource` (`ecb USD/IDR`), rates received, bars without a rate; shown in the job detail ("Currency") |
 
 Yahoo's own `USDIDR=X` is deliberately not used: its history has days off by a factor of 10
@@ -365,7 +425,7 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 | `job-history`                | `500`                       | finished jobs kept in memory                                              |
 | `yahoo.base-url`             | `https://query1.finance.yahoo.com` | `query2.finance.yahoo.com` serves the same API                     |
 | `fx.base-url`                | `https://api.frankfurter.dev/v1` | ECB reference rates for listings quoted in another currency (INDY) |
-| `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: like "Update all companies" - the companies of `schedule.exchange` behind, and IHSG |
+| `schedule.enabled` (`PRICE_SCHEDULE_ENABLED`) | `false`    | evening run: like "Update all companies" - the companies of `schedule.exchange` behind, and IHSG and LQ45 |
 | `schedule.cron`, `schedule.zone`, `schedule.exchange` | `0 30 17 * * MON-FRI`, `Asia/Jakarta`, `IDX` | when and for which exchange              |
 
 `neracalab.markets` (Forex and Commodities):
@@ -407,9 +467,10 @@ exchange and IHSG; Forex and Commodities are updated from the page.
 | `PriceUpdateServiceTest`      | "Update all companies": only the companies behind are queued (never `full`), a company without prices too, an active job kept, the up-to-date ones skipped; the index queued unless up to date; the status counts; an exchange without index |
 | `PriceUpdateControllerTest`   | status, update of an exchange and the IHSG ingestion over MockMvc against the Docker Postgres (stub provider, mocked index): the index job in the queue, recorded in `ingestion_job` with ticker IHSG |
 | `IndexIngestionServiceTest`   | the IHSG ingestion: from the latest stored day, today's bar only after the cutoff, no request when up to date, the whole history the first time |
-| `InstrumentIngestionServiceTest` | a Forex pair / commodity: the last completed day by the market's zone, no request when up to date, the overlap window, today's bar and a bad print not stored (and deleted), coal monthly up to the month before, the whole history the first time |
+| `InstrumentIngestionServiceTest` | a Forex pair / commodity: the last completed day by the market's zone, no request when up to date, the overlap window, today's bar and a bad print not stored (and deleted), coal monthly up to the month before, palm oil in ringgit as CPO=F x MYR=X (the last rate up to 5 days before), cobalt from the IMF and the wood pulp index from FRED monthly, the whole history the first time |
 | `BarCleanerTest`              | the bad prints of the real USD/IDR and USD/JPY histories dropped (one to three days), a real move kept, wicks cut, the first and last bar never judged |
-| `WorldBankPinkSheetClientTest`| the Pink Sheet workbook: the months of one column, "…" months skipped, an unknown column / sheet failing |
+| `WorldBankPinkSheetClientTest`| the Pink Sheet workbook: the months of one column, "…" months skipped, a column found without its footnote mark ("Rubber, TSR20 **"), one download per update (kept 10 minutes), an unknown column / sheet failing |
+| `ImfPcpsClientTest`           | the IMF PCPS answer (SDMX-JSON): the months in order, a month without a price left out; not JSON, a period that is not a month, a price that is not positive, no value, no series failing |
 | `MarketControllerTest`        | the markets and instruments, one instrument queued and recorded (exchange FOREX), "Update all" of a market, 404 / 400 |
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
 | `PricesAfterUploadTest`       | prices of a stored filing's company: queued when missing or behind, for the uploader, never `full`; the active job is reused; nothing when up to date, for an unknown company or when switched off (`PriceIngestionServiceTest`: up to date only when the last completed trading day is stored) |

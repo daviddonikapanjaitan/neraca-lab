@@ -536,6 +536,94 @@ public class FullTextExtractorTest {
     }
 
     /**
+     * PNLF FY2024 (error 582): its profit before tax adds 'Decrease (increase) in unearned premiums' as filed (3,269
+     * million in FY2024, -760 in FY2023). The model deducted it and kept doing so after it was shown the only reversal
+     * that closes the gap: revenue was stored 6,538 million short, operating income 4,248,950 beside a profit before tax
+     * of 4,255,488 and the upload INCOMPLETE. The row is reversed for the model in every field that names it.
+     */
+    @Test
+    void theOnlyReversalThatReconcilesAnInsurersProfitBeforeTaxIsMadeWhenTheModelKeepsTheSign() throws Exception {
+        IngestionSession session = session("PNLF", "2024-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String[] revenue = {"+Revenue from insurance premiums", "-Reinsurance premiums", "-Retrocession premiums",
+                "-Decrease (increase) in unearned premiums", "+Net investment income",
+                "+Gains (losses) on sale of securities and mutual funds at fair value through profit of loss",
+                "+Unrealised fair value gains (losses) on securities and mutual funds at fair value through profit or loss",
+                "+Other underwriting income"};
+        String[] cost = {"+Claim expenses", "-Reinsurance claims", "+Increase (decrease) in liability for future policy benefit",
+                "-Increase (decrease) in insurance liabilities ceded to reinsurers", "+Commission expenses",
+                "+Other underwriting expenses", "+Acquisition costs of insurance contracts"};
+        List<String> operating = new ArrayList<>(List.of(revenue));
+        for (String c : cost) {
+            operating.add((c.charAt(0) == '-' ? "+" : "-") + c.substring(1));
+        }
+        operating.add("-General and administrative expenses");
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, "6312000", revenue)),
+                Map.entry("cost_of_revenue", terms(text, "6312000", cost)),
+                Map.entry("operating_expenses", terms(text, "6312000", "+General and administrative expenses")),
+                Map.entry("operating_income", terms(text, "6312000", operating.toArray(String[]::new))),
+                Map.entry("pretax_income", terms(text, "6312000", "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, "6312000", "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, "6312000", "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, "6312000", "+Profit (loss) attributable to parent entity")));
+        String wrong = "{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}";
+        answers(wrong, wrong, wrong);
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.CURRENT_PERIOD,
+                StatementColumn.PRIOR_PERIOD), "Unsupported filing", new AgentTrace());
+
+        assertThat(prompts.get(1)).contains("revenue - costs equal profit before tax in c1 exactly when the sign of "
+                + "'Decrease (increase) in unearned premiums' (6312000!R");
+        assertThat(report.problems()).noneMatch(p -> p.contains("income_statement"));
+        assertThat(report.notes()).anyMatch(n -> n.startsWith("Full-text extraction of CURRENT_PERIOD 2024 FY income_statement: "
+                + "the sign of 'Decrease (increase) in unearned premiums'"));
+        MappedStatement current = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        // 2,346,444 - 245,661 - 33,453 + 3,269 + 664,499 + 273,193 - 218,914 + 10,902,669
+        assertThat(current.values().get("revenue")).isEqualByComparingTo("13692046000000");
+        // 1,501,451 - 259,114 - 42,501 + 7,114 + 335,045 + 50,830 + 97,553
+        assertThat(current.values().get("cost_of_revenue")).isEqualByComparingTo("1690378000000");
+        assertThat(current.values().get("operating_income")).isEqualByComparingTo("4255488000000");
+        assertThat(current.values().get("pretax_income")).isEqualByComparingTo("4255488000000");
+        assertThat(current.checks()).anyMatch(c -> c.severity() == Check.Severity.WARNING
+                && c.message().startsWith("The sign of 'Decrease (increase) in unearned premiums'"));
+        // FY2023: -760 added as filed, the revenue of the FY2023 filing
+        MappedStatement prior = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(prior.values().get("revenue")).isEqualByComparingTo("14525080000000");
+        assertThat(prior.values().get("operating_income")).isEqualByComparingTo("4405601000000");
+    }
+
+    /**
+     * PNLF FY2025 (error 581): its FY2024 comparative is restated in part (net investment income, other underwriting
+     * income, G&A and profit before tax) beside insurance lines as filed a year before; no choice of signs gives its
+     * profit before tax. Nothing is reversed: the model's answer is stored with the open item, as before.
+     */
+    @Test
+    void noReversalIsMadeWhenNoneReconcilesTheProfitBeforeTax() throws Exception {
+        IngestionSession session = session("PNLF", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, "6312000", "+Revenue from insurance premiums", "-Reinsurance premiums",
+                        "-Retrocession premiums", "+Decrease (increase) in unearned premiums", "+Net investment income",
+                        "+Other underwriting income")),
+                Map.entry("cost_of_revenue", terms(text, "6312000", "+Claim expenses", "-Reinsurance claims",
+                        "+Commission expenses", "+Other underwriting expenses")),
+                Map.entry("operating_expenses", terms(text, "6312000", "+General and administrative expenses")),
+                Map.entry("pretax_income", terms(text, "6312000", "+Total profit (loss) before tax")),
+                Map.entry("net_income", terms(text, "6312000", "+Total profit (loss)")));
+        String answer = "{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}";
+        answers(answer, answer, answer);
+
+        FullTextExtractor.Report report = extractor(3).extract(session, List.of(StatementColumn.PRIOR_PERIOD),
+                "Unsupported filing", new AgentTrace());
+
+        assertThat(report.problems()).anyMatch(p -> p.startsWith("Full-text extraction of PRIOR_PERIOD 2024 FY income_statement: "
+                + "stored as the model mapped it, although ") && p.contains("pretax_income = revenue - cost_of_revenue "
+                + "- operating_expenses - interest_expense does not hold: 3986888 vs "));
+        assertThat(report.notes()).noneMatch(n -> n.contains("reversed from the model's answer"));
+    }
+
+    /**
      * TUGU FY2023 states its EPS after the 2:1 split of 2023-05-24 and the comparative before it, unrestated: the
      * columns contradict each other, and the EPS the model names is not stored either (the model stored 0.372 and
      * 0.195, the figures in thousands).

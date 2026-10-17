@@ -7,6 +7,7 @@ import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { SESSION_COOKIE } from "@/lib/session-cookie"
+import type { MacroOutlook } from "@/lib/macro"
 import type {
   AnalysisOptions,
   AnalysisPage,
@@ -150,6 +151,13 @@ export const getMacroStatus = cache(() => get<MacroStatus>("/api/v1/macro/series
 
 /** GET /api/v1/technical/markets (the exchanges and markets of the Technicals page) */
 export const getTechnicalMarkets = cache(() => get<TechnicalMarket[]>("/api/v1/technical/markets"))
+
+/** GET /api/v1/macro/outlook?country=&index=&range= (the Macro page) */
+export const getMacroOutlook = cache((country: string, index: string | undefined, range: string) =>
+  get<MacroOutlook>(
+    `/api/v1/macro/outlook?${new URLSearchParams({ country, range, ...(index ? { index } : {}) })}`
+  )
+)
 
 /** GET /api/v1/prices/status?exchange= (how far the stored prices and the index reach) */
 export const getPriceStatus = cache((exchange: string) =>

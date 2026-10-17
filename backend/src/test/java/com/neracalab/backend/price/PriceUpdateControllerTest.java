@@ -127,6 +127,8 @@ class PriceUpdateControllerTest {
                 .andExpect(jsonPath("$.provider").value("stub"))
                 .andExpect(jsonPath("$.index.code").value("IHSG"))
                 .andExpect(jsonPath("$.index.symbol").value("^JKSE"))
+                .andExpect(jsonPath("$.index.indexes[0].code").value("IHSG"))
+                .andExpect(jsonPath("$.index.indexes[0].rows").value(8891))
                 .andExpect(jsonPath("$.index.rows").value(8891))
                 .andReturn().getResponse().getContentAsString();
         JsonNode status = json.readTree(body);
