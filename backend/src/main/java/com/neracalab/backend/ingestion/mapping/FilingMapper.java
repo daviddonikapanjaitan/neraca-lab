@@ -143,7 +143,7 @@ public final class FilingMapper {
     /** Rounding of the filed amounts in full units: the declared rounding (also when the amounts are written in full). */
     private final BigDecimal precision;
     /** Multiplier from the filed per-share figures (EPS) to currency units per share; 1 unless filed in the rounding unit. */
-    private final BigDecimal epsScale;
+    private BigDecimal epsScale;     // 1/1000 once published counts show the EPS is filed per 1,000 shares
     private final IdxTaxonomy taxonomy;
     /** Financial and Sharia Industry taxonomy (banks): own statements and line items. */
     private final boolean financial;
@@ -906,8 +906,21 @@ public final class FilingMapper {
 
         List<Check> checks = new ArrayList<>();
         Map<String, String> how = new LinkedHashMap<>();
-        if (revenue == null && cost == null && grossReported != null) {
-            // some filers tag only the gross profit (SIMP FY2023): the statement still reconciles from it; revenue and
+        BigDecimal breakdown = revenue == null && cost == null && grossReported != null ? revenueBreakdownTotal(column) : null;
+        if (breakdown != null) {
+            // only the gross profit is tagged, but the filing's own revenue breakdown gives the revenue (ADRO FY2023:
+            // 6,517,556,000 by type, gross profit 2,537,284,000, cost 3,980,272,000 in the notes). Left empty, the
+            // FY2024 filing's comparative - restated for the discontinued coal business, 2,135,412,000 - stayed
+            // beside this filing's gross profit and its 6,517,556,000 breakdown
+            revenue = breakdown;
+            cost = breakdown.subtract(grossReported);
+            checks.add(Check.warning("revenue", "'Sales and revenue' and its cost are not tagged in this column (only '"
+                    + GROSS_PROFIT + "'); revenue " + breakdown.toPlainString() + " from the revenue breakdown, cost of "
+                    + "revenue = revenue - gross profit"));
+            how.put("revenue", "not tagged on the face of this filing (only gross profit): the total of its revenue breakdown");
+            how.put("cost_of_revenue", "revenue (from the breakdown) - gross profit");
+        } else if (revenue == null && cost == null && grossReported != null) {
+            // some filers tag only the gross profit and no breakdown: the statement still reconciles from it; revenue and
             // cost stay empty here and are filled by a later filing's comparative (stored values are never replaced)
             checks.add(Check.warning("revenue", "'Sales and revenue' and its cost are not tagged in this column (only '"
                     + GROSS_PROFIT + "'); revenue and cost of revenue are left empty"));
@@ -1448,6 +1461,23 @@ public final class FilingMapper {
      * securities issued and subordinated loans are long_term_debt and short_term_debt stays empty, which
      * also leaves total debt, net debt and enterprise value empty (not meaningful for a bank).
      */
+    /** Sum of the lines between 'Temporary syirkah funds' and its total row; {@code null} when none is reported. */
+    private BigDecimal syirkahParts(StatementTable b, int ctx) {
+        int from = b.indexOf("Temporary syirkah funds");
+        int to = b.indexOf("Total temporary syirkah funds");
+        if (from < 0 || to <= from) {
+            return null;
+        }
+        BigDecimal sum = null;
+        for (StatementTable.Line line : b.lines().subList(from + 1, to)) {
+            BigDecimal v = amount(line.value(ctx));
+            if (v != null) {
+                sum = sum == null ? v : sum.add(v);
+            }
+        }
+        return sum;
+    }
+
     private MappedStatement financialBalanceSheet(StatementColumn column, int ctx, ShareCapital shares) {
         StatementTable b = balanceSheet;
         List<Check> checks = new ArrayList<>();
@@ -1460,6 +1490,17 @@ public final class FilingMapper {
         BigDecimal totalEquity = req(b, "Total equity", ctx, checks);
         BigDecimal liabilitiesAndEquity = amount(b.value("Total liabilities, temporary syirkah funds and equity", ctx));
         BigDecimal syirkahReported = sumOrNull(b, List.of("Total temporary syirkah funds"), ctx);
+        BigDecimal syirkahParts = syirkahReported == null ? syirkahParts(b, ctx) : null;
+        if (syirkahParts != null && liabilities != null && totalEquity != null && totalAssets != null
+                && liabilities.add(syirkahParts).add(totalEquity).compareTo(totalAssets) == 0) {
+            // the total row left empty, its parts filed (ARTO FY2022: mudharabah time deposits 269,558 + 256,501 =
+            // 526,059 million, the total entered on the next row, "Total accumulated tabarru's funds"): the sum of
+            // the parts, when the balance sheet then balances exactly
+            checks.add(Check.warning("syirkah", "'Total temporary syirkah funds' is not reported; the sum of its lines, "
+                    + syirkahParts.stripTrailingZeros().toPlainString() + ", balances the balance sheet"));
+            syirkah = syirkahParts;
+            syirkahReported = syirkahParts;
+        }
         if (liabilities != null && totalEquity != null && totalAssets != null) {
             checks.add(equal("balance", "total liabilities + temporary syirkah funds + total equity = total assets",
                     liabilities.add(syirkah).add(totalEquity), totalAssets));
@@ -1897,6 +1938,23 @@ public final class FilingMapper {
                         .toList() + " repeat another line's cash flow; counted once, the lines then add up to the filing's "
                         + name + " total " + total.stripTrailingZeros().toPlainString() + " (not counted in the fields either)"));
             }
+            // lines filed with decimals in a filing rounded to thousands or millions, which the total leaves out:
+            // ADMR's H1 2025 comparative (USD thousand) shows exploration and evaluation assets 124.222 and intangible
+            // assets 90.109 beside whole amounts; the other lines add up to the filed total -322,409 exactly
+            List<String> fractional = unit.compareTo(BigDecimal.ONE) <= 0 ? List.of() : rawLines.keySet().stream()
+                    .filter(l -> rawLines.get(l).divide(unit).stripTrailingZeros().scale() > 0).toList();
+            BigDecimal whole = sum;
+            for (String label : fractional) {
+                whole = whole.subtract(signedLines.get(label));
+            }
+            if (!fractional.isEmpty() && whole.compareTo(total) == 0) {
+                repeated.addAll(fractional);
+                return List.of(Check.warning(name + "_section", "Lines filed with decimals in a filing rounded to "
+                        + unit.toPlainString() + ": " + fractional.stream().map(l -> "'" + l + "' "
+                        + signedLines.get(l).stripTrailingZeros().toPlainString()).toList() + " are not part of the filing's "
+                        + name + " total " + total.stripTrailingZeros().toPlainString() + " (the total is the sum of the "
+                        + "other lines); not counted, in the fields either"));
+            }
         }
         return List.of(equal(name + "_section", "sum of " + name + " lines (payments negative) = " + name + " total", sum, total));
     }
@@ -2060,6 +2118,20 @@ public final class FilingMapper {
     }
 
     // ------------------------------------------------------------------ revenue segments
+
+    /**
+     * The revenue of a column by its revenue breakdown: the breakdown's reported total, else the sum of its lines;
+     * {@code null} when there is none, it does not add up to its own total, or it is not positive.
+     */
+    private BigDecimal revenueBreakdownTotal(StatementColumn column) {
+        SegmentExtraction e = segments(column, null).filter(s -> !s.hasErrors()).orElse(null);
+        if (e == null) {
+            return null;
+        }
+        BigDecimal total = e.reportedTotal() != null ? e.reportedTotal()
+                : e.lines().stream().map(SegmentLine::revenue).reduce(ZERO, BigDecimal::add);
+        return total.signum() > 0 ? total : null;
+    }
 
     public Optional<SegmentExtraction> segments(StatementColumn column, BigDecimal incomeRevenue) {
         int side = durationIndex(column);
@@ -2460,6 +2532,34 @@ public final class FilingMapper {
         if (filing.resolved()) {
             return filing;
         }
+        ShareCapital asFiled = webShareCounts(filing, counts, splits, source);
+        if (asFiled.resolved() || epsScale.compareTo(BigDecimal.ONE) != 0) {
+            return asFiled;
+        }
+        // an EPS filed per 1,000 shares (BRMS, full USD amounts: FY2025 basic EPS 0.35 for 50,009,777 / 142.9 billion
+        // shares = USD 0.00035): no published count fits it as filed. Read so only when every published count at a
+        // date of the filing then fits; the per-share figures are then stored per share
+        epsScale = PER_THOUSAND_SHARES;
+        ShareCapital perThousand = webShareCounts(filing, counts, splits, source);
+        if (perThousand.resolved() && perThousand.checks().stream().noneMatch(c -> "web_shares".equals(c.rule())
+                && c.severity() == Check.Severity.WARNING && c.message().contains("not used"))) {
+            String note = "The workbook's EPS is filed per 1,000 shares: no " + source + " count fits it as filed, every one "
+                    + "fits it divided by 1,000; per-share figures are divided by 1,000";
+            warnings.add(note);
+            List<Check> checks = new ArrayList<>(perThousand.checks());
+            checks.add(Check.warning("eps_unit", note));
+            return new ShareCapital(perThousand.parValue(), perThousand.basis(), perThousand.snapshots(),
+                    perThousand.weightedCurrent(), perThousand.weightedPrior(), checks, perThousand.webSource(),
+                    perThousand.webSplits());
+        }
+        epsScale = BigDecimal.ONE;
+        return asFiled;
+    }
+
+    private static final BigDecimal PER_THOUSAND_SHARES = new BigDecimal("0.001");
+
+    private ShareCapital webShareCounts(ShareCapital filing, List<WebShareCount> counts, List<WebSplit> splits,
+                                        String source) {
         Map<LocalDate, WebShareCount> byDate = new LinkedHashMap<>();
         counts.forEach(c -> byDate.putIfAbsent(c.date(), c));
         List<WebSplit> ordered = splits.stream().filter(s -> s.factor() != null && s.factor().signum() > 0

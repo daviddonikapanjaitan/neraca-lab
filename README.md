@@ -172,6 +172,11 @@ neraca_lab/
 │                                decided by the full-text extraction), RISE (Property Industry taxonomy), SMBR
 │                                (2022 .. 2025 annual, 2026-II), DOOH, INET (2023 .. 2025 annual, 2026-II), FORE
 │                                (2025 annual, 2026-II); BBCA's pdf/ (2022 .. 2025 annual, 2026-II)
+│                                ADMR, ADRO, AKRA, AMRT, ASII, BBTN (bank), BRMS (USD; EPS filed per 1,000 shares),
+│                                UNTR, TLKM (P&L by nature, no gross profit) and TRUK (the last two also pdf/) (2022 ..
+│                                2025 annual, 2026-II), AMMN (2023 .. 2025 annual, 2026-II), AADI (2024, 2025 annual,
+│                                2026-II), ARTO (sharia bank; 2022, 2025 annual, 2026-II - its 2024 file and TRUK's
+│                                2024 xlsx were broken downloads and are not committed)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -519,7 +524,8 @@ Embeddings: `openai/text-embedding-3-small` (1536 dimensions) through OpenRouter
 again and downloaded as PDF.
 
 ```text
-[Daily ETL] Yahoo Finance -> PostgreSQL (837 IDX listings, daily market data, weekly fundamentals)
+[Daily ETL] Yahoo Finance -> PostgreSQL (837 IDX listings, daily market data, weekly fundamentals;
+            when the screener returns no listings, the known listings are quoted 50 per request)
 [Stage 1, Java, no AI] tier, price, trading, liquidity, earnings, equity filters
                        -> quantitative scorecard per agent -> shortlist = top N x 3 (max 100)
 [Stage 2, DeepSeek V4 Flash] research agent (tool calling + ReAct: EmitenNews, Pasardana,
@@ -764,7 +770,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
-`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `FilingMapperWebSplitsTest` the filings behind the notes of 2026-10-16 (BKSL: a par value only one column's EPS fits; CUAN, DSSA: published counts on the count of before a later split; BUKA, DSSA: a period-end count after a buyback); `IngestionServiceCurrencyTest` that a filing in another currency than the company's stored data is refused (CUAN's IDR FY2023); `CompanyControllerTest` and `TechnicalControllerTest` also the IDX quote of a USD reporter (Rp 540.00, not 539.9999); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
+`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `FilingMapperAdroTest`, `IngestionVerifierRoundingTest` and `FilingMapperAdmrArtoBrmsTest` the filings behind the error log of 2026-10-18 (ADRO: revenue from the breakdown when only gross profit is tagged; UNTR: ending cash with decimals within the filing's unit; ADMR: lines with decimals outside a rounded total; ARTO: syirkah funds from their lines; BRMS: EPS filed per 1,000 shares); `FilingMapperWebSplitsTest` the filings behind the notes of 2026-10-16 (BKSL: a par value only one column's EPS fits; CUAN, DSSA: published counts on the count of before a later split; BUKA, DSSA: a period-end count after a buyback); `IngestionServiceCurrencyTest` that a filing in another currency than the company's stored data is refused (CUAN's IDR FY2023); `CompanyControllerTest` and `TechnicalControllerTest` also the IDX quote of a USD reporter (Rp 540.00, not 539.9999); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `ShareSplitTest` the share splits (also that a split-adjusted USD EPS keeps its decimals: RAJA 0.0054 / 5 = 0.00108); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
@@ -784,7 +790,7 @@ files rejected without storing, the job list filters and pages (`limit` / `offse
 name of each upload). `PriceIngestionControllerTest` also checks that price jobs are recorded in
 `ingestion_job`. The tests delete the job rows they create.
 Screening: `NewsParsersTest` (excerpts of the four news sites' headline lists), `YahooFundamentalsClientTest`
-(saved Yahoo responses, the currency of the fundamentals), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist; selected stocks:
+(saved Yahoo responses, the quote batch of the fallback universe, the currency of the fundamentals), `QuantScreeningTest` (metrics, scorecards, funnel, shortlist; selected stocks:
 flagged and excluded stocks; a company reporting in USD: converted metrics, fiscal years in IDR, unknown without a rate),
 `ScreeningAgentsTest` (scripted model: options, cost metering and budget, ReAct with a tool call,
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`

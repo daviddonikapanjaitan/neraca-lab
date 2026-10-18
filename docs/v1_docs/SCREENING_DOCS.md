@@ -124,7 +124,13 @@ with the price ingestion).
 | Step         | Yahoo API                                                   | Requests                   |
 |--------------|-------------------------------------------------------------|----------------------------|
 | Universe     | `POST /v1/finance/screener` (exchange JKT, 250 per page)    | 4 for about 840 listings   |
+| Universe, fallback | `GET /v7/finance/quote` (50 symbols per request) for the known listings (`stock_listing` + `company`), when the screener answers with no listings | 17 for about 830 listings |
 | Fundamentals | `GET /v10/finance/quoteSummary` (financialData, defaultKeyStatistics, summaryDetail, assetProfile) + `GET /ws/fundamentals-timeseries` (4 fiscal years) | 2 per stock |
+
+Since 2026-10-16 the screener answers `total: 0` for every query (even its predefined lists) while the quote endpoint
+answers with the same fields: the universe is then quoted from the listings already known (`FundamentalEtlService.syncUniverse`,
+log `Yahoo screener returned no IDX listings; quoting the 827 known listings instead`). A new listing is only found again
+once the screener answers.
 
 The screener and quoteSummary need a session cookie and a crumb (fetched once, renewed on
 "Invalid Crumb"). Market data is stored for every listing every day; fundamentals are refreshed
@@ -275,7 +281,7 @@ permission and the `FUNDAMENTALS` / `SCREENING` job types. Details in the column
 | Test                          | What it proves                                                                      |
 |-------------------------------|-------------------------------------------------------------------------------------|
 | `NewsParsersTest`             | excerpts of the four sites' pages (headline lists, `src/test/resources/screening`) give the right headlines and dates (Jakarta time); a synthetic article page gives title, date and text; relevance matching |
-| `YahooFundamentalsClientTest` | screener, quoteSummary and time series responses are read correctly (banks too), the currency of the fundamentals |
+| `YahooFundamentalsClientTest` | screener, quote (the fallback universe: a batch of symbols, an unknown symbol absent), quoteSummary and time series responses are read correctly (banks too), the currency of the fundamentals |
 | `QuantScreeningTest`          | metrics, scorecards, renormalization, overall blending, the funnel in order, shortlist = 3 x top N; selected stocks: same steps, tradability failures kept and flagged (liquidity of each stock's tier), data failures excluded and named, every eligible one shortlisted; a company reporting in USD (INDY's figures): P/B, FCF yield, EV / EBITDA and Altman Z converted, P/E and EPS untouched, all four unknown without a rate; the dossier's fiscal years in IDR with a note, as reported and not called IDR without a rate |
 | `ScreeningAgentsTest`         | model options (reasoning off, Opus effort low), cost metering and budget, ReAct with a tool call, Reflection critic, JSON retry (cut off at the limit, no strengths and concerns), provider routing without OpenInference, transient-failure retries and their limit, synthesis rules and fallback (scripted model) |
 | `FundamentalRepositoryTest`   | daily snapshots, fundamentals and their currency carried forward, stale detection (Docker Postgres) |

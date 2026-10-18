@@ -364,6 +364,18 @@ public class FundamentalRepository {
                 .list();
     }
 
+    /** Tickers of the exchange known already: its active listings and its active companies, sorted. */
+    public List<String> knownTickers(Exchange exchange) {
+        return jdbc.sql("""
+                        SELECT ticker FROM stock_listing WHERE exchange = :exchange AND active
+                        UNION
+                        SELECT ticker FROM company WHERE exchange = :exchange AND active
+                        ORDER BY ticker""")
+                .param("exchange", exchange.code())
+                .query(String.class)
+                .list();
+    }
+
     /** Date of the newest market data of the exchange. */
     public Optional<LocalDate> latestSnapshotDate(Exchange exchange) {
         return jdbc.sql("""

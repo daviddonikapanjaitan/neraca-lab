@@ -128,8 +128,11 @@ public class IngestionVerifier {
             }
             if (column == StatementColumn.CURRENT_PERIOD && p.balanceSheetCash() != null && p.endingCash() != null
                     && p.balanceSheetCash().compareTo(p.endingCash()) != 0) {
-                String overdrafts = overdraftExplanation(session, column, p);
-                if (overdrafts != null) {
+                String rounding = roundingExplanation(session, p);
+                String overdrafts = rounding != null ? null : overdraftExplanation(session, column, p);
+                if (rounding != null) {
+                    notes.add(period.key() + ": " + rounding);
+                } else if (overdrafts != null) {
                     notes.add(period.key() + ": " + overdrafts);
                 } else {
                     problems.add(period.key() + ": balance-sheet cash " + p.balanceSheetCash() + " != cash-flow ending cash " + p.endingCash());
@@ -159,6 +162,22 @@ public class IngestionVerifier {
     static boolean hasReconciledSegments(StoredPeriod p) {
         return p.segments() > 0 && p.revenue() != null && p.segmentRevenue() != null
                 && p.segmentRevenue().compareTo(p.revenue()) == 0;
+    }
+
+    /**
+     * A filing in thousands or millions whose cash flow cell carries more digits than its rounding unit (UNTR FY2022:
+     * ending cash 38281513.468848 million, the balance sheet 38281513): the two differ by less than one unit, which
+     * the mapper's own check accepts. Stored as filed; {@code null} when the difference is a unit or more.
+     */
+    static String roundingExplanation(IngestionSession session, StoredPeriod p) {
+        BigDecimal unit = session.mapper().unit();
+        BigDecimal difference = p.endingCash().subtract(p.balanceSheetCash()).abs();
+        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) >= 0) {
+            return null;
+        }
+        return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
+                + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
+                + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
     }
 
     /**

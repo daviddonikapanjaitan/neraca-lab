@@ -46,6 +46,7 @@ public class YahooFundamentalsClient {
 
     static final int PAGE_SIZE = 250;
     private static final int MAX_PAGES = 20;
+    static final int QUOTE_BATCH = 50;
 
     /** Annual time series types and the key they are stored under in {@code fundamental_snapshot.annual}. */
     static final Map<String, String> ANNUAL_TYPES = new LinkedHashMap<>();
@@ -157,6 +158,32 @@ public class YahooFundamentalsClient {
             }
         }
         log.info("Yahoo screener: {} {} listings", quotes.size(), exchange.code());
+        return quotes;
+    }
+
+    /**
+     * The same market data for known tickers, {@code GET /v7/finance/quote}, {@value #QUOTE_BATCH} symbols per
+     * request, largest market cap first. Used when the screener answers with no listings at all: since 2026-10-16
+     * it gives {@code total: 0} for every query, even its predefined lists, while the quote endpoint still answers.
+     */
+    public List<ListingQuote> quotes(Exchange exchange, List<String> tickers) {
+        List<ListingQuote> quotes = new ArrayList<>();
+        for (int from = 0; from < tickers.size(); from += QUOTE_BATCH) {
+            String symbols = tickers.subList(from, Math.min(from + QUOTE_BATCH, tickers.size())).stream()
+                    .map(t -> symbol(exchange, t)).collect(java.util.stream.Collectors.joining(","));
+            JsonNode items = withCrumb(c -> http.get(URI.create(baseUrl + "/v7/finance/quote?symbols=" + encode(symbols)
+                    + "&crumb=" + encode(c) + "&lang=en-US&region=ID&formatted=false")), "the quotes")
+                    .path("quoteResponse").path("result");
+            for (JsonNode q : items) {
+                ListingQuote quote = quote(exchange, q);
+                if (quote != null) {
+                    quotes.add(quote);
+                }
+            }
+        }
+        quotes.sort(java.util.Comparator.comparing(ListingQuote::marketCap,
+                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+        log.info("Yahoo quotes: {} of {} known {} listings", quotes.size(), tickers.size(), exchange.code());
         return quotes;
     }
 
