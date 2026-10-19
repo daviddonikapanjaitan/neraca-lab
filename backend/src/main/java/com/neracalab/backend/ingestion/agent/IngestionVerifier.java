@@ -124,7 +124,12 @@ public class IngestionVerifier {
                 problems.add(period.key() + ": total assets " + p.totalAssets() + " != liabilities + equity " + p.liabilitiesPlusEquity());
             }
             if (p.segments() > 0 && p.revenue() != null && p.segmentRevenue().compareTo(p.revenue()) != 0) {
-                problems.add(period.key() + ": segment revenue " + p.segmentRevenue() + " != revenue " + p.revenue());
+                String rounding = segmentRoundingExplanation(session, p);
+                if (rounding != null) {
+                    notes.add(period.key() + ": " + rounding);
+                } else {
+                    problems.add(period.key() + ": segment revenue " + p.segmentRevenue() + " != revenue " + p.revenue());
+                }
             }
             if (column == StatementColumn.CURRENT_PERIOD && p.balanceSheetCash() != null && p.endingCash() != null
                     && p.balanceSheetCash().compareTo(p.endingCash()) != 0) {
@@ -178,6 +183,23 @@ public class IngestionVerifier {
         return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
                 + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
                 + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
+    }
+
+    /**
+     * A revenue breakdown filed with more digits than the filing's rounding unit (EXCL FY2022, millions: Data & Digital
+     * Services 26,546,951.253861 and two more lines with decimals, 29,141,993.900667 in all, beside revenue 29,141,994):
+     * the two differ by less than one unit, which the mapper's own check accepts. Stored as filed; {@code null} when the
+     * difference is a unit or more.
+     */
+    static String segmentRoundingExplanation(IngestionSession session, StoredPeriod p) {
+        BigDecimal unit = session.mapper().precision();
+        BigDecimal difference = p.segmentRevenue().subtract(p.revenue()).abs();
+        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) >= 0) {
+            return null;
+        }
+        return "segment revenue " + p.segmentRevenue().toPlainString() + " and revenue " + p.revenue().toPlainString()
+                + " differ by " + difference.toPlainString() + ", less than the filing's rounding unit "
+                + unit.toPlainString() + " (the breakdown is filed with more digits): stored as filed";
     }
 
     /**

@@ -109,10 +109,15 @@ class FilingMapperErrorLogTest {
         assertThat(shares.snapshots()).anyMatch(s -> s.date().equals(LocalDate.parse("2024-12-31"))
                 && s.sharesOutstanding() != null && s.sharesOutstanding().compareTo(new BigDecimal("60676250000")) == 0);
 
-        // a count five times too small (the shares before a split) is still refused
+        // a count five times too small (the shares before a split) is still refused; the share capital then gives the
+        // count (606,762,000 million / par 10, as the EPS confirms)
         ShareCapital wrong = mapper.withWebShareCounts(mapper.shareCapital(),
                 List.of(new WebShareCount(LocalDate.parse("2024-12-31"), new BigDecimal("12135250000"), null, null)), "Yahoo Finance");
-        assertThat(wrong.resolved()).isFalse();
+        assertThat(wrong.webSource()).isNull();
+        assertThat(wrong.parValue()).isEqualByComparingTo("10");
+        assertThat(wrong.snapshots()).anyMatch(s -> s.date().equals(LocalDate.parse("2024-12-31"))
+                && s.sharesOutstanding().compareTo(new BigDecimal("60676200000")) == 0);
+        assertThat(wrong.checks()).anyMatch(c -> c.rule().equals("web_shares") && c.message().contains("not used"));
     }
 
     /** A workbook with a second problem is not "decided by the model by design"; a filing by function never is. */

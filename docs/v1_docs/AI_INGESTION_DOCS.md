@@ -930,6 +930,48 @@ WHERE error_id = 26;
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
 
+### The uploads of 2026-10-19 (errors 667 - 673): a final tax twice, a tax with the wrong sign, revenue with other income
+
+Seven rows from COIN, DEWA, ENRG, ESSA, EXCL and HEAL, and BUVA's valuation. Six are fixed in code. While checking
+them, the model-mapped filings by nature turned out to carry wrong revenue (EXCL, BUVA, TLKM), and the USD filers
+GMFI, KRAS and TPIA wrong EPS and share counts. A sweep of all workbooks in `data/IDX_XBRL` before and after the
+change touches only the columns below. Every other income statement is the same, and the only new share counts
+are BUVA FY2021 and FY2022 (a filing by nature still takes a published count first).
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A final tax deducted twice.** COIN H1 2025 (in its H1 2026 filing): 'Final tax expenses' 48,187,537 above profit before tax and 'Tax benefit (expenses)' -48,187,537 below it; profit before tax 25,573,185,374 is the other lines without the final tax. | 667 | `FilingMapper.doubleReportedLines`: a final tax line equal to the tax below profit before tax is counted once, as that tax, when profit before tax then reconciles exactly. |
+| **Other income filed again inside other gains.** DEWA H1 2025: 'Other income' 1,543,226 thousand and 'Other gains (losses)' 2,327,443 = 1,543,226 + 784,217 (the gain on the fixed assets sold for 784,217 in investing). Profit before tax 246,402,270 counts the other income once, in the gains. | 668 | A residual unsigned line is left out when a residual signed line of the same direction is larger and profit before tax then reconciles exactly. Operating income 367,780,970 thousand. |
+| **One amount on two lines a unit apart.** ENRG H1 2025 (full USD): 'Other income' 1,903,917 and 'Other gains (losses)' 1,903,918. Only without the gains line is profit before tax 58,365,683 exact. | 669 | Two residual lines a filed unit apart are tried both ways, and the reconciliation decides. |
+| **A tax expense filed as a benefit.** HEAL FY2023: 'Tax benefit (expenses)' 151,109 million (an expense filed positive, beside the prior year's -101,315); profit before tax 710,393 - 151,109 = total profit 559,284. | 673 | `FilingMapper.taxSign`: the tax is read with the other sign when only that gives the total profit (warning `tax_sign`). |
+| **Revenue with other income; revenue not tagged.** Filings by nature are mapped by the model. It added 'Other income' to 'Sales and revenue' in EXCL FY2024 (34,391,597 + 415,641 million), H1 2025 and H1 2026 (70,613), BUVA FY2024 (355,259,333,593 + 15,260,830,841) and TLKM FY2023 (149,216 + 252 billion), H1 2025 and H1 2026 (-75). EXCL's FY2023 workbook leaves the row empty in both columns (the revenue, 32,322,651,000,000, is only in its breakdown by type, 3617000), and the model stored 'Other income' 424,062,000,000 as revenue with an operating loss of 27.6 trillion. That left the breakdown unsaved. None of these uploads ended in the log: by design a stored filing by nature is not an error. | 672 | `FullTextExtractor.revenueAsFiled`: revenue must equal the profit or loss's own 'Sales and revenue' row (`FilingMapper.filedRevenue`), shown to the model when it does not, and an open item when its last answer still differs. A row empty on the face is shown in the workbook text with the breakdown's total and read back like a filed cell (`WorkbookText.Fill`), so the model can count it in revenue and operating income: FY2023 operating income 4,722,916 million, which reconciles to profit before tax 1,704,517. |
+| **A breakdown finer than its unit.** EXCL FY2022 (millions) files three breakdown lines with decimals: 29,141,993.900667 against revenue 29,141,994. | 671 | `IngestionVerifier.segmentRoundingExplanation`: a difference under the filing's declared rounding is a note. The breakdown is stored as filed. |
+| **BUVA: no share count before 2023.** BUVA files by nature and its loss EPS without the sign (FY2022: 26 and 51). The par value was judged only on a profit or loss by function, and Yahoo Finance publishes no count before 2023, so FY2021 and FY2022 had no market cap and no valuation. | - | `FilingMapper.parValueFallback`: when no published count fits a filing by nature, its share capital and par value give the counts, as for a filing by function: 340,563,460,000 / par 50 = 6,811,269,200 shares, -177,323,077,262 / 6,811,269,200 = -26.03. The par value is matched on the size of the EPS. Published counts still come first, because they count the treasury shares a par value cannot (BUKA FY2025). |
+| **A rupiah par value against a share capital in dollars.** GMFI (USD 219,015,655 / par 5 = 43,803,131 "shares") reproduced its EPS 0.0001 x 1,000, so GMFI's EPS was stored 1,000 times too large (FY2021 -4.5, FY2022 0.1, FY2024 1.0). KRAS (19,751,460 shares, EPS 1 for 0.001) and TPIA FY2024 (86,863,000 shares, EPS -1) were hit the same way. | - | `FilingMapper.rupiahShareCapital`: par values divide only a share capital in rupiah. Those filings take Yahoo Finance's counts, or none. |
+
+Not fixed (the filing): ESSA H1 2026 (670). Every cash flow section adds up to its total, the net change is O + I + F
+and the ending cash is the balance sheet's 189,225,543, but beginning cash 125,760,092 + 56,515,451 = 182,275,543,
+6,950,000 short. No line of the workbook accounts for it (the bonds moved by -5,300,000, as the balance sheet
+shows), so the rule-based extraction rightly refuses the column. The full-text extraction stores it as filed.
+
+BUVA has no gross profit in any period, and that is right. A profit or loss by nature (1312000) has no cost of
+sales and no gross profit row, only revenue and expenses by type ('Hotel operation expenses', 'Other expenses'),
+and neither field is built from expense rows by nature (MSIN). BUVA's other valuation fields are all filled. H1
+2025 has no P/B and no EV ratios because an interim filing has no balance sheet at its comparative date.
+
+Data: the KRAS and TPIA counts of 19,751,460 and 86,863,000 were cleared first (an upload never replaces a stored
+count with nothing). Then 22 filings were uploaded again on 2026-10-19, all `SUCCEEDED` with no new row: HEAL 2023,
+COIN, DEWA and ENRG 2026-II, EXCL 2022, 2023, 2024 and 2026-II, BUVA 2022 and 2024, TLKM 2023 and 2026-II, GMFI 2022
+and 2024, KRAS 2022 to 2026-II, and TPIA 2022 to 2024. Every revenue now equals the filed 'Sales and revenue', and
+EXCL FY2023 has its breakdown. BUVA FY2021 and FY2022 have 6,811,269,200 shares and a valuation. KRAS has Yahoo
+Finance's 19,346,396,900 shares at every date, with its EPS in USD (FY2022 0.001). TPIA FY2021 to FY2023 have no
+count: Yahoo Finance's do not fit their EPS, which is better than one 1,000 times too small.
+
+Tests: `FilingMapperCoinDewaEnrgHealTest`, `FullTextExtractorTest` (revenue with other income shown to the model and
+an open item when kept; EXCL's untagged revenue shown with the breakdown total), `IngestionVerifierRoundingTest`
+(EXCL's breakdown), `FilingMapperErrorLogTest` / `FilingMapperWebSharesTest` (a refused published count of a
+filing by nature falls back to its own count).
+
 ### The review of 2026-10-16 (errors 510, 511, 523): share counts and currencies of BKSL, CUAN, DSSA and BUKA
 
 Two open rows - 510 (BBNI FY2025, the full-text extraction took over and stored it: `SUCCEEDED`) and 511 (BKSL's

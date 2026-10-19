@@ -290,7 +290,7 @@ public class FullTextExtractor {
      */
     public Report extract(IngestionSession session, List<StatementColumn> columns, String reason, AgentTrace trace) {
         FilingMapper mapper = session.mapper();
-        WorkbookText text = new WorkbookText(mapper.workbook(), properties.maxChars());
+        WorkbookText text = new WorkbookText(mapper.workbook(), properties.maxChars(), revenueFills(mapper));
         List<String> mapped = new ArrayList<>();
         List<String> problems = new ArrayList<>();
         List<String> notes = new ArrayList<>();
@@ -344,6 +344,25 @@ public class FullTextExtractor {
         }
         notes.forEach(session::note);
         return new Report(columns.stream().map(Enum::name).toList(), trace.modelCalls() - callsBefore, mapped, problems, notes);
+    }
+
+    /**
+     * The revenue of a column whose profit or loss leaves 'Sales and revenue' empty, from its own revenue breakdown
+     * ({@link FilingMapper#filedRevenue}): shown to the model in the empty cell, so that it can name the row. EXCL's
+     * FY2023 workbook files 32,322,651,000,000 only in its breakdown; without the row the model took 'Other income'.
+     */
+    static List<WorkbookText.Fill> revenueFills(FilingMapper mapper) {
+        List<WorkbookText.Fill> fills = new ArrayList<>();
+        for (StatementColumn column : mapper.columns()) {
+            try {
+                mapper.filedRevenue(column).filter(r -> r.breakdown() != null).ifPresent(r -> fills.add(new WorkbookText.Fill(
+                        r.sheet(), r.row(), mapper.durationIndex(column), r.filed(),
+                        "not tagged on the face: the total of the revenue breakdown, sheet " + r.breakdown())));
+            } catch (RuntimeException e) {
+                // a workbook the mapper cannot read: nothing to fill in
+            }
+        }
+        return fills;
     }
 
     /** The statement of the rule-based extraction, when it can produce one (it cannot for a workbook it cannot map). */
@@ -944,6 +963,9 @@ public class FullTextExtractor {
                             sum(values.get("revenue"), negate(values.get("cost_of_revenue"))), values.get("revenue"),
                             values.get("cost_of_revenue"));
                 }
+                if (!bank) {
+                    revenueAsFiled(mapper, target, values.get("revenue"), tolerance, issues, checks);
+                }
                 if (mapper.insurance()) {
                     // an insurer has no 'profit from operation' row and every line of its profit or loss above profit
                     // before tax is in revenue, cost of revenue, operating expenses or finance costs: they must give it.
@@ -1151,6 +1173,36 @@ public class FullTextExtractor {
         terms.forEach((field, list) -> result.put(field, list.stream()
                 .map(t -> refs.contains(t.row().ref()) ? new Term(t.row(), -t.sign()) : t).toList()));
         return result;
+    }
+
+    /**
+     * Revenue is the profit or loss's own 'Sales and revenue' row, by nature as by function ({@link FilingMapper#filedRevenue}).
+     * The model added 'Other income' to it in filings by nature - EXCL FY2024 34,391,597 + 415,641 million, H1 2025 and
+     * H1 2026 (70,613); BUVA FY2024 (15,260,830,841); TLKM FY2023 (252 billion), H1 2025, H1 2026 (-75) - and took
+     * 'Other income' alone where the row is empty (EXCL FY2023).
+     */
+    private static void revenueAsFiled(FilingMapper mapper, Target target, BigDecimal revenue, BigDecimal tolerance,
+                                       List<String> issues, List<Check> checks) {
+        FilingMapper.FiledRevenue filed;
+        try {
+            filed = mapper.filedRevenue(target.column()).orElse(null);
+        } catch (RuntimeException e) {
+            return;     // a workbook the mapper cannot read: nothing to compare with
+        }
+        if (filed == null) {
+            return;
+        }
+        String row = "'" + FilingMapper.SALES + "' (" + filed.sheet() + "!R" + filed.row() + ")";
+        if (revenue != null && revenue.subtract(filed.amount()).abs().compareTo(tolerance) <= 0) {
+            checks.add(Check.ok("full_text", "revenue = " + row));
+            return;
+        }
+        issues.add("revenue is " + (revenue == null ? "not mapped" : filed(revenue, mapper)) + " but the profit or loss's own "
+                + row + " is " + filed(filed.amount(), mapper) + " in " + columnName(target) + ": revenue is that row alone, with "
+                + "sign 1 (other income, finance income and gains are not revenue; they stay in operating_income or out of it "
+                + "as the field says)" + (filed.breakdown() == null ? ""
+                : ". The row is not tagged on the face in this column; the text shows it with the total of the revenue "
+                + "breakdown (sheet " + filed.breakdown() + "), which counts in operating_income like a filed revenue"));
     }
 
     /** An identity that must hold when both sides are known (and every operand in {@code needed} was mapped). */
