@@ -114,6 +114,38 @@ class MacroSourceParsersTest {
                 .isInstanceOf(SourceException.class).hasMessageContaining("Download");
     }
 
+    /**
+     * Since 2026-10 the Download button is a link that posts the form back (an ASP.NET LinkButton, as on
+     * data-inflasi.aspx): the control is named in __EVENTTARGET, and no submit button is posted.
+     */
+    @Test
+    void biExportFormFromTheDownloadLink() {
+        String html = """
+                <html><body><form method="post" id="aspnetForm">
+                <input type="hidden" name="__EVENTTARGET" id="__EVENTTARGET" value="" />
+                <input type="hidden" name="__EVENTARGUMENT" id="__EVENTARGUMENT" value="" />
+                <input type="hidden" name="__VIEWSTATE" value="abc" />
+                <input name="ctl00$ctl51$g_a8ad$ctl00$TextBoxDateFrom" type="text" />
+                <input name="ctl00$ctl51$g_a8ad$ctl00$TextBoxDateTo" type="text" />
+                <input type="submit" name="ctl00$ctl51$g_a8ad$ctl00$ButtonCari" value="Search" />
+                <a onclick="javascript:setFormSubmitToFalse();" id="ctl00_ctl51_g_a8ad_ctl00_ButtonExport" class="btn-unduh"
+                   href="javascript:__doPostBack(&#39;ctl00$ctl51$g_a8ad$ctl00$ButtonExport&#39;,&#39;&#39;)">Download</a>
+                <a href="javascript:__doPostBack(&#39;ctl00$ctl51$g_a8ad$ctl00$DataPagerDataInflasi$ctl01$ctl01&#39;,&#39;&#39;)">2</a>
+                </form></body></html>""";
+        Map<String, String> form = BankIndonesiaSource.exportForm(Jsoup.parse(html), LocalDate.of(2003, 1, 1),
+                LocalDate.of(2026, 10, 21));
+        assertThat(form).containsEntry("__EVENTTARGET", "ctl00$ctl51$g_a8ad$ctl00$ButtonExport")
+                .containsEntry("__EVENTARGUMENT", "").containsEntry("__VIEWSTATE", "abc")
+                .containsEntry("ctl00$ctl51$g_a8ad$ctl00$TextBoxDateFrom", "01/2003")
+                .containsEntry("ctl00$ctl51$g_a8ad$ctl00$TextBoxDateTo", "10/2026")
+                .doesNotContainKey("ctl00$ctl51$g_a8ad$ctl00$ButtonCari")
+                .doesNotContainKey("ctl00$ctl51$g_a8ad$ctl00$ButtonExport");
+        // a page with neither the button nor the link
+        String without = html.replaceAll("(?s)<a onclick.*?Download</a>", "");
+        assertThatThrownBy(() -> BankIndonesiaSource.exportForm(Jsoup.parse(without), LocalDate.now(), LocalDate.now()))
+                .isInstanceOf(SourceException.class).hasMessageContaining("Download");
+    }
+
     private static byte[] biExport(String[][] rows) throws IOException {
         try (Workbook book = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Sheet sheet = book.createSheet("BI-7Day-RR");

@@ -15,14 +15,14 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ---------------------------------------------------------------------
--- ingestion_job: the two RAG ingestion job types (and ANALYSIS of V1.0.15 and MACRO of V1.0.25, which run after this
--- script)
+-- ingestion_job: the two RAG ingestion job types (and ANALYSIS of V1.0.15, MACRO of V1.0.25 and MACRO_ANALYSIS of V1.0.27,
+-- which run after this script)
 -- ---------------------------------------------------------------------
 ALTER TABLE ingestion_job
     DROP CONSTRAINT IF EXISTS ck_ingestion_job_type,
     ADD  CONSTRAINT ck_ingestion_job_type
         CHECK (job_type IN ('FINANCIAL_STATEMENT', 'PRICE', 'FUNDAMENTALS', 'SCREENING', 'RAG_PDF', 'RAG_NEWS',
-                             'ANALYSIS', 'MACRO'));
+                             'ANALYSIS', 'MACRO', 'MACRO_ANALYSIS'));
 
 ALTER TABLE ingestion_job
     DROP CONSTRAINT IF EXISTS ck_ingestion_job_file,
@@ -30,7 +30,7 @@ ALTER TABLE ingestion_job
         CHECK (job_type NOT IN ('FINANCIAL_STATEMENT', 'RAG_PDF') OR file_id IS NOT NULL);
 
 COMMENT ON COLUMN ingestion_job.job_type IS
-    'FINANCIAL_STATEMENT = IDX .xlsx upload stored by the AI agent, PRICE = daily price ingestion, FUNDAMENTALS = screening data ETL, SCREENING = AI stock screening, RAG_PDF = PDF document into the RAG vector store, RAG_NEWS = news of a company into the RAG vector store, ANALYSIS = AI analysis of one stock, MACRO = macro series of the technical analysis (V1.0.25).';
+    'FINANCIAL_STATEMENT = IDX .xlsx upload stored by the AI agent, PRICE = daily price ingestion, FUNDAMENTALS = screening data ETL, SCREENING = AI stock screening, RAG_PDF = PDF document into the RAG vector store, RAG_NEWS = news of a company into the RAG vector store, ANALYSIS = AI analysis of one stock, MACRO = macro series of the technical analysis (V1.0.25), MACRO_ANALYSIS = AI macro analysis of a country (V1.0.27).';
 
 COMMENT ON TABLE ingestion_file IS 'Uploaded files, one row per distinct content: financial statement workbooks (.xlsx) and RAG PDF documents (.pdf).';
 

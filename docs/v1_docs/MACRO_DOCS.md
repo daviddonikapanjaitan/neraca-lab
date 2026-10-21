@@ -130,7 +130,7 @@ Parsers fail loudly on a layout they do not know.
 | FRED (`FredSource`) | `https://fred.stlouisfed.org/graph/fredgraph.csv?id={id}&cosd={from}`, no API key. Header `observation_date,{ID}`; a day without a value (`.` or empty) is skipped. |
 | Yahoo Finance (`YahooMacroSource`) | The chart client of the price ingestion (paced with it); daily closes; today's New York bar is left out. |
 | CNBC (`CnbcSource`) | `https://ts-api.cnbc.com/harmony/app/bars/{symbol}/1D/{from}/{to}/adjusted/EST5EDT.json`, **one request per calendar year**: a request over many years leaves days out (2026-09-10 and 2026-09-21 were missing from the 2011 - 2026 answer). The close of each day. Weekend-dated bars are left out: they are sessions dated a day early by the service's US time zone (most of 2015, next to the bar of the right day) or repeats of Friday. Today's (Jakarta) bar is left out. CNBC has no bar in 2014: 3,394 weekdays from September 2011. |
-| Bank Indonesia (`BankIndonesiaSource`) | Reads the page, then posts its ASP.NET form back with the **Download** button and the page's date range (BI-Rate: `TextBoxDateStart / End`, dd/mm/yyyy; inflation: `TextBoxDateFrom / To`, mm/yyyy). The answer is an `.xlsx` with a "Period" column ("23 September 2026", "19 Agustus 2026", "Agustus 2026": Indonesian or English months) and a value column ("5.75 %"). |
+| Bank Indonesia (`BankIndonesiaSource`) | Reads the page, then posts its ASP.NET form back with the **Download** control (a submit button `...$ButtonExport`, or - since October 2026 on both pages - a link `javascript:__doPostBack('...$ButtonExport','')`, posted as `__EVENTTARGET`; before that change ID_CPI_YOY failed with "the page has no Download (ButtonExport) button") and the page's date range (BI-Rate: `TextBoxDateStart / End`, dd/mm/yyyy; inflation: `TextBoxDateFrom / To`, mm/yyyy). The answer is an `.xlsx` with a "Period" column ("23 September 2026", "19 Agustus 2026", "Agustus 2026": Indonesian or English months) and a value column ("5.75 %"). |
 | BI SEKI (`BiSekiSource`) | `https://www.bi.go.id/SEKI/tabel/{table}` (`.xls`); `source_ref` = `TABLE.xls#row label`. The months run across the columns: a row of month names (Jan .. Des; `*` = provisional) under a row of years written once per year. A year is counted from the first label (a month not after the one before starts the next year), and every year label must agree with that count, or the job fails. A column without a month (the yearly total) is skipped. |
 | CFTC (`CftcSource`) | `https://publicreporting.cftc.gov/resource/6dca-aqww.json` (Socrata), filtered by `cftc_contract_market_code` and date; net = non-commercial long - short, dated on the Tuesday of the positions (public on Friday). |
 
@@ -207,10 +207,11 @@ signals. Each vote is listed with its reason.
 The macro panel, the regimes and the macro preset summaries are on the Macro page (section 6a); Companies › Technicals no
 longer shows them (2026-10-16).
 
-## 6a. The Macro page (sidebar › Macro, permission COMPANIES)
+## 6a. The Macro page (sidebar › Macro › Outlook, permission COMPANIES)
 
 A country's stock index read through its macro data, between Companies and Screening in the sidebar
-(`/macro?country=ID&index=IHSG&range=1Y`; the choice is kept in the URL). Everything is computed in Java by fixed
+(`/macro?country=ID&index=IHSG&range=1Y`; the choice is kept in the URL). The sidebar entry is a dropdown: **Outlook**
+(this page) and **AI Analysis** (the AI macro analysis, [MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md)). Everything is computed in Java by fixed
 rules (`macro.outlook.MacroOutlook`, rules version `2026-10-16.1`), no AI model; the page only draws it.
 
 **Choices**
@@ -268,6 +269,21 @@ rules (`macro.outlook.MacroOutlook`, rules version `2026-10-16.1`), no AI model;
    its 200-day average; **accumulate** in the two cases above; **sell / reduce** when the score is below 40 and the index
    closes below its average - and "what would change the call": the parts against, heaviest first.
 
+**Also on the page** (2026-10-21)
+- **Commodities and currencies** (between the macro panel and the presets; `macro.outlook.MarketBoard`): every active
+  commodity and currency pair of the Forex / commodity price ingestion, grouped into Indonesia's exports (coal, nickel,
+  cobalt, palm oil, tin, copper, LNG, rubber, pulp), imports (crude oil, wheat, soybean meal, corn, sugar) and the
+  others, with the last price, 1M / 3M / 1Y change, the place in its 52-week range, a 1Y sparkline (weekly closes)
+  and what it means for the country: an export up 5 % or more in 3 months supportive (down 5 % a headwind), an import
+  the reverse, USD/IDR up 2 % or more a headwind (down 1 % supportive), a stale price (10 days daily, 75 days monthly)
+  neutral. The **terms of trade** sum the export and import votes: FAVOURABLE at +2, UNFAVOURABLE at -2.
+- **Right column** (sticky on a wide screen): the **AI panel** - the latest AI macro analysis of the chosen index
+  (investability, verdict, action, the four agents' stances, the thesis, beside the rules' score) with **Run AI
+  analysis** and a link to its report - and **Indexes**: the country's indexes (IHSG, LQ45) with close, 1M / 3M / 1Y and
+  the distance to the 200-day average.
+- The Soros preset also returns its `loop` (VIRTUOUS, NEUTRAL, VICIOUS) and `loopThen`, the Dalio preset its
+  `quadrant` (GOLDILOCKS, REFLATION, STAGFLATION, ...): the AI agents' validator reads them.
+
 On 2026-10-16 (IHSG 5,185, 26 % below its 200-day average of 7,033): liquidity tightening (-3 of 6), risk neutral (-1 of
 6), BI hiking with a restrictive real rate, inflation inside the band, a firmer rupiah - **36 / 100, not investable now,
 sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
@@ -275,7 +291,7 @@ sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
 | Endpoint (permission COMPANIES) | Returns |
 |---|---|
 | `GET /api/v1/macro/outlook/countries` | the countries (`available`) and their indexes (`rows`, `lastDate`) |
-| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros`, `dalio`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
+| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros` with `loop`, `dalio` with `quadrant`), `indexes` (the country's indexes), `markets` (`rows` with `role`, `tone`, `summary`, `points`; `termsOfTrade`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
 
 ## 7. Limitations
 

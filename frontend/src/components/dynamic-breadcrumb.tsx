@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/breadcrumb"
 import { TECHNICALS_HREF } from "@/lib/companies-sections"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
+import { MACRO_ANALYSIS_HREF, MACRO_HREF } from "@/lib/macro"
 import { ANALYSIS_HREF, SELECTED_STOCKS_HREF } from "@/lib/screening-sections"
 
 interface Crumb {
@@ -36,6 +37,8 @@ const ADMIN_PAGES: Record<string, string> = {
  * /screening/<id>           -> Screening / Screening Stocks / Report
  * /screening/selected/<id>  -> Screening / Selected Stocks / Report
  * /screening/analysis/<id>  -> Screening / Analysis / Report
+ * /macro                    -> Macro / Outlook
+ * /macro/analysis/<id>      -> Macro / AI Analysis / Report
  * The exchange crumb opens the company list filtered by that exchange.
  */
 function crumbs(pathname: string): Crumb[] {
@@ -64,6 +67,14 @@ function crumbs(pathname: string): Crumb[] {
       { label: "Screening", href: "/screening" },
       section,
       ...(report ? [{ label: "Report", href: pathname }] : []),
+    ]
+  }
+  if (segments[0] === "macro") {
+    const analysis = segments[1] === "analysis"
+    return [
+      { label: "Macro", href: MACRO_HREF },
+      analysis ? { label: "AI Analysis", href: MACRO_ANALYSIS_HREF } : { label: "Outlook", href: MACRO_HREF },
+      ...(analysis && segments.length > 2 ? [{ label: "Report", href: pathname }] : []),
     ]
   }
   if (segments[0] !== "companies") {

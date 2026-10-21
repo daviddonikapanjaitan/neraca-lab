@@ -18,5 +18,7 @@ public enum IngestionJobType {
     /** AI analysis of one stock: research agent over its stored documents, investor agents, synthesis, report */
     ANALYSIS,
     /** one macro series (BI rate, US 10Y, Fed assets, ...) from its source into macro_series (technical analysis) */
-    MACRO
+    MACRO,
+    /** AI macro analysis of a country's stock market: research agent, the four macro agents, synthesis, report */
+    MACRO_ANALYSIS
 }

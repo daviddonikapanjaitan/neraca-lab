@@ -151,7 +151,8 @@ Details: [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md).
 
 ### 3.2b Macro - `/macro?country=ID&index=IHSG&range=1Y` (`COMPANIES`)
 
-A sidebar entry of its own between Companies and Screening (no sub-pages). The server page loads the outlook
+A sidebar dropdown between Companies and Screening: **Outlook** (this page) and **AI Analysis** (3.2c). The server
+page loads the outlook
 (`GET /api/v1/macro/outlook`); the client component (`components/macro/macro-page-client.tsx`) reloads it through
 `/api/macro/outlook` when the country, index or range changes and keeps the choice in the URL (`router.replace`). An
 unknown country or index in the URL shows Indonesia / IHSG.
@@ -162,10 +163,22 @@ unknown country or index in the URL shows Indonesia / IHSG.
 | Index | a plain line chart (Recharts), no indicators; close, 1M / 3M / YTD / 1Y, 52-week range; the investability score and the action badge |
 | Macro panel | "Macro panel (liquidity and risk regimes, rates, dollar)": both regimes with every vote and their state 3 months before; a chart per series grouped Indonesia / Global liquidity and risk, each with its last value, a Supportive / Headwind / Neutral badge, the summary and the preset that reads it |
 | Preset summaries | Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio (two per row on a wide screen): stance, label, score, thesis, buy when / sell when, the evidence on request |
+| Commodities and currencies | exports, imports and other instruments: last, 1M / 3M / 1Y, 52-week range, a 1Y sparkline, a Supportive / Headwind / Neutral badge with what it means for the country; the terms of trade on top |
 | Conclusion | the score (0 - 100) on a bar with the 40 / 60 marks, verdict and action, the summary, the buy / accumulate / sell conditions with met ones ticked (the group that applies now highlighted), what would change the call, the six parts of the score (weight, reading, points, why) |
+| Right column | sticky on a wide screen (`xl`, 340 px): the AI panel (`components/macro/macro-ai-panel.tsx`: the latest AI macro analysis of the index - investability, verdict, action, the agents' stances, the thesis, the rules' score - "Run AI analysis", a link to the report; polls every 3 s while one is active) and the country's indexes (IHSG, LQ45) |
 | Other | notes (series without data, an index not stored yet) and the disclaimer |
 
 Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6a.
+
+### 3.2c Macro › AI Analysis - `/macro/analysis`, `/macro/analysis/[id]` (`COMPANIES`)
+
+| Page | Content |
+|---|---|
+| `/macro/analysis` | `macro-analysis-form.tsx`: country (Indonesia; the others "coming later"), index, the four agents, the models, the budget and what the database holds; "Run analysis" opens the report. `macro-analyses-table.tsx`: the analyses of every country and index, most recent first (country · index, status, investability, action, conviction, cost, requested), paged, polled while one is active |
+| `/macro/analysis/[id]` | `macro-analysis-report.tsx`: progress while it runs (polls every 3 s), then the tiles (investability, action, rules score, AI cost, duration), the executive summary (thesis, bull / bear case, risks, monitor, sector tilts, data gaps, adjustment), one card per agent (prior, AI, final score, stance, thesis, supports, risks, buy / sell when, reflection), the research brief (evidence refs, tool results, ReAct steps), the rules the agents read, the commodities and currencies, notes, model calls and the PDF download |
+
+Route handlers: `/api/macro/analyses` (GET list, POST), `/api/macro/analyses/[id]`, `/api/macro/analyses/[id]/pdf`.
+Details: [MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md).
 
 ### 3.3 Ingestion - `/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news`, `/ingestion/macro` (`INGESTION`)
 
@@ -206,7 +219,7 @@ DeepSeek) and the full-text extraction (Haiku) side by side
 | News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |
 | Stored documents (RAG)     | badge with stored documents and chunks, ticker filter (tickers starting with it, applied once typing pauses), search box (5 closest chunks with distance, pages or date, link to the article), table: company, document / article (link), pages or published date, chunks, stored; pages as in the jobs table (10 rows, or 5 / 20 / 50; first / previous / next / last); reloaded when a job finishes |
 | Summary tiles              | in progress, done, incomplete, failed (from `counts`)                                                                           |
-| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG) / analyses / macro, scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
+| Jobs table                 | type tabs (all / financial statements / prices / screening data / screenings / PDF (RAG) / News (RAG) / analyses / macro / macro analyses, scrollable on small screens), status filter, job, status badge, progress (`stage` + `message`), requested (time and "by <username>", "Scheduled run" without a user), duration, download icon on upload rows; pages (`components/table-pagination.tsx`): "Showing 11–20 of 57 jobs", rows per page 5 / 10 / 20 / 50 (default 10), "Page 2 of 6", first / previous / next / last; changing the type, status or rows per page, or submitting a job, goes back to page 1; the current page is refreshed every 2 s while a job is active, every 10 s otherwise |
 | Detail sheet               | file (size, SHA-256, new / reused) with a "Download file" button, started by (name and username, deleted user, or scheduled run), timings, attempts, result summary (verification and agent metrics incl. model retries when there were any, or price days, valuation and the currency conversion of a listing quoted in another currency, or RAG pages / chunks / model, or news range, per-source counts and articles not stored), raw JSON |
 
 Download (`DownloadFileButton`): the file is fetched first and then saved under the name of that

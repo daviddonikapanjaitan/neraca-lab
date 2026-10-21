@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 
 import { EmptyState } from "@/components/empty-state"
+import { MacroAiPanel } from "@/components/macro/macro-ai-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,12 +29,14 @@ import {
   macroOutlookUrl,
   type Condition,
   type MacroAction,
+  type MacroIndexRow,
   type MacroOutlook,
   type MacroPanel,
   type MacroPreset,
   type MacroRange,
   type MacroRegimeThen,
   type MacroStance,
+  type MarketRow,
   type Tone,
   type Verdict,
 } from "@/lib/macro"
@@ -87,8 +90,9 @@ function signed(value: number | null | undefined, digits = 1, suffix = "%"): str
 
 /**
  * The Macro page: the country and index dropdowns and the range, the index as a plain line, the macro panel (a chart and
- * a summary per series, the liquidity and risk regimes), the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio
- * summaries and the conclusion. A change reloads the outlook and keeps the choice in the URL.
+ * a summary per series, the liquidity and risk regimes), the commodities and currencies read for the country, the Paul
+ * Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries and the conclusion; on the right the AI macro analysis
+ * of the index and the country's indexes side by side. A change reloads the outlook and keeps the choice in the URL.
  */
 export function MacroPageClient({ initial }: { initial: MacroOutlook }) {
   const router = useRouter()
@@ -189,25 +193,188 @@ export function MacroPageClient({ initial }: { initial: MacroOutlook }) {
         </p>
       )}
 
-      <div className={cn("flex flex-col gap-4 transition-opacity", loading && "opacity-60")}>
-        <IndexCard data={data} />
-        <MacroPanelCard data={data} />
-        <PresetsCard data={data} />
-        <ConclusionCard data={data} />
-        {data.notes.length > 0 && (
-          <ul role="note" className="space-y-1 rounded-lg border border-amber-600/30 bg-amber-600/5 px-3 py-2 text-xs">
-            {data.notes.map((n) => (
-              <li key={n} className="flex items-start gap-2 text-amber-800 dark:text-amber-300">
-                <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
-                <span>{n}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="text-xs text-muted-foreground">
-          {data.disclaimer} Rules version {data.rulesVersion}.
-        </p>
+      <div className={cn("grid items-start gap-4 transition-opacity xl:grid-cols-[minmax(0,1fr)_340px]", loading && "opacity-60")}>
+        <div className="flex min-w-0 flex-col gap-4">
+          <IndexCard data={data} />
+          <MacroPanelCard data={data} />
+          <MarketsCard data={data} />
+          <PresetsCard data={data} />
+          <ConclusionCard data={data} />
+          {data.notes.length > 0 && (
+            <ul role="note" className="space-y-1 rounded-lg border border-amber-600/30 bg-amber-600/5 px-3 py-2 text-xs">
+              {data.notes.map((n) => (
+                <li key={n} className="flex items-start gap-2 text-amber-800 dark:text-amber-300">
+                  <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+                  <span>{n}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {data.disclaimer} Rules version {data.rulesVersion}.
+          </p>
+        </div>
+        <aside aria-label="AI macro analysis" className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4">
+          <MacroAiPanel country={data.country.code} index={data.index.code} rulesScore={data.conclusion.score} />
+          <IndexesCard indexes={data.indexes ?? []} current={data.index.code} />
+        </aside>
       </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ indexes
+
+/** The country's indexes side by side: the broad market (IHSG) against its most liquid stocks (LQ45). */
+function IndexesCard({ indexes, current }: { indexes: MacroIndexRow[]; current: string }) {
+  if (indexes.length === 0) return null
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Indexes</CardTitle>
+        <CardDescription>Breadth: the broad market against its most liquid stocks.</CardDescription>
+      </CardHeader>
+      <CardContent className="px-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="pl-4">Index</TableHead>
+              <TableHead className="text-right">3M</TableHead>
+              <TableHead className="text-right">1Y</TableHead>
+              <TableHead className="pr-4 text-right">vs 200d</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {indexes.map((i) => (
+              <TableRow key={i.code} className={cn(i.code === current && "bg-muted/40")}>
+                <TableCell className="pl-4">
+                  <span className="font-mono text-xs font-medium">{i.code}</span>
+                  <div className="font-mono text-[11px] text-muted-foreground tabular-nums">{formatNumber(i.close, 2)}</div>
+                </TableCell>
+                <TableCell className={cn("text-right font-mono text-xs tabular-nums", toneOf(i.change3mPct))}>
+                  {signed(i.change3mPct)}
+                </TableCell>
+                <TableCell className={cn("text-right font-mono text-xs tabular-nums", toneOf(i.change1yPct))}>
+                  {signed(i.change1yPct)}
+                </TableCell>
+                <TableCell className={cn("pr-4 text-right font-mono text-xs tabular-nums", toneOf(i.vsSma200Pct))}>
+                  {signed(i.vsSma200Pct)}
+                  {i.sma200Slope && <div className="text-[10px] text-muted-foreground">avg {i.sma200Slope.toLowerCase()}</div>}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
+function toneOf(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value === 0) return ""
+  return value > 0 ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400"
+}
+
+// ------------------------------------------------------------------ commodities and currencies
+
+const ROLE_GROUPS: { title: string; roles: MarketRow["role"][] }[] = [
+  { title: "What Indonesia exports", roles: ["EXPORT"] },
+  { title: "What Indonesia imports", roles: ["IMPORT"] },
+  { title: "Havens, currencies and references", roles: ["MIXED", "CURRENCY", "REFERENCE"] },
+]
+
+/** The commodities and currency pairs of the price ingestion, read for the country, and its terms of trade. */
+function MarketsCard({ data }: { data: MacroOutlook }) {
+  const markets = data.markets
+  const rows = markets ? [...markets.commodities, ...markets.forex] : []
+  const terms = markets?.termsOfTrade
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Commodities and currencies</CardTitle>
+        <CardDescription>
+          {data.country.name} exports coal, nickel, palm oil, tin, gold and LNG and imports crude oil, wheat and soybeans:
+          what their prices mean for its trade balance, the rupiah and the resource sectors · data from Ingestion › Price
+          Ingestion
+        </CardDescription>
+        {terms?.state && (
+          <CardAction>
+            <Badge
+              variant="outline"
+              className={cn(
+                terms.state === "FAVOURABLE" && "border-emerald-600/40 text-emerald-700 dark:text-emerald-400",
+                terms.state === "UNFAVOURABLE" && "border-rose-600/40 text-rose-700 dark:text-rose-400"
+              )}
+            >
+              Terms of trade {terms.state.toLowerCase()} ({terms.score !== null && terms.score > 0 ? "+" : ""}
+              {terms.score} of {terms.signals})
+            </Badge>
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {terms && <p className="text-sm leading-relaxed">{terms.summary}</p>}
+        {rows.length === 0 ? (
+          <EmptyState
+            variant="chart"
+            title="No commodity or currency prices"
+            description="Load them on Ingestion › Price Ingestion with the market Commodities or Forex."
+          />
+        ) : (
+          ROLE_GROUPS.map((group) => {
+            const items = rows.filter((r) => group.roles.includes(r.role))
+            if (items.length === 0) return null
+            return (
+              <section key={group.title} aria-label={group.title} className="space-y-3">
+                <h3 className="text-sm font-semibold">{group.title}</h3>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {items.map((r) => (
+                    <MarketTile key={r.code} row={r} />
+                  ))}
+                </div>
+              </section>
+            )
+          })
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function MarketTile({ row: r }: { row: MarketRow }) {
+  const points = r.points.map(([t, v]) => ({ date: dateOf(t), value: v }))
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5 rounded-xl border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium" title={r.name}>
+            {r.name}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            <span className="font-mono text-foreground tabular-nums">{formatNumber(r.last, r.last >= 100 ? 2 : 4)}</span>{" "}
+            {r.unit} · {formatDate(r.lastDate)}
+            {r.stale && <span className="text-amber-600 dark:text-amber-400"> · stale</span>}
+          </p>
+        </div>
+        <Badge variant="outline" className={cn("shrink-0", TONE_STYLE[r.tone])}>
+          {TONE_LABEL[r.tone]}
+        </Badge>
+      </div>
+      {points.length > 1 && (
+        <ChartContainer config={lineConfig} className="aspect-auto h-[64px] w-full">
+          <LineChart data={points} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+            <XAxis dataKey="date" hide />
+            <YAxis hide domain={["auto", "auto"]} />
+            <ChartTooltip content={<ChartTooltipContent labelFormatter={(v) => formatDate(String(v))} />} />
+            <Line dataKey="value" stroke="var(--color-value)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
+          </LineChart>
+        </ChartContainer>
+      )}
+      <p className="font-mono text-[11px] text-muted-foreground tabular-nums">
+        1M {signed(r.change1mPct)} · 3M {signed(r.change3mPct)} · 1Y {signed(r.change1yPct)}
+        {r.rangePct !== null && ` · ${formatNumber(r.rangePct, 0)}% of its 52-week range`}
+      </p>
+      {r.relevance && <p className="text-xs leading-relaxed">{r.relevance}</p>}
     </div>
   )
 }

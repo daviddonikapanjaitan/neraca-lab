@@ -37,6 +37,9 @@ public class BankIndonesiaSource implements MacroSource {
 
     private static final DateTimeFormatter FORM_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter FORM_MONTH = DateTimeFormatter.ofPattern("MM/yyyy");
+    /** The Download link's postback: javascript:__doPostBack('ctl00$...$ButtonExport','') - target and argument. */
+    private static final java.util.regex.Pattern POST_BACK =
+            java.util.regex.Pattern.compile("__doPostBack\\('([^']*\\$ButtonExport)'\\s*,\\s*'([^']*)'\\)");
 
     private final PoliteHttpClient http;
 
@@ -88,6 +91,20 @@ public class BankIndonesiaSource implements MacroSource {
                 continue;
             }
             fields.put(name, input.attr("value"));
+        }
+        if (button == null) {
+            // since 2026-10 the button is a link that posts the form back through __doPostBack (an ASP.NET LinkButton:
+            // <a href="javascript:__doPostBack('ctl00$...$ButtonExport','')">Download</a>): the control is named in
+            // __EVENTTARGET instead of being posted as a field
+            for (Element link : form.select("a[href]")) {
+                java.util.regex.Matcher postBack = POST_BACK.matcher(link.attr("href"));
+                if (postBack.find()) {
+                    button = postBack.group(1);
+                    fields.put("__EVENTTARGET", button);
+                    fields.put("__EVENTARGUMENT", postBack.group(2));
+                    break;
+                }
+            }
         }
         if (button == null) {
             throw new SourceException("Bank Indonesia: the page has no Download (ButtonExport) button");

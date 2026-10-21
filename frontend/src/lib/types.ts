@@ -290,6 +290,7 @@ export type IngestionJobType =
   | "RAG_NEWS"
   | "ANALYSIS"
   | "MACRO"
+  | "MACRO_ANALYSIS"
 
 export type RagSourceType = "PDF" | "NEWS"
 

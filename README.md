@@ -57,6 +57,7 @@ start), then change its password in Admin Center > User Management.
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
+| [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex and indexes, the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
 | [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 3, technical only) the future technical agents read |
 | [`macro.md`](macro.md)                                      | requirements of the macro data (Druckenmiller, Tudor Jones) and how they were implemented |
 | [`commodities.md`](commodities.md)                          | which further commodities matter for screening IDX stocks (nickel, copper, tin, HBA, ...): insight, not built yet |
@@ -80,7 +81,9 @@ neraca_lab/
 │       ├── java/.../technical/  technical analysis: indicator engine (ta4j + custom), IDX rules, macro signals,
 │       │                        preset summaries, APIs, refresh
 │       ├── java/.../market/     Forex pairs and commodities: catalog, ingestion (Yahoo, World Bank), bad-print cleaning
-│       ├── java/.../macro/      macro data: catalog, sources (FRED, Bank Indonesia, SEKI, CNBC, CFTC, Yahoo), queue, API
+│       ├── java/.../macro/      macro data: catalog, sources (FRED, Bank Indonesia, SEKI, CNBC, CFTC, Yahoo), queue, API;
+│       │                        outlook/ (the Macro page's rules, commodities board), analysis/ (AI macro analysis:
+│       │                        research agent, macro agents, reflection, Reflexion, synthesis, queue, PDF)
 │       ├── java/.../crawl/      the polite HTTP client of the crawlers (one request per host, 2 s apart)
 │       ├── java/.../job/        ingestion job progress (ingestion_job): list / detail / file download APIs
 │       ├── java/.../auth/       login, sessions, access check of every API, root user bootstrap
@@ -112,6 +115,7 @@ neraca_lab/
 │               ├── V1.0.20__schema_screening_currency.sql (fundamental_snapshot.financial_currency: USD reporters)
 │               ├── V1.0.23__schema_technical.sql  (technical analysis: IHSG, events, macro, snapshots, chart settings)
 │               ├── V1.0.25__schema_markets_macro.sql (Forex / commodity bars, macro catalog, release dates)
+│               ├── V1.0.27__schema_macro_analysis.sql (AI macro analysis: runs, agent scores, lessons, llm_usage)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -697,7 +701,25 @@ panels are technical only.
 curl -H "$AUTH" "http://localhost:8080/api/v1/macro/outlook?country=ID&index=LQ45&range=1Y"
 ```
 
-Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6a.
+Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6a. The page also shows the commodities
+and currency pairs with what each means for Indonesia (exports, imports, the rupiah; the terms of trade) and, in its
+right column, the latest AI macro analysis and the country's indexes.
+
+**AI macro analysis** (sidebar › Macro › AI Analysis; permission COMPANIES): a background job like the AI stock
+screening. A research agent (DeepSeek, ReAct with tool calling) reads the stored history of the macro series,
+commodities, currency pairs and IHSG / LQ45; four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
+Dalio - each score how investable the country is (0 - 100), checked by a validator and a critic (Reflection) and
+taught by earlier runs (Reflexion); Claude Opus 5.5 writes the synthesis (summary, bull / bear case, risks, what to
+monitor, sector tilts, at most +-5 points). Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
+AI) + 20 % the Macro page's rules score, with the verdict and the action of the rules. About $0.05 and 30 - 50 s per
+analysis (budget $0.20). Indonesia now; the United States and China later.
+
+```bash
+curl -H "$AUTH" -H "Content-Type: application/json" -d '{"country":"ID","index":"IHSG"}' \
+     http://localhost:8080/api/v1/macro/analyses
+```
+
+Details: [`docs/v1_docs/MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md).
 
 ## Frontend
 
@@ -750,7 +772,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 608 tests
+(cd backend && ./mvnw test)                      # 696 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -782,6 +804,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
 `MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
+`MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the validator's rules, the blend and the action; the commodities board for Indonesia);
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;

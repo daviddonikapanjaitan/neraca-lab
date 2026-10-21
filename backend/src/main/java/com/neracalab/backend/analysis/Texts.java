@@ -4,13 +4,13 @@ import java.util.List;
 import java.util.Objects;
 
 /** Bounds on model-written text kept in the report. */
-final class Texts {
+public final class Texts {
 
     private Texts() {
     }
 
     /** Trimmed, at most {@code max} characters (an ellipsis marks the cut); "" for null. */
-    static String clip(String text, int max) {
+    public static String clip(String text, int max) {
         if (text == null) {
             return "";
         }
@@ -19,12 +19,12 @@ final class Texts {
     }
 
     /** As {@link #clip(String, int)}, null for null or blank. */
-    static String clipOrNull(String text, int max) {
+    public static String clipOrNull(String text, int max) {
         return text == null || text.isBlank() ? null : clip(text, max);
     }
 
     /** At most {@code maxItems} non-blank items of at most {@code maxChars} characters. */
-    static List<String> clip(List<String> items, int maxItems, int maxChars) {
+    public static List<String> clip(List<String> items, int maxItems, int maxChars) {
         if (items == null) {
             return List.of();
         }
@@ -33,7 +33,7 @@ final class Texts {
     }
 
     /** Whitespace collapsed (PDF text is full of padding). */
-    static String compact(String text) {
+    public static String compact(String text) {
         return text == null ? "" : text.replaceAll("\\s+", " ").trim();
     }
 }

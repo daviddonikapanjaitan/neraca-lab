@@ -26,6 +26,7 @@ foreign key.
 | `V1.0.20__schema_screening_currency.sql`  | `fundamental_snapshot.financial_currency`: currency of a listing's Yahoo fundamentals, for companies that report in another currency than they trade in (section 4.11) |
 | `V1.0.23__schema_technical.sql`           | technical analysis ([TECHNICAL_DOCS.md](TECHNICAL_DOCS.md)): `index_daily` (IHSG bars, unique index_code + trading_date), `corporate_event` (dividends / splits / other dated events for chart markers, unique company + type + date + source), `corporate_event_fetch` (last event fetch per company and source), `macro_series` (BI_RATE, SBN_10Y observations; USD/IDR is read from `fx_rate_daily`), `indicator_snapshot` (latest snapshot per company: `as_of_date`, `schema_version`, `snapshot_json` JSONB, `input_hash`; [../indicator-snapshot.md](../indicator-snapshot.md)), `chart_setting` (a user's chart settings JSONB, deleted with the user). New tables only |
 | `V1.0.25__schema_markets_macro.sql`       | Forex / commodity prices and macro data ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 1b, [MACRO_DOCS.md](MACRO_DOCS.md)): `market_instrument` (the catalog: market FOREX / COMMODITY, source yahoo / worldbank / imf / fred (the check re-created on every start), symbol, quote currency, unit, DAILY / MONTHLY, tick size, `max_spike` of the bad-print cleaning), `instrument_daily` (their bars, unique instrument + trading_date), `macro_series_def` (the macro catalog: source, `source_ref`, unit, frequency, `release_lag_days`, priority, `used_by`, sanity range `min_value` / `max_value`, `max_change`); `macro_series` gains `period_end`, `release_date` (point in time), `revision`, `updated_at`. `ingestion_job.job_type` gains `MACRO` (in V1.0.10 and V1.0.14, which re-create the check) |
+| `V1.0.27__schema_macro_analysis.sql`      | AI macro analysis of a country ([MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md)): `macro_analysis_run`, `macro_analysis_agent_score`, `macro_analysis_lesson`, `llm_usage.macro_analysis_id`; `ingestion_job.job_type` gains `MACRO_ANALYSIS` (in V1.0.10 and V1.0.14, which re-create the check) (section 4.14) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -713,6 +714,33 @@ One analysis of one company (Screening > Analysis). Full description: [ANALYSIS_
 
 Index `ix_analysis_run_company`. Lessons learned by the analyses go to `screening_lesson` (Reflexion memory
 shared with the screening).
+
+### 4.14 AI macro analysis of a country (`V1.0.27__schema_macro_analysis.sql`)
+
+One AI macro analysis of a country's stock market, its index (Macro > AI Analysis). Full description:
+[MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md).
+
+| Table                        | Column                         | Type          | Notes                                                                  |
+|------------------------------|--------------------------------|---------------|------------------------------------------------------------------------|
+| `macro_analysis_run`         | `analysis_id`                  | UUID PK FK    | = `ingestion_job.job_id` (job type `MACRO_ANALYSIS`, exchange = the country's exchange, ticker = the index), `ON DELETE CASCADE` |
+|                              | `country`, `country_name`, `index_code`, `index_name` | VARCHAR | e.g. `ID`, `Indonesia`, `IHSG`; index `ix_macro_analysis_run_index` (country, index_code) |
+|                              | `agents`                       | JSONB         | the macro agents, e.g. `["TUDOR_JONES", "DRUCKENMILLER", "SOROS", "DALIO"]` |
+|                              | `budget_usd`                   | NUMERIC(12,6) | cost cap (`neracalab.macro-analysis.budget-usd`)                        |
+|                              | `as_of_date`                   | DATE          | the data read: everything published by that day                        |
+|                              | `rules_score`                  | NUMERIC(7,3)  | the Macro page's rules investability score as of the analysis          |
+|                              | `overall_score`, `synthesis_adjustment` | NUMERIC(7,3) | investability 0 - 100: 80% the agents' mean + 20% the rules score, plus the synthesis adjustment (at most +-5) |
+|                              | `verdict`, `action`, `conviction` | VARCHAR    | `INVESTABLE` / `SELECTIVE` / `NOT_INVESTABLE`; `BUY` / `ACCUMULATE` / `WAIT` / `SELL`; `HIGH` / `MEDIUM` / `LOW` (checks) |
+|                              | `context`, `research`, `synthesis`, `notes` | JSONB | what the agents saw (the rules' outlook without chart points, indexes, commodities, currency pairs); research brief, ReAct steps and tool results; synthesis with sector tilts; messages, lessons, budget |
+|                              | `cost_usd`, `*_tokens`, `model_calls` | NUMERIC / BIGINT / INTEGER | totals of the analysis                              |
+| `macro_analysis_agent_score` | `score_id`                     | BIGSERIAL PK  |                                                                        |
+|                              | `analysis_id`                  | UUID FK       | `macro_analysis_run`, `ON DELETE CASCADE`; **unique** with `agent`      |
+|                              | `agent`                        | VARCHAR(20)   | `TUDOR_JONES`, `DRUCKENMILLER`, `SOROS`, `DALIO` (check)                |
+|                              | `prior_score`, `prior_detail`  | NUMERIC, JSONB | the agent's preset of the rules as 0 - 100 (50 + 50 x score / signals) and the preset's stance |
+|                              | `llm_score`, `final_score`     | NUMERIC       | AI score; 60% prior + 40% AI (either alone without the other)           |
+|                              | `stance`, `thesis`, `supports`, `risks`, `buy_when`, `sell_when`, `reflection` | | the agent's view (stance `BUY` .. `AVOID`, check) and its Reflection review |
+|                              | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `PRIOR_ONLY`, `NO_SCORE` (check)                  |
+| `macro_analysis_lesson`      | `lesson_id`, `agent`, `lesson`, `occurrences`, `source_analysis`, `active` | | Reflexion memory of the macro agents; **unique** (agent, lesson); `active = false` drops a lesson |
+| `llm_usage`                  | `macro_analysis_id`            | UUID FK       | the macro analysis of a model call (`run_id`, `analysis_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_macro_analysis` |
 
 ## 5. Views (`V1.0.3__views.sql`)
 
