@@ -50,6 +50,28 @@ class IngestionVerifierRoundingTest {
         }
     }
 
+    /**
+     * MEDC FY2022 (full USD amounts) files common stocks 121,798,945.72: liabilities + equity 6,931,905,825.7 beside total
+     * assets 6,931,905,826 (errors 711, 712). Less than one unit apart: a note, in its own filing and its FY2023 one.
+     */
+    @Test
+    void balanceSheetWithinTheRoundingUnitIsANote() throws Exception {
+        BigDecimal assets = new BigDecimal("6931905826");
+        StoredPeriod within = new StoredPeriod("FY", true, true, true, 0, BigDecimal.ZERO, null, assets,
+                new BigDecimal("6931905825.7"), null, null, null);
+        StoredPeriod beyond = new StoredPeriod("FY", true, true, true, 0, BigDecimal.ZERO, null, assets,
+                new BigDecimal("6931905825"), null, null, null);
+        for (String filing : new String[] {"2022-Tahunan", "2023-Tahunan"}) {
+            IngestionSession medc = session("MEDC", filing);
+            assertThat(IngestionVerifier.balanceRoundingExplanation(medc, within))
+                    .contains("differ by 0.3").contains("less than the filing's rounding unit 1");
+            assertThat(IngestionVerifier.balanceRoundingExplanation(medc, beyond)).isNull();
+        }
+        // a filing in millions: a difference of a unit or more stays a problem
+        assertThat(IngestionVerifier.balanceRoundingExplanation(session(), new StoredPeriod("FY", true, true, true, 0,
+                BigDecimal.ZERO, null, new BigDecimal("100000000"), new BigDecimal("99000000"), null, null, null))).isNull();
+    }
+
     private static StoredPeriod stored(BigDecimal balanceSheetCash, BigDecimal endingCash) {
         return new StoredPeriod("FY", true, true, true, 0, BigDecimal.ZERO, null, null, null,
                 balanceSheetCash, endingCash, null);

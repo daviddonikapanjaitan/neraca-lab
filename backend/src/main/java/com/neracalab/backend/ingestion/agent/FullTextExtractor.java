@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 import com.neracalab.backend.ingestion.agent.WorkbookText.Kind;
 import com.neracalab.backend.ingestion.mapping.Check;
 import com.neracalab.backend.ingestion.mapping.FilingMapper;
+import com.neracalab.backend.ingestion.mapping.IncomeLineCategory;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
@@ -458,6 +459,7 @@ public class FullTextExtractor {
                     statements.put(target, statement);
                     termsOf.put(target, mapping.of(target));
                     reversals.put(target, reversal);
+                    operatingIssue(mapper, text, target, mapping.of(target), statement).ifPresent(c -> issues.add(c.issue()));
                 } else if (!text.hasFigures(target.kind(), target.valueColumn())) {
                     statements.remove(target);
                     continue;       // nothing in the file for this statement's column: reported once, per column
@@ -516,6 +518,35 @@ public class FullTextExtractor {
             open.remove(target);
             notes.add("Full-text extraction of " + target.name(mapper) + ": the sign of " + which + " reversed from the "
                     + "model's answer, the only choice that makes revenue - costs equal the filed profit before tax");
+        }
+        // profit from operations as the fields define it, which the model was shown and did not follow: its own rows
+        // without the non-operating ones (and by nature the expense rows it subtracts as the operating expenses), when
+        // that gives the filed profit before tax exactly - not stored known wrong
+        for (Target target : List.copyOf(open.keySet())) {
+            Map<String, List<Term>> terms = termsOf.get(target);
+            Optional<OperatingCorrection> correction = terms == null || !statements.containsKey(target) ? Optional.empty()
+                    : operatingIssue(mapper, text, target, terms, statements.get(target));
+            if (correction.isEmpty()) {
+                continue;
+            }
+            List<String> issues = new ArrayList<>();
+            MappedStatement corrected = statement(session, text, target, correction.get().terms(), issues, new ArrayList<>());
+            if (!open.get(target).containsAll(issues)) {
+                continue;       // the correction would open a check the model's answer passed
+            }
+            String what = operatingChange(statements.get(target), corrected);
+            List<Check> checks = new ArrayList<>(corrected.checks());
+            checks.add(Check.warning("full_text", "Profit from operations as defined, from the model's own rows: " + what));
+            statements.put(target, new MappedStatement(corrected.table(), corrected.column(), corrected.period(),
+                    corrected.sourceSheet(), corrected.values(), corrected.derivations(), checks, corrected.unclassified(),
+                    corrected.rejected()));
+            if (issues.isEmpty()) {
+                open.remove(target);
+            } else {
+                open.put(target, issues);
+            }
+            notes.add("Full-text extraction of " + target.name(mapper) + ": profit from operations as defined, from the "
+                    + "model's own rows (with them it and the non-operating rows give the filed profit before tax): " + what);
         }
         // a field left empty because its rows cannot be read is an open item; the rest is for the audit trail
         errors.forEach(e -> (e.endsWith(LEFT_EMPTY) ? problems : notes).add("Full-text extraction: " + e));
@@ -871,6 +902,12 @@ public class FullTextExtractor {
                 if (raw == null) {
                     continue;
                 }
+                if (PER_SHARE.contains(field.name()) && mapper.discontinuedEpsLeftOut(target.column(), term.row().label())) {
+                    // the rule-based extraction leaves it out too (FilingMapper#epsWithDiscontinued): MEDC FY2022 files
+                    // its total EPS a second time on the row of the discontinued operations
+                    parts.add("(not '" + term.row().label() + "' (" + term.row().ref() + "): no EPS of the discontinued operations)");
+                    continue;
+                }
                 sum = (sum == null ? BigDecimal.ZERO : sum).add(term.sign() < 0 ? raw.negate() : raw);
                 counted.computeIfAbsent(field.name(), k -> new ArrayList<>())
                         .add(new Counted(term, (term.sign() < 0 ? raw.negate() : raw).multiply(mapper.unit())));
@@ -878,7 +915,7 @@ public class FullTextExtractor {
                 sheet = sheet == null ? term.row().sheet() : sheet;
             }
             BigDecimal value = sum == null ? null
-                    : plainScale(sum.multiply(PER_SHARE.contains(field.name()) ? mapper.epsScale() : mapper.unit()));
+                    : plainScale(sum.multiply(PER_SHARE.contains(field.name()) ? mapper.epsScale(target.column()) : mapper.unit()));
             values.put(field.name(), value);
             how.put(field.name(), value == null ? "full-text extraction: not reported"
                     : "full-text extraction: " + String.join(" ", parts));
@@ -1173,6 +1210,198 @@ public class FullTextExtractor {
         terms.forEach((field, list) -> result.put(field, list.stream()
                 .map(t -> refs.contains(t.row().ref()) ? new Term(t.row(), -t.sign()) : t).toList()));
         return result;
+    }
+
+    private static final String PROFIT_BEFORE_TAX = "Total profit (loss) before tax";
+
+    /**
+     * Where the model's profit from operations is not the one its field defines, although its own rows give it: rows
+     * below operating profit counted in operating_income (ISAT FY2022 'Other gains (losses)' 4,969,515 million, the
+     * sale of its towers in FY2021; MDKA H1 2025 the foreign exchange, 'Other gains (losses)' and the final tax), and,
+     * in a profit or loss by nature, operating_expenses other than the expense rows operating_income subtracts (ISAT
+     * FY2023 19,150,447 million of 41,911,981: network operation, interconnection, maintenance and marketing left out;
+     * PGEO FY2023 'Other expenses' 5,526 thousand without the exploration expenses of 178,977). Pointed out only when the
+     * operating income so corrected and the profit or loss's own rows below it - finance income and costs, the
+     * non-operating gains and losses, final tax - give the filed profit before tax exactly. By nature, where no choice of
+     * the model's rows reconciles, the template's own operating income is pointed out instead ({@link #byNatureTemplate});
+     * by function a filing whose lines do not reconcile is not judged here. A non-financial profit or loss only (banks
+     * and insurers define these otherwise), and only when the operating income is built from rows, not from a profit
+     * total. The model is shown the issue; the correction is used only when its last answer keeps it.
+     */
+    private static Optional<OperatingCorrection> operatingIssue(FilingMapper mapper, WorkbookText text, Target target,
+                                                                Map<String, List<Term>> terms, MappedStatement statement) {
+        if (target.kind() != Kind.INCOME || mapper.financial()) {
+            return Optional.empty();
+        }
+        List<Term> operating = terms.getOrDefault("operating_income", List.of());
+        BigDecimal pretax = statement.values().get("pretax_income");
+        BigDecimal stored = statement.values().get("operating_income");
+        if (operating.isEmpty() || pretax == null || stored == null || operating.stream()
+                .anyMatch(t -> t.row().label().toLowerCase(java.util.Locale.ROOT).contains("profit (loss)"))) {
+            return Optional.empty();
+        }
+        String sheet = operating.getFirst().row().sheet();
+        if (Kind.ofSheet(sheet).orElse(null) != Kind.INCOME || operating.stream().anyMatch(t -> !t.row().sheet().equals(sheet))) {
+            return Optional.empty();
+        }
+        WorkbookText.Row pretaxRow = text.rows().stream()
+                .filter(r -> r.sheet().equals(sheet) && PROFIT_BEFORE_TAX.equals(r.label())).findFirst().orElse(null);
+        if (pretaxRow == null) {
+            return Optional.empty();
+        }
+        BigDecimal tolerance = mapper.unit().max(BigDecimal.ONE).multiply(BigDecimal.valueOf(2));
+        BigDecimal storedExpenses = statement.values().get("operating_expenses");
+        // the rows below operating profit, as filed, and their sum as they enter profit before tax
+        List<Term> belowRows = new ArrayList<>();
+        BigDecimal below = BigDecimal.ZERO;
+        for (WorkbookText.Row row : text.rows()) {
+            IncomeLineCategory category = IncomeLineCategory.ofTemplateLine(row.label());
+            BigDecimal raw = row.sheet().equals(sheet) && row.index() < pretaxRow.index() && category != null
+                    && IncomeLineCategory.BELOW_OPERATING.contains(category) ? text.value(row, target.valueColumn()) : null;
+            if (raw != null) {
+                below = below.add(category.deducted() ? raw.negate() : raw);
+                belowRows.add(new Term(row, category.deducted() ? -1 : 1));
+            }
+        }
+        below = below.multiply(mapper.unit());
+
+        Map<String, List<Term>> defined = operatingAsDefined(terms, mapper.incomeByNature());
+        BigDecimal operatingIncome = filedSum(mapper, text, target, defined.get("operating_income"));
+        if (operatingIncome != null && operatingIncome.add(below).subtract(pretax).abs().compareTo(tolerance) <= 0) {
+            BigDecimal expenses = mapper.incomeByNature() ? filedSum(mapper, text, target, defined.get("operating_expenses")) : null;
+            boolean incomeOff = operatingIncome.subtract(stored).abs().compareTo(tolerance) > 0;
+            boolean expensesOff = expenses != null
+                    && (storedExpenses == null || expenses.subtract(storedExpenses).abs().compareTo(tolerance) > 0);
+            if (!incomeOff && !expensesOff) {
+                return Optional.empty();
+            }
+            List<String> parts = new ArrayList<>();
+            List<Term> left = operating.stream().filter(FullTextExtractor::belowOperating).toList();
+            if (!left.isEmpty()) {
+                parts.add("operating_income counts " + rowsOf(left) + ", below profit from operations (the field is without "
+                        + "finance income and costs, foreign exchange, 'Other gains (losses)' and the other non-operating gains "
+                        + "and losses): without them it is " + filed(operatingIncome, mapper) + " instead of " + filed(stored, mapper));
+            }
+            if (expensesOff) {
+                parts.add("operating_expenses is " + (storedExpenses == null ? "not mapped" : filed(storedExpenses, mapper))
+                        + " but in a profit or loss by nature it is every expense row operating_income subtracts: "
+                        + rowsOf(defined.get("operating_expenses")) + " = " + filed(expenses, mapper));
+            }
+            return Optional.of(new OperatingCorrection(String.join("; ", parts) + " (so operating income + the rows below it "
+                    + "give the filed profit before tax " + filed(pretax, mapper) + " in " + columnName(target) + ")", defined));
+        }
+        if (!mapper.incomeByNature()) {
+            return Optional.empty();    // by function the rule-based extraction reads it; a filing that does not reconcile is not judged
+        }
+        // by nature, no choice of the model's rows gives an operating income that reconciles: the template's own (PGEO
+        // FY2023 leaves 'Sales and revenue' empty on the face and files no breakdown; the model's operating income of
+        // -163,283 thousand was the expense rows and 'Other gains (losses)' without revenue)
+        BigDecimal fromTemplate = pretax.subtract(below);
+        return byNatureTemplate(mapper, text, target, sheet, pretaxRow, belowRows, fromTemplate, tolerance).map(template -> {
+            Map<String, List<Term>> result = new LinkedHashMap<>(terms);
+            result.putAll(template);
+            BigDecimal expenses = filedSum(mapper, text, target, template.get("operating_expenses"));
+            return new OperatingCorrection("operating_income is " + filed(stored, mapper) + ", but operating income + the rows "
+                    + "below it must give the filed profit before tax " + filed(pretax, mapper) + " in " + columnName(target)
+                    + ": it is " + filed(fromTemplate, mapper) + " = " + rowsOf(template.get("operating_income"))
+                    + "; operating_expenses is every expense row by nature: " + rowsOf(template.get("operating_expenses"))
+                    + " = " + (expenses == null ? "0" : filed(expenses, mapper)), result);
+        });
+    }
+
+    /** A correction of the model's operating income: the issue shown to it, and the terms used when it keeps its answer. */
+    private record OperatingCorrection(String issue, Map<String, List<Term>> terms) {
+    }
+
+    /**
+     * Operating income and operating expenses of a profit or loss by nature from its template: profit before tax less the
+     * rows below operating profit, and the rows above them that are expenses by nature. Only when every other row with an
+     * amount is revenue, other income or an expense row ('... expenses', impairment) and, where revenue is filed on the
+     * face, revenue + other income - the expenses give that operating income.
+     */
+    private static Optional<Map<String, List<Term>>> byNatureTemplate(FilingMapper mapper, WorkbookText text, Target target,
+                                                                      String sheet, WorkbookText.Row pretaxRow, List<Term> belowRows,
+                                                                      BigDecimal operatingIncome, BigDecimal tolerance) {
+        List<Term> expenses = new ArrayList<>();
+        List<Term> income = new ArrayList<>();
+        for (WorkbookText.Row row : text.rows()) {
+            if (!row.sheet().equals(sheet) || row.index() >= pretaxRow.index() || text.value(row, target.valueColumn()) == null) {
+                continue;
+            }
+            IncomeLineCategory category = IncomeLineCategory.ofTemplateLine(row.label());
+            if (category != null && IncomeLineCategory.BELOW_OPERATING.contains(category)) {
+                continue;
+            }
+            String label = row.label().toLowerCase(java.util.Locale.ROOT);
+            if (category == IncomeLineCategory.REVENUE || category == IncomeLineCategory.OTHER_OPERATING_INCOME) {
+                income.add(new Term(row, 1));
+            } else if (label.contains("expense") || label.contains("impairment")) {
+                expenses.add(new Term(row, 1));
+            } else {
+                return Optional.empty();   // a row the template does not explain
+            }
+        }
+        if (income.stream().anyMatch(t -> IncomeLineCategory.ofTemplateLine(t.row().label()) == IncomeLineCategory.REVENUE)) {
+            BigDecimal spent = filedSum(mapper, text, target, expenses);
+            BigDecimal byRows = filedSum(mapper, text, target, income).subtract(spent == null ? BigDecimal.ZERO : spent);
+            if (byRows.subtract(operatingIncome).abs().compareTo(tolerance) > 0) {
+                return Optional.empty();
+            }
+        }
+        List<Term> operating = new ArrayList<>();
+        operating.add(new Term(pretaxRow, 1));
+        belowRows.forEach(t -> operating.add(new Term(t.row(), -t.sign())));
+        return Optional.of(Map.of("operating_income", List.copyOf(operating), "operating_expenses", List.copyOf(expenses)));
+    }
+
+    /**
+     * The model's terms with operating income as its field defines it: without the rows below operating profit, and in a
+     * profit or loss by nature operating expenses = the expense rows operating income subtracts.
+     */
+    private static Map<String, List<Term>> operatingAsDefined(Map<String, List<Term>> terms, boolean byNature) {
+        List<Term> operating = terms.getOrDefault("operating_income", List.of()).stream()
+                .filter(t -> !belowOperating(t)).toList();
+        Map<String, List<Term>> result = new LinkedHashMap<>(terms);
+        result.put("operating_income", operating);
+        if (byNature) {
+            result.put("operating_expenses", operating.stream().filter(t -> t.sign() < 0).map(t -> new Term(t.row(), 1)).toList());
+        }
+        return result;
+    }
+
+    private static boolean belowOperating(Term term) {
+        IncomeLineCategory category = IncomeLineCategory.ofTemplateLine(term.row().label());
+        return category != null && IncomeLineCategory.BELOW_OPERATING.contains(category);
+    }
+
+    /** The signed sum of terms of the target's column, in full units; {@code null} without an amount. */
+    private static BigDecimal filedSum(FilingMapper mapper, WorkbookText text, Target target, List<Term> terms) {
+        BigDecimal sum = null;
+        for (Term term : terms) {
+            BigDecimal raw = text.value(term.row(), target.valueColumn());
+            if (raw != null) {
+                sum = (sum == null ? BigDecimal.ZERO : sum).add(term.sign() < 0 ? raw.negate() : raw);
+            }
+        }
+        return sum == null ? null : sum.multiply(mapper.unit());
+    }
+
+    private static String rowsOf(List<Term> terms) {
+        return String.join(", ", terms.stream().map(t -> (t.sign() < 0 ? "-" : "+") + " '" + t.row().label() + "' ("
+                + t.row().ref() + ")").toList());
+    }
+
+    /** What the correction of {@link #operatingAsDefined} changed, e.g. "operating_income 5765522000000 (model: ...)". */
+    private static String operatingChange(MappedStatement before, MappedStatement after) {
+        List<String> changed = new ArrayList<>();
+        for (String field : List.of("operating_income", "operating_expenses")) {
+            BigDecimal was = before.values().get(field);
+            BigDecimal now = after.values().get(field);
+            if (now != null && (was == null || was.compareTo(now) != 0)) {
+                changed.add(field + " " + now.toPlainString() + " (model: " + (was == null ? "not mapped" : was.toPlainString()) + ")");
+            }
+        }
+        return String.join(", ", changed);
     }
 
     /**

@@ -112,6 +112,22 @@ public enum IncomeLineCategory {
             Map.entry("Share of profit (loss) of associates accounted for using equity method", NON_OPERATING_GAIN_OR_LOSS),
             Map.entry("Share of profit (loss) of joint ventures accounted for using equity method", NON_OPERATING_GAIN_OR_LOSS));
 
+    /** Lines below profit from operations: finance income and costs, non-operating gains, losses and expenses, final tax. */
+    public static final Set<IncomeLineCategory> BELOW_OPERATING = Set.of(FINANCE_INCOME, FINANCE_COST,
+            NON_OPERATING_GAIN_OR_LOSS, NON_OPERATING_EXPENSE, FINAL_TAX_EXPENSE);
+
+    /** Default classification of a line of the General and Infrastructure Industry templates, {@code null} when unknown. */
+    public static IncomeLineCategory ofTemplateLine(String label) {
+        return label == null ? null : KNOWN.get(label);
+    }
+
+    /** Whether the category is a cost or expense, reported positive and subtracted from profit before tax. */
+    public boolean deducted() {
+        return this == COST_OF_REVENUE || this == SELLING_EXPENSE || this == GENERAL_ADMINISTRATIVE_EXPENSE
+                || this == OTHER_OPERATING_EXPENSE || this == FINANCE_COST || this == NON_OPERATING_EXPENSE
+                || this == FINAL_TAX_EXPENSE;
+    }
+
     /**
      * Bank cost lines filed with either sign, their size always a cost: BRIS files the syirkah fund holders'
      * share negative (FY2025: -9,136,405 million; profit from operation reconciles with it as a cost).

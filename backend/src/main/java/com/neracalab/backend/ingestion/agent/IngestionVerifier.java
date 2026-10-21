@@ -121,7 +121,12 @@ public class IngestionVerifier {
             }
             if (p.totalAssets() != null && p.liabilitiesPlusEquity() != null
                     && p.totalAssets().compareTo(p.liabilitiesPlusEquity()) != 0) {
-                problems.add(period.key() + ": total assets " + p.totalAssets() + " != liabilities + equity " + p.liabilitiesPlusEquity());
+                String rounding = balanceRoundingExplanation(session, p);
+                if (rounding != null) {
+                    notes.add(period.key() + ": " + rounding);
+                } else {
+                    problems.add(period.key() + ": total assets " + p.totalAssets() + " != liabilities + equity " + p.liabilitiesPlusEquity());
+                }
             }
             if (p.segments() > 0 && p.revenue() != null && p.segmentRevenue().compareTo(p.revenue()) != 0) {
                 String rounding = segmentRoundingExplanation(session, p);
@@ -182,6 +187,24 @@ public class IngestionVerifier {
         }
         return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
                 + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
+                + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
+    }
+
+    /**
+     * A balance sheet whose equity carries a fraction of the filing's rounding unit (MEDC FY2022, full USD amounts: common
+     * stocks 121,798,945.72, so equity attributable to the parent 1,557,260,009.7 and liabilities + equity
+     * 6,931,905,825.7 beside total assets 6,931,905,826 - its FY2023 filing states 1,557,260,010): the two differ by less
+     * than one unit, which the mapper's own check accepts. Stored as filed; {@code null} when the difference is a unit or
+     * more. Errors 711 and 712: both MEDC uploads ended INCOMPLETE over USD 0.30.
+     */
+    static String balanceRoundingExplanation(IngestionSession session, StoredPeriod p) {
+        BigDecimal unit = session.mapper().precision().max(BigDecimal.ONE);
+        BigDecimal difference = p.totalAssets().subtract(p.liabilitiesPlusEquity()).abs();
+        if (difference.compareTo(unit) >= 0) {
+            return null;
+        }
+        return "total assets " + p.totalAssets().toPlainString() + " and liabilities + equity "
+                + p.liabilitiesPlusEquity().toPlainString() + " differ by " + difference.toPlainString()
                 + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
     }
 

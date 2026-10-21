@@ -357,6 +357,135 @@ public class FullTextExtractorTest {
         assertThat(report.problems()).noneMatch(p -> p.contains("revenue is"));
     }
 
+    /** Expense rows of ISAT's profit or loss by nature (3312000), as operating income subtracts them. */
+    private static final String[] ISAT_EXPENSES = {"-Interconnection expenses", "-Ticketing, sales and promotion expenses",
+            "-Maintenance and overhaul expenses", "-Network operation expenses", "-Employee benefits expenses",
+            "-Depreciation and amortisation expenses", "-Other expenses"};
+
+    /**
+     * ISAT FY2023 (by nature): the model's operating income subtracted every expense row, its operating expenses only
+     * depreciation, employee benefits and other expenses (19,150,447 of 41,911,981 million). Shown to the model; kept in
+     * its last answer, the operating expenses are the rows its operating income subtracts: with them, operating income
+     * and the rows below it give the filed profit before tax.
+     */
+    @Test
+    void operatingExpensesByNatureAreTheRowsOperatingIncomeSubtracts() throws Exception {
+        IngestionSession session = session("ISAT", "2023-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000, FullTextExtractor.revenueFills(session.mapper()));
+        String answer = isat(text, operating("+Sales and revenue"),
+                new String[] {"+Depreciation and amortisation expenses", "+Employee benefits expenses", "+Other expenses"});
+        answers(answer, answer);
+
+        FullTextExtractor.Report report = extractor(2).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature",
+                new AgentTrace());
+
+        assertThat(prompts.get(1)).contains("operating_expenses is 19150447000000 but in a profit or loss by nature it is "
+                + "every expense row operating_income subtracts").contains("= 41911981000000");
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("41911981000000");
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("9316801000000");
+        assertThat(income.checks()).anyMatch(c -> c.message().startsWith("Profit from operations as defined, from the model's "
+                + "own rows: operating_expenses 41911981000000 (model: 19150447000000)"));
+        assertThat(report.notes()).anyMatch(n -> n.contains("profit from operations as defined"));
+        assertThat(report.problems()).noneMatch(p -> p.contains("operating_expenses is"));
+    }
+
+    /**
+     * ISAT FY2022 (the comparative of its FY2023 filing): the model counted 'Other gains (losses)' - 4,969,515 million,
+     * below operating profit - in operating income. Without it, operating income + the rows below it give the filed
+     * profit before tax 6,535,789: 46,752,319 - 40,986,797 = 5,765,522.
+     */
+    @Test
+    void aNonOperatingRowTheModelKeepsInOperatingIncomeIsLeftOut() throws Exception {
+        IngestionSession session = session("ISAT", "2023-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000, FullTextExtractor.revenueFills(session.mapper()));
+        String answer = isat(text, operating("+Sales and revenue", "+Other gains (losses)"),
+                java.util.Arrays.stream(ISAT_EXPENSES).map(e -> "+" + e.substring(1)).toArray(String[]::new));
+        answers(answer);
+
+        extractor(1).extract(session, List.of(StatementColumn.PRIOR_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("5765522000000");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("40986797000000");
+        assertThat(income.derivations().get("operating_income")).doesNotContain("Other gains (losses)");
+    }
+
+    /**
+     * By nature, where no choice of the model's rows gives the filed profit before tax (depreciation left out of its
+     * operating income), the template's own operating income is used: profit before tax less the rows below operating
+     * profit, and every expense row by nature - only because revenue - the expense rows give the same figure.
+     */
+    @Test
+    void byNatureTheTemplatesOperatingIncomeWhereTheModelsRowsDoNotReconcile() throws Exception {
+        IngestionSession session = session("ISAT", "2023-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000, FullTextExtractor.revenueFills(session.mapper()));
+        List<String> withoutDepreciation = new ArrayList<>(List.of(operating("+Sales and revenue")));
+        withoutDepreciation.remove("-Depreciation and amortisation expenses");
+        answers(isat(text, withoutDepreciation.toArray(String[]::new), new String[] {"+Other expenses"}));
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("9316801000000");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("41911981000000");
+        assertThat(income.derivations().get("operating_income")).contains("+ 'Total profit (loss) before tax'");
+    }
+
+    /**
+     * PGEO FY2023 (by nature) leaves 'Sales and revenue' empty and files no breakdown: the model's operating income was
+     * the expense rows and 'Other gains (losses)', -163,283 thousand, its operating expenses 'Other expenses' alone.
+     * Profit before tax 240,961 less the rows below operating profit gives 221,785; the expenses by nature 184,503.
+     */
+    @Test
+    void byNatureWithoutRevenueOnTheFaceTheTemplatesOperatingIncome() throws Exception {
+        IngestionSession session = session("PGEO", "2023-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000, FullTextExtractor.revenueFills(session.mapper()));
+        String sheet = "3312000";
+        Map<String, String> income = Map.ofEntries(
+                Map.entry("operating_expenses", terms(text, sheet, "+Other expenses")),
+                Map.entry("operating_income", terms(text, sheet, "-Exploration expenses", "-Other expenses", "+Other gains (losses)")),
+                Map.entry("interest_income", terms(text, sheet, "+Finance income")),
+                Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")));
+        String answer = "{\"income_statement\": " + object(income) + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}";
+        answers(answer, answer);
+
+        extractor(2).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        assertThat(prompts.get(1)).contains("but operating income + the rows below it must give the filed profit before tax");
+        MappedStatement statement = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(statement.values().get("operating_income")).isEqualByComparingTo("221785000");
+        assertThat(statement.values().get("operating_expenses")).isEqualByComparingTo("184503000");
+        assertThat(statement.values().get("pretax_income")).isEqualByComparingTo("240961000");
+    }
+
+    private static String[] operating(String... income) {
+        List<String> rows = new ArrayList<>(List.of(income));
+        rows.addAll(List.of(ISAT_EXPENSES));
+        return rows.toArray(String[]::new);
+    }
+
+    private static String isat(WorkbookText text, String[] operatingIncome, String[] operatingExpenses) {
+        String sheet = "3312000";
+        Map<String, String> income = Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
+                Map.entry("operating_expenses", terms(text, sheet, operatingExpenses)),
+                Map.entry("operating_income", terms(text, sheet, operatingIncome)),
+                Map.entry("interest_income", terms(text, sheet, "+Finance income")),
+                Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")));
+        return "{\"income_statement\": " + object(income) + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}";
+    }
+
     /** A profit or loss by function is not touched: its gross profit is never cleared. */
     @Test
     void aProfitOrLossByFunctionKeepsItsGrossProfit() throws Exception {
