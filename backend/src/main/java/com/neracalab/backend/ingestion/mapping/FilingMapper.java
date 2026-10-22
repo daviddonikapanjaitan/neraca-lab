@@ -841,7 +841,62 @@ public final class FilingMapper {
                         retry.values(), how, checks, retry.unclassified()));
             }
         }
+        for (Part part : partsOfResidualLines(durationIndex(column), overrides)) {
+            MappedStatement retry = incomeStatementAsFiled(column, overrides, Map.of(part.residual(), part.raw()), shares).orElseThrow();
+            if (retry.checks().stream().noneMatch(Check::isError)) {
+                String amount = amount(part.raw()).stripTrailingZeros().toPlainString();
+                String without = amount(income.value(part.residual(), durationIndex(column)).subtract(part.raw()))
+                        .stripTrailingZeros().toPlainString();
+                List<Check> checks = new ArrayList<>(retry.checks());
+                checks.add(Check.warning("double_reported", "'" + part.line() + "' " + amount + " is also counted in '"
+                        + part.residual() + "' in this column; '" + part.residual() + "' counted without it, " + without));
+                Map<String, String> how = new LinkedHashMap<>(retry.derivations());
+                how.put("double_reported", "'" + part.residual() + "' less '" + part.line() + "' " + amount
+                        + " (profit before tax only reconciles with the amount counted once)");
+                return Optional.of(new MappedStatement(retry.table(), retry.column(), retry.period(), retry.sourceSheet(),
+                        retry.values(), how, checks, retry.unclassified()));
+            }
+        }
         return filed;
+    }
+
+    /** A line whose amount ({@code raw}, as filed) one column counts again within a residual line of its direction. */
+    private record Part(String line, String residual, BigDecimal raw) {
+    }
+
+    /**
+     * Lines of one column that may be filed again within a residual "Other ..." line of their direction: an income
+     * (expense) line that is no residual line itself, smaller than a residual income (expense) line. KETR FY2024 in its
+     * FY2025 filing: 'Finance income' 3,820,523,591 within 'Other income' 15,061,778,585 - the FY2024 filing has 'Other
+     * income' 11,241,254,994 beside the same finance income - and profit before tax 101,667,066,908 counts it once. The
+     * line keeps its amount and the residual line is counted without it, as the period's own filing presents them; only
+     * when the statement then passes every check. A classification given by the agent is never second-guessed.
+     */
+    private List<Part> partsOfResidualLines(int ctx, Map<String, IncomeLineCategory> overrides) {
+        if (financial) {
+            return List.of();
+        }
+        Map<String, BigDecimal> lines = new LinkedHashMap<>();   // label -> contribution to profit before tax
+        for (StatementTable.Line line : income.lines()) {
+            BigDecimal raw = line.value(ctx);
+            IncomeLineCategory category = IncomeLineCategory.KNOWN.get(line.label());
+            if (raw == null || raw.signum() <= 0 || category == null || overrides.containsKey(line.label())) {
+                continue;
+            }
+            if (EXPENSE_CATEGORIES.contains(category)) {
+                lines.putIfAbsent(line.label(), raw.negate());
+            } else if (INCOME_CATEGORIES.contains(category)) {
+                lines.putIfAbsent(line.label(), raw);
+            }
+        }
+        List<Part> parts = new ArrayList<>();
+        lines.forEach((residual, whole) -> lines.forEach((line, part) -> {
+            if (isResidual(residual) && !isResidual(line) && whole.signum() == part.signum()
+                    && whole.abs().compareTo(part.abs()) > 0) {
+                parts.add(new Part(line, residual, part.abs()));
+            }
+        }));
+        return parts;
     }
 
     /** Insurance expense lines of the bank template (a bank's insurance subsidiary). */
@@ -1030,6 +1085,12 @@ public final class FilingMapper {
 
     private Optional<MappedStatement> incomeStatementAsFiled(StatementColumn column, Map<String, IncomeLineCategory> overrides,
                                                              ShareCapital shares) {
+        return incomeStatementAsFiled(column, overrides, Map.of(), shares);
+    }
+
+    /** @param less amounts (as filed) a line is counted without: a part filed again within it ({@link #partsOfResidualLines}) */
+    private Optional<MappedStatement> incomeStatementAsFiled(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                             Map<String, BigDecimal> less, ShareCapital shares) {
         int ctx = durationIndex(column);
         if (ctx < 0 || income == null || !income.hasData(ctx)) {
             return Optional.empty();
@@ -1044,6 +1105,9 @@ public final class FilingMapper {
             BigDecimal raw = asCost(line.label(), line.value(ctx));
             if (raw == null || STRUCTURAL_INCOME_LINES.contains(line.label())) {
                 continue;
+            }
+            if (less.containsKey(line.label())) {
+                raw = raw.subtract(less.get(line.label()));
             }
             IncomeLineCategory category = overrides.getOrDefault(line.label(), known.get(line.label()));
             if (category == null) {
@@ -1631,8 +1695,112 @@ public final class FilingMapper {
         how.put("lease_liabilities", "current + long-term finance lease liabilities");
         how.put("marketable_securities", "short-term investments + current financial assets at fair value (NULL when none)");
         how.put("shares_outstanding", sharesHow(outstanding, shares));
+        withoutRowsMissingOnTheFace(b, ctx, v, how, checks);
         return Optional.of(new MappedStatement("balance_sheet", column, period(column), b.sheet(), v, how, checks, List.of(),
                 rejectedShares(shares)));
+    }
+
+    /** A section of the balance sheet: its header and total rows, and the fields made up of its rows. */
+    private record Section(String header, String total, Map<String, List<String>> fields) {
+    }
+
+    private static final List<Section> SECTIONS = List.of(
+            new Section("Current assets", "Total current assets", Map.of(
+                    "cash_and_equivalents", List.of("Cash and cash equivalents"),
+                    "accounts_receivable", List.of("Trade receivables third parties", "Trade receivables related parties"),
+                    "inventory", List.of("Current inventories", "Current real estate assets"))),
+            new Section("Non-current assets", "Total non-current assets", Map.of(
+                    "goodwill", List.of("Goodwill"),
+                    "intangible_assets", List.of("Intangible assets other than goodwill"))),
+            new Section("Current liabilities", "Total current liabilities", Map.of(
+                    "accounts_payable", List.of("Trade payables third parties", "Trade payables related parties"),
+                    "deferred_revenue", List.of("Current advances from customers third parties",
+                            "Current advances from customers related parties", "Current contract liabilities",
+                            "Current deferred revenue"),
+                    "short_term_debt", SHORT_TERM_DEBT,
+                    "lease_liabilities", LEASES)),
+            new Section("Non-current liabilities", "Total non-current liabilities", Map.of(
+                    "long_term_debt", LONG_TERM_DEBT,
+                    "lease_liabilities", LEASES)));
+
+    /**
+     * A field of a balance sheet section whose rows fall short of its filed total, and none of whose rows is filed, is
+     * not known to be 0: rows are missing on the face of the balance sheet. It is left empty (a value another filing
+     * stored stays) and a warning says so. LPPF FY2023 files 'Total current assets' 1,448,030 million beside rows of
+     * 655,249 - no 'Current inventories', 792,781 in its inventory note and in the FY2024 comparative - and 'Total
+     * current liabilities' 2,952,977 beside rows of 2,402,974, without its bank loans of 550,003 (the bank loan note);
+     * the upload had stored inventory and short-term debt as 0 over the comparative's figures. A gap within the
+     * filing's rounding (one unit per row) is not a missing row.
+     */
+    private void withoutRowsMissingOnTheFace(StatementTable b, int ctx, Map<String, BigDecimal> v, Map<String, String> how,
+                                             List<Check> checks) {
+        for (MissingRows missing : rowsMissingOnTheFace(b, ctx)) {
+            for (String field : missing.unknown()) {
+                v.put(field, null);
+                how.put(field, "not stored: none of its rows is filed, and the rows of '" + missing.total()
+                        + "' fall short of it - rows are missing on the face of the balance sheet");
+            }
+            checks.add(Check.warning("missing_rows", "'" + missing.total() + "' " + missing.filed().toPlainString()
+                    + " is more than the sum of its rows " + missing.rows().toPlainString() + " ("
+                    + missing.filed().subtract(missing.rows()).toPlainString() + " not on the face of the balance sheet)"
+                    + (missing.unknown().isEmpty() ? "" : "; " + String.join(", ", missing.unknown()) + " not stored as 0")));
+        }
+    }
+
+    /**
+     * A section of the balance sheet whose rows fall short of its filed total.
+     *
+     * @param unknown fields of the section none of whose rows is filed
+     */
+    private record MissingRows(String total, BigDecimal filed, BigDecimal rows, List<String> unknown) {
+    }
+
+    private List<MissingRows> rowsMissingOnTheFace(StatementTable b, int ctx) {
+        List<MissingRows> result = new ArrayList<>();
+        for (Section section : SECTIONS) {
+            int from = b.indexOf(section.header());
+            int to = b.indexOf(section.total());
+            BigDecimal total = amount(b.value(section.total(), ctx));
+            if (from < 0 || to <= from || total == null) {
+                continue;
+            }
+            BigDecimal rows = ZERO;
+            int filed = 0;
+            for (StatementTable.Line line : b.lines().subList(from + 1, to)) {
+                BigDecimal value = amount(line.value(ctx));
+                if (value != null) {
+                    rows = rows.add(value);
+                    filed++;
+                }
+            }
+            BigDecimal gap = total.subtract(rows);
+            if (gap.compareTo(precision.max(BigDecimal.ONE).multiply(BigDecimal.valueOf(Math.max(filed, 1)))) <= 0) {
+                continue;
+            }
+            List<String> unknown = new ArrayList<>();
+            section.fields().forEach((field, labels) -> {
+                if (labels.stream().noneMatch(l -> b.value(l, ctx) != null)) {
+                    unknown.add(field);
+                }
+            });
+            unknown.sort(null);
+            result.add(new MissingRows(section.total(), total, rows, List.copyOf(unknown)));
+        }
+        return result;
+    }
+
+    /**
+     * Balance sheet fields of a column that are not known to be 0 although none of their rows is filed: rows are missing
+     * on the face of its balance sheet ({@link #withoutRowsMissingOnTheFace}). Empty for a bank.
+     */
+    public java.util.Set<String> fieldsMissingOnTheFace(StatementColumn column) {
+        int ctx = instantIndex(column);
+        if (ctx < 0 || balanceSheet == null || financial) {
+            return java.util.Set.of();
+        }
+        java.util.Set<String> fields = new java.util.TreeSet<>();
+        rowsMissingOnTheFace(balanceSheet, ctx).forEach(m -> fields.addAll(m.unknown()));
+        return fields;
     }
 
     private static String sharesHow(BigDecimal outstanding, ShareCapital shares) {

@@ -881,6 +881,9 @@ public class FullTextExtractor {
         FilingMapper mapper = session.mapper();
         String table = target.kind().table();
         boolean bank = mapper.financial();
+        if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
+            terms = costAsOperatingExpenses(terms);
+        }
         Map<String, BigDecimal> values = new LinkedHashMap<>();
         Map<String, String> how = new LinkedHashMap<>();
         // every row as counted in its field (signed, full units), to point out a row whose sign breaks an identity
@@ -959,8 +962,11 @@ public class FullTextExtractor {
             }
         }
         if (target.kind() == Kind.BALANCE_SHEET && !bank && values.get("total_liabilities") != null) {
+            // not where the balance sheet leaves rows off its face (LPPF FY2023: no row for its bank loans of 550,003
+            // million, which 'Total current liabilities' includes): no row there is no evidence of no debt
+            Set<String> missing = mapper.fieldsMissingOnTheFace(target.column());
             for (String debt : DEBT_FIELDS) {
-                if (values.get(debt) == null) {
+                if (values.get(debt) == null && !missing.contains(debt)) {
                     values.put(debt, BigDecimal.ZERO);
                     how.put(debt, "full-text extraction: no such row in the balance sheet (0, as the rule-based extraction stores it)");
                 }
@@ -1073,6 +1079,32 @@ public class FullTextExtractor {
         }
         return new MappedStatement(table, target.column(), mapper.period(target.column()),
                 sheet == null ? target.kind().table() : sheet, values, how, checks, List.of(), cleared);
+    }
+
+    /**
+     * A profit or loss by nature has no cost of sales: rows the model names as cost of revenue are expense rows by
+     * nature, and those its operating income subtracts are operating expenses. Cleared with the cost of revenue, they
+     * were in no field (MNCN H1 2026: 'Program and broadcasting expenses' 2,133,396 million as cost of revenue, so
+     * operating expenses 864,240 beside an operating income of 519,964 that deducts both; 3,517,600 - 2,997,636).
+     */
+    private static Map<String, List<Term>> costAsOperatingExpenses(Map<String, List<Term>> terms) {
+        Set<String> subtracted = terms.getOrDefault("operating_income", List.of()).stream()
+                .filter(t -> t.sign() < 0).map(t -> t.row().ref()).collect(java.util.stream.Collectors.toSet());
+        List<Term> expenses = new ArrayList<>(terms.getOrDefault("operating_expenses", List.of()));
+        Set<String> named = new java.util.HashSet<>(expenses.stream().map(t -> t.row().ref()).toList());
+        boolean added = false;
+        for (Term cost : terms.getOrDefault("cost_of_revenue", List.of())) {
+            if (cost.sign() > 0 && subtracted.contains(cost.row().ref()) && named.add(cost.row().ref())) {
+                expenses.add(cost);
+                added = true;
+            }
+        }
+        if (!added) {
+            return terms;
+        }
+        Map<String, List<Term>> result = new LinkedHashMap<>(terms);
+        result.put("operating_expenses", List.copyOf(expenses));
+        return result;
     }
 
     /**

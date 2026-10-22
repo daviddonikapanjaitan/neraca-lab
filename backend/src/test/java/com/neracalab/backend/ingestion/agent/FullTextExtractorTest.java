@@ -248,6 +248,43 @@ public class FullTextExtractorTest {
     }
 
     /**
+     * MNCN H1 2026 (by nature, error 806): the model named 'Program and broadcasting expenses' as cost of revenue and only
+     * 'Other expenses' as operating expenses, while its operating income deducts both. The cost of revenue is cleared,
+     * and the expense row it named was in no field: operating expenses 864,240 million beside revenue 3,517,600 and an
+     * operating income of 519,964. Counted in operating expenses, as its operating income counts it.
+     */
+    @Test
+    void anExpenseByNatureNamedAsCostOfRevenueIsAnOperatingExpense() throws Exception {
+        IngestionSession session = session("MNCN", "2026-II");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1312000";
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
+                Map.entry("cost_of_revenue", terms(text, sheet, "+Program and broadcasting expenses")),
+                Map.entry("operating_expenses", terms(text, sheet, "+Other expenses")),
+                Map.entry("operating_income", terms(text, sheet, "+Sales and revenue", "-Program and broadcasting expenses",
+                        "-Other expenses")),
+                Map.entry("interest_income", terms(text, sheet, "+Interest income")),
+                Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity"))));
+        answers("{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("cost_of_revenue")).isNull();
+        assertThat(income.values().get("gross_profit")).isNull();
+        // 2,133,396 + 864,240 (million): revenue 3,517,600 - operating expenses = operating income 519,964
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("2997636000000");
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("519964000000");
+        assertThat(income.derivations().get("operating_expenses")).contains("'Program and broadcasting expenses'", "'Other expenses'");
+    }
+
+    /**
      * MSIN FY2025 (by nature, no 'profit from operation' row): the model's answer left operating_income empty, the
      * upload ended SUCCEEDED, and the company had no EV / operating profit from then on. Profit from operations is
      * a total a profit or loss cannot do without: the model is asked again and gives the rows that compute it.
