@@ -96,7 +96,9 @@ public final class MacroAnalysisViews {
      * @param macroSeries   macro series with stored observations (of {@code macroSeriesTotal} in the catalog)
      * @param commodities   commodities with stored prices
      * @param currencyPairs currency pairs with stored prices
+     * @param macroDocuments macro documents (RAG) stored per country code (countries without any are absent)
      */
-    public record Data(int macroSeries, int macroSeriesTotal, int commodities, int currencyPairs) {
+    public record Data(int macroSeries, int macroSeriesTotal, int commodities, int currencyPairs,
+                       Map<String, Long> macroDocuments) {
     }
 }

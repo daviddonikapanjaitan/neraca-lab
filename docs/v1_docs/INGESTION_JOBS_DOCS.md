@@ -59,7 +59,7 @@ curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRT
 | 202  | new job (QUEUED)                                                                |
 | 200  | the same file is already queued / being stored: that job                        |
 | 422  | not an `.xlsx`, not an IDX XBRL workbook (ProblemDetail; logged in `ingestion_error`) |
-| 413  | larger than 20 MB                                                               |
+| 413  | larger than 50 MB                                                               |
 
 Upload stages: `Waiting in the upload queue` -> `Reading the workbook` -> `AI agent is storing HRTA 2026 H1`
 (the standard extraction) -> only when that does not store the workbook: `Full-text extraction of HRTA 2026 H1:

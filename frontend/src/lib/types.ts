@@ -305,7 +305,78 @@ export interface RagStatus {
   maxRangeDays: number
   /** RAG jobs waiting in the queue */
   pending: number
-  stored: { pdfDocuments: number; newsDocuments: number; chunks: number }
+  /** pdfDocuments: of the companies; macroDocuments: of the countries; chunks: all */
+  stored: { pdfDocuments: number; newsDocuments: number; macroDocuments: number; chunks: number }
+  /** the countries of the macro documents (only the available ones take uploads) */
+  macroCountries: MacroDocumentCountry[]
+  macroDocumentTypes: MacroDocumentTypeOption[]
+}
+
+/** A country of the macro documents (Indonesia; the United States and China later) and its stored documents. */
+export interface MacroDocumentCountry {
+  code: string
+  name: string
+  available: boolean
+  documents: number
+}
+
+export type MacroDocumentType =
+  | "MONETARY_POLICY"
+  | "FINANCIAL_STABILITY"
+  | "FISCAL"
+  | "EXTERNAL_SECTOR"
+  | "ECONOMIC_OUTLOOK"
+  | "STATISTICS"
+  | "DEVELOPMENT_PLAN"
+  | "RESEARCH"
+  | "OTHER"
+
+export interface MacroDocumentTypeOption {
+  code: MacroDocumentType
+  label: string
+  /** e.g. "Bank Indonesia board statements, Monetary Policy Review and Report" */
+  examples: string
+}
+
+/** A macro PDF of a country in the vector store (GET /api/v1/rag/macro/documents). */
+export interface MacroRagDocument {
+  documentId: number
+  country: string
+  title: string
+  issuer: string | null
+  documentType: MacroDocumentType
+  /** publication date: 00:00 Jakarta time as an instant */
+  publishedAt: string
+  fileName: string | null
+  pages: number | null
+  characters: number
+  chunks: number
+  embeddingModel: string
+  updatedAt: string
+}
+
+/** GET /api/v1/rag/macro/documents: one page, latest publication first. */
+export interface MacroRagDocumentPage {
+  total: number
+  limit: number
+  offset: number
+  documents: MacroRagDocument[]
+}
+
+/** A chunk of a macro document found by GET /api/v1/rag/macro/search. */
+export interface MacroRagHit {
+  chunkId: number
+  documentId: number
+  country: string
+  title: string
+  issuer: string | null
+  documentType: MacroDocumentType
+  publishedAt: string
+  fileName: string | null
+  pageFrom: number | null
+  pageTo: number | null
+  content: string
+  distance: number
 }
 
 /** A chunk found by GET /api/v1/rag/search (cosine distance: 0 = same direction). */

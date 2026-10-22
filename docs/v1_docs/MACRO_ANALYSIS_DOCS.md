@@ -15,8 +15,11 @@ Macro page does).
   regimes, the reading of every macro series, the four presets, the rules' investability score,
   the country's indexes (IHSG, LQ45), commodities and currency pairs with what each means for the country
       |
-[Research agent]  ReAct + tool calling over the STORED history (no web)
-  history(code, months), correlation(a, b, months)  -> brief with references T1, T2, ...
+[Research agent]  ReAct + tool calling over the STORED history and the country's macro documents (no web)
+  history(code, months), correlation(a, b, months)          -> refs T1, T2, ...
+  searchDocuments(query): RAG over the macro PDFs published  -> refs D1, D2, ...
+    by the as-of date (offered only when there are some)
+  -> brief with references
       |
 [Macro agents]  Tudor Jones, Druckenmiller, Soros, Dalio: one independent call each (shared, cacheable dossier)
   -> Reflection: the validator checks every answer, a critic reviews the flagged ones
@@ -56,7 +59,7 @@ Permission **COMPANIES** (as the Macro page).
 
 | Endpoint | Does |
 |---|---|
-| `GET /api/v1/macro/analyses/options` | The countries and their indexes, the agents (code, label, focus), the budget, the research / agent / synthesis models and `data` (`macroSeries` of `macroSeriesTotal`, `commodities`, `currencyPairs` with stored prices). |
+| `GET /api/v1/macro/analyses/options` | The countries and their indexes, the agents (code, label, focus), the budget, the research / agent / synthesis models and `data` (`macroSeries` of `macroSeriesTotal`, `commodities`, `currencyPairs` with stored prices, `macroDocuments`: macro documents stored per country code). |
 | `POST /api/v1/macro/analyses` `{"country":"ID","index":"IHSG","agents":[...]}` | Queues an analysis: **202** with the new one, **200** with the index's analysis already queued or running (not queued twice). `country` defaults to ID, `index` to IHSG, `agents` to all four (`TUDOR_JONES`, `DRUCKENMILLER`, `SOROS`, `DALIO`; a preset id such as `ptj`, a label or a surname is accepted). 400: a country not available yet, an unknown country, index or agent, an empty agent list. |
 | `GET /api/v1/macro/analyses?country&index&limit=10&offset=0` | One page, most recent first (`total`, `limit` 1 - 100, `offset`, `analyses`). |
 | `GET /api/v1/macro/analyses/{id}` | The report: `run` (status, stage, scores, verdict, action, conviction, cost, tokens, times), `synthesisAdjustment`, `context`, `research`, `synthesis`, `notes`, `agents`, `usage`. 404: unknown. |
@@ -90,6 +93,30 @@ The research agent's tools (`MacroTools`) read the stored histories:
 
 Each result has a ref (T1, T2, ...). A repeated call or one past `max-tool-calls` is refused. The prompts say a value is
 a **record** only when it is the stored high or low - a window's or a 52-week high is not.
+
+## 3a. Macro documents (RAG)
+
+The country's **macro documents** - PDFs of Bank Indonesia, the Ministry of Finance, the IMF, the World Bank, ...
+uploaded on **Ingestion › PDF Documents (RAG)**, right-hand card (`RAG_DOCS.md` section 2a; what to collect:
+`instruction/pdf_rag_macro.md`) - give the research agent what the series cannot: the reasons behind a decision,
+forward guidance, forecasts, stated risks and policy plans.
+
+| Tool | Returns |
+|---|---|
+| `searchDocuments(query)` | The `document-results` (4) chunks of the country's macro documents closest to the query (cosine, pgvector), each with a ref (D1, D2, ...), the issuer, title, type, publication date, pages and an excerpt of at most `excerpt-chars` (700). |
+
+- **Point in time**: only the documents published by the as-of date (on or before it, Jakarta time) are listed and
+  searched (`MacroDocumentSearch`). A document published later is not read; the report notes how many were left out.
+- **Offered only when there are documents**: without any (none stored for the country, or none published by the as-of
+  date) the tool is not offered and the report notes that the research read the stored series only.
+- The research agent's task lists the documents it can search: the 15 latest, with date, issuer, title and type.
+- Its own limit, `max-document-searches` (4), apart from the history and correlation calls. A repeated query is
+  refused. The same chunk found again keeps its ref.
+- Each query's embedding is metered (stage `RETRIEVAL`, cost estimated at `embedding-price-per-million`).
+- The prompts say a figure in a document is as of its date, the stored series win when they disagree, and a document
+  of type research is an opinion. The agents read the D refs in the research brief as evidence; evidence citing a ref
+  that no search returned is dropped, as for the T refs.
+- The report (and its PDF) lists the tool results with their D refs and the macro documents the research could search.
 
 ## 4. The agentic patterns
 
@@ -146,6 +173,10 @@ a critic per flagged answer - and 1 Opus synthesis), about 70,000 prompt tokens,
 | `research-iterations` | 4 | Model turns of the research agent. |
 | `max-tool-calls` | 8 | Tool calls of the research agent. |
 | `history-months` | 36 | Most months one `history` call returns. |
+| `max-document-searches` | 4 | Searches in the country's macro documents (only when some are stored). |
+| `document-results` | 4 | Chunks returned per document search. |
+| `excerpt-chars` | 700 | Longest excerpt of a chunk returned to the research agent. |
+| `embedding-price-per-million` | 0.02 | USD per million tokens of the embedding model (estimated cost of a search). |
 | `agent-max-tokens` | 1000 | Output limit of an agent answer or a review. |
 | `prior-weight` | 0.6 | Weight of the rules preset in an agent's score. |
 | `rules-weight` | 0.2 | Weight of the rules score in the investability. |
@@ -168,8 +199,8 @@ The models are those of the screening (`neracalab.screening.llm`: `research-mode
 
 | Test | Covers |
 |---|---|
-| `MacroAnalysisControllerTest` | The options; an analysis of Indonesia end to end on stored macro data, commodities and indexes with a scripted model (research with tools, four agents assessed or revised, the synthesis, scores, verdict, action, usage rows, the PDF); an active analysis of the same index returned, not queued again; invalid requests (400) and agent names by code, preset or surname. |
-| `MacroAnalysisRulesTest` | `history` reads only what was published by the as-of date (stored high and low); a flow summed per month with changes in points; correlation and the tool limits; the validator holding each investor to his own rules; answers normalized; the prior from the preset; the blend and the action table; the synthesis bounded to +-5. |
+| `MacroAnalysisControllerTest` | The options; an analysis of Indonesia end to end on stored macro data, commodities and indexes with a scripted model (research with tools, four agents assessed or revised, the synthesis, scores, verdict, action, usage rows, the PDF), with two macro documents stored: the one published by the as-of date listed to the research agent and found by its document search (D1, kept as evidence and in the dossier), the one published after it not read and noted; an active analysis of the same index returned, not queued again; invalid requests (400) and agent names by code, preset or surname. |
+| `MacroAnalysisRulesTest` | `history` reads only what was published by the as-of date (stored high and low); a flow summed per month with changes in points; correlation and the tool limits; the document search (refs D1, D2 kept for the same chunk, excerpts, a repeated query refused, its own limit) offered only when the country has documents; the report's notes on documents not read; the validator holding each investor to his own rules; answers normalized; the prior from the preset; the blend and the action table; the synthesis bounded to +-5. |
 | `MarketBoardTest` | Exports, imports and the rupiah read for Indonesia (tones, terms of trade); stale data neutral, an empty board says so. |
 | `AccessControlTest` | The macro analyses need COMPANIES. |
 
@@ -189,5 +220,7 @@ Druckenmiller 12.6 AVOID, Soros 46.0 WAIT (foreign SBN inflows, a narrower count
 
 - Indonesia only; the United States and China need their own series, indexes and presets.
 - The agents read macro data that lag the market and are not revised by vintage (MACRO_DOCS section 7).
-- No news or web search: the research agent reads only the stored history.
+- No news or web search: the research agent reads only the stored history and the macro documents uploaded for the
+  country; a document is only as current as the last upload (`instruction/pdf_rag_macro.md` has the publication
+  calendar).
 - An analysis is research, not investment advice.

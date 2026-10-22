@@ -213,7 +213,7 @@ DeepSeek) and the full-text extraction (Haiku) side by side
 
 | Element                    | Content                                                                                                                         |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 20 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
+| Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 50 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
 | PDF document upload        | exchange and company dropdowns (`company-picker.tsx`; a file name ending with a stored ticker selects it), `.pdf` drop zone, client-side check of extension and size, result notice |
 | News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |

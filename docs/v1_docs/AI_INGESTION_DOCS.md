@@ -30,7 +30,7 @@ in a background thread. Details of storage, job statuses and the job API:
 | 202  | job queued (`Location: /api/v1/ingestions/{id}`)                                     |
 | 200  | the same file is already queued / being stored: that job                             |
 | 422  | not an .xlsx / not an IDX XBRL workbook, or a filing in another currency than the company's stored data (ProblemDetail body; logged in `ingestion_error`). An IDX workbook the standard extraction cannot map is accepted (202) and stored by the full-text extraction, section 6 |
-| 413  | file larger than 20 MB                                                               |
+| 413  | file larger than 50 MB                                                               |
 
 Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
 `SUCCEEDED` (everything stored and verified by a database read-back), `INCOMPLETE` -> `INCOMPLETE`

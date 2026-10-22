@@ -3,8 +3,8 @@
 import { EMPTY } from "@/lib/format"
 import type { IndexEntry, IndexPriceStatus, IngestionJobCreator, IngestionJobStatus, IngestionJobType } from "@/lib/types"
 
-/** Backend upload limit (spring.servlet.multipart.max-file-size: 20MB). */
-export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+/** Backend upload limit (spring.servlet.multipart.max-file-size: 50MB). */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 /** Rows per page of the jobs table and the stored documents (RAG), and the default. */
 export const TABLE_PAGE_SIZES = [5, 10, 20, 50] as const

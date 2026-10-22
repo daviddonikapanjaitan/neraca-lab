@@ -2,7 +2,9 @@ package com.neracalab.backend.macro.analysis;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,19 +17,39 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.technical.engine.Candle;
 import com.neracalab.backend.technical.engine.MarketContext.Observation;
 
 /**
  * Tools of the macro research agent (Tool Calling Pattern), over the data the analysis read from the database: the
  * macro series (point in time: only observations released by the as-of date), the commodities and currency pairs of
- * the price ingestion and the country's indexes. Nothing outside the database; every result gets a reference (T1, T2,
- * ...) the brief cites, and every call counts against {@code max-tool-calls}.
+ * the price ingestion and the country's indexes, and - when the country has any - its macro documents in the RAG
+ * vector store (only those published by the as-of date). Nothing outside the database; every result gets a reference
+ * the brief cites (T1, T2, ... for the series, D1, D2, ... for the document excerpts). History and correlation calls
+ * count against {@code max-tool-calls}, document searches against {@code max-document-searches}.
  */
 public class MacroTools {
 
+    /** Name of the document search tool (offered only when {@link #hasDocuments()}). */
+    static final String DOCUMENT_TOOL = "searchDocuments";
+    private static final ZoneId JAKARTA = ZoneId.of("Asia/Jakarta");
+
     /** A tool result as the report lists it. */
     public record Retrieved(String ref, String tool, String arguments, String summary) {
+    }
+
+    /**
+     * The country's macro documents the research agent may search ({@link MacroDocumentSearch}): those published by the
+     * as-of date.
+     */
+    public interface DocumentSearch {
+
+        /** The documents that can be found, latest publication first. */
+        List<RagRepository.MacroDocumentRow> documents();
+
+        /** The chunks closest to the query, closest first. */
+        List<RagRepository.MacroHit> search(String query);
     }
 
     /**
@@ -43,10 +65,14 @@ public class MacroTools {
     private final Map<String, Meta> meta;
     private final LocalDate asOf;
     private final MacroAnalysisProperties properties;
+    private final DocumentSearch documents;
     private final AtomicInteger calls = new AtomicInteger();
+    private final AtomicInteger searches = new AtomicInteger();
     private final AtomicInteger refCount = new AtomicInteger();
+    private final AtomicInteger documentRefCount = new AtomicInteger();
     private final Set<String> asked = new HashSet<>();
     private final List<Retrieved> retrieved = new ArrayList<>();
+    private final Map<Long, String> chunkRefs = new HashMap<>();
 
     /**
      * @param macro  macro series code -> observations, oldest first
@@ -55,11 +81,18 @@ public class MacroTools {
      */
     public MacroTools(Map<String, List<Observation>> macro, Map<String, List<Candle>> prices, Map<String, Meta> meta,
                       LocalDate asOf, MacroAnalysisProperties properties) {
+        this(macro, prices, meta, asOf, properties, null);
+    }
+
+    /** @param documents the country's macro documents; null (or none published by the as-of date): no document search */
+    public MacroTools(Map<String, List<Observation>> macro, Map<String, List<Candle>> prices, Map<String, Meta> meta,
+                      LocalDate asOf, MacroAnalysisProperties properties, DocumentSearch documents) {
         this.macro = macro;
         this.prices = prices;
         this.meta = meta;
         this.asOf = asOf;
         this.properties = properties;
+        this.documents = documents;
     }
 
     @Tool(description = """
@@ -170,6 +203,72 @@ public class MacroTools {
                 + ": r = " + (r == null ? "n/a" : String.format(Locale.ROOT, "%.2f", r)) + " over " + pairs.size()
                 + " months (" + reading + ")");
         return out;
+    }
+
+    @Tool(name = DOCUMENT_TOOL, description = """
+            Semantic search in the country's stored macro documents published by the as-of date: central bank \
+            statements and reports, budget and fiscal documents, IMF / World Bank / ADB reports and the like. Use it for \
+            what the series cannot say: the reasons behind a decision, forward guidance, forecasts, stated risks and \
+            policy plans. Returns the closest excerpts with a ref (D1, D2, ...), the issuer, title, publication date \
+            and pages. Short, specific queries, e.g. 'Bank Indonesia forward guidance rupiah' or 'fiscal deficit \
+            financing 2027'.""")
+    public List<Map<String, Object>> searchDocuments(@ToolParam(description = "what to look for, in a few words")
+                                                     String query) {
+        if (!hasDocuments()) {
+            throw new IllegalStateException("No macro documents of the country are stored for the as-of date " + asOf);
+        }
+        String q = query == null ? "" : query.trim().replaceAll("\\s+", " ");
+        if (q.isEmpty() || q.length() > 300) {
+            throw new IllegalArgumentException("The query must have 1 to 300 characters");
+        }
+        synchronized (asked) {
+            if (!asked.add("documents|" + q.toLowerCase(Locale.ROOT))) {
+                throw new IllegalStateException("This was searched already; use its results");
+            }
+        }
+        if (searches.incrementAndGet() > properties.maxDocumentSearches()) {
+            throw new IllegalStateException("Document search limit reached (" + properties.maxDocumentSearches() + ")");
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (RagRepository.MacroHit hit : documents.search(q)) {
+            String excerpt = excerpt(hit.content(), properties.excerptChars());
+            String date = hit.publishedAt() == null ? null : hit.publishedAt().atZone(JAKARTA).toLocalDate().toString();
+            String pages = pages(hit.pageFrom(), hit.pageTo());
+            String ref;
+            synchronized (this) {
+                ref = chunkRefs.get(hit.chunkId());
+                if (ref == null) {
+                    ref = "D" + documentRefCount.incrementAndGet();
+                    chunkRefs.put(hit.chunkId(), ref);
+                    record(ref, DOCUMENT_TOOL, q, source(hit.issuer(), hit.title(), date, pages) + ": "
+                            + excerpt(hit.content(), 240));
+                }
+            }
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ref", ref);
+            m.put("issuer", hit.issuer());
+            m.put("title", hit.title());
+            m.put("type", hit.documentType().label());
+            m.put("published", date);
+            m.put("pages", pages);
+            m.put("excerpt", excerpt);
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** Documents can be searched: the country has some published by the as-of date. */
+    public boolean hasDocuments() {
+        return documents != null && !documents.documents().isEmpty();
+    }
+
+    /** The documents the search can find (none without a document search). */
+    public List<RagRepository.MacroDocumentRow> documents() {
+        return documents == null ? List.of() : documents.documents();
+    }
+
+    public int documentSearches() {
+        return searches.get();
     }
 
     /** The codes the tools know, with names and units (told to the agent). */
@@ -333,6 +432,36 @@ public class MacroTools {
 
     private String ref() {
         return "T" + refCount.incrementAndGet();
+    }
+
+    /** "Bank Indonesia - Monetary Policy Review August 2026 (2026-08-20, pp. 3-4)" */
+    static String source(String issuer, String title, String date, String pages) {
+        StringBuilder b = new StringBuilder();
+        if (issuer != null && !issuer.isBlank()) {
+            b.append(issuer).append(" - ");
+        }
+        b.append(title);
+        List<String> where = new ArrayList<>();
+        if (date != null) {
+            where.add(date);
+        }
+        if (pages != null) {
+            where.add(pages);
+        }
+        return where.isEmpty() ? b.toString() : b.append(" (").append(String.join(", ", where)).append(')').toString();
+    }
+
+    static String pages(Integer from, Integer to) {
+        if (from == null) {
+            return null;
+        }
+        return to == null || to.equals(from) ? "p. " + from : "pp. " + from + "-" + to;
+    }
+
+    /** The text with its white space collapsed, at most {@code max} characters. */
+    static String excerpt(String text, int max) {
+        String t = text == null ? "" : text.trim().replaceAll("\\s+", " ");
+        return t.length() <= max ? t : t.substring(0, max) + "...";
     }
 
     private synchronized void record(String ref, String tool, String arguments, String summary) {

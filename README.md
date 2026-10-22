@@ -53,11 +53,11 @@ start), then change its password in Admin Center > User Management.
 | [`SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md)       | AI stock screening: daily ETL, Stage 1, agents (tool calling, ReAct, Reflection, Reflexion), cost, report, PDF |
 | [`ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md)         | AI analysis of one stock: company data, research agent over its documents (RAG), agents, cost, report, PDF |
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
-| [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion, chunking, embeddings, search API |
+| [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion of the companies, macro PDFs of a country, chunking, embeddings, search API |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
-| [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex and indexes, the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
+| [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex, indexes and the macro documents (RAG), the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
 | [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 3, technical only) the future technical agents read |
 | [`macro.md`](macro.md)                                      | requirements of the macro data (Druckenmiller, Tudor Jones) and how they were implemented |
 | [`commodities.md`](commodities.md)                          | which further commodities matter for screening IDX stocks (nickel, copper, tin, HBA, ...): insight, not built yet |
@@ -116,6 +116,7 @@ neraca_lab/
 │               ├── V1.0.23__schema_technical.sql  (technical analysis: IHSG, events, macro, snapshots, chart settings)
 │               ├── V1.0.25__schema_markets_macro.sql (Forex / commodity bars, macro catalog, release dates)
 │               ├── V1.0.27__schema_macro_analysis.sql (AI macro analysis: runs, agent scores, lessons, llm_usage)
+│               ├── V1.0.28__schema_rag_macro.sql  (macro documents of a country in the RAG vector store)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -131,6 +132,7 @@ neraca_lab/
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
 ├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
 ├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
+├── data/macro/<country>/        macro PDFs of a country (indonesia/: Bank Indonesia, Ministry of Finance) for the macro upload
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF (upload them on Ingestion > PDF Documents (RAG))
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
@@ -517,14 +519,20 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 ingestion and a re-adjusted history switch to it automatically. Details, job fields and known
 limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md).
 
-## RAG vector store (PDF documents and news)
+## RAG vector store (PDF documents, news and macro documents)
 
 Two Ingestion pages fill a pgvector store that the AI features can search by meaning; every
-document is linked to its company (`rag_document.company_id` -> `company`):
+document is linked to its company (`rag_document.company_id` -> `company`) or, a macro document, to
+its country (`rag_document.country`):
 
-- **PDF Documents (RAG)**: upload a `.pdf` with a text layer (e.g. `data/IDX_XBRL/HRTA/pdf`) for a stored
+- **PDF Documents (RAG)**, left card: upload a `.pdf` with a text layer (e.g. `data/IDX_XBRL/HRTA/pdf`) for a stored
   company (picked automatically from a file name ending with the ticker). Its text is read page by
   page (PDFBox), split into ~1,500-character chunks, embedded and stored.
+- **PDF Documents (RAG)**, right card (**Macro document upload**): a macro PDF of a country - Bank
+  Indonesia, the Ministry of Finance, the IMF, the World Bank, ... - with its document type,
+  publication date, title and issuer. Indonesia now; the United States and China are listed as coming
+  later. The research agent of **Macro › AI Analysis** searches the documents of the analysed country
+  that were published by the analysis' as-of date. What to collect: `instruction/pdf_rag_macro.md`.
 - **News (RAG)**: choose an IDX company and a date range (this month, last 7 / 30 days, previous
   month or custom, Jakarta time, up to 366 days). Articles from EmitenNews, Investor.id, IDX Channel
   and Pasardana published in the range are read and stored; articles already stored are skipped.
@@ -533,6 +541,9 @@ document is linked to its company (`rag_document.company_id` -> `company`):
 curl -H "$AUTH" -F file=@data/IDX_XBRL/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
 curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=gold%20sales%202025"   # closest chunks
+curl -H "$AUTH" -F file=@Monetary-Policy-Review-August-2026.pdf -F country=ID -F documentType=MONETARY_POLICY \
+     -F publishedOn=2026-08-20 -F issuer="Bank Indonesia" http://localhost:8080/api/v1/rag/macro/pdf     # a macro PDF
+curl -H "$AUTH" "http://localhost:8080/api/v1/rag/macro/search?country=ID&q=rupiah%20stabilisation"  # its chunks
 ```
 
 Embeddings: `openai/text-embedding-3-small` (1536 dimensions) through OpenRouter with the same
@@ -712,7 +723,8 @@ right column, the latest AI macro analysis and the country's indexes.
 
 **AI macro analysis** (sidebar › Macro › AI Analysis; permission COMPANIES): a background job like the AI stock
 screening. A research agent (DeepSeek, ReAct with tool calling) reads the stored history of the macro series,
-commodities, currency pairs and IHSG / LQ45; four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
+commodities, currency pairs and IHSG / LQ45 and searches the country's macro documents (PDFs uploaded on Ingestion › PDF
+Documents (RAG), only those published by the as-of date; refs D1, D2, ...); four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
 Dalio - each score how investable the country is (0 - 100), checked by a validator and a critic (Reflection) and
 taught by earlier runs (Reflexion); Claude Opus 5.5 writes the synthesis (summary, bull / bear case, risks, what to
 monitor, sector tilts, at most +-5 points). Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
@@ -756,7 +768,7 @@ npm run dev                   # http://localhost:3000
 | `/ingestion/prices`              | Price Ingestion: fetch daily prices of one company (exchange / ticker dropdowns), or of one currency / commodity (market Forex / Commodities); on the right, update every company of the exchange (or every currency / commodity) to today and ingest the IHSG index |
 | `/ingestion/macro`               | Macro: "Update all macro data to today", the series per region with their source, latest value, state and actions (fetch, full history, CSV upload, history chart) |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
-| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company into the pgvector store; stored documents (10 per page: 5 / 10 / 20 / 50) and a search test |
+| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company (left) or a macro `.pdf` of a country (right) into the pgvector store; stored documents of the companies and macro documents of a country (10 per page: 5 / 10 / 20 / 50), each with a search test |
 | `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles (10 per page: 5 / 10 / 20 / 50) and a search test |
 |                                  | Every Ingestion page ends with the jobs table: it opens on the page's own job type (tabs for the others and "All"), 10 jobs per page (5 / 10 / 20 / 50) |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
@@ -777,7 +789,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 701 tests
+(cd backend && ./mvnw test)                      # 707 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -809,7 +821,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
 `MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
-`MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the validator's rules, the blend and the action; the commodities board for Indonesia);
+`MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools and a search in the macro documents published by the as-of date, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the document search's refs and limits, the validator's rules, the blend and the action; the commodities board for Indonesia);
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
@@ -839,9 +851,9 @@ flagged and excluded stocks; a company reporting in USD: converted metrics, fisc
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
 (pipeline mocked: validation, job, report, PDF; selectable companies, selection validation, runs by scope); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
 RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
-(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, rolled back)
-and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
-permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
+(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, macro documents of a country by publication date, rolled back)
+and `RagControllerTest` (a company PDF and a macro PDF of Indonesia through the worker into the store with stub
+embeddings, validation, the United States and China not available yet, permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering

@@ -27,6 +27,7 @@ foreign key.
 | `V1.0.23__schema_technical.sql`           | technical analysis ([TECHNICAL_DOCS.md](TECHNICAL_DOCS.md)): `index_daily` (IHSG bars, unique index_code + trading_date), `corporate_event` (dividends / splits / other dated events for chart markers, unique company + type + date + source), `corporate_event_fetch` (last event fetch per company and source), `macro_series` (BI_RATE, SBN_10Y observations; USD/IDR is read from `fx_rate_daily`), `indicator_snapshot` (latest snapshot per company: `as_of_date`, `schema_version`, `snapshot_json` JSONB, `input_hash`; [../indicator-snapshot.md](../indicator-snapshot.md)), `chart_setting` (a user's chart settings JSONB, deleted with the user). New tables only |
 | `V1.0.25__schema_markets_macro.sql`       | Forex / commodity prices and macro data ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 1b, [MACRO_DOCS.md](MACRO_DOCS.md)): `market_instrument` (the catalog: market FOREX / COMMODITY, source yahoo / worldbank / imf / fred (the check re-created on every start), symbol, quote currency, unit, DAILY / MONTHLY, tick size, `max_spike` of the bad-print cleaning), `instrument_daily` (their bars, unique instrument + trading_date), `macro_series_def` (the macro catalog: source, `source_ref`, unit, frequency, `release_lag_days`, priority, `used_by`, sanity range `min_value` / `max_value`, `max_change`); `macro_series` gains `period_end`, `release_date` (point in time), `revision`, `updated_at`. `ingestion_job.job_type` gains `MACRO` (in V1.0.10 and V1.0.14, which re-create the check) |
 | `V1.0.27__schema_macro_analysis.sql`      | AI macro analysis of a country ([MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md)): `macro_analysis_run`, `macro_analysis_agent_score`, `macro_analysis_lesson`, `llm_usage.macro_analysis_id`; `ingestion_job.job_type` gains `MACRO_ANALYSIS` (in V1.0.10 and V1.0.14, which re-create the check) (section 4.14) |
+| `V1.0.28__schema_rag_macro.sql`           | macro documents of a country in the RAG vector store ([RAG_DOCS.md](RAG_DOCS.md) section 2a): `rag_document` / `rag_chunk` gain `country` (`company_id` NULL for them; one of the two, check), `rag_document` gains `issuer` and `document_type`; unique per country, type and file (section 4.12) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -656,34 +657,40 @@ query then takes `company.currency`, and those rows count as stale once so the n
 
 ### 4.12 RAG vector store (`V1.0.14__schema_rag.sql`)
 
-PDF documents and news articles of a company, split into chunks with their embeddings, for
-retrieval-augmented generation. Every row belongs to a company (`ON DELETE CASCADE`: deleting a
-company deletes its documents and chunks). Full description: [RAG_DOCS.md](RAG_DOCS.md).
+PDF documents and news articles of a company, and macro PDFs of a country (`V1.0.28__schema_rag_macro.sql`), split
+into chunks with their embeddings, for retrieval-augmented generation. Every row belongs to a company (`ON DELETE
+CASCADE`: deleting a company deletes its documents and chunks) or to a country, never both (`ck_rag_document_scope`,
+`ck_rag_chunk_scope`). Full description: [RAG_DOCS.md](RAG_DOCS.md).
 
 | Table          | Column                         | Type           | Notes                                                                 |
 |----------------|--------------------------------|----------------|-----------------------------------------------------------------------|
 | `rag_document` | `document_id`                  | BIGSERIAL PK   |                                                                       |
-|                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE`                                        |
-|                | `source_type`                  | VARCHAR(10)    | `PDF` or `NEWS` (check)                                               |
-|                | `source_key`                   | VARCHAR(1000)  | PDF: SHA-256 of the file; NEWS: the article URL; **unique** per company and type (`uq_rag_document_source`) |
+|                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE`; NULL for a macro document             |
+|                | `country`                      | VARCHAR(10)    | macro document: its country (`ID`); NULL for a company document       |
+|                | `issuer`                       | VARCHAR(100)   | macro document: who published it (Bank Indonesia, IMF, ...)           |
+|                | `document_type`                | VARCHAR(30)    | macro document (required, `ck_rag_document_macro`): `MONETARY_POLICY`, `FINANCIAL_STABILITY`, `FISCAL`, `EXTERNAL_SECTOR`, `ECONOMIC_OUTLOOK`, `STATISTICS`, `DEVELOPMENT_PLAN`, `RESEARCH`, `OTHER` (check) |
+|                | `source_type`                  | VARCHAR(10)    | `PDF` or `NEWS` (check); a macro document is a `PDF`                  |
+|                | `source_key`                   | VARCHAR(1000)  | PDF: SHA-256 of the file; NEWS: the article URL; **unique** per company and type (`uq_rag_document_source`) or per country and type (`uq_rag_document_country_source`, partial) |
 |                | `title`                        | VARCHAR(1000)  | file name without `.pdf`, or the article title                        |
 |                | `source_name`, `source_url`    | VARCHAR        | `PDF upload` / the news site; the article URL (required for `NEWS`, check) |
 |                | `file_id`, `file_name`         | BIGINT FK, VARCHAR(255) | `ingestion_file` of a PDF (required for `PDF`, check)        |
-|                | `published_at`                 | TIMESTAMPTZ    | news: publication time; PDF: NULL                                     |
+|                | `published_at`                 | TIMESTAMPTZ    | news: publication time; macro PDF: publication date at 00:00 Jakarta (required); company PDF: NULL |
 |                | `pages`, `characters`, `chunks`| INTEGER        | PDF pages; text length; number of chunks (non-negative, check)        |
 |                | `embedding_model`              | VARCHAR(100)   | e.g. `openai/text-embedding-3-small`                                  |
 |                | `job_id`                       | UUID           | the `ingestion_job` that last stored it                               |
 |                | `created_at`, `updated_at`     | TIMESTAMPTZ    |                                                                       |
 | `rag_chunk`    | `chunk_id`                     | BIGSERIAL PK   |                                                                       |
 |                | `document_id`                  | BIGINT FK      | `rag_document`, `ON DELETE CASCADE`                                   |
-|                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE` (repeated for filtered search)         |
+|                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE` (repeated for filtered search); NULL for a macro document |
+|                | `country`                      | VARCHAR(10)    | the macro document's country (repeated for filtered search)           |
 |                | `chunk_index`                  | INTEGER        | 0-based order; **unique** with `document_id` (`uq_rag_chunk`)         |
 |                | `page_from`, `page_to`         | INTEGER        | PDF pages of the chunk; NULL for news                                 |
 |                | `content`                      | TEXT           | the chunk text (not empty, check)                                     |
 |                | `embedding`                    | `vector(1536)` | pgvector; HNSW index with `vector_cosine_ops` (search by `<=>`)       |
 
-Indexes: `ix_rag_document_company` (`company_id, source_type, published_at DESC`),
-`ix_rag_chunk_company`, `ix_rag_chunk_embedding` (HNSW, `vector_cosine_ops`). Storing a document again (same
+Indexes: `ix_rag_document_company` (`company_id, source_type, published_at DESC`), `ix_rag_document_country`
+(`country, published_at DESC`), `ix_rag_chunk_company`, `ix_rag_chunk_country`, `ix_rag_chunk_embedding` (HNSW,
+`vector_cosine_ops`). Storing a document again (same
 file or URL for the same company) updates its row and replaces all its chunks in one transaction.
 
 ### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)

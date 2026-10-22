@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
@@ -29,11 +30,21 @@ import com.neracalab.backend.technical.engine.MarketContext.Observation;
 public class MacroOutlookService {
 
     /** A country of the page's dropdown; {@code exchange} null: not available yet. */
-    record Country(String code, String name, String exchange) {
+    public record Country(String code, String name, String exchange) {
+
+        public boolean available() {
+            return exchange != null;
+        }
     }
 
-    static final List<Country> COUNTRIES = List.of(new Country("ID", "Indonesia", "IDX"),
+    public static final List<Country> COUNTRIES = List.of(new Country("ID", "Indonesia", "IDX"),
             new Country("US", "United States", null), new Country("CN", "China", null));
+
+    /** A country of {@link #COUNTRIES} by its code ("id" too), available or not; empty for an unknown code. */
+    public static Optional<Country> findCountry(String code) {
+        String c = code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
+        return COUNTRIES.stream().filter(x -> x.code().equals(c)).findFirst();
+    }
 
     private final TechnicalRepository repository;
     private final TechnicalProperties properties;
@@ -250,8 +261,7 @@ public class MacroOutlookService {
     }
 
     private static Country country(String code) {
-        String c = code == null || code.isBlank() ? "ID" : code.trim().toUpperCase(Locale.ROOT);
-        Country country = COUNTRIES.stream().filter(x -> x.code().equals(c)).findFirst()
+        Country country = findCountry(code == null || code.isBlank() ? "ID" : code)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown country '" + code + "': use ID (Indonesia)"));
         if (country.exchange() == null) {
             throw new IllegalArgumentException(country.name() + " is not available yet: only Indonesia (ID) for now");

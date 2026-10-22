@@ -48,7 +48,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     title: "PDF Documents (RAG)",
     heading: "PDF Documents (RAG)",
     description:
-      "Upload PDF documents of a company (financial statements, annual reports); their text is chunked, embedded and stored in the pgvector store for RAG.",
+      "Upload PDF documents of a company (financial statements, annual reports) or macro documents of a country (central bank, finance ministry, IMF reports) for Macro › AI Analysis; their text is chunked, embedded and stored in the pgvector store for RAG.",
     href: "/ingestion/rag-pdf",
     jobType: "RAG_PDF",
   },

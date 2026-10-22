@@ -12,6 +12,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param researchIterations  most model turns of the research agent (ReAct loop guard)
  * @param maxToolCalls        most tool calls of the research agent (history lookups and correlations)
  * @param historyMonths       most months a history lookup returns
+ * @param maxDocumentSearches most searches of the research agent in the country's macro documents (RAG)
+ * @param documentResults     chunks returned per document search
+ * @param excerptChars        longest excerpt of a chunk returned to the research agent
+ * @param embeddingPricePerMillion USD per million tokens of the embedding model (estimated cost of a search)
  * @param agentMaxTokens      output limit of one macro agent answer or review
  * @param priorWeight         weight of the agent's rules preset in its score (the rest is its AI judgement), as the
  *                            screening blends the quantitative scorecard
@@ -24,6 +28,10 @@ public record MacroAnalysisProperties(
         @DefaultValue("4") int researchIterations,
         @DefaultValue("8") int maxToolCalls,
         @DefaultValue("36") int historyMonths,
+        @DefaultValue("4") int maxDocumentSearches,
+        @DefaultValue("4") int documentResults,
+        @DefaultValue("700") int excerptChars,
+        @DefaultValue("0.02") double embeddingPricePerMillion,
         @DefaultValue("1000") int agentMaxTokens,
         @DefaultValue("0.6") double priorWeight,
         @DefaultValue("0.2") double rulesWeight) {
@@ -35,6 +43,11 @@ public record MacroAnalysisProperties(
         if (researchIterations < 1 || maxToolCalls < 0 || historyMonths < 6 || agentMaxTokens < 200) {
             throw new IllegalArgumentException("neracalab.macro-analysis: research-iterations >= 1, max-tool-calls >= 0, "
                     + "history-months >= 6, agent-max-tokens >= 200");
+        }
+        if (maxDocumentSearches < 0 || documentResults < 1 || documentResults > 20 || excerptChars < 200
+                || embeddingPricePerMillion < 0) {
+            throw new IllegalArgumentException("neracalab.macro-analysis: max-document-searches >= 0, document-results "
+                    + "1 .. 20, excerpt-chars >= 200, embedding-price-per-million >= 0");
         }
         if (priorWeight < 0 || priorWeight > 1 || rulesWeight < 0 || rulesWeight > 1) {
             throw new IllegalArgumentException("neracalab.macro-analysis: prior-weight and rules-weight in 0 .. 1");

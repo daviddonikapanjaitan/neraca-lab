@@ -25,7 +25,14 @@ export interface MacroAnalysisOptions {
   researchModel: string
   agentModel: string
   synthesisModel: string
-  data: { macroSeries: number; macroSeriesTotal: number; commodities: number; currencyPairs: number }
+  data: {
+    macroSeries: number
+    macroSeriesTotal: number
+    commodities: number
+    currencyPairs: number
+    /** macro documents (RAG) stored per country code; a country without any is absent */
+    macroDocuments: Record<string, number>
+  }
 }
 
 /** One macro analysis as listed (and the head of the report). */
@@ -106,10 +113,26 @@ export interface MacroBriefView {
   evidence: { ref: string; fact: string }[]
 }
 
+/** A macro document of the country the research agent could search. */
+export interface MacroResearchDocument {
+  documentId: number
+  title: string
+  issuer: string | null
+  documentType: string
+  documentTypeLabel: string
+  /** publication date (yyyy-mm-dd) */
+  publishedOn: string | null
+  pages: number | null
+  chunks: number
+}
+
 export interface MacroResearch {
   brief: MacroBriefView | null
   trace: { iteration: number; thought: string | null; tools: string[] }[]
+  /** tool results: T1, T2, ... (history, correlation), D1, D2, ... (searchDocuments: excerpts of macro documents) */
   retrieved: { ref: string; tool: string; arguments: string; summary: string }[]
+  /** the country's macro documents published by the as-of date, which the research could search (older reports: absent) */
+  documents?: MacroResearchDocument[]
   modelUsed: boolean
   droppedRefs: number
   note: string | null

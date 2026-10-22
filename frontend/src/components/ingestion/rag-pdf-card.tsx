@@ -166,7 +166,7 @@ export function RagPdfCard({
           />
           <FileUpIcon className="size-6 text-muted-foreground" />
           <span className="text-sm font-medium">Drop a .pdf file here or click to choose</span>
-          <span className="text-xs text-muted-foreground">PDF with text, up to 20 MB</span>
+          <span className="text-xs text-muted-foreground">PDF with text, up to 50 MB</span>
         </label>
 
         {file && (

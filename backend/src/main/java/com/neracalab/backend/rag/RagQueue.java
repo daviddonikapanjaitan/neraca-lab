@@ -23,15 +23,18 @@ import com.neracalab.backend.job.IngestionJobType;
 import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.JobWorkerPool;
 import com.neracalab.backend.job.Requester;
+import com.neracalab.backend.rag.RagIngestionService.MacroMeta;
+import com.neracalab.backend.rag.RagIngestionService.MacroPdfResult;
 import com.neracalab.backend.rag.RagIngestionService.NewsResult;
 import com.neracalab.backend.rag.RagIngestionService.PdfResult;
 import com.neracalab.backend.rag.RagRepository.Company;
 
 /**
- * Asynchronous RAG ingestions (job types RAG_PDF and RAG_NEWS in {@code ingestion_job}). A submit records a QUEUED
- * job and returns at once; the worker threads ({@code neracalab.jobs.workers}, 5) chunk, embed and store the
- * documents, that many jobs at the same time. At most one active job per company and source (an identical request
- * while one is queued / running returns that job), so two running jobs never write the same document; the news
+ * Asynchronous RAG ingestions (job types RAG_PDF and RAG_NEWS in {@code ingestion_job}; a macro PDF of a country is a
+ * RAG_PDF job of exchange {@link #MACRO_EXCHANGE}). A submit records a QUEUED job and returns at once; the worker
+ * threads ({@code neracalab.jobs.workers}, 5) chunk, embed and store the documents, that many jobs at the same time.
+ * At most one active job per company (or country) and source (an identical request while one is queued / running
+ * returns that job), so two running jobs never write the same document; the news
  * sites are still read one request at a time per site ({@code NewsHttpClient}). The queue is in memory: jobs still
  * active when the application stops are failed at the next start.
  */
@@ -43,14 +46,22 @@ public class RagQueue implements SmartLifecycle {
     public record Submission(IngestionJob job, boolean created) {
     }
 
-    private sealed interface Task permits PdfTask, NewsTask {
-        Company company();
+    /**
+     * Exchange of a macro PDF's job ({@code ingestion_job.exchange}, as the Macro jobs); its ticker is the country
+     * (ID).
+     */
+    public static final String MACRO_EXCHANGE = "MACRO";
+
+    private sealed interface Task permits PdfTask, NewsTask, MacroPdfTask {
     }
 
     private record PdfTask(Company company, long fileId, String fileName, String checksum) implements Task {
     }
 
     private record NewsTask(Company company, LocalDate from, LocalDate to) implements Task {
+    }
+
+    private record MacroPdfTask(MacroMeta meta, long fileId, String fileName, String checksum) implements Task {
     }
 
     private final RagIngestionService service;
@@ -85,6 +96,30 @@ public class RagQueue implements SmartLifecycle {
                 IngestionJobType.RAG_PDF, company.exchange(), company.ticker());
         enqueue(id, new PdfTask(company, file.fileId(), name, file.checksumSha256()));
         log.info("RAG PDF job {} queued by {}: {} {} ({})", id, requester(requestedBy), company.ticker(), name, file.fileId());
+        return new Submission(jobs.find(id).orElseThrow(), true);
+    }
+
+    /**
+     * Stores the macro PDF (or reuses the stored file with the same checksum) and queues its ingestion for the
+     * country; the same file already queued or running for the country returns that job.
+     */
+    public synchronized Submission submitMacroPdf(MacroMeta meta, byte[] content, String fileName, String contentType,
+                                                  Requester requestedBy) {
+        StoredFile file = files.store(content, fileName, contentType);
+        Optional<IngestionJob> active = jobs.activeFileJobOf(IngestionJobType.RAG_PDF, file.fileId(), MACRO_EXCHANGE,
+                meta.country()).flatMap(jobs::find);
+        if (active.isPresent()) {
+            return new Submission(active.get(), false);
+        }
+        UUID id = UUID.randomUUID();
+        String name = fileName.length() <= IngestionFileRepository.NAME_LENGTH
+                ? fileName : fileName.substring(0, IngestionFileRepository.NAME_LENGTH);
+        jobs.insertFileJob(new NewUpload(id, file.fileId(), name, file.reused(),
+                        "Waiting in the RAG queue (macro document of " + meta.countryName() + ")", requestedBy),
+                IngestionJobType.RAG_PDF, MACRO_EXCHANGE, meta.country());
+        enqueue(id, new MacroPdfTask(meta, file.fileId(), name, file.checksumSha256()));
+        log.info("RAG macro PDF job {} queued by {}: {} {} ({}, {}, {})", id, requester(requestedBy), meta.country(), name,
+                meta.documentType(), meta.publishedOn(), file.fileId());
         return new Submission(jobs.find(id).orElseThrow(), true);
     }
 
@@ -127,7 +162,27 @@ public class RagQueue implements SmartLifecycle {
         switch (task) {
             case PdfTask pdf -> processPdf(id, pdf);
             case NewsTask news -> processNews(id, news);
+            case MacroPdfTask macro -> processMacroPdf(id, macro);
         }
+    }
+
+    private void processMacroPdf(UUID id, MacroPdfTask task) {
+        jobs.running(id, "Reading " + task.fileName());
+        byte[] content = files.content(task.fileId())
+                .orElseThrow(() -> new IllegalStateException("Stored file " + task.fileId() + " not found"));
+        MacroPdfResult result;
+        try {
+            result = service.ingestMacroPdf(id, task.meta(), task.fileId(), task.fileName(), task.checksum(), content,
+                    stage -> jobs.progress(id, stage, null, null));
+        } catch (PdfText.PdfException e) {
+            jobs.finish(id, IngestionJobStatus.FAILED, "Invalid PDF", e.getMessage(), null);
+            return;
+        } catch (EmbeddingClient.EmbeddingException e) {
+            jobs.finish(id, IngestionJobStatus.FAILED, "Embedding failed", e.getMessage(), null);
+            return;
+        }
+        jobs.finish(id, IngestionJobStatus.SUCCEEDED, "Stored " + result.chunks() + " chunks of " + result.pages()
+                + " pages for " + task.meta().countryName() + " (macro document)", null, result);
     }
 
     private void processPdf(UUID id, PdfTask task) {

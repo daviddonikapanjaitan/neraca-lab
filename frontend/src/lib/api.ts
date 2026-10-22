@@ -20,6 +20,7 @@ import type {
   IngestionJobList,
   IngestionJobType,
   PermissionInfo,
+  MacroRagDocumentPage,
   MacroStatus,
   MarketStatus,
   PriceQueue,
@@ -189,6 +190,11 @@ export const getRagStatus = cache(() => get<RagStatus>("/api/v1/rag/status"))
 /** GET /api/v1/rag/documents?source=&limit= (most recently stored first) */
 export const getRagDocuments = cache((source: RagSourceType, limit: number) =>
   get<RagDocumentPage>(`/api/v1/rag/documents?source=${source}&limit=${limit}`)
+)
+
+/** GET /api/v1/rag/macro/documents?country=&limit= (macro documents of a country, latest publication first) */
+export const getRagMacroDocuments = cache((country: string, limit: number) =>
+  get<MacroRagDocumentPage>(`/api/v1/rag/macro/documents?country=${encodeURIComponent(country)}&limit=${limit}`)
 )
 
 /** GET /api/v1/screenings/options */

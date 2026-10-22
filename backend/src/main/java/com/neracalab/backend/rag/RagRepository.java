@@ -6,7 +6,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -16,9 +18,10 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The RAG vector store: {@code rag_document} (one per PDF or news article of a company) and {@code rag_chunk}
- * (text chunks with their embeddings, {@code vector(1536)}). Similarity search orders by cosine distance
- * ({@code <=>}, HNSW index).
+ * The RAG vector store: {@code rag_document} (one per PDF or news article of a company, or per macro PDF of a
+ * country) and {@code rag_chunk} (text chunks with their embeddings, {@code vector(1536)}). Similarity search orders
+ * by cosine distance ({@code <=>}, HNSW index). The company queries ({@link #documents}, {@link #search}) never return
+ * macro documents and the macro queries never return company documents.
  */
 @Repository
 public class RagRepository {
@@ -48,13 +51,43 @@ public class RagRepository {
     public record DocumentPage(long total, int limit, int offset, List<DocumentRow> documents) {
     }
 
-    /** Documents and chunks stored per source type. */
-    public record Counts(long pdfDocuments, long newsDocuments, long chunks) {
+    /**
+     * Documents and chunks stored: PDFs and news of the companies, macro PDFs of the countries.
+     *
+     * @param chunks every chunk (companies and countries)
+     */
+    public record Counts(long pdfDocuments, long newsDocuments, long macroDocuments, long chunks) {
     }
 
     public record Hit(long chunkId, long documentId, String ticker, SourceType sourceType, String title, String sourceUrl,
                       String fileName, Instant publishedAt, Integer pageFrom, Integer pageTo, String content,
                       double distance) {
+    }
+
+    /** A macro PDF of a country to store ({@code publishedAt}: its publication date, required). */
+    public record NewMacroDocument(String country, String sourceKey, String title, String issuer,
+                                   MacroDocumentType documentType, Instant publishedAt, long fileId, String fileName,
+                                   Integer pages, int characters, String embeddingModel, UUID jobId) {
+    }
+
+    public record MacroDocumentRow(long documentId, String country, String title, String issuer,
+                                   MacroDocumentType documentType, Instant publishedAt, String fileName, Integer pages,
+                                   int characters, int chunks, String embeddingModel, Instant updatedAt) {
+    }
+
+    /**
+     * One page of stored macro documents.
+     *
+     * @param total     documents matching the filters (every page together)
+     * @param documents latest publication first, at most {@code limit} from {@code offset}
+     */
+    public record MacroDocumentPage(long total, int limit, int offset, List<MacroDocumentRow> documents) {
+    }
+
+    /** A chunk of a macro document found by {@link #searchMacro}. */
+    public record MacroHit(long chunkId, long documentId, String country, String title, String issuer,
+                           MacroDocumentType documentType, Instant publishedAt, String fileName, Integer pageFrom,
+                           Integer pageTo, String content, double distance) {
     }
 
     private final JdbcClient jdbc;
@@ -119,17 +152,67 @@ public class RagRepository {
                 .param("model", doc.embeddingModel())
                 .param("job", doc.jobId())
                 .query(Long.class).single();
-        jdbc.sql("DELETE FROM rag_chunk WHERE document_id = :d").param("d", id).update();
+        replaceChunks(id, doc.companyId(), null, chunks, embeddings);
+        return id;
+    }
+
+    /**
+     * Stores a macro document of a country and replaces its chunks, in one transaction (as {@link #store}): the same
+     * file again for the same country replaces it, with the title, issuer, type and date given now.
+     *
+     * @return the document id
+     */
+    @Transactional
+    public long storeMacro(NewMacroDocument doc, List<TextChunker.Chunk> chunks, List<float[]> embeddings) {
+        if (chunks.size() != embeddings.size()) {
+            throw new IllegalArgumentException(chunks.size() + " chunks but " + embeddings.size() + " embeddings");
+        }
+        long id = jdbc.sql("""
+                        INSERT INTO rag_document (country, source_type, source_key, title, issuer, document_type,
+                                                  source_name, file_id, file_name, published_at, pages, characters,
+                                                  chunks, embedding_model, job_id)
+                        VALUES (:country, 'PDF', :key, :title, :issuer, :type, 'Macro PDF upload', :fileId, :fileName,
+                                :published, :pages, :characters, :chunks, :model, :job)
+                        ON CONFLICT (country, source_type, source_key) WHERE country IS NOT NULL DO UPDATE SET
+                            title = EXCLUDED.title, issuer = EXCLUDED.issuer, document_type = EXCLUDED.document_type,
+                            file_id = EXCLUDED.file_id, file_name = EXCLUDED.file_name,
+                            published_at = EXCLUDED.published_at, pages = EXCLUDED.pages,
+                            characters = EXCLUDED.characters, chunks = EXCLUDED.chunks,
+                            embedding_model = EXCLUDED.embedding_model, job_id = EXCLUDED.job_id, updated_at = now()
+                        RETURNING document_id""")
+                .param("country", doc.country())
+                .param("key", truncate(doc.sourceKey(), 1000))
+                .param("title", truncate(doc.title(), 1000))
+                .param("issuer", truncate(doc.issuer(), 100), Types.VARCHAR)
+                .param("type", doc.documentType().name())
+                .param("fileId", doc.fileId())
+                .param("fileName", truncate(doc.fileName(), 255), Types.VARCHAR)
+                .param("published", doc.publishedAt().atOffset(ZoneOffset.UTC), Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("pages", doc.pages(), Types.INTEGER)
+                .param("characters", doc.characters())
+                .param("chunks", chunks.size())
+                .param("model", doc.embeddingModel())
+                .param("job", doc.jobId())
+                .query(Long.class).single();
+        replaceChunks(id, null, doc.country(), chunks, embeddings);
+        return id;
+    }
+
+    /** The chunks of a document, replaced: of a company ({@code companyId}) or a country ({@code country}). */
+    private void replaceChunks(long documentId, Long companyId, String country, List<TextChunker.Chunk> chunks,
+                               List<float[]> embeddings) {
+        jdbc.sql("DELETE FROM rag_chunk WHERE document_id = :d").param("d", documentId).update();
         List<Object[]> rows = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
             TextChunker.Chunk c = chunks.get(i);
-            rows.add(new Object[] {id, doc.companyId(), c.index(), c.pageFrom(), c.pageTo(), c.text(), vector(embeddings.get(i))});
+            rows.add(new Object[] {documentId, companyId, country, c.index(), c.pageFrom(), c.pageTo(), c.text(),
+                    vector(embeddings.get(i))});
         }
         template.batchUpdate("""
-                INSERT INTO rag_chunk (document_id, company_id, chunk_index, page_from, page_to, content, embedding)
-                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS vector))""", rows,
-                new int[] {Types.BIGINT, Types.BIGINT, Types.INTEGER, Types.INTEGER, Types.INTEGER, Types.VARCHAR, Types.VARCHAR});
-        return id;
+                INSERT INTO rag_chunk (document_id, company_id, country, chunk_index, page_from, page_to, content, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS vector))""", rows,
+                new int[] {Types.BIGINT, Types.BIGINT, Types.VARCHAR, Types.INTEGER, Types.INTEGER, Types.INTEGER,
+                        Types.VARCHAR, Types.VARCHAR});
     }
 
     /** Stored documents, most recently updated first; exchange / ticker / type narrow the list when given. */
@@ -211,11 +294,114 @@ public class RagRepository {
 
     public Counts counts() {
         return jdbc.sql("""
-                        SELECT (SELECT count(*) FROM rag_document WHERE source_type = 'PDF'),
+                        SELECT (SELECT count(*) FROM rag_document WHERE source_type = 'PDF' AND company_id IS NOT NULL),
                                (SELECT count(*) FROM rag_document WHERE source_type = 'NEWS'),
+                               (SELECT count(*) FROM rag_document WHERE country IS NOT NULL),
                                (SELECT count(*) FROM rag_chunk)""")
-                .query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3)))
+                .query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4)))
                 .single();
+    }
+
+    // ------------------------------------------------------------------ macro documents of a country
+
+    /**
+     * One page of the stored macro documents, latest publication first: of the country and the type given
+     * ({@code null} = any).
+     */
+    @Transactional(readOnly = true)
+    public MacroDocumentPage macroDocuments(String country, MacroDocumentType type, int limit, int offset) {
+        String filter = """
+                FROM rag_document d
+                WHERE d.country IS NOT NULL
+                  AND (CAST(:country AS varchar) IS NULL OR d.country = :country)
+                  AND (CAST(:type AS varchar) IS NULL OR d.document_type = :type)
+                """;
+        long total = jdbc.sql("SELECT count(*) " + filter)
+                .param("country", country, Types.VARCHAR)
+                .param("type", type == null ? null : type.name(), Types.VARCHAR)
+                .query(Long.class).single();
+        List<MacroDocumentRow> rows = jdbc.sql("""
+                        SELECT d.document_id, d.country, d.title, d.issuer, d.document_type, d.published_at, d.file_name,
+                               d.pages, d.characters, d.chunks, d.embedding_model, d.updated_at
+                        """ + filter + """
+                        ORDER BY d.published_at DESC, d.document_id DESC
+                        LIMIT :limit OFFSET :offset""")
+                .param("country", country, Types.VARCHAR)
+                .param("type", type == null ? null : type.name(), Types.VARCHAR)
+                .param("limit", limit)
+                .param("offset", offset)
+                .query((rs, i) -> new MacroDocumentRow(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                        MacroDocumentType.valueOf(rs.getString(5)), instant(rs.getTimestamp(6)), rs.getString(7),
+                        (Integer) rs.getObject(8), rs.getInt(9), rs.getInt(10), rs.getString(11),
+                        instant(rs.getTimestamp(12))))
+                .list();
+        return new MacroDocumentPage(total, limit, offset, rows);
+    }
+
+    /**
+     * Macro documents of the country with chunks, published before {@code publishedBefore} ({@code null} = any time),
+     * latest publication first (what the AI macro analysis can read as of a date).
+     */
+    public List<MacroDocumentRow> macroDocumentsPublishedBefore(String country, Instant publishedBefore, int limit) {
+        return jdbc.sql("""
+                        SELECT d.document_id, d.country, d.title, d.issuer, d.document_type, d.published_at, d.file_name,
+                               d.pages, d.characters, d.chunks, d.embedding_model, d.updated_at
+                        FROM rag_document d
+                        WHERE d.country = :country AND d.chunks > 0
+                          AND (CAST(:before AS timestamptz) IS NULL OR d.published_at < :before)
+                        ORDER BY d.published_at DESC, d.document_id DESC
+                        LIMIT :limit""")
+                .param("country", country)
+                .param("before", publishedBefore == null ? null : publishedBefore.atOffset(ZoneOffset.UTC),
+                        Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("limit", limit)
+                .query((rs, i) -> new MacroDocumentRow(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                        MacroDocumentType.valueOf(rs.getString(5)), instant(rs.getTimestamp(6)), rs.getString(7),
+                        (Integer) rs.getObject(8), rs.getInt(9), rs.getInt(10), rs.getString(11),
+                        instant(rs.getTimestamp(12))))
+                .list();
+    }
+
+    /** Macro documents stored per country (code -> count; countries without any are absent). */
+    public Map<String, Long> macroDocumentCounts() {
+        Map<String, Long> out = new LinkedHashMap<>();
+        jdbc.sql("SELECT country, count(*) FROM rag_document WHERE country IS NOT NULL GROUP BY country ORDER BY country")
+                .query(rs -> {
+                    out.put(rs.getString(1), rs.getLong(2));
+                });
+        return out;
+    }
+
+    /**
+     * The chunks of the country's macro documents closest to {@code query} (cosine distance), of the documents
+     * published before {@code publishedBefore} only ({@code null} = any time: point in time for an analysis as of a
+     * date). The HNSW scan continues until enough rows pass the filters (pgvector iterative scan).
+     */
+    @Transactional
+    public List<MacroHit> searchMacro(String country, Instant publishedBefore, float[] query, int limit) {
+        jdbc.sql("SET LOCAL hnsw.iterative_scan = relaxed_order").update();
+        List<MacroHit> hits = new ArrayList<>(jdbc.sql("""
+                        SELECT k.chunk_id, k.document_id, d.country, d.title, d.issuer, d.document_type, d.published_at,
+                               d.file_name, k.page_from, k.page_to, k.content,
+                               k.embedding <=> CAST(:query AS vector) AS distance
+                        FROM rag_chunk k
+                        JOIN rag_document d ON d.document_id = k.document_id
+                        WHERE k.country = :country
+                          AND (CAST(:before AS timestamptz) IS NULL OR d.published_at < :before)
+                        ORDER BY k.embedding <=> CAST(:query AS vector)
+                        LIMIT :limit""")
+                .param("query", vector(query))
+                .param("country", country)
+                .param("before", publishedBefore == null ? null : publishedBefore.atOffset(ZoneOffset.UTC),
+                        Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("limit", limit)
+                .query((rs, i) -> new MacroHit(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(4),
+                        rs.getString(5), MacroDocumentType.valueOf(rs.getString(6)), instant(rs.getTimestamp(7)),
+                        rs.getString(8), (Integer) rs.getObject(9), (Integer) rs.getObject(10), rs.getString(11),
+                        rs.getDouble(12)))
+                .list());
+        hits.sort(Comparator.comparingDouble(MacroHit::distance));     // relaxed order: re-sort exactly
+        return hits;
     }
 
     /** pgvector text form "[0.1,-0.2,...]". */
