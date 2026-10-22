@@ -2,6 +2,15 @@
 
 export const MACRO_HREF = "/macro"
 
+/** Macro > AI Analysis: the AI macro analysis of a country (docs/v1_docs/MACRO_ANALYSIS_DOCS.md). */
+export const MACRO_ANALYSIS_HREF = "/macro/analysis"
+
+/** The Macro pages, shared by the sidebar dropdown and the breadcrumb. */
+export const MACRO_SECTIONS: { title: string; href: string }[] = [
+  { title: "Outlook", href: MACRO_HREF },
+  { title: "AI Analysis", href: MACRO_ANALYSIS_HREF },
+]
+
 export type Tone = "POSITIVE" | "NEGATIVE" | "NEUTRAL"
 export type MacroStance = "BUY" | "ACCUMULATE" | "WAIT" | "AVOID"
 export type MacroAction = "BUY" | "ACCUMULATE" | "WAIT" | "SELL"
@@ -66,6 +75,65 @@ export interface MacroPreset {
   points: { tone: Tone; text: string }[]
   buyWhen: string[]
   sellWhen: string[]
+  /** Soros: the reflexive loop (VIRTUOUS, NEUTRAL, VICIOUS) */
+  loop?: string | null
+  /** Dalio: the growth / inflation quadrant */
+  quadrant?: string | null
+}
+
+/** One index of the country beside the others (IHSG and LQ45). */
+export interface MacroIndexRow {
+  code: string
+  name: string
+  date: string | null
+  close: number | null
+  change1mPct: number | null
+  change3mPct: number | null
+  ytdPct: number | null
+  change1yPct: number | null
+  fromHighPct: number | null
+  vsSma200Pct: number | null
+  aboveSma200: boolean | null
+  sma200Slope: "RISING" | "FALLING" | "FLAT" | null
+}
+
+/** A commodity or currency pair read for the country (MarketBoard in the backend). */
+export interface MarketRow {
+  code: string
+  name: string
+  unit: string
+  frequency: "DAILY" | "MONTHLY"
+  lastDate: string
+  last: number
+  change1mPct: number | null
+  change3mPct: number | null
+  change1yPct: number | null
+  high52w: number | null
+  low52w: number | null
+  /** where the close stands in its 52-week range, 0 - 100 */
+  rangePct: number | null
+  role: "EXPORT" | "IMPORT" | "MIXED" | "CURRENCY" | "REFERENCE"
+  /** what a rise means for the country */
+  relevance: string | null
+  tone: Tone
+  stale: boolean
+  summary: string
+  /** [epoch seconds, close]: weekly over the last year */
+  points: [number, number][]
+}
+
+export interface MarketBoard {
+  asOfDate: string
+  commodities: MarketRow[]
+  forex: MarketRow[]
+  termsOfTrade: {
+    state: "FAVOURABLE" | "NEUTRAL" | "UNFAVOURABLE" | null
+    score: number | null
+    signals: number
+    favourable: string[]
+    unfavourable: string[]
+    summary: string
+  }
 }
 
 export interface Condition {
@@ -120,6 +188,10 @@ export interface MacroOutlook {
   panels: MacroPanel[]
   presets: MacroPreset[]
   conclusion: Conclusion
+  /** every index of the country side by side */
+  indexes: MacroIndexRow[]
+  /** the commodities and currency pairs of the price ingestion */
+  markets: MarketBoard
   notes: string[]
   rulesVersion: string
   disclaimer: string

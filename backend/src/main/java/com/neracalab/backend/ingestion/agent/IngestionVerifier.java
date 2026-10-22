@@ -121,15 +121,28 @@ public class IngestionVerifier {
             }
             if (p.totalAssets() != null && p.liabilitiesPlusEquity() != null
                     && p.totalAssets().compareTo(p.liabilitiesPlusEquity()) != 0) {
-                problems.add(period.key() + ": total assets " + p.totalAssets() + " != liabilities + equity " + p.liabilitiesPlusEquity());
+                String rounding = balanceRoundingExplanation(session, p);
+                if (rounding != null) {
+                    notes.add(period.key() + ": " + rounding);
+                } else {
+                    problems.add(period.key() + ": total assets " + p.totalAssets() + " != liabilities + equity " + p.liabilitiesPlusEquity());
+                }
             }
             if (p.segments() > 0 && p.revenue() != null && p.segmentRevenue().compareTo(p.revenue()) != 0) {
-                problems.add(period.key() + ": segment revenue " + p.segmentRevenue() + " != revenue " + p.revenue());
+                String rounding = segmentRoundingExplanation(session, p);
+                if (rounding != null) {
+                    notes.add(period.key() + ": " + rounding);
+                } else {
+                    problems.add(period.key() + ": segment revenue " + p.segmentRevenue() + " != revenue " + p.revenue());
+                }
             }
             if (column == StatementColumn.CURRENT_PERIOD && p.balanceSheetCash() != null && p.endingCash() != null
                     && p.balanceSheetCash().compareTo(p.endingCash()) != 0) {
-                String overdrafts = overdraftExplanation(session, column, p);
-                if (overdrafts != null) {
+                String rounding = roundingExplanation(session, p);
+                String overdrafts = rounding != null ? null : overdraftExplanation(session, column, p);
+                if (rounding != null) {
+                    notes.add(period.key() + ": " + rounding);
+                } else if (overdrafts != null) {
                     notes.add(period.key() + ": " + overdrafts);
                 } else {
                     problems.add(period.key() + ": balance-sheet cash " + p.balanceSheetCash() + " != cash-flow ending cash " + p.endingCash());
@@ -159,6 +172,57 @@ public class IngestionVerifier {
     static boolean hasReconciledSegments(StoredPeriod p) {
         return p.segments() > 0 && p.revenue() != null && p.segmentRevenue() != null
                 && p.segmentRevenue().compareTo(p.revenue()) == 0;
+    }
+
+    /**
+     * A filing in thousands or millions whose cash flow cell carries more digits than its rounding unit (UNTR FY2022:
+     * ending cash 38281513.468848 million, the balance sheet 38281513): the two differ by less than one unit, which
+     * the mapper's own check accepts. Stored as filed; {@code null} when the difference is a unit or more.
+     */
+    static String roundingExplanation(IngestionSession session, StoredPeriod p) {
+        BigDecimal unit = session.mapper().unit();
+        BigDecimal difference = p.endingCash().subtract(p.balanceSheetCash()).abs();
+        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) >= 0) {
+            return null;
+        }
+        return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
+                + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
+                + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
+    }
+
+    /**
+     * A balance sheet whose equity carries a fraction of the filing's rounding unit (MEDC FY2022, full USD amounts: common
+     * stocks 121,798,945.72, so equity attributable to the parent 1,557,260,009.7 and liabilities + equity
+     * 6,931,905,825.7 beside total assets 6,931,905,826 - its FY2023 filing states 1,557,260,010): the two differ by less
+     * than one unit, which the mapper's own check accepts. Stored as filed; {@code null} when the difference is a unit or
+     * more. Errors 711 and 712: both MEDC uploads ended INCOMPLETE over USD 0.30.
+     */
+    static String balanceRoundingExplanation(IngestionSession session, StoredPeriod p) {
+        BigDecimal unit = session.mapper().precision().max(BigDecimal.ONE);
+        BigDecimal difference = p.totalAssets().subtract(p.liabilitiesPlusEquity()).abs();
+        if (difference.compareTo(unit) >= 0) {
+            return null;
+        }
+        return "total assets " + p.totalAssets().toPlainString() + " and liabilities + equity "
+                + p.liabilitiesPlusEquity().toPlainString() + " differ by " + difference.toPlainString()
+                + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
+    }
+
+    /**
+     * A revenue breakdown filed with more digits than the filing's rounding unit (EXCL FY2022, millions: Data & Digital
+     * Services 26,546,951.253861 and two more lines with decimals, 29,141,993.900667 in all, beside revenue 29,141,994):
+     * the two differ by less than one unit, which the mapper's own check accepts. Stored as filed; {@code null} when the
+     * difference is a unit or more.
+     */
+    static String segmentRoundingExplanation(IngestionSession session, StoredPeriod p) {
+        BigDecimal unit = session.mapper().precision();
+        BigDecimal difference = p.segmentRevenue().subtract(p.revenue()).abs();
+        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) >= 0) {
+            return null;
+        }
+        return "segment revenue " + p.segmentRevenue().toPlainString() + " and revenue " + p.revenue().toPlainString()
+                + " differ by " + difference.toPlainString() + ", less than the filing's rounding unit "
+                + unit.toPlainString() + " (the breakdown is filed with more digits): stored as filed";
     }
 
     /**

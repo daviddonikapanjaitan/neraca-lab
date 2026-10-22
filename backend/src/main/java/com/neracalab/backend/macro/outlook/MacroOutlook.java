@@ -1115,9 +1115,13 @@ public final class MacroOutlook {
                 + ": the boom is running out of fuel");
         sell.add("BI spends reserves (down 2% or more in 3 months) to hold the rupiah: the defence that comes before a "
                 + "break");
-        return preset("soros", "George Soros", "Reflexivity: ride a self-reinforcing boom, get out when the loop of "
-                + "foreign money, the rupiah and BI turns", stance, label, score == null ? null : score.doubleValue(), n,
-                thesis, points, buy, sell);
+        Map<String, Object> preset = preset("soros", "George Soros", "Reflexivity: ride a self-reinforcing boom, get out "
+                + "when the loop of foreign money, the rupiah and BI turns", stance, label,
+                score == null ? null : score.doubleValue(), n, thesis, points, buy, sell);
+        // the loop itself, for the AI analysis (its validator holds a boom against a vicious loop)
+        preset.put("loop", state);
+        preset.put("loopThen", then);
+        return preset;
     }
 
     /** Ray Dalio's growth / inflation quadrant and its text. */
@@ -1285,9 +1289,12 @@ public final class MacroOutlook {
         sell.add("Money gets dearer into slowing growth: real rates up as central banks tighten - the squeeze of the "
                 + "short-term debt cycle");
         sell.add("Credit stress: the US high-yield spread above its 80th percentile of the year - the debt cycle turning");
-        return preset("dalio", "Ray Dalio", "The economic machine: growth and inflation quadrants, real rates and credit - "
-                + "balanced (All Weather) unless the environment clearly favours equities", stance, label,
+        Map<String, Object> preset = preset("dalio", "Ray Dalio", "The economic machine: growth and inflation quadrants, "
+                + "real rates and credit - balanced (All Weather) unless the environment clearly favours equities", stance, label,
                 score == null ? null : score.doubleValue(), n, thesis, points, buy, sell);
+        // the quadrant itself, for the AI analysis (its validator never lets stagflation be bought)
+        preset.put("quadrant", quad);
+        return preset;
     }
 
     /** "Goldilocks", "stagflation", ... ("unknown" without a quadrant) */
@@ -1633,6 +1640,11 @@ public final class MacroOutlook {
         }
         double f = Math.pow(10, digits);
         return Math.round(v * f) / f;
+    }
+
+    /** {@link #r}, for the other parts of the page (the index board). */
+    static Double round(Double v, int digits) {
+        return r(v, digits);
     }
 
     /** 7033.12 -> "7,033" (digits 0); 2.5 -> "2.50" (digits 2) */

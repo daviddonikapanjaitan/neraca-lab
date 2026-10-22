@@ -54,6 +54,7 @@ spring:
         - classpath:db/V1.0.20__schema_screening_currency.sql  # currency of the screening fundamentals (USD reporters)
         - classpath:db/V1.0.23__schema_technical.sql           # technical analysis: index, events, macro, snapshots, chart settings
         - classpath:db/V1.0.25__schema_markets_macro.sql       # Forex / commodity bars, macro series catalog and release dates
+        - classpath:db/V1.0.27__schema_macro_analysis.sql      # AI macro analysis of a country (Macro > AI Analysis)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -266,6 +267,18 @@ neracalab:
     annual-periods: 4                         # fiscal years in the fact sheet (plus the latest interim period)
     embedding-price-per-million: 0.02         # USD per million tokens of the embedding model (estimated cost)
     agent-max-tokens: 1000                    # output limit of an investor agent answer (screening: 450; the dossier is richer)
+
+  # AI macro analysis of a country (POST /api/v1/macro/analyses); docs/v1_docs/MACRO_ANALYSIS_DOCS.md. Models and
+  # prices: neracalab.screening.llm
+  macro-analysis:
+    budget-usd: ${MACRO_ANALYSIS_BUDGET_USD:0.20}  # hard cost cap of one macro analysis (all model calls)
+    synthesis-reserve-usd: 0.10                    # kept free for the synthesis (Opus) while the others run
+    research-iterations: 4                         # model turns of the research agent (ReAct guard)
+    max-tool-calls: 8                              # history and correlation lookups of the research agent
+    history-months: 36                             # most months one history lookup returns
+    agent-max-tokens: 1000                         # output limit of a macro agent answer or review
+    prior-weight: 0.6                              # agent score = 60% its rules preset + 40% its AI judgement
+    rules-weight: 0.2                              # investability = 80% the agents' mean + 20% the rules score
 
   # AI stock screening (POST /api/v1/screenings); docs/v1_docs/SCREENING_DOCS.md
   screening:

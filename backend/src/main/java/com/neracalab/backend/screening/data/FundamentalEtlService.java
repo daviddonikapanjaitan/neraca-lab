@@ -69,6 +69,14 @@ public class FundamentalEtlService {
     public UniverseResult syncUniverse(Exchange exchange) {
         List<ListingQuote> quotes = yahoo.universe(exchange);
         if (quotes.isEmpty()) {
+            // the screener answers with nothing (Yahoo, since 2026-10-16): quote the listings already known instead;
+            // a new listing is found again once the screener answers
+            List<String> known = repository.knownTickers(exchange);
+            log.warn("Yahoo screener returned no {} listings; quoting the {} known listings instead", exchange.code(),
+                    known.size());
+            quotes = yahoo.quotes(exchange, known);
+        }
+        if (quotes.isEmpty()) {
             throw new PriceProviderException("Yahoo Finance returned no " + exchange.code() + " listings");
         }
         LocalDate today = LocalDate.now(exchange.zone());

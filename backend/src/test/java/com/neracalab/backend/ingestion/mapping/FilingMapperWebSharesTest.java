@@ -147,11 +147,13 @@ class FilingMapperWebSharesTest {
         assertThat(outstanding(shares)).containsEntry(LocalDate.parse("2025-12-31"), new BigDecimal("23801568645"))
                 .containsEntry(LocalDate.parse("2024-12-31"), new BigDecimal("23801568645"));
 
-        // a count that does not fit the EPS is still refused
+        // a count that does not fit the EPS is still refused; the EPS denominator then gives the count
+        // (647,824 million / 27.2177 = 23,801,568,645 shares, share capital unchanged, no treasury stock)
         ShareCapital wrong = mapper.withWebShareCounts(mapper.shareCapital(),
                 List.of(count("2025-12-31", 20_000_000_000L, null, null)), "Yahoo Finance");
-        assertThat(wrong.resolved()).isFalse();
+        assertThat(wrong.webSource()).isNull();
         assertThat(wrong.checks()).anyMatch(c -> c.message().contains("basic EPS is"));
+        assertThat(outstanding(wrong)).containsEntry(LocalDate.parse("2025-12-31"), new BigDecimal("23801568645"));
     }
 
     /**

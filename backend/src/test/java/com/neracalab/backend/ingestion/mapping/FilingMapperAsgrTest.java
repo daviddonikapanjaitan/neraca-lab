@@ -94,11 +94,12 @@ class FilingMapperAsgrTest {
         MappedStatement income = fy2023.incomeStatement(StatementColumn.CURRENT_PERIOD, Map.of(), fy2023.shareCapital()).orElseThrow();
         assertThat(income.hasErrors()).isFalse();
         assertThat(income.checks()).anyMatch(c -> c.rule().equals("revenue") && c.severity() == Check.Severity.WARNING);
-        assertThat(income.values().get("revenue")).isNull();
-        assertThat(income.values().get("cost_of_revenue")).isNull();
+        // the revenue from its own breakdown by type (16,002,643 million), the cost = revenue - gross profit
+        assertThat(income.values().get("revenue")).isEqualByComparingTo(m(16002643));
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo(m(16002643 - 3358216));
         assertThat(income.values().get("gross_profit")).isEqualByComparingTo(m(3358216));
         assertThat(income.values().get("pretax_income")).isEqualByComparingTo(m(1487689));
-        // FY2024's comparative carries the FY2023 revenue the FY2023 filing did not tag
+        // FY2024's comparative carries the same FY2023 revenue
         FilingMapper fy2024 = simp("2024-Tahunan");
         assertThat(fy2024.incomeStatement(StatementColumn.PRIOR_PERIOD, Map.of(), fy2024.shareCapital()).orElseThrow()
                 .values().get("revenue")).isEqualByComparingTo(m(16002643));

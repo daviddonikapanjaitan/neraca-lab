@@ -48,6 +48,23 @@ class YahooFundamentalsClientTest {
         assertThat(bbca.firstTradeDate()).isBefore(LocalDate.of(2010, 1, 1));
     }
 
+    /**
+     * The quote endpoint, used while the screener answers with no listings (2026-10-18): the same fields; an unknown
+     * symbol (NOPE123.JK was asked for) is simply absent.
+     */
+    @Test
+    void quoteBatch() throws IOException {
+        JsonNode result = fixture("yahoo_quote_batch.json").path("quoteResponse").path("result");
+        assertThat(result).hasSize(2);
+        ListingQuote bbca = YahooFundamentalsClient.quote(Exchange.IDX, result.path(0));
+        assertThat(bbca.ticker()).isEqualTo("BBCA");
+        assertThat(bbca.name()).isEqualTo("PT Bank Central Asia Tbk");
+        assertThat(bbca.marketCap()).isEqualTo(635_706_095_435_776d);
+        assertThat(bbca.avgVolume3m()).isEqualTo(140_076_944d);
+        assertThat(bbca.firstTradeDate()).isBefore(LocalDate.of(2010, 1, 1));
+        assertThat(YahooFundamentalsClient.quote(Exchange.IDX, result.path(1)).ticker()).isEqualTo("TLKM");
+    }
+
     /** BNGA.JK share counts (October 2026): annual and quarterly points merged per date. */
     @Test
     void shareCounts() throws IOException {

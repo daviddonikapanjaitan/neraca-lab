@@ -8,6 +8,7 @@ import { redirect } from "next/navigation"
 
 import { SESSION_COOKIE } from "@/lib/session-cookie"
 import type { MacroOutlook } from "@/lib/macro"
+import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } from "@/lib/macro-analysis"
 import type {
   AnalysisOptions,
   AnalysisPage,
@@ -151,6 +152,19 @@ export const getMacroStatus = cache(() => get<MacroStatus>("/api/v1/macro/series
 
 /** GET /api/v1/technical/markets (the exchanges and markets of the Technicals page) */
 export const getTechnicalMarkets = cache(() => get<TechnicalMarket[]>("/api/v1/technical/markets"))
+
+/** GET /api/v1/macro/analyses/options: the countries and indexes, macro agents, budget, models, stored data */
+export const getMacroAnalysisOptions = cache(() => get<MacroAnalysisOptions>("/api/v1/macro/analyses/options"))
+
+/** GET /api/v1/macro/analyses?limit=&offset= (one page, most recent first) */
+export const getMacroAnalyses = cache((limit: number, offset: number) =>
+  get<MacroAnalysisPage>(`/api/v1/macro/analyses?limit=${limit}&offset=${offset}`)
+)
+
+/** GET /api/v1/macro/analyses/{id}: the report */
+export const getMacroAnalysis = cache((id: string) =>
+  get<MacroAnalysisReport>(`/api/v1/macro/analyses/${encodeURIComponent(id)}`)
+)
 
 /** GET /api/v1/macro/outlook?country=&index=&range= (the Macro page) */
 export const getMacroOutlook = cache((country: string, index: string | undefined, range: string) =>

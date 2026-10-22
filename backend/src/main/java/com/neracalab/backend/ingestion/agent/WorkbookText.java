@@ -68,17 +68,37 @@ public final class WorkbookText {
     public record Row(String ref, String sheet, int index, String label) {
     }
 
+    /**
+     * An amount a statement cell leaves empty that the filing gives elsewhere: shown in the cell with a note and read
+     * back like a filed amount (EXCL FY2023: 'Sales and revenue' empty on the face, 32,322,651,000,000 in the revenue
+     * breakdown).
+     *
+     * @param sheet       the statement sheet, as named in the file
+     * @param row         1-based, as in Excel
+     * @param valueColumn 0 = current period, 1 = comparative
+     * @param value       in the filing's unit, as the cell would hold it
+     * @param note        where the amount comes from
+     */
+    public record Fill(String sheet, int row, int valueColumn, BigDecimal value, String note) {
+    }
+
     /** Most rows of a notes sheet shown (the statement sheets are shown completely). */
     private static final int NOTE_ROWS = 60;
     private static final int CELL_CHARS = 80;
 
     private final IdxWorkbook workbook;
+    private final List<Fill> fills;
     private final Map<String, Row> rows = new LinkedHashMap<>();
     private final String text;
     private final boolean truncated;
 
     public WorkbookText(IdxWorkbook workbook, int maxChars) {
+        this(workbook, maxChars, List.of());
+    }
+
+    public WorkbookText(IdxWorkbook workbook, int maxChars, List<Fill> fills) {
         this.workbook = workbook;
+        this.fills = List.copyOf(fills);
         StringBuilder sb = new StringBuilder();
         boolean cut = false;
         // general information first, then the three statements, then the notes
@@ -128,7 +148,13 @@ public final class WorkbookText {
         if (valueColumn < 0 || col >= width - 1) {
             return null;
         }
-        return sheet.cell(row.index(), col) instanceof BigDecimal d ? d : null;
+        return sheet.cell(row.index(), col) instanceof BigDecimal d ? d
+                : fill(row.sheet(), row.index(), valueColumn).map(Fill::value).orElse(null);
+    }
+
+    private Optional<Fill> fill(String sheet, int index, int valueColumn) {
+        return fills.stream().filter(f -> f.sheet().equals(sheet) && f.row() == index + 1 && f.valueColumn() == valueColumn)
+                .findFirst();
     }
 
     /**
@@ -163,7 +189,9 @@ public final class WorkbookText {
         int shown = 0;
         int more = 0;
         for (int r = 0; r < sheet.rowCount(); r++) {
-            if (!hasAmount(sheet, r)) {
+            int index = r;
+            if (!hasAmount(sheet, r) && (!statement || fills.stream().noneMatch(f -> f.sheet().equals(sheet.name())
+                    && f.row() == index + 1))) {
                 continue;
             }
             if (!statement && shown >= NOTE_ROWS) {
@@ -177,7 +205,9 @@ public final class WorkbookText {
                 StringBuilder line = new StringBuilder(ref).append(" | ").append(label);
                 for (int c = 1; c < sheet.width(r) - 1; c++) {
                     Object v = sheet.cell(r, c);
-                    line.append(" | c").append(c).append('=').append(v instanceof BigDecimal d ? plain(d) : "-");
+                    Optional<Fill> fill = v instanceof BigDecimal ? Optional.empty() : fill(sheet.name(), r, c - 1);
+                    line.append(" | c").append(c).append('=').append(v instanceof BigDecimal d ? plain(d)
+                            : fill.map(f -> plain(f.value()) + " (" + f.note() + ")").orElse("-"));
                 }
                 lines.add(line.toString());
             } else {

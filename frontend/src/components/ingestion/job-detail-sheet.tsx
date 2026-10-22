@@ -472,6 +472,15 @@ export function JobDetailSheet({
                 </Link>
               )}
 
+              {shown.type === "MACRO_ANALYSIS" && (
+                <Link
+                  href={`/macro/analysis/${shown.id}`}
+                  className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
+                >
+                  Open the macro analysis report <ChevronRightIcon />
+                </Link>
+              )}
+
               {shown.type === "MACRO" && (
                 <Link
                   href="/ingestion/macro"
@@ -481,6 +490,7 @@ export function JobDetailSheet({
                 </Link>
               )}
               {shown.type !== "MACRO" &&
+                shown.type !== "MACRO_ANALYSIS" &&
                 shown.ticker &&
                 shown.exchange &&
                 !isActive(shown.status) &&

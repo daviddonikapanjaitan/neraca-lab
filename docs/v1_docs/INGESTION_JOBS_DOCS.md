@@ -12,10 +12,11 @@ Every ingestion runs asynchronously in the background and records its progress i
 | RAG news of a date range        | `POST /api/v1/rag/news?exchange=&ticker=&from=&to=` | `RagQueue` ([RAG_DOCS.md](RAG_DOCS.md))                |
 | AI analysis of one stock        | `POST /api/v1/analyses`                        | `AnalysisQueue`: one thread ([ANALYSIS_DOCS.md](ANALYSIS_DOCS.md)) |
 | Macro series                    | `POST /api/v1/macro/ingestions`, `/updates`, a CSV upload | `MacroIngestionQueue`: one thread ([MACRO_DOCS.md](MACRO_DOCS.md)); exchange `MACRO`, ticker = the series code |
+| AI macro analysis of a country  | `POST /api/v1/macro/analyses`                  | `MacroAnalysisQueue`: one thread ([MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md)); exchange = the country's exchange (`IDX`), ticker = the index (`IHSG`, `LQ45`) |
 
-All of them write `ingestion_job` (one row per process; `job_type` `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`, `ANALYSIS`, `MACRO`). A `PRICE` job is one company, the IHSG index (ticker IHSG), or a Forex pair / commodity (exchange `FOREX` / `COMMODITY`, ticker the instrument code). `GET /api/v1/ingestions` lists them. The
+All of them write `ingestion_job` (one row per process; `job_type` `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`, `ANALYSIS`, `MACRO`, `MACRO_ANALYSIS`). A `PRICE` job is one company, the IHSG index (ticker IHSG), or a Forex pair / commodity (exchange `FOREX` / `COMMODITY`, ticker the instrument code). `GET /api/v1/ingestions` lists them. The
 frontend Ingestion pages (`/ingestion/xbrl`, `/ingestion/prices`, `/ingestion/screening-data`, `/ingestion/rag-pdf`, `/ingestion/rag-news`, [FRONTEND_DOCS.md](FRONTEND_DOCS.md)) use these APIs. Every API here
-needs the `INGESTION` permission, except the screening and analysis APIs (`SCREENING`). Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
+needs the `INGESTION` permission, except the screening and analysis APIs (`SCREENING`) and the macro analyses (`COMPANIES`). Every API needs a login: `AUTH="Authorization: Bearer <token>"` from `POST /api/v1/auth/login`
 ([AUTH_DOCS.md](AUTH_DOCS.md), section 3).
 
 Code: `backend/src/main/java/com/neracalab/backend/`
@@ -101,7 +102,7 @@ curl -H "$AUTH" -OJ http://localhost:8080/api/v1/ingestions/{id}/file           
 
 | Parameter | Default | Values                                                                                       |
 |-----------|---------|----------------------------------------------------------------------------------------------|
-| `type`    | all     | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`, `ANALYSIS`, `MACRO` (case-insensitive) |
+| `type`    | all     | `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`, `ANALYSIS`, `MACRO`, `MACRO_ANALYSIS` (case-insensitive) |
 | `status`  | all     | comma-separated: `QUEUED`, `RUNNING`, `WAITING_RATE_LIMIT`, `SUCCEEDED`, `INCOMPLETE`, `FAILED` |
 | `limit`   | 50      | 1-500: jobs per page                                                                         |
 | `offset`  | 0       | jobs skipped (most recent first): page `n` (1-based) of `limit` jobs is `offset = (n - 1) * limit` |
