@@ -2,6 +2,7 @@ package com.neracalab.backend.macro.analysis;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -36,6 +37,8 @@ import com.neracalab.backend.macro.analysis.MacroSynthesisAgent.MacroSynthesis;
 import com.neracalab.backend.macro.analysis.MacroValidator.Facts;
 import com.neracalab.backend.macro.analysis.MacroValidator.Issue;
 import com.neracalab.backend.macro.outlook.MacroOutlookService;
+import com.neracalab.backend.rag.EmbeddingClient;
+import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.ScreeningProperties.ModelPrice;
 import com.neracalab.backend.screening.agent.JsonReplies;
@@ -50,8 +53,8 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li><b>Macro data</b> (no model): the Macro page's rules over the stored macro series - regimes, the reading of
  *       every series, the four investor presets, the rules' investability score - the country's indexes and the
  *       commodities and currency pairs ({@link MacroOutlookService}).</li>
- *   <li><b>Research agent</b> (ReAct + tool calling over the stored histories, {@link MacroResearchAgent}): a brief
- *       with references.</li>
+ *   <li><b>Research agent</b> (ReAct + tool calling over the stored histories and the country's macro documents in
+ *       the RAG vector store published by the as-of date, {@link MacroResearchAgent}): a brief with references.</li>
  *   <li><b>Macro agents</b> (Paul Tudor Jones, Stanley Druckenmiller, George Soros, Ray Dalio): one independent call
  *       each, sharing the system prompt and the dossier (cacheable prefix); <b>Reflection</b>: the validator checks
  *       every answer, a critic reviews the flagged ones; <b>Reflexion</b>: lessons of earlier analyses are in the
@@ -70,6 +73,7 @@ public class MacroAnalysisService {
     /** Investability: from this score up investable, below {@link #NOT_INVESTABLE} not (as the rules). */
     static final double INVESTABLE = 60;
     static final double NOT_INVESTABLE = 40;
+    private static final ZoneId JAKARTA = ZoneId.of("Asia/Jakarta");
 
     private final MacroOutlookService outlook;
     private final MacroResearchAgent research;
@@ -80,12 +84,15 @@ public class MacroAnalysisService {
     private final IngestionJobRepository jobs;
     private final ScreeningProperties screening;
     private final MacroAnalysisProperties properties;
+    private final EmbeddingClient embeddings;
+    private final RagRepository rag;
     private final JsonReplies json;
 
     public MacroAnalysisService(MacroOutlookService outlook, MacroResearchAgent research, MacroPanel panel,
                                 MacroSynthesisAgent synthesis, MacroLessons lessons, MacroAnalysisRepository repository,
                                 IngestionJobRepository jobs, ScreeningProperties screening,
-                                MacroAnalysisProperties properties, JsonMapper mapper) {
+                                MacroAnalysisProperties properties, EmbeddingClient embeddings, RagRepository rag,
+                                JsonMapper mapper) {
         this.outlook = outlook;
         this.research = research;
         this.panel = panel;
@@ -95,6 +102,8 @@ public class MacroAnalysisService {
         this.jobs = jobs;
         this.screening = screening;
         this.properties = properties;
+        this.embeddings = embeddings;
+        this.rag = rag;
         this.json = new JsonReplies(mapper);
     }
 
@@ -152,12 +161,16 @@ public class MacroAnalysisService {
         ModelPrice researchPrice = screening.llm().price(screening.llm().researchModel());
         ModelPrice agentPrice = screening.llm().price(screening.llm().agentModel());
 
-        // ---- research agent (ReAct + tools over the stored histories)
-        progress(id, meter, "Research agent: reading the history of the macro series, commodities and indexes");
+        // ---- research agent (ReAct + tools over the stored histories and the country's macro documents)
+        MacroDocumentSearch documents = new MacroDocumentSearch(choice.country(), asOf, embeddings, rag, meter, properties);
+        progress(id, meter, "Research agent: reading the history of the macro series, commodities and indexes"
+                + (documents.documents().isEmpty() ? "" : " and " + documents.documents().size() + " macro documents"));
+        documentNotes(choice, asOf, documents.documents().size(), rag.macroDocumentCounts().getOrDefault(choice.country(), 0L))
+                .forEach(notes::add);
         MacroOutlookService.History history = outlook.history(choice.country());
         Map<String, MacroTools.Meta> meta = new LinkedHashMap<>();
         history.info().forEach((code, info) -> meta.put(code, new MacroTools.Meta(info.name(), info.unit(), info.rate(), info.flow())));
-        MacroTools tools = new MacroTools(history.macro(), history.prices(), meta, asOf, properties);
+        MacroTools tools = new MacroTools(history.macro(), history.prices(), meta, asOf, properties, documents);
         boolean allowResearch = meter.allows(researchPrice.cost(30_000, 3_000), reserve);
         MacroResearchAgent.Result r = research.research(meter, subject, researchSummary(view, asOf), tools, allowResearch);
         boolean researchDegraded = r.note() != null;
@@ -167,7 +180,7 @@ public class MacroAnalysisService {
         if (r.droppedRefs() > 0) {
             notes.add(r.droppedRefs() + " research evidence items cited tool results that were never returned and were dropped.");
         }
-        repository.saveResearch(id, researchDocument(r));
+        repository.saveResearch(id, researchDocument(r, documents.documents()));
         checkInterrupted();
 
         // ---- the dossier every macro agent shares (cacheable prefix)
@@ -263,6 +276,7 @@ public class MacroAnalysisService {
         input.put("index", context.get("index"));
         input.put("indexes", context.get("indexes"));
         input.put("termsOfTrade", markets == null ? null : markets.get("termsOfTrade"));
+        input.put("regionalCurrencies", markets == null ? null : markets.get("regionalCurrencies"));
         input.put("agents", rows);
         input.put("research", r.brief());
         input.put("dataNotes", List.copyOf(notes.messages));
@@ -325,7 +339,7 @@ public class MacroAnalysisService {
     /**
      * What the agents see (and the report keeps): the Macro page's view without its chart points and its dropdown
      * lists - the as-of date, the index and the country's other indexes, the regimes, the reading of every series, the
-     * presets, the rules' conclusion, the commodities and currency pairs.
+     * presets, the rules' conclusion, the commodities and currency pairs, and the rupiah against its Asian peers.
      */
     @SuppressWarnings("unchecked")
     static Map<String, Object> context(MacroOutlookService.Choice choice, Map<String, Object> view) {
@@ -361,6 +375,7 @@ public class MacroAnalysisService {
                     .map(MacroAnalysisService::withoutPoints).toList());
             m.put("currencyPairs", ((List<Object>) markets.getOrDefault("forex", List.of())).stream()
                     .map(MacroAnalysisService::withoutPoints).toList());
+            m.put("regionalCurrencies", markets.get("regionalCurrencies"));
             c.put("markets", m);
         }
         c.put("rulesVersion", view.get("rulesVersion"));
@@ -488,11 +503,52 @@ public class MacroAnalysisService {
         }
     }
 
-    private static Map<String, Object> researchDocument(MacroResearchAgent.Result r) {
+    /**
+     * What the report says about the macro documents: none stored for the country, or some published after the as-of
+     * date (not read: point in time).
+     */
+    static List<String> documentNotes(MacroOutlookService.Choice choice, LocalDate asOf, int readable, long stored) {
+        if (stored == 0) {
+            return List.of("No macro documents of " + choice.countryName() + " are stored (Ingestion > PDF Documents "
+                    + "(RAG), Macro documents): the research read the stored series only.");
+        }
+        if (readable == 0) {
+            return List.of("None of the " + stored + " macro documents of " + choice.countryName() + " was published by "
+                    + asOf + ": the research read the stored series only.");
+        }
+        if (stored > readable) {
+            return List.of((stored - readable) + " of the " + stored + " macro documents of " + choice.countryName()
+                    + " were published after " + asOf + " and were not read (point in time).");
+        }
+        return List.of();
+    }
+
+    /** The macro documents the research could search, as the report lists them. */
+    static List<Map<String, Object>> documentList(List<RagRepository.MacroDocumentRow> documents) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (RagRepository.MacroDocumentRow d : documents) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("documentId", d.documentId());
+            m.put("title", d.title());
+            m.put("issuer", d.issuer());
+            m.put("documentType", d.documentType().name());
+            m.put("documentTypeLabel", d.documentType().label());
+            m.put("publishedOn", d.publishedAt() == null ? null
+                    : d.publishedAt().atZone(JAKARTA).toLocalDate().toString());
+            m.put("pages", d.pages());
+            m.put("chunks", d.chunks());
+            out.add(m);
+        }
+        return out;
+    }
+
+    private static Map<String, Object> researchDocument(MacroResearchAgent.Result r,
+                                                        List<RagRepository.MacroDocumentRow> documents) {
         Map<String, Object> doc = new LinkedHashMap<>();
         doc.put("brief", r.brief());
         doc.put("trace", r.trace());
         doc.put("retrieved", r.retrieved());
+        doc.put("documents", documentList(documents));
         doc.put("modelUsed", r.modelUsed());
         doc.put("droppedRefs", r.droppedRefs());
         doc.put("note", r.note());

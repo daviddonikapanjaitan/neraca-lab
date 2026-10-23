@@ -409,6 +409,8 @@ class TechnicalControllerTest {
         assertThat(bars.get("currency")).isEqualTo("JPY");
         assertThat(bars.get("unit")).isEqualTo("JPY per ZZZ");
         assertThat(bars.get("lotSize")).isNull();
+        // its tick sets the decimals of the chart
+        assertThat(((Number) bars.get("tickSize")).doubleValue()).isEqualTo(0.001);
         assertThat((List<?>) bars.get("autoRejection")).isEmpty();
         assertThat((String) bars.get("priceBasis")).contains("JPY per ZZZ");
 
@@ -437,7 +439,8 @@ class TechnicalControllerTest {
         assertThat(summary.get("unit")).isEqualTo("JPY per ZZZ");
         assertSummaries(summary, new IdxTickSize(List.of(new TechnicalProperties.TickBand(null, new BigDecimal("0.001")))));
 
-        mvc.perform(get("/api/v1/technical/FOREX/EURUSD/ohlcv")).andExpect(status().isNotFound())
+        // a code that is not in the catalog (EUR/USD is since 2026-10-23)
+        mvc.perform(get("/api/v1/technical/FOREX/ZZNONE/ohlcv")).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.title").value("Instrument not found"));
     }
 

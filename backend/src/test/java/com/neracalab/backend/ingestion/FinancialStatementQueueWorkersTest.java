@@ -252,7 +252,7 @@ class FinancialStatementQueueWorkersTest {
     @Test
     void anUploadTheFullTextExtractionRescuedSucceedsAndIsStillRecorded() {
         outcome = response(Status.COMPLETED, new IngestionResponse.Fallback("INCOMPLETE",
-                "saveStatements(PRIOR_PERIOD) is blocked: income_statement failed checks", "anthropic/claude-haiku-5.5",
+                "saveStatements(PRIOR_PERIOD) is blocked: income_statement failed checks", "anthropic/claude-sonnet-5.5",
                 List.of("PRIOR_PERIOD"), 1,
                 List.of("PRIOR_PERIOD 2024 FY income_statement"), List.of(), List.of("saveStatements(PRIOR_PERIOD) done"), null));
         queue = queue(1);
@@ -274,23 +274,23 @@ class FinancialStatementQueueWorkersTest {
         assertThat(error.getValue().finalStatus()).isEqualTo("SUCCEEDED");
         // the model that did the full-text extraction is part of the record
         assertThat(((java.util.Map<?, ?>) error.getValue().details()).get("fullTextExtraction"))
-                .extracting("model").isEqualTo("anthropic/claude-haiku-5.5");
+                .extracting("model").isEqualTo("anthropic/claude-sonnet-5.5");
     }
 
     /**
-     * The full-text extraction's model (Haiku) kept failing: the upload fails, and the error log has the model,
+     * The full-text extraction's model (Sonnet) kept failing: the upload fails, and the error log has the model,
      * why the extraction stopped and each failed call with what the provider said.
      */
     @Test
     void aFullTextExtractionWhoseModelFailsIsRecordedWithItsFailedCalls() {
-        String haiku = "anthropic/claude-haiku-5.5";
+        String sonnet = "anthropic/claude-sonnet-5.5";
         outcome = response(Status.FAILED, new IngestionResponse.Fallback("UNSUPPORTED_WORKBOOK",
-                "Unsupported filing: Profit or loss uses the 'by nature' template", haiku, List.of(), 0, List.of(),
+                "Unsupported filing: Profit or loss uses the 'by nature' template", sonnet, List.of(), 0, List.of(),
                 List.of("Full-text extraction: the model call failed (stream was reset: CANCEL)"), List.of(),
                 "IllegalStateException: no usable answer"));
         when(jobs.failedModelCalls(any())).thenReturn(List.of(
-                new IngestionJob.FailedCall("FULL_TEXT", haiku, "no model response within 150 s", 150_000, java.time.Instant.now()),
-                new IngestionJob.FailedCall("FULL_TEXT", haiku, "stream was reset: CANCEL", 61_000, java.time.Instant.now())));
+                new IngestionJob.FailedCall("FULL_TEXT", sonnet, "no model response within 150 s", 150_000, java.time.Instant.now()),
+                new IngestionJob.FailedCall("FULL_TEXT", sonnet, "stream was reset: CANCEL", 61_000, java.time.Instant.now())));
         queue = queue(1);
         submit("NSSS-2025.xlsx");
 
@@ -302,7 +302,7 @@ class FinancialStatementQueueWorkersTest {
         assertThat(error.getValue().fallbackUsed()).isTrue();
         assertThat(error.getValue().finalStatus()).isEqualTo("FAILED");
         Map<?, ?> details = (Map<?, ?>) error.getValue().details();
-        assertThat(details.get("fullTextExtraction")).extracting("model").isEqualTo(haiku);
+        assertThat(details.get("fullTextExtraction")).extracting("model").isEqualTo(sonnet);
         assertThat(details.get("fullTextExtraction")).extracting("error").isEqualTo("IllegalStateException: no usable answer");
         assertThat(details.get("failedModelCalls")).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST)
                 .hasSize(2).extracting("error")
@@ -313,10 +313,10 @@ class FinancialStatementQueueWorkersTest {
     @Test
     void theFailedCallsOfARescuedUploadAreRecordedToo() {
         outcome = response(Status.COMPLETED, new IngestionResponse.Fallback("INCOMPLETE", "open items",
-                "anthropic/claude-haiku-5.5", List.of("PRIOR_PERIOD"), 2, List.of("PRIOR_PERIOD 2024 FY income_statement"),
+                "anthropic/claude-sonnet-5.5", List.of("PRIOR_PERIOD"), 2, List.of("PRIOR_PERIOD 2024 FY income_statement"),
                 List.of(), List.of(), null));
         when(jobs.failedModelCalls(any())).thenReturn(List.of(new IngestionJob.FailedCall("FULL_TEXT",
-                "anthropic/claude-haiku-5.5", "HTTP 529 overloaded", 900, java.time.Instant.now())));
+                "anthropic/claude-sonnet-5.5", "HTTP 529 overloaded", 900, java.time.Instant.now())));
         queue = queue(1);
         submit("TINS-2025.xlsx");
 

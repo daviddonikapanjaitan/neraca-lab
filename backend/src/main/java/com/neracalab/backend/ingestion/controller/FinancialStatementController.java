@@ -38,7 +38,7 @@ import com.neracalab.backend.ingestion.xlsx.IdxWorkbookException;
  * <ul>
  *   <li>202 - new job (QUEUED), {@code Location: /api/v1/ingestions/{id}}</li>
  *   <li>200 - the same file is already queued / being stored: that job</li>
- *   <li>422 - not an .xlsx / not an IDX XBRL workbook (recorded in {@code ingestion_error}); 413 - larger than 20 MB</li>
+ *   <li>422 - not an .xlsx / not an IDX XBRL workbook (recorded in {@code ingestion_error}); 413 - larger than 50 MB</li>
  * </ul>
  */
 @RestController

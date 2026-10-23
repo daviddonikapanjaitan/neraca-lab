@@ -141,7 +141,7 @@ export function UploadCard({ onSubmitted }: { onSubmitted: (job: IngestionJob) =
           />
           <FileUpIcon className="size-6 text-muted-foreground" />
           <span className="text-sm font-medium">Drop an .xlsx file here or click to choose</span>
-          <span className="text-xs text-muted-foreground">IDX XBRL financial statement workbook, up to 20 MB</span>
+          <span className="text-xs text-muted-foreground">IDX XBRL financial statement workbook, up to 50 MB</span>
         </label>
 
         {file && (

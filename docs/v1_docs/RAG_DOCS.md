@@ -1,15 +1,16 @@
-# RAG vector store (PDF documents and news)
+# RAG vector store (PDF documents, news and macro documents)
 
 The RAG vector store holds text that the AI features can retrieve by meaning: PDF documents of a
-company (financial statements, annual reports) and the company's news articles. Every document is
-split into chunks; each chunk is embedded (a 1536-number vector) and stored in PostgreSQL with
-**pgvector**, linked to its company by a foreign key to `company`.
+company (financial statements, annual reports), the company's news articles, and **macro documents
+of a country** (central bank, finance ministry, IMF / World Bank reports). Every document is split
+into chunks; each chunk is embedded (a 1536-number vector) and stored in PostgreSQL with
+**pgvector**, linked either to its company (foreign key to `company`) or to its country.
 
 Two pages under **Ingestion** fill it (permission `INGESTION`):
 
 | Page                | Path                    | Job type   | Source                                                  |
 |---------------------|-------------------------|------------|---------------------------------------------------------|
-| PDF Documents (RAG) | `/ingestion/rag-pdf`    | `RAG_PDF`  | an uploaded `.pdf` of a stored company                  |
+| PDF Documents (RAG) | `/ingestion/rag-pdf`    | `RAG_PDF`  | left: an uploaded `.pdf` of a stored company; right: a macro `.pdf` of a country (section 2a) |
 | News (RAG)          | `/ingestion/rag-news`   | `RAG_NEWS` | the news of a stored IDX company within a date range    |
 
 Both run as background jobs in `ingestion_job` (shown in the jobs table of every Ingestion page);
@@ -49,7 +50,7 @@ News request (company, from, to) -> RAG_NEWS job
 ## 2. PDF documents
 
 - Only `.pdf` files with a text layer. A scanned PDF (images only), a password-protected or an
-  unreadable file is rejected with 422 before anything is stored. Limit 20 MB (the upload limit).
+  unreadable file is rejected with 422 before anything is stored. Limit 50 MB (the upload limit; macro reports such as the APBN KiTa bulletin are often over 20 MB).
 - The company is chosen on the page; a file name ending with a stored ticker
   (`FinancialStatement-2025-Tahunan-HRTA.pdf`) selects it automatically.
 - The file is stored once per SHA-256 checksum in `ingestion_file` (shared with the `.xlsx`
@@ -58,6 +59,41 @@ News request (company, from, to) -> RAG_NEWS job
   same file for another company is a separate document.
 - At most one active job per file and company: a repeated upload while it is queued or running
   returns that job (200).
+
+## 2a. Macro documents of a country
+
+The right-hand card of **PDF Documents (RAG)** (**Macro document upload**) stores a macro PDF of a
+country for the AI macro analysis (`MACRO_ANALYSIS_DOCS.md`, section 3a). Which documents to collect,
+and why: `instruction/pdf_rag_macro.md`.
+The files uploaded so far are kept in `data/macro/<country>/` (`data/macro/indonesia/`: Bank
+Indonesia's Monetary Policy Review / Report, the International Investment Position report, the
+Ministry of Finance's APBN KiTa bulletin and the Indonesia Stock Exchange's monthly market
+statistics, `ms_equity` / `ms_bond` / `ms_sw` `_2609.pdf`).
+
+- **Country**: Indonesia (`ID`). The United States and China are listed but not available yet; the
+  API answers 400 ("United States is not available yet: only Indonesia (ID) for now"). The list is
+  the Macro page's (`MacroOutlookService.COUNTRIES`).
+- **Document type** (required, `MacroDocumentType`): `MONETARY_POLICY` (BI board statements,
+  Monetary Policy Review / Report), `FINANCIAL_STABILITY`, `FISCAL` (APBN KiTa, Nota Keuangan,
+  KEM-PPKF), `EXTERNAL_SECTOR` (balance of payments), `ECONOMIC_OUTLOOK` (IMF Article IV, World Bank,
+  ADB), `STATISTICS` (BPS releases), `DEVELOPMENT_PLAN` (RPJMN), `RESEARCH` (bank / think-tank
+  research: an opinion) or `OTHER`.
+- **Publication date** (required, not in the future, Jakarta time): the day the document was
+  released, not the period it covers. It is stored as 00:00 Jakarta time in
+  `rag_document.published_at`. The macro analysis reads only the documents published by its as-of
+  date (point in time).
+- **Title** (defaults to the file name, at most 300 characters) and **issuer** (optional, at most
+  100; the page suggests Bank Indonesia, Ministry of Finance, OJK, BPS, IMF, World Bank, ...).
+- The same checks as a company PDF (`.pdf`, `%PDF` header, text layer, 50 MB). The job is a
+  `RAG_PDF` job of exchange `MACRO` whose ticker is the country (`ID`); its result is the
+  `MacroPdfResult` (country, title, issuer, type, publication date, pages, chunks).
+- Each chunk is **embedded with a header** in front of it: "Bank Indonesia - Monetary Policy Review
+  August 2026 (monetary policy, Indonesia, 2026-08-20)". A query for "Bank Indonesia guidance" then
+  also finds a page that never names its publisher. The stored text is the chunk alone.
+- The same file again for the same country replaces the document, its details and its chunks: a
+  wrong date or type is corrected by uploading the file again.
+- **Stored macro documents** (below the company documents): the documents of a country, latest
+  publication first, with a search test over that country's documents.
 
 ## 3. News
 
@@ -111,6 +147,13 @@ All endpoints need a session with the `INGESTION` permission.
 | `GET`  | `/api/v1/rag/status` | embedding model and dimensions, chunk size, news limits, queue length, stored documents and chunks |
 | `GET`  | `/api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF\|NEWS&limit=100&offset=0]` | one page of the stored documents, most recently stored first: `{ total, limit, offset, documents }` (`total` = documents matching the filters; limit 1-500, offset 0 or more; `ticker` one company, `tickerPrefix` the tickers starting with it) |
 | `GET`  | `/api/v1/rag/search?q=...[&exchange=IDX&ticker&source&limit=8]` | closest chunks: ticker, document, pages, published date, content, `distance` (0 = same direction; limit 1-50, query up to 2,000 characters) |
+| `POST` | `/api/v1/rag/macro/pdf` (multipart `file`, `country` = ID, `documentType`, `publishedOn` = yyyy-mm-dd, optional `title`, `issuer`) | 202 new job, 200 job already active for the file and country; 400 country not available / unknown, type missing / unknown, date missing / not a date / in the future, title over 300 or issuer over 100 characters, not a `.pdf`; 422 no text layer |
+| `GET`  | `/api/v1/rag/macro/documents[?country&documentType&limit=100&offset=0]` | one page of the stored macro documents, latest publication first: `{ total, limit, offset, documents }` (country, title, issuer, documentType, publishedAt, pages, chunks) |
+| `GET`  | `/api/v1/rag/macro/search?q=...[&country=ID&limit=8]` | closest chunks of the country's macro documents: title, issuer, type, published date, pages, content, `distance` |
+
+The status (`GET /api/v1/rag/status`) also has `stored.macroDocuments`, `macroCountries` (code,
+name, available, documents stored) and `macroDocumentTypes` (code, label, examples). The company
+endpoints never return macro documents, and the macro endpoints never return company documents.
 
 Follow a job with `GET /api/v1/ingestions/{id}`; its `result` is the `PdfResult` (pages, pages with
 text, characters, chunks, model) or the `NewsResult` described above.
@@ -118,6 +161,9 @@ text, characters, chunks, model) or the `NewsResult` described above.
 ```bash
 curl -H "$AUTH" -F file=@data/IDX_XBRL/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA \
      http://localhost:8080/api/v1/rag/pdf
+curl -H "$AUTH" -F file=@Monetary-Policy-Review-August-2026.pdf -F country=ID -F documentType=MONETARY_POLICY \
+     -F publishedOn=2026-08-20 -F issuer="Bank Indonesia" http://localhost:8080/api/v1/rag/macro/pdf
+curl -H "$AUTH" "http://localhost:8080/api/v1/rag/macro/search?country=ID&q=Bank%20Indonesia%20rupiah%20guidance"
 curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=pendapatan%20penjualan%20emas%202025"
 ```
@@ -133,6 +179,16 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=pendapata
   source_key)`.
 - `rag_chunk`: `chunk_index`, `page_from` / `page_to`, `content`, `embedding vector(1536)`;
   `company_id` is repeated for filtered search; HNSW index with `vector_cosine_ops`.
+
+`V1.0.28__schema_rag_macro.sql` (macro documents of a country):
+
+- `rag_document.company_id` and `rag_chunk.company_id` may be NULL; both tables get `country`, and
+  `ck_rag_document_scope` / `ck_rag_chunk_scope` require exactly one of the two.
+- `rag_document.issuer` and `document_type` (`ck_rag_document_type`); a macro document is a PDF with
+  its type and publication date (`ck_rag_document_macro`).
+- Unique on `(country, source_type, source_key)` for the macro documents (a partial index; the
+  company documents keep `uq_rag_document_source`); indexes `ix_rag_document_country`,
+  `ix_rag_chunk_country`.
 
 Column-level reference: `DB_SCHEMA_DOCS.md`.
 
@@ -159,7 +215,9 @@ Changing the embedding model makes old and new vectors incomparable: ingest the 
 
 `backend/src/main/java/com/neracalab/backend/rag/`: `RagController` (API), `RagQueue` (5 worker
 threads, `neracalab.jobs.workers`: that many PDFs / news ingestions at the same time; `JobWorkerPool`), `RagIngestionService`, `PdfText`, `TextChunker`, `EmbeddingClient`,
-`NewsCollector`, `RagRepository`, `RagProperties`.
+`NewsCollector`, `RagRepository`, `RagProperties`, `MacroDocumentType`. Frontend:
+`rag-pdf-card.tsx` and `rag-macro-pdf-card.tsx` (the two uploads), `rag-documents-card.tsx` and
+`rag-macro-documents-card.tsx` (the stored documents).
 
 | Test | Covers |
 |------|--------|
@@ -169,8 +227,8 @@ threads, `neracalab.jobs.workers`: that many PDFs / news ingestions at the same 
 | `NewsCollectorTest` | Jakarta-time range, walking older pages until the range start, Investor.id page numbers, only the four news sites read (saved pages, no network) |
 | `RagNewsIngestionTest` | an article read from its site is stored; a momentary 404 is retried and stored; a lasting 404 fails after 4 attempts, a 403 at once, without stopping the job |
 | `NewsRetryTest` | which failures are retried (timeout, 404 of an article, 5xx) and which not (403, 404 of a tag page), the attempt limit, the growing pause, interruption |
-| `RagRepositoryTest` | store, cosine search with filters, replace on re-ingest, news keyed by URL, cascade (real database, rolled back) |
-| `RagControllerTest` | a PDF through the worker into the store and back by search (stub embeddings, cleaned up), validation errors, status, permission |
+| `RagRepositoryTest` | store, cosine search with filters, replace on re-ingest, news keyed by URL, cascade; a macro document of a country: search by country and publication date (point in time), listing by country and type, never mixed with the company documents, replaced with its details, company or country but not both (real database, rolled back) |
+| `RagControllerTest` | a PDF through the worker into the store and back by search (stub embeddings, cleaned up); a macro PDF of Indonesia through the worker (`MACRO` / `ID` job, its details, listed, found by the country's search, not a company's); validation errors of both (the United States and China not available yet, type, date, title, issuer, file); status with the macro countries and types; permission |
 | `IngestionJobTypeConstraintTest` | `V1.0.10` and `V1.0.14` re-create `ck_ingestion_job_type` on every start; both must list every job type (a narrower list stops the application once a RAG job is stored) |
 
 Frontend: `src/app/(dashboard)/ingestion/rag-pdf`, `rag-news`, `src/components/ingestion/rag-*.tsx`,

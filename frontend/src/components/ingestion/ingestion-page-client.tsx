@@ -10,6 +10,8 @@ import { MacroCard } from "@/components/ingestion/macro-card"
 import { PriceCard } from "@/components/ingestion/price-card"
 import { PriceUpdateCard } from "@/components/ingestion/price-update-card"
 import { RagDocumentsCard } from "@/components/ingestion/rag-documents-card"
+import { RagMacroDocumentsCard } from "@/components/ingestion/rag-macro-documents-card"
+import { RagMacroPdfCard } from "@/components/ingestion/rag-macro-pdf-card"
 import { RagNewsCard } from "@/components/ingestion/rag-news-card"
 import { RagPdfCard } from "@/components/ingestion/rag-pdf-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
@@ -20,6 +22,7 @@ import type {
   FundamentalsStatus,
   IngestionJob,
   IngestionJobList,
+  MacroRagDocumentPage,
   MacroStatus,
   MarketStatus,
   PriceStatus,
@@ -48,6 +51,11 @@ export type IngestionSectionData =
       companiesByExchange: Record<string, CompanySummary[]>
       rag: RagStatus
       documents: RagDocumentPage
+      /** first page of the macro documents of {@code macroCountry} */
+      macroDocuments: MacroRagDocumentPage
+      macroCountry: string
+      /** today in Jakarta (yyyy-mm-dd): the latest publication date of a macro document */
+      today: string
     }
   | {
       section: "rag-news"
@@ -111,17 +119,27 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
 
       {data.section === "macro" && <MacroCard status={data.macro} onSubmitted={submitted} />}
 
-      {data.section !== "prices" && data.section !== "macro" && (
+      {data.section === "rag-pdf" && (
+        // a company's document on the left; a country's macro document on the right
+        <div className="grid w-full items-start gap-4 lg:grid-cols-2">
+          <RagPdfCard
+            exchanges={data.exchanges}
+            companiesByExchange={data.companiesByExchange}
+            onSubmitted={submitted}
+          />
+          <RagMacroPdfCard
+            countries={data.rag.macroCountries}
+            documentTypes={data.rag.macroDocumentTypes}
+            today={data.today}
+            onSubmitted={submitted}
+          />
+        </div>
+      )}
+
+      {data.section !== "prices" && data.section !== "macro" && data.section !== "rag-pdf" && (
         <div className="w-full max-w-3xl">
           {data.section === "xbrl" && <UploadCard onSubmitted={submitted} />}
           {data.section === "screening-data" && <FundamentalsCard status={data.fundamentals} onSubmitted={submitted} />}
-          {data.section === "rag-pdf" && (
-            <RagPdfCard
-              exchanges={data.exchanges}
-              companiesByExchange={data.companiesByExchange}
-              onSubmitted={submitted}
-            />
-          )}
           {data.section === "rag-news" && (
             <RagNewsCard
               exchanges={data.exchanges}
@@ -140,6 +158,10 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
           initial={data.documents}
           status={data.rag}
         />
+      )}
+
+      {data.section === "rag-pdf" && (
+        <RagMacroDocumentsCard initial={data.macroDocuments} initialCountry={data.macroCountry} status={data.rag} />
       )}
 
       <JobsTable initial={jobs} defaultType={info.jobType} watch={watch} onJobFinished={jobFinished} />

@@ -116,11 +116,11 @@ class ScreeningAgentsTest {
         List<UsageMeter.Usage> usages = new ArrayList<>();
         UsageMeter meter = meter(1, usages);
         new LlmGateway(model, properties).worker(meter, new LlmGateway.Purpose("AGENT", "BUFFETT", "BBCA"),
-                "deepseek/deepseek-v4-flash-0731", List.of(new org.springframework.ai.chat.messages.UserMessage("x")),
+                "deepseek/deepseek-v4.1-flash-1017", List.of(new org.springframework.ai.chat.messages.UserMessage("x")),
                 List.of(), 300);
 
         OpenAiChatOptions options = (OpenAiChatOptions) model.prompts.get(0).getOptions();
-        assertThat(options.getModel()).isEqualTo("deepseek/deepseek-v4-flash-0731");
+        assertThat(options.getModel()).isEqualTo("deepseek/deepseek-v4.1-flash-1017");
         assertThat(options.getMaxTokens()).isEqualTo(300);
         assertThat(options.getExtraBody()).containsEntry("reasoning", Map.of("enabled", false))
                 .containsEntry("provider", Map.of("sort", "price", "ignore", List.of("OpenInference")))
@@ -142,7 +142,7 @@ class ScreeningAgentsTest {
                 .reply("{\"ok\":true}");
         List<UsageMeter.Usage> usages = new ArrayList<>();
         LlmGateway.Reply reply = new LlmGateway(model, properties).worker(meter(1, usages),
-                new LlmGateway.Purpose("AGENT", "MUNGER", "HRTA"), "deepseek/deepseek-v4-flash-0731",
+                new LlmGateway.Purpose("AGENT", "MUNGER", "HRTA"), "deepseek/deepseek-v4.1-flash-1017",
                 List.of(new org.springframework.ai.chat.messages.UserMessage("x")), List.of(), 300);
 
         assertThat(reply.text()).isEqualTo("{\"ok\":true}");
@@ -161,13 +161,13 @@ class ScreeningAgentsTest {
         LlmGateway gateway = new LlmGateway(resets, properties);
         List<org.springframework.ai.chat.messages.Message> x = List.of(new org.springframework.ai.chat.messages.UserMessage("x"));
         assertThatThrownBy(() -> gateway.worker(meter(1, new ArrayList<>()), new LlmGateway.Purpose("AGENT", "GILL", "HRTA"),
-                "deepseek/deepseek-v4-flash-0731", x, List.of(), 300))
+                "deepseek/deepseek-v4.1-flash-1017", x, List.of(), 300))
                 .isInstanceOf(LlmGateway.LlmException.class).hasMessageContaining("(3 attempts)");
         assertThat(resets.prompts).hasSize(3);           // the first call and model-retries (2) more
 
         ScriptedModel refused = new ScriptedModel().fail(new IllegalArgumentException("invalid model id"));
         assertThatThrownBy(() -> new LlmGateway(refused, properties).worker(meter(1, new ArrayList<>()),
-                new LlmGateway.Purpose("AGENT", "GILL", "HRTA"), "deepseek/deepseek-v4-flash-0731", x, List.of(), 300))
+                new LlmGateway.Purpose("AGENT", "GILL", "HRTA"), "deepseek/deepseek-v4.1-flash-1017", x, List.of(), 300))
                 .isInstanceOf(LlmGateway.LlmException.class).hasMessageNotContaining("attempts");
         assertThat(refused.prompts).hasSize(1);
     }

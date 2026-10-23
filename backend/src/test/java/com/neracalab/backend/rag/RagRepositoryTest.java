@@ -1,9 +1,12 @@
 package com.neracalab.backend.rag;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,10 +21,15 @@ import com.neracalab.backend.ingestion.file.IngestionFileRepository.StoredFile;
 import com.neracalab.backend.rag.RagRepository.Company;
 import com.neracalab.backend.rag.RagRepository.DocumentRow;
 import com.neracalab.backend.rag.RagRepository.Hit;
+import com.neracalab.backend.rag.RagRepository.MacroHit;
 import com.neracalab.backend.rag.RagRepository.NewDocument;
+import com.neracalab.backend.rag.RagRepository.NewMacroDocument;
 import com.neracalab.backend.rag.RagRepository.SourceType;
 
-/** The pgvector store (rag_document / rag_chunk) on the real database; every test is rolled back. */
+/**
+ * The pgvector store (rag_document / rag_chunk) on the real database, company and macro documents; every test is
+ * rolled back.
+ */
 @SpringBootTest
 @Transactional
 class RagRepositoryTest {
@@ -89,6 +97,72 @@ class RagRepositoryTest {
         assertThat(row.chunks()).isEqualTo(1);
         assertThat(row.fileName()).isEqualTo("test.pdf");
         assertThat(row.ticker()).isEqualTo("HRTA");
+    }
+
+    @Test
+    void storesSearchesAndListsAMacroDocumentOfACountry() {
+        StoredFile file = files.store(("%PDF-macro " + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8), "mpr.pdf",
+                "application/pdf");
+        Instant published = LocalDate.of(2026, 8, 20).atStartOfDay(ZoneId.of("Asia/Jakarta")).toInstant();
+        String title = "Monetary Policy Review " + UUID.randomUUID();
+        NewMacroDocument doc = new NewMacroDocument("ID", file.checksumSha256(), title, "Bank Indonesia",
+                MacroDocumentType.MONETARY_POLICY, published, file.fileId(), "mpr.pdf", 2, 40, "test-model", null);
+        long id = repository.storeMacro(doc, chunks("guidance", "rupiah"), List.of(axis(20), axis(21)));
+
+        // the country's search finds it; only documents published before the instant given (point in time)
+        List<MacroHit> hits = repository.searchMacro("ID", null, axis(21), 50);
+        assertThat(hits.getFirst()).satisfies(h -> {
+            assertThat(h.documentId()).isEqualTo(id);
+            assertThat(h.content()).isEqualTo("rupiah");
+            assertThat(h.distance()).isCloseTo(0.0, org.assertj.core.data.Offset.offset(1e-6));
+            assertThat(h.issuer()).isEqualTo("Bank Indonesia");
+            assertThat(h.documentType()).isEqualTo(MacroDocumentType.MONETARY_POLICY);
+            assertThat(h.publishedAt()).isEqualTo(published);
+            assertThat(h.pageFrom()).isEqualTo(2);
+        });
+        assertThat(hits).extracting(MacroHit::distance).isSorted();
+        Instant nextDay = published.plus(java.time.Duration.ofDays(1));
+        assertThat(repository.searchMacro("ID", nextDay, axis(21), 50)).anyMatch(h -> h.documentId() == id);
+        assertThat(repository.searchMacro("ID", published, axis(21), 50)).noneMatch(h -> h.documentId() == id);
+        assertThat(repository.searchMacro("US", null, axis(21), 50)).noneMatch(h -> h.documentId() == id);
+        assertThat(repository.macroDocumentsPublishedBefore("ID", nextDay, 500)).anyMatch(d -> d.documentId() == id);
+        assertThat(repository.macroDocumentsPublishedBefore("ID", published, 500)).noneMatch(d -> d.documentId() == id);
+
+        // never mixed with the company documents
+        assertThat(repository.search(null, null, axis(21), 50)).noneMatch(h -> h.documentId() == id);
+        assertThat(repository.documents(null, null, null, SourceType.PDF, 500, 0).documents())
+                .noneMatch(d -> d.documentId() == id);
+
+        // the listing, by country and type
+        RagRepository.MacroDocumentRow row = repository.macroDocuments("ID", null, 500, 0).documents().stream()
+                .filter(d -> d.documentId() == id).findFirst().orElseThrow();
+        assertThat(row.title()).isEqualTo(title);
+        assertThat(row.chunks()).isEqualTo(2);
+        assertThat(row.fileName()).isEqualTo("mpr.pdf");
+        assertThat(repository.macroDocuments("ID", MacroDocumentType.FISCAL, 500, 0).documents())
+                .noneMatch(d -> d.documentId() == id);
+        assertThat(repository.macroDocuments("CN", null, 500, 0).documents()).noneMatch(d -> d.documentId() == id);
+        assertThat(repository.macroDocumentCounts().get("ID")).isPositive();
+        assertThat(repository.counts().macroDocuments()).isPositive();
+
+        // the same file again for the country replaces the document, its details and its chunks
+        long again = repository.storeMacro(new NewMacroDocument("ID", file.checksumSha256(), "Corrected title", null,
+                MacroDocumentType.ECONOMIC_OUTLOOK, nextDay, file.fileId(), "mpr.pdf", 1, 10, "test-model", null),
+                chunks("outlook"), List.of(axis(22)));
+        assertThat(again).isEqualTo(id);
+        RagRepository.MacroDocumentRow replaced = repository.macroDocuments("ID", MacroDocumentType.ECONOMIC_OUTLOOK, 500, 0)
+                .documents().stream().filter(d -> d.documentId() == id).findFirst().orElseThrow();
+        assertThat(replaced.title()).isEqualTo("Corrected title");
+        assertThat(replaced.issuer()).isNull();
+        assertThat(replaced.publishedAt()).isEqualTo(nextDay);
+        assertThat(replaced.chunks()).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT count(*) FROM rag_chunk WHERE document_id = :d AND country = 'ID' AND company_id IS NULL")
+                .param("d", id).query(Long.class).single()).isEqualTo(1);
+
+        // a document belongs to a company or to a country, never both (the last statement: it aborts the transaction)
+        assertThatThrownBy(() -> jdbc.sql("UPDATE rag_document SET company_id = :c WHERE document_id = :d")
+                .param("c", hrta().companyId()).param("d", id).update())
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
     @Test

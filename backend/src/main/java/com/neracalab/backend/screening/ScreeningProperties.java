@@ -100,8 +100,8 @@ public record ScreeningProperties(
      * @param prices         USD per million tokens per model, used only when OpenRouter reports no cost
      *                       for a call (default: the OpenRouter list prices of the default models)
      */
-    public record Llm(@DefaultValue("deepseek/deepseek-v4-flash-0731") String researchModel,
-                      @DefaultValue("deepseek/deepseek-v4-flash-0731") String agentModel,
+    public record Llm(@DefaultValue("deepseek/deepseek-v4.1-flash-1017") String researchModel,
+                      @DefaultValue("deepseek/deepseek-v4.1-flash-1017") String agentModel,
                       @DefaultValue("anthropic/claude-opus-5.5") String synthesisModel,
                       @DefaultValue("low") String synthesisEffort,
                       @DefaultValue("price") String providerSort,
@@ -116,8 +116,8 @@ public record ScreeningProperties(
 
         public Llm {
             if (prices == null || prices.isEmpty()) {
-                prices = List.of(new ModelPrice("deepseek/deepseek-v4-flash-0731", 0.06, 1.28),
-                        new ModelPrice("anthropic/claude-haiku-5.5", 0.10, 0.50),
+                prices = List.of(new ModelPrice("deepseek/deepseek-v4.1-flash-1017", 0.15, 0.60),
+                        new ModelPrice("anthropic/claude-sonnet-5.5", 2, 10),
                         new ModelPrice("anthropic/claude-opus-5.5", 4, 20));
             }
             if (concurrency < 1 || researchIterations < 1) {

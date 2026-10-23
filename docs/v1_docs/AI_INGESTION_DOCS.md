@@ -30,7 +30,7 @@ in a background thread. Details of storage, job statuses and the job API:
 | 202  | job queued (`Location: /api/v1/ingestions/{id}`)                                     |
 | 200  | the same file is already queued / being stored: that job                             |
 | 422  | not an .xlsx / not an IDX XBRL workbook, or a filing in another currency than the company's stored data (ProblemDetail body; logged in `ingestion_error`). An IDX workbook the standard extraction cannot map is accepted (202) and stored by the full-text extraction, section 6 |
-| 413  | file larger than 20 MB                                                               |
+| 413  | file larger than 50 MB                                                               |
 
 Follow the job with `GET /api/v1/ingestions/{id}`. Agent outcome -> job status: `COMPLETED` ->
 `SUCCEEDED` (everything stored and verified by a database read-back), `INCOMPLETE` -> `INCOMPLETE`
@@ -94,7 +94,7 @@ FY2025 ran 8-9 minutes on three timed-out OpenRouter responses before the limit 
 ```properties
 OPENAI_API_KEY=sk-or-v1-...
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
-OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+OPENAI_MODEL=deepseek/deepseek-v4.1-flash-1017
 ```
 
 `application.yaml` imports it (`spring.config.import: optional:file:.env[.properties]`) and points
@@ -108,7 +108,7 @@ every ingestion call went to `openai/gpt-5-mini` on OpenRouter, whatever `OPENAI
 stock screening was not affected: `LlmGateway` always sets its model). `IngestionAgent.options()` now
 sets the configured model on every request (`IngestionAgentModelTest` pins both the Spring AI default
 and the fix), and the job result lists the models the responses report (`metrics.models`, e.g.
-`["deepseek/deepseek-v4-flash-0731"]`), so a substitution is visible in the job.
+`["deepseek/deepseek-v4.1-flash-1017"]`), so a substitution is visible in the job.
 
 | Property                                | Default | Meaning                                         |
 |-----------------------------------------|---------|-------------------------------------------------|
@@ -666,6 +666,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
 | `FilingMapperTuguMoliCnmaTest` (unit) | the filings behind the error rows of 2026-10-14: TUGU read in the Insurance Industry taxonomy with 3,555,575,600 shares at par 50 (EPS in millions in FY2024, an unrestated split in FY2023), MOLI's EPS in thousands (H1 2026) and its contradicting FY2025 columns (no par 1), CNMA's depreciation with its balance sheet by order of liquidity |
+| `FilingMapperKetrLppfTest` (unit) | the filings behind the error rows of 2026-10-22: KETR's FY2024 comparative in its FY2025 filing reconciles with 'Finance income' 3,820,523,591 counted once, 'Other income' without it (11,241,254,994, operating income 181,136,399,270 as in the FY2024 filing); LPPF FY2023, rows missing on the face of its balance sheet: inventory, short-term debt, goodwill and intangibles are left empty, not 0, while the FY2024 comparative has inventory 792,781 and bank loans 550,003 million |
 | `FilingMapperItmgMdkaMedcHrumTest` (unit) | the filings behind the error rows of 2026-10-21: ITMG FY2023 read as full amounts (total assets 2,187,847,000 USD; FY2024 stays in thousands); ITMG and MDKA H1 2025 reconcile with 'Other gains (losses)' counted once (operating income 123,254 thousand / 83,182,117); with Yahoo Finance's counts ITMG's H1 2025 EPS 0.00008 is read as 0.08 and MDKA's H1 2026 EPS 0.00042 as 0.0042, and no column is corrected without published evidence or on counts of another basis; MEDC's and HRUM's discontinued EPS rows that are no such EPS are left out (MEDC FY2022 0.021503, FY2025 0.00408), UNVR's, EMTK's, MPMX's and KRAS's are kept |
 | `FilingMapperTotlMidiTest` (unit) | the filings behind the error rows of 2026-10-13: TOTL's breakdowns with "Jasa Konstruksi" on several lines of one kind are one segment equal to the line its FY2024 filing shows (lines of different kinds stay apart); MIDI's H1 2025 cash roll-forward holds without the deconsolidation line its ending cash excludes |
 | `DerivedDataRefreshTest` (Docker Postgres) | the refresh of the derived data: a second run changes nothing and takes seconds, the market snapshots equal the lookup per trading day they replaced, six requests at once cost one or two runs, a company with prices, shares and a balance sheet but no trailing twelve months (BACH) is valued on its balance sheet (market cap, EV, P/B; no TTM ratios), the same rows from the per-company refresh |
@@ -827,7 +828,7 @@ For a workbook of a taxonomy the rules do not map, nothing of the rule-based ext
 model and nothing can be adopted.
 
 Measured with DeepSeek V4 Flash, the model of the full-text extraction until it got its own
-(`neracalab.ingestion.fallback.model`, Claude Haiku 5.5; the NSSS row below):
+(`neracalab.ingestion.fallback.model`, Claude Haiku 5.5 when these were measured, Claude Sonnet 5.5 since 2026-10-23; the NSSS row below):
 
 | Workbook | What the model decided | Calls, time | Result |
 |----------|------------------------|-------------|--------|
@@ -891,7 +892,8 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 | Property (`neracalab.ingestion.fallback.*`) | Default | Meaning                                                    |
 |---------------------------------------------|---------|------------------------------------------------------------|
 | `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
-| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-haiku-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash at about the same cost per upload (one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
+| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-sonnet-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash and dearer per token (USD 2 / 10 per million against 0.15 / 0.60; one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
+| `reasoning-effort` (`INGESTION_FALLBACK_REASONING_EFFORT`) | `low` | OpenRouter reasoning effort of its calls, sent as `"reasoning": {"effort": "low"}` in place of the standard extraction's `"enabled": false` (`model-reasoning`): Claude Sonnet 5.5 refuses reasoning switched off with HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled" (error 878, every full-text extraction failed on its first call); empty = the standard extraction's setting |
 | `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
 | `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
 | `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
@@ -930,6 +932,46 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-10-23 (errors 877 - 880): WINE
+
+| What was wrong | Rows | Fix |
+|----------------|------|-----|
+| **The full-text extraction's model refused every call.** Since the switch to Claude Sonnet 5.5 its requests carried the standard extraction's `"reasoning": {"enabled": false}` (`model-reasoning: false`), and Sonnet 5.5 refuses that: HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled" (80 ms, no answer). WINE's FY2023 upload ended `INCOMPLETE` with nothing of FY2023 stored. The only such call in `llm_usage`. | 878 | `fallback.reasoning-effort` (`INGESTION_FALLBACK_REASONING_EFFORT`, default `low`): `FullTextExtractor.options` sends `"reasoning": {"effort": "low"}` in its place, the provider exclusions and the cost request kept; the standard extraction's DeepSeek calls still switch reasoning off. Uploaded again: three Sonnet calls (USD 0.0897), FY2023 stored (error 880). |
+| **A filing that contradicts itself.** WINE's FY2023 cash flow (direct method) files no investing row and no investing total in the FY2023 column (FY2022: -3,267,185,857), and its financing lines add up to 29,103,486,541 beside the filed total 29,500,370,253 (difference 396,883,712). Operating -14,044,367,603 + financing 29,500,370,253 is not the net change 7,750,478,932 (beginning 9,166,930,763, ending 16,917,409,695), so investing would be -7,705,523,718 - but the filing does not say it. | 880 | Not changed: nothing in the workbook decides it. Stored by the full-text extraction as filed - operating, financing (the filed total), its lines, the net change and the ending cash - with investing and capital expenditure left empty; `INCOMPLETE`. WINE's FY2024 workbook would fill them from its comparative (a comparative fills an empty field). |
+| **A broken download.** WINE's FY2024 xlsx is a 165-byte Excel lock file ('Administrator'), not a workbook. | 877 | Rightly refused (422). Download it from IDX again in place of the file in `data/IDX_XBRL/WINE/xlsx`: its FY2023 comparative fills FY2023's investing. |
+
+The negative cash of WINE's FY2024 (-6,347,846,792), FY2025 (-13,842,609,224) and H1 2025 (-2,998,446,986) cash
+flows is as filed: WINE reports cash net of bank overdrafts there (the balance sheet: 8,652,153,208 and 2,856,625,986).
+ASLC, BBRM, GZCO, IKBI, MHKI, NAIK, SRSN and UNIQ, uploaded with WINE: every filing `SUCCEEDED`.
+
+Tests: `FullTextExtractorTest` (its own reasoning effort in place of the standard extraction's reasoning off); 707
+passing.
+
+### The review of 2026-10-22 (errors 802 - 809): KETR, CYBR, IRSX, MNCN, RMKE and LPPF
+
+| What was wrong | Rows | Fix |
+|----------------|------|-----|
+| **A line filed again within a residual line.** KETR's FY2025 workbook restates FY2024 with 'Other income' 15,061,778,585 - the FY2024 filing's 11,241,254,994 plus its finance income - and still files 'Finance income' 3,820,523,591: profit before tax 101,667,066,908 counts it once. The full-text extraction took over the comparative. | 802 | `FilingMapper.partsOfResidualLines`: an income (expense) line that is no residual line, smaller than a residual 'Other ...' line of its direction, may be filed again within it; when profit before tax then reconciles and every check passes, the line keeps its amount and the residual line is counted without it (`incomeStatementAsFiled(..., less, ...)`), as the period's own filing presents them (operating income 181,136,399,270 in both filings). Tried after the repeats of `doubleReportedLines`. A sweep of every workbook in `data/IDX_XBRL`: it applies to this one column only. |
+| **Rows left off the face of the balance sheet.** 18 of the 137 FY2023 workbooks (ADMR, ADRO, ARNA, ASGR, ASII, AUTO, ELSA, ESSA, EXCL, ISAT, ITMG, JPFA, LPPF, MYOR, PGEO, SIMP, UNTR, UNVR) leave rows such as inventories, property, plant and equipment, right-of-use assets and bank loans off the balance sheet that their totals and notes include (LPPF: 'Total current assets' 1,448,030 million beside rows of 655,249 - its inventories of 792,781 are in the note; 'Total current liabilities' 2,952,977 beside 2,402,974, without its bank loans of 550,003). A field with no row was stored as 0 - the sum of no rows - and, as the current period replaces, over the FY2024 comparative's figures: FY2023 inventory 0 for 15 of them (ASII, UNVR, MYOR, ...), short-term debt 0 for ten and long-term debt 0 for nine. LPPF's upload ended `INCOMPLETE`: cash flow ending cash 457,628 is the balance sheet's 507,631 less overdrafts of 50,003, but the filing gave no short-term debt to hold them. No workbook of another year has such a gap. | 809 | `FilingMapper.withoutRowsMissingOnTheFace`: where the rows of a section (current / non-current assets, current / non-current liabilities) fall short of its filed total by more than the rounding (one unit per row), its fields none of whose rows is filed (cash, receivables, inventory, payables, deferred revenue, debt, leases, goodwill, intangibles) are left empty with a warning, so a value another filing stored stays; `fieldsMissingOnTheFace` keeps the full-text extraction from storing 0 debt there. `IngestionVerifier.overdraftExplanation` takes the period's stored short-term debt when the filing gives none. The stored zeros are cleared and filled from the FY2024 comparatives (data below). |
+| **An expense by nature in no field.** MNCN files its profit or loss by nature (no gross profit, by design). For H1 2026 and H1 2025 the model named 'Program and broadcasting expenses' (2,133,396 / 2,239,777 million) as cost of revenue, which a filing by nature does not have and is cleared, and only 'Other expenses' as operating expenses: operating expenses 864,240 beside revenue 3,517,600 and an operating income of 519,964 that deducts both. | 806, 807 | `FullTextExtractor.costAsOperatingExpenses`: in a profit or loss by nature, rows named as cost of revenue that operating income subtracts are counted in operating expenses. |
+| **Filings that contradict themselves.** CYBR's FY2024 cash flow ends 31,000 above its balance sheet cash (49,913,901,136 - 38,750,102,771 + 21,108,892 = 11,184,907,257 beside 11,184,876,257), and its FY2025 cash flow starts from that figure; the H1 2026 filing starts from the balance sheet's. IRSX's H1 2025 comparative in its H1 2026 filing files a profit before tax of -1,384,348,324, which is gross profit - G&A - finance costs + other income without its finance income 332,451,244 (the interest received in its cash flow) and other expenses 252,471,000. | 803, 804, 805 | Not changed: nothing in the workbooks decides them. CYBR stays `INCOMPLETE` with the difference; IRSX H1 2025 is stored by the full-text extraction as filed. |
+| **A broken download.** RMKE's FY2024 xlsx is a 165-byte Excel lock file ('Administrator'), not a workbook. | 808 | Rightly refused; download it from IDX again. |
+
+**MNCN's revenue breakdown of the comparatives.** The first line of MNCN's breakdown by type carries the total in the
+prior columns of its FY2025 and H1 2026 workbooks (FY2024: 7,953,812 million beside the other five lines of 5,291,126;
+its own FY2024 filing has 'Digital' 2,662,686 there), and the lines have no names. They do not reconcile and are not
+stored; FY2024 keeps the breakdown of its own filing, H1 2025 has none.
+
+Data, 2026-10-22: the FY2023 zeros of the 18 companies cleared where the FY2024 comparative differs (inventory 15,
+short-term debt 10, long-term debt 9, ESSA's leases) and MNCN's H1 2025 operating expenses; uploaded again, all
+`SUCCEEDED`: the FY2024 filings of the 16 affected companies (FY2023 now e.g. ASII inventory 39,138,000, MYOR long-term
+debt 3,533,332,615,996, LPPF inventory 792,781 and short-term debt 550,003 million), LPPF 2023 (overdrafts within the
+stored debt), KETR 2025 (standard extraction, no fallback). MNCN 2026-II: operating expenses H1 2026 2,997,636 and H1
+2025 3,209,795 million, `INCOMPLETE` only for the comparative breakdown above (error 821).
+
+Tests: `FilingMapperKetrLppfTest`, `FullTextExtractorTest` (an expense by nature named as cost of revenue),
+`IngestionVerifierOverdraftTest` (overdrafts within the stored short-term debt); 701 passing.
 
 ### The review of 2026-10-21 (errors 707 - 713): ITMG, MDKA, MEDC, PGAS, PGEO, ISAT and HRUM
 
@@ -1246,7 +1288,7 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
 |--------|---------|
 | `job_id` | the upload job (`ingestion_job`); deleted with it |
 | `stage` | `PLAN` (the planner), `EXECUTE` (a tool turn of the agent loop), `REVIEW` (the reviewer) of the standard extraction; `FULL_TEXT` (an answer of the full-text extraction) |
-| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Haiku 5.5) for the full-text extraction |
+| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4.1 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Sonnet 5.5) for the full-text extraction |
 | `ticker` | the filing's company |
 | `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens` | as the provider reports them |
 | `cost_usd`, `cost_estimated` | the cost OpenRouter reports for the call (`usage.cost`; every request asks for it with `"usage": {"include": true}`). A call without one is priced from `neracalab.screening.llm.prices` and flagged |
@@ -1264,7 +1306,7 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
 - Uploads stored before this was added have no rows, so no cost is shown for them.
 - **Failed calls go to the error log too.** When an upload is recorded in `ingestion_error` (section 6), the
   row's `details.failedModelCalls` lists the job's failed model calls from these rows, so a full-text
-  extraction whose model (Haiku) timed out or was refused shows what the provider said:
+  extraction whose model (Sonnet) timed out or was refused shows what the provider said:
 
   ```sql
   SELECT e.error_id, e.ticker, e.period, e.final_status, c->>'model' AS model, c->>'stage' AS stage,
@@ -1296,6 +1338,6 @@ GROUP BY j.job_id ORDER BY j.requested_at DESC LIMIT 20;
 ```
 
 Tests: `IngestionUsageRecorderTest` (an OpenAI-compatible server on localhost answers the calls: stage, the
-model asked - DeepSeek and Haiku -, tokens and the reported cost; a call without a cost is estimated and
+model asked - DeepSeek and Sonnet -, tokens and the reported cost; a call without a cost is estimated and
 flagged; a failed attempt and its retry are both recorded; a row that cannot be written does not fail the
 ingestion), `IngestionJobCostTest` (the sums per job and per stage and model, against Postgres).

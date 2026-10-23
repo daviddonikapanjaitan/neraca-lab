@@ -40,6 +40,7 @@ import com.neracalab.backend.macro.analysis.MacroAnalysisViews.MacroAnalysisSumm
 import com.neracalab.backend.macro.analysis.MacroAnalysisViews.Options;
 import com.neracalab.backend.macro.analysis.report.MacroAnalysisPdfRenderer;
 import com.neracalab.backend.macro.outlook.MacroOutlookService;
+import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.ScreeningViews.Option;
 import com.neracalab.backend.web.ApiException;
@@ -70,10 +71,11 @@ public class MacroAnalysisController {
     private final ScreeningProperties screening;
     private final MacroAnalysisPdfRenderer pdf;
     private final JdbcClient jdbc;
+    private final RagRepository rag;
 
     public MacroAnalysisController(MacroAnalysisQueue queue, MacroAnalysisRepository repository, MacroOutlookService outlook,
                                    MacroAnalysisProperties properties, ScreeningProperties screening,
-                                   MacroAnalysisPdfRenderer pdf, JdbcClient jdbc) {
+                                   MacroAnalysisPdfRenderer pdf, JdbcClient jdbc, RagRepository rag) {
         this.queue = queue;
         this.repository = repository;
         this.outlook = outlook;
@@ -81,6 +83,7 @@ public class MacroAnalysisController {
         this.screening = screening;
         this.pdf = pdf;
         this.jdbc = jdbc;
+        this.rag = rag;
     }
 
     @GetMapping("/options")
@@ -97,7 +100,7 @@ public class MacroAnalysisController {
                                   JOIN market_instrument i ON i.instrument_code = d.instrument_code
                                  WHERE i.active AND i.market = 'FOREX') AS forex""")
                 .query((rs, i) -> new Data(rs.getInt("series"), rs.getInt("series_total"), rs.getInt("commodities"),
-                        rs.getInt("forex")))
+                        rs.getInt("forex"), rag.macroDocumentCounts()))
                 .single();
         return new Options(outlook.countries(), agents, properties.budgetUsd(), screening.llm().researchModel(),
                 screening.llm().agentModel(), screening.llm().synthesisModel(), data);

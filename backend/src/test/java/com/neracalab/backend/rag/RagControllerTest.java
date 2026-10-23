@@ -180,6 +180,145 @@ class RagControllerTest {
         }
     }
 
+    /**
+     * A macro PDF of Indonesia through the worker: stored with its country (not a company), its details and its
+     * publication date, listed and found by the country's search. Its chunks are embedded with the issuer, title and
+     * date in front: the stub vector of a text is its first word's, here the issuer's "Bank".
+     */
+    @Test
+    void storesAMacroDocumentOfIndonesiaAndFindsIt() throws Exception {
+        String marker = "Rupiah" + UUID.randomUUID().toString().replace("-", "");
+        byte[] content = pdf(marker + " Bank Indonesia menahan BI-Rate");
+        // a name of its own: the database may hold the real review under its usual name
+        String title = "Monetary-Policy-Review-" + marker;
+        String fileName = title + ".pdf";
+        MockMultipartFile file = new MockMultipartFile("file", fileName, "application/pdf", content);
+        UUID id = null;
+        try {
+            String body = mvc.perform(multipart("/api/v1/rag/macro/pdf").file(file).param("country", "id")
+                            .param("documentType", "monetary_policy").param("publishedOn", "2026-08-20")
+                            .param("issuer", " Bank   Indonesia "))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.type").value("RAG_PDF"))
+                    .andExpect(jsonPath("$.exchange").value("MACRO"))
+                    .andExpect(jsonPath("$.ticker").value("ID"))
+                    .andExpect(jsonPath("$.file.fileName").value(fileName))
+                    .andReturn().getResponse().getContentAsString();
+            id = UUID.fromString(json.readTree(body).path("id").asString());
+
+            IngestionJob job = awaitFinished(id);
+            assertThat(job.status()).as(job.message()).isEqualTo(IngestionJobStatus.SUCCEEDED);
+            assertThat(job.stage()).isEqualTo("Stored 1 chunks of 1 pages for Indonesia (macro document)");
+            assertThat(job.result().path("country").asString()).isEqualTo("ID");
+            assertThat(job.result().path("countryName").asString()).isEqualTo("Indonesia");
+            assertThat(job.result().path("title").asString()).isEqualTo(title);
+            assertThat(job.result().path("issuer").asString()).isEqualTo("Bank Indonesia");
+            assertThat(job.result().path("documentType").asString()).isEqualTo("MONETARY_POLICY");
+            assertThat(job.result().path("publishedOn").asString()).isEqualTo("2026-08-20");
+            assertThat(job.result().path("chunks").asInt()).isEqualTo(1);
+
+            mvc.perform(get("/api/v1/rag/macro/documents").param("country", "ID"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.documents[?(@.fileName == '" + fileName + "')].issuer")
+                            .value("Bank Indonesia"))
+                    .andExpect(jsonPath("$.documents[?(@.fileName == '" + fileName + "')].publishedAt")
+                            .value("2026-08-19T17:00:00Z"));
+            mvc.perform(get("/api/v1/rag/macro/search").param("q", "Bank Indonesia guidance").param("country", "id")
+                            .param("limit", "3"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].country").value("ID"))
+                    .andExpect(jsonPath("$[0].documentType").value("MONETARY_POLICY"))
+                    .andExpect(jsonPath("$[0].content").value(org.hamcrest.Matchers.startsWith(marker)));
+            // a macro document is no company's
+            mvc.perform(get("/api/v1/rag/documents").param("source", "PDF").param("limit", "500"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.documents[?(@.fileName == '" + fileName + "')]").isEmpty());
+            mvc.perform(get("/api/v1/rag/status"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.stored.macroDocuments").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
+                    .andExpect(jsonPath("$.macroCountries[0].code").value("ID"))
+                    .andExpect(jsonPath("$.macroCountries[0].documents").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
+        } finally {
+            if (id != null) {
+                Long fileId = jobs.find(id).map(j -> j.file() == null ? null : j.file().fileId()).orElse(null);
+                jdbc.sql("DELETE FROM rag_document WHERE job_id = :id").param("id", id).update();
+                jdbc.sql("DELETE FROM ingestion_job WHERE job_id = :id").param("id", id).update();
+                if (fileId != null) {
+                    jdbc.sql("DELETE FROM ingestion_file WHERE file_id = :f AND checksum_sha256 = :c")
+                            .param("f", fileId).param("c", IngestionFileRepository.sha256(content)).update();
+                }
+            }
+        }
+    }
+
+    @Test
+    void rejectsWrongMacroUploads() throws Exception {
+        MockMultipartFile ok = new MockMultipartFile("file", "a.pdf", "application/pdf", pdf("x"));
+        String today = LocalDate.now(Exchange.IDX.zone()).toString();
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("country", "US")
+                        .param("documentType", "FISCAL").param("publishedOn", today))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("United States is not available yet: only Indonesia (ID) for now"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("country", "cn")
+                        .param("documentType", "FISCAL").param("publishedOn", today))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("China is not available yet: only Indonesia (ID) for now"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("country", "XX")
+                        .param("documentType", "FISCAL").param("publishedOn", today))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Unknown country 'XX'; use ID, US, CN"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("publishedOn", today))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Choose the type of the document"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("documentType", "VIDEO").param("publishedOn", today))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.startsWith("Unknown document type 'VIDEO'")));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("documentType", "FISCAL"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Give the publication date of the document"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("documentType", "FISCAL")
+                        .param("publishedOn", LocalDate.parse(today).plusDays(1).toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("is in the future")));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("documentType", "FISCAL").param("publishedOn", "2026-13-01"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("The publication date '2026-13-01' is not a date (yyyy-mm-dd)"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("documentType", "FISCAL").param("publishedOn", today)
+                        .param("title", "t".repeat(301)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("The title must have 1 to 300 characters"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(ok).param("documentType", "FISCAL").param("publishedOn", today)
+                        .param("issuer", "i".repeat(101)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("The issuer must have at most 100 characters"));
+        mvc.perform(multipart("/api/v1/rag/macro/pdf")
+                        .file(new MockMultipartFile("file", "a.txt", "text/plain", "x".getBytes(StandardCharsets.UTF_8)))
+                        .param("documentType", "FISCAL").param("publishedOn", today))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Only .pdf files are accepted"));
+        byte[] blank;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            document.addPage(new PDPage());
+            document.save(out);
+            blank = out.toByteArray();
+        }
+        mvc.perform(multipart("/api/v1/rag/macro/pdf").file(new MockMultipartFile("file", "scan.pdf", "application/pdf", blank))
+                        .param("documentType", "FISCAL").param("publishedOn", today))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.title").value("Invalid PDF"));
+
+        mvc.perform(get("/api/v1/rag/macro/documents").param("documentType", "VIDEO"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/rag/macro/documents").param("country", "XX"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/rag/macro/documents").param("country", "US").param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.limit").value(5))
+                .andExpect(jsonPath("$.documents").isArray());
+        mvc.perform(get("/api/v1/rag/macro/search").param("q", " "))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test
     void rejectsWrongPdfUploads() throws Exception {
         byte[] text = "not a pdf".getBytes(StandardCharsets.UTF_8);
@@ -261,7 +400,16 @@ class RagControllerTest {
                 .andExpect(jsonPath("$.maxRangeDays").value(366))
                 .andExpect(jsonPath("$.newsMaxArticles").value(60))
                 .andExpect(jsonPath("$.tavilyEnabled").doesNotExist())
-                .andExpect(jsonPath("$.stored.chunks").isNumber());
+                .andExpect(jsonPath("$.stored.chunks").isNumber())
+                .andExpect(jsonPath("$.stored.macroDocuments").isNumber())
+                .andExpect(jsonPath("$.macroCountries.length()").value(3))
+                .andExpect(jsonPath("$.macroCountries[0].code").value("ID"))
+                .andExpect(jsonPath("$.macroCountries[0].available").value(true))
+                .andExpect(jsonPath("$.macroCountries[1].code").value("US"))
+                .andExpect(jsonPath("$.macroCountries[1].available").value(false))
+                .andExpect(jsonPath("$.macroCountries[2].available").value(false))
+                .andExpect(jsonPath("$.macroDocumentTypes[0].code").value("MONETARY_POLICY"))
+                .andExpect(jsonPath("$.macroDocumentTypes[0].label").value("Monetary policy"));
     }
 
     @Test

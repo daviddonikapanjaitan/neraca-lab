@@ -434,8 +434,9 @@ function Research({ report, active }: { report: Report; active: boolean }) {
           <BookOpenTextIcon className="size-4 text-primary" /> Research brief
         </CardTitle>
         <CardDescription>
-          The research agent read the stored history of the macro series, commodities, currencies and indexes (ReAct
-          with tools); refs point to the tool results it read (T1, T2, ...).
+          The research agent read the stored history of the macro series, commodities, currencies and indexes and
+          searched the country&apos;s macro documents published by the as-of date (ReAct with tools); refs point to the
+          tool results it read (T1, T2, ...) and the document excerpts (D1, D2, ...).
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
@@ -520,6 +521,22 @@ function Research({ report, active }: { report: Report; active: boolean }) {
                 </TableBody>
               </Table>
             </div>
+          </details>
+        )}
+        {research?.documents && research.documents.length > 0 && (
+          <details className="rounded-lg border text-xs">
+            <summary className="cursor-pointer px-3 py-1.5 font-medium text-muted-foreground">
+              Macro documents the research could search ({research.documents.length})
+            </summary>
+            <ul className="flex flex-col gap-1 border-t px-3 py-2">
+              {research.documents.map((d) => (
+                <li key={d.documentId}>
+                  <span className="tabular-nums text-muted-foreground">{formatDate(d.publishedOn)}</span>{" "}
+                  {d.issuer && <span className="font-medium">{d.issuer}: </span>}
+                  {d.title} <span className="text-muted-foreground">({d.documentTypeLabel})</span>
+                </li>
+              ))}
+            </ul>
           </details>
         )}
         {research && research.trace.length > 0 && (
@@ -612,7 +629,15 @@ function MarketsSnapshot({ report }: { report: Report }) {
         </CardTitle>
         <CardDescription>{markets?.termsOfTrade.summary ?? "No commodity or currency prices were stored."}</CardDescription>
       </CardHeader>
-      <CardContent className="px-0">
+      <CardContent className="space-y-3 px-0">
+        {markets?.regionalCurrencies && (
+          <p className="px-4 text-sm leading-relaxed">
+            <span className={cn("font-medium", TONE_CLASS[markets.regionalCurrencies.tone])}>
+              The rupiah against its Asian peers:
+            </span>{" "}
+            {markets.regionalCurrencies.summary}
+          </p>
+        )}
         {rows.length > 0 && (
           <div className="overflow-x-auto">
             <Table>

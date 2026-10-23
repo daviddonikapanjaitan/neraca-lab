@@ -1,7 +1,15 @@
 // AI macro analysis of a country (docs/v1_docs/MACRO_ANALYSIS_DOCS.md): GET /api/v1/macro/analyses and its report.
 
 import { EMPTY } from "@/lib/format"
-import { MACRO_ANALYSIS_HREF, type MacroCountry, type MarketRow, type MacroIndexRow, type MacroPreset, type Tone } from "@/lib/macro"
+import {
+  MACRO_ANALYSIS_HREF,
+  type MacroCountry,
+  type MarketRow,
+  type MacroIndexRow,
+  type MacroPreset,
+  type RegionalCurrencies,
+  type Tone,
+} from "@/lib/macro"
 import type { IngestionJobCreator, IngestionJobStatus, ScreeningOption, ScreeningUsage } from "@/lib/types"
 
 export type MacroAgentCode = "TUDOR_JONES" | "DRUCKENMILLER" | "SOROS" | "DALIO"
@@ -25,7 +33,14 @@ export interface MacroAnalysisOptions {
   researchModel: string
   agentModel: string
   synthesisModel: string
-  data: { macroSeries: number; macroSeriesTotal: number; commodities: number; currencyPairs: number }
+  data: {
+    macroSeries: number
+    macroSeriesTotal: number
+    commodities: number
+    currencyPairs: number
+    /** macro documents (RAG) stored per country code; a country without any is absent */
+    macroDocuments: Record<string, number>
+  }
 }
 
 /** One macro analysis as listed (and the head of the report). */
@@ -106,10 +121,26 @@ export interface MacroBriefView {
   evidence: { ref: string; fact: string }[]
 }
 
+/** A macro document of the country the research agent could search. */
+export interface MacroResearchDocument {
+  documentId: number
+  title: string
+  issuer: string | null
+  documentType: string
+  documentTypeLabel: string
+  /** publication date (yyyy-mm-dd) */
+  publishedOn: string | null
+  pages: number | null
+  chunks: number
+}
+
 export interface MacroResearch {
   brief: MacroBriefView | null
   trace: { iteration: number; thought: string | null; tools: string[] }[]
+  /** tool results: T1, T2, ... (history, correlation), D1, D2, ... (searchDocuments: excerpts of macro documents) */
   retrieved: { ref: string; tool: string; arguments: string; summary: string }[]
+  /** the country's macro documents published by the as-of date, which the research could search (older reports: absent) */
+  documents?: MacroResearchDocument[]
   modelUsed: boolean
   droppedRefs: number
   note: string | null
@@ -151,6 +182,8 @@ export interface MacroAnalysisContext {
     termsOfTrade: { state: string | null; score: number | null; signals: number; summary: string }
     commodities: Omit<MarketRow, "points">[]
     currencyPairs: Omit<MarketRow, "points">[]
+    /** the rupiah against its Asian peers; absent in analyses of before 2026-10-23 */
+    regionalCurrencies?: RegionalCurrencies | null
   }
   rulesVersion: string
 }

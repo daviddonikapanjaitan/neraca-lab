@@ -58,6 +58,8 @@ const header = {
   frequency: frequency.optional(),
   /** a currency pair or commodity: "Yahoo Finance IDR=X", "World Bank Pink Sheet, Coal, Australian" */
   source: z.string().nullable().optional(),
+  /** a currency pair or commodity: its tick (EUR/USD 0.0001), which sets the decimals of the chart; null otherwise */
+  tickSize: nullableNum.optional(),
 }
 
 export const ohlcvSchema = z.object({

@@ -3,7 +3,9 @@ package com.neracalab.backend.macro.analysis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,17 +18,22 @@ import com.neracalab.backend.macro.analysis.MacroSynthesisAgent.MacroSynthesis;
 import com.neracalab.backend.macro.analysis.MacroSynthesisAgent.SectorTilt;
 import com.neracalab.backend.macro.analysis.MacroValidator.Facts;
 import com.neracalab.backend.macro.analysis.MacroValidator.Issue;
+import com.neracalab.backend.macro.outlook.MacroOutlookService;
+import com.neracalab.backend.rag.MacroDocumentType;
+import com.neracalab.backend.rag.RagRepository.MacroDocumentRow;
+import com.neracalab.backend.rag.RagRepository.MacroHit;
 import com.neracalab.backend.technical.engine.Candle;
 import com.neracalab.backend.technical.engine.MarketContext.Observation;
 
 /**
  * The rules of the AI macro analysis without a model: the tools over the stored histories (point in time, correlation,
- * limits), the validator, the agents' priors and scores, the action table and the synthesis bounds.
+ * limits) and the country's macro documents (refs, limits, offered only when there are documents), the validator, the
+ * agents' priors and scores, the action table and the synthesis bounds.
  */
 class MacroAnalysisRulesTest {
 
     private static final LocalDate AS_OF = LocalDate.of(2026, 10, 21);
-    private static final MacroAnalysisProperties PROPERTIES = new MacroAnalysisProperties(0.2, 0.1, 4, 4, 36, 1000, 0.6, 0.2);
+    private static final MacroAnalysisProperties PROPERTIES = new MacroAnalysisProperties(0.2, 0.1, 4, 4, 36, 2, 3, 300, 0.02, 1000, 0.6, 0.2);
 
     // ------------------------------------------------------------------ tools
 
@@ -111,11 +118,160 @@ class MacroAnalysisRulesTest {
         assertThatThrownBy(() -> tools.history("USDIDR", 12)).hasMessageContaining("limit reached");
     }
 
+    /**
+     * The currency pairs added on 2026-10-23 are read by the research agent as the model writes them: the rupiah against
+     * the yuan ("usd/cny"), and AUD/JPY's history (risk appetite).
+     */
+    @Test
+    void theRupiahIsReadAgainstTheYuanAndRiskAppetiteFromAudJpy() {
+        Map<String, List<Candle>> prices = new LinkedHashMap<>();
+        List<Candle> idr = new ArrayList<>();
+        List<Candle> cny = new ArrayList<>();
+        List<Candle> audJpy = new ArrayList<>();
+        double r = 15000;
+        double y = 7.0;
+        double a = 100;
+        for (int m = 0; m < 30; m++) {
+            LocalDate d = LocalDate.of(2024, 4, 28).plusMonths(m);
+            double move = m % 3 == 0 ? 0.02 : -0.01;
+            r *= 1 + move;
+            y *= 1 + move / 2;          // the yuan moves with the rupiah, half as far
+            a *= 1 - move * 3;          // risk appetite falls when Asian currencies weaken
+            idr.add(Candle.daily(d, r, r, r, r, r, 0));
+            cny.add(Candle.daily(d, y, y, y, y, y, 0));
+            audJpy.add(Candle.daily(d, a, a, a, a, a, 0));
+        }
+        prices.put("USDIDR", idr);
+        prices.put("USDCNY", cny);
+        prices.put("AUDJPY", audJpy);
+        MacroTools tools = tools(Map.of(), prices);
+        Map<String, Object> together = tools.correlation("usd/idr", "USD/CNY", 24);
+        assertThat(together.get("a")).isEqualTo("USDIDR");
+        assertThat(together.get("b")).isEqualTo("USDCNY");
+        assertThat((Double) together.get("r")).isGreaterThan(0.95);
+        Map<String, Object> risk = tools.history("aud/jpy", 12);
+        assertThat(risk.get("code")).isEqualTo("AUDJPY");
+        assertThat(risk.get("months")).isEqualTo(12);
+        assertThat(tools.catalog()).containsKeys("USDIDR", "USDCNY", "AUDJPY");
+    }
+
     private static MacroTools tools(Map<String, List<Observation>> macro, Map<String, List<Candle>> prices) {
         Map<String, MacroTools.Meta> meta = new LinkedHashMap<>();
         macro.keySet().forEach(k -> meta.put(k, new MacroTools.Meta(k, "%", true, false)));
         prices.keySet().forEach(k -> meta.put(k, new MacroTools.Meta(k, "USD", false, false)));
         return new MacroTools(macro, prices, meta, AS_OF, PROPERTIES);
+    }
+
+    // ------------------------------------------------------------------ macro documents (RAG)
+
+    private static final Instant AUGUST_REVIEW = LocalDate.of(2026, 8, 20).atStartOfDay(ZoneId.of("Asia/Jakarta"))
+            .toInstant();
+
+    /** A document search over fixed hits (what the research agent may read of the country's macro documents). */
+    private static MacroTools.DocumentSearch documents(List<MacroDocumentRow> rows, List<MacroHit> hits) {
+        return new MacroTools.DocumentSearch() {
+            @Override
+            public List<MacroDocumentRow> documents() {
+                return rows;
+            }
+
+            @Override
+            public List<MacroHit> search(String query) {
+                return hits;
+            }
+        };
+    }
+
+    private static MacroDocumentRow review() {
+        return new MacroDocumentRow(1, "ID", "Monetary Policy Review August 2026", "Bank Indonesia",
+                MacroDocumentType.MONETARY_POLICY, AUGUST_REVIEW, "Monetary-Policy-Review-August-2026.pdf", 20, 30_000,
+                25, "test-model", AUGUST_REVIEW);
+    }
+
+    private static MacroHit hit(long chunkId, int from, int to, String text) {
+        return new MacroHit(chunkId, 1, "ID", "Monetary Policy Review August 2026", "Bank Indonesia",
+                MacroDocumentType.MONETARY_POLICY, AUGUST_REVIEW, "Monetary-Policy-Review-August-2026.pdf", from, to,
+                text, 0.1 * chunkId);
+    }
+
+    @Test
+    void documentSearchGivesEachExcerptAStableRefAndHasItsOwnLimit() {
+        MacroTools tools = new MacroTools(Map.of(), Map.of(), Map.of(), AS_OF, PROPERTIES, documents(List.of(review()),
+                List.of(hit(11, 3, 4, "Bank Indonesia   held the BI-Rate\nat 5.75% to keep the rupiah stable."),
+                        hit(12, 7, 7, "x".repeat(400)))));
+        assertThat(tools.hasDocuments()).isTrue();
+        List<Map<String, Object>> first = tools.searchDocuments(" BI   forward guidance ");
+        assertThat(first).extracting(m -> m.get("ref")).containsExactly("D1", "D2");
+        assertThat(first.getFirst()).containsEntry("issuer", "Bank Indonesia")
+                .containsEntry("published", "2026-08-20")
+                .containsEntry("pages", "pp. 3-4")
+                .containsEntry("type", "Monetary policy")
+                .containsEntry("excerpt", "Bank Indonesia held the BI-Rate at 5.75% to keep the rupiah stable.");
+        assertThat(first.get(1)).containsEntry("pages", "p. 7");
+        assertThat((String) first.get(1).get("excerpt")).hasSize(303);     // excerpt-chars 300, then "..."
+        assertThat(tools.retrieved().getFirst()).satisfies(r -> {
+            assertThat(r.tool()).isEqualTo("searchDocuments");
+            assertThat(r.arguments()).isEqualTo("BI forward guidance");
+            assertThat(r.summary()).isEqualTo("Bank Indonesia - Monetary Policy Review August 2026 (2026-08-20, "
+                    + "pp. 3-4): Bank Indonesia held the BI-Rate at 5.75% to keep the rupiah stable.");
+        });
+
+        // the same chunks found again keep their refs; the same query is not searched twice
+        assertThat(tools.searchDocuments("rupiah outlook")).extracting(m -> m.get("ref")).containsExactly("D1", "D2");
+        assertThat(tools.retrieved()).hasSize(2);
+        assertThatThrownBy(() -> tools.searchDocuments("bi forward GUIDANCE")).hasMessageContaining("searched already");
+        // max-document-searches 2: the third is refused; it is not counted against the history calls
+        assertThatThrownBy(() -> tools.searchDocuments("fiscal deficit")).hasMessageContaining("Document search limit reached (2)");
+        assertThat(tools.calls()).isZero();
+        assertThat(tools.refs()).containsExactlyInAnyOrder("D1", "D2");
+        assertThat(MacroResearchAgent.offered(MacroResearchAgent.catalog(tools), tools, PROPERTIES))
+                .extracting(cb -> cb.getToolDefinition().name())
+                .containsExactlyInAnyOrder("history", "correlation");
+        assertThatThrownBy(() -> tools.searchDocuments("  ")).hasMessageContaining("1 to 300 characters");
+    }
+
+    @Test
+    void theDocumentSearchIsOfferedOnlyWhenTheCountryHasDocuments() {
+        MacroTools with = new MacroTools(Map.of(), Map.of(), Map.of(), AS_OF, PROPERTIES,
+                documents(List.of(review()), List.of()));
+        assertThat(MacroResearchAgent.offered(MacroResearchAgent.catalog(with), with, PROPERTIES))
+                .extracting(cb -> cb.getToolDefinition().name())
+                .containsExactlyInAnyOrder("history", "correlation", "searchDocuments");
+        assertThat(MacroResearchAgent.subjectBlock("Indonesia (IHSG)", "As of 2026-10-21.", with, PROPERTIES))
+                .contains("Macro documents searchDocuments can read (1, published by the as-of date, latest first):")
+                .contains("- 2026-08-20 Bank Indonesia: Monetary Policy Review August 2026 (monetary policy)")
+                .contains("4 history / correlation calls, 2 document searches");
+
+        for (MacroTools none : List.of(new MacroTools(Map.of(), Map.of(), Map.of(), AS_OF, PROPERTIES),
+                new MacroTools(Map.of(), Map.of(), Map.of(), AS_OF, PROPERTIES, documents(List.of(), List.of())))) {
+            assertThat(none.hasDocuments()).isFalse();
+            assertThat(MacroResearchAgent.catalog(none)).containsOnlyKeys("history", "correlation");
+            assertThatThrownBy(() -> none.searchDocuments("BI guidance")).hasMessageContaining("No macro documents");
+            assertThat(MacroResearchAgent.subjectBlock("Indonesia (IHSG)", "As of 2026-10-21.", none, PROPERTIES))
+                    .contains("Macro documents: none stored for this country by the as-of date")
+                    .doesNotContain("document searches");
+        }
+    }
+
+    @Test
+    void theReportSaysWhichMacroDocumentsWereNotRead() {
+        MacroOutlookService.Choice indonesia = new MacroOutlookService.Choice("ID", "Indonesia", "IDX", "IHSG",
+                "Jakarta Composite Index");
+        assertThat(MacroAnalysisService.documentNotes(indonesia, AS_OF, 0, 0)).singleElement().asString()
+                .startsWith("No macro documents of Indonesia are stored");
+        assertThat(MacroAnalysisService.documentNotes(indonesia, AS_OF, 0, 2)).singleElement().asString()
+                .isEqualTo("None of the 2 macro documents of Indonesia was published by 2026-10-21: the research read "
+                        + "the stored series only.");
+        assertThat(MacroAnalysisService.documentNotes(indonesia, AS_OF, 3, 4)).singleElement().asString()
+                .isEqualTo("1 of the 4 macro documents of Indonesia were published after 2026-10-21 and were not read "
+                        + "(point in time).");
+        assertThat(MacroAnalysisService.documentNotes(indonesia, AS_OF, 4, 4)).isEmpty();
+        // the first instant after the as-of date in Jakarta (17:00 UTC the day before)
+        assertThat(MacroDocumentSearch.publishedBefore(AS_OF)).isEqualTo(Instant.parse("2026-10-21T17:00:00Z"));
+        assertThat(MacroAnalysisService.documentList(List.of(review()))).singleElement().satisfies(d -> {
+            assertThat(d).containsEntry("publishedOn", "2026-08-20").containsEntry("documentType", "MONETARY_POLICY")
+                    .containsEntry("documentTypeLabel", "Monetary policy").containsEntry("issuer", "Bank Indonesia");
+        });
     }
 
     // ------------------------------------------------------------------ validator

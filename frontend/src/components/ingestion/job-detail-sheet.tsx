@@ -76,9 +76,18 @@ interface PriceResult {
   } | null
 }
 
-/** Fields of the RAG PDF result (RagIngestionService.PdfResult). */
+/**
+ * Fields of the RAG PDF result (RagIngestionService.PdfResult); a macro PDF of a country (MacroPdfResult) also has
+ * its country, title, issuer, type and publication date.
+ */
 interface RagPdfResult {
   documentId?: number
+  country?: string
+  countryName?: string
+  title?: string
+  issuer?: string | null
+  documentType?: string
+  publishedOn?: string
   fileName?: string
   pages?: number
   pagesWithText?: number
@@ -248,9 +257,24 @@ function MacroSummary({ result }: { result: MacroResult }) {
   )
 }
 
+/** Exchange of a macro PDF's job (RagQueue.MACRO_EXCHANGE); its ticker is the country. */
+const MACRO_DOCUMENT_EXCHANGE = "MACRO"
+
+function isMacroDocumentJob(job: { type: string; exchange: string | null }): boolean {
+  return job.type === "RAG_PDF" && job.exchange === MACRO_DOCUMENT_EXCHANGE
+}
+
 function RagPdfSummary({ result }: { result: RagPdfResult }) {
   return (
     <dl className="flex flex-col gap-2">
+      {result.country && (
+        <>
+          <Field label="Title">{result.title}</Field>
+          <Field label="Issuer">{result.issuer}</Field>
+          <Field label="Type">{result.documentType?.replaceAll("_", " ").toLowerCase()}</Field>
+          <Field label="Published">{formatDate(result.publishedOn)}</Field>
+        </>
+      )}
       <Field label="Pages">
         {count(result.pages)} ({count(result.pagesWithText)} with text)
       </Field>
@@ -387,7 +411,12 @@ export function JobDetailSheet({
               )}
 
               <dl className="flex flex-col gap-2">
-                {shown.ticker && (
+                {shown.ticker && isMacroDocumentJob(shown) && (
+                  <Field label="Country">
+                    {(shown.result as RagPdfResult | null)?.countryName ?? shown.ticker} (macro document)
+                  </Field>
+                )}
+                {shown.ticker && !isMacroDocumentJob(shown) && (
                   <Field label="Company">
                     <span className="font-mono">{shown.exchange} · {shown.ticker}</span>
                   </Field>
@@ -491,6 +520,7 @@ export function JobDetailSheet({
               )}
               {shown.type !== "MACRO" &&
                 shown.type !== "MACRO_ANALYSIS" &&
+                !isMacroDocumentJob(shown) &&
                 shown.ticker &&
                 shown.exchange &&
                 !isActive(shown.status) &&

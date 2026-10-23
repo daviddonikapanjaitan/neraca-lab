@@ -20,7 +20,7 @@ public interface ModelCallListener {
 
     /**
      * @param stage      what the call was for ({@link #PLAN}, {@link #EXECUTE}, {@link #REVIEW}, {@link #FULL_TEXT})
-     * @param model      the model asked (the id of the request, e.g. deepseek/deepseek-v4-flash-0731)
+     * @param model      the model asked (the id of the request, e.g. deepseek/deepseek-v4.1-flash-1017)
      * @param response   the answer; {@code null} when the attempt failed
      * @param durationMs how long the attempt took
      * @param error      why the attempt failed; {@code null} when it answered

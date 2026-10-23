@@ -3,6 +3,7 @@ package com.neracalab.backend.rag;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,12 +25,14 @@ import com.neracalab.backend.screening.news.NewsParsers.ArticleText;
 
 /**
  * Builds the RAG vector store: the text of a PDF or of news articles is chunked ({@link TextChunker}), embedded
- * ({@link EmbeddingClient}) and stored with its company ({@link RagRepository}).
+ * ({@link EmbeddingClient}) and stored with its company, or a macro PDF with its country ({@link RagRepository}).
  */
 @Service
 public class RagIngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(RagIngestionService.class);
+    /** The publication date of a macro document is stored as 00:00 Jakarta time. */
+    static final ZoneId JAKARTA = ZoneId.of("Asia/Jakarta");
 
     /** Outcome of a PDF: what was stored. */
     public record PdfResult(long documentId, String fileName, int pages, int pagesWithText, int characters, int chunks,
@@ -86,8 +89,66 @@ public class RagIngestionService {
         return new PdfResult(id, fileName, pages.size(), withText, characters, chunks.size(), embeddings.model());
     }
 
+    // ------------------------------------------------------------------ macro PDF of a country
+
+    /**
+     * What a macro PDF is, as given at the upload.
+     *
+     * @param publishedOn publication date of the document (not the period it covers)
+     * @param issuer      who published it; null when not given
+     */
+    public record MacroMeta(String country, String countryName, String title, String issuer,
+                            MacroDocumentType documentType, LocalDate publishedOn) {
+    }
+
+    /** Outcome of a macro PDF: what was stored (the job result). */
+    public record MacroPdfResult(long documentId, String country, String countryName, String title, String issuer,
+                                 MacroDocumentType documentType, LocalDate publishedOn, String fileName, int pages,
+                                 int pagesWithText, int characters, int chunks, String embeddingModel) {
+    }
+
+    /**
+     * Chunks, embeds and stores a macro PDF of a country (the same file again for the country replaces its document
+     * and its details). Each chunk is embedded with the document's issuer, title and date in front of it, so a search
+     * for "Bank Indonesia guidance" also finds a page that never names its publisher; the stored text is the chunk
+     * alone.
+     */
+    public MacroPdfResult ingestMacroPdf(UUID jobId, MacroMeta meta, long fileId, String fileName, String checksum,
+                                         byte[] content, Consumer<String> progress) {
+        progress.accept("Reading the text of " + fileName);
+        List<PdfText.Page> pages = PdfText.pages(content);
+        List<TextChunker.Part> parts = pages.stream().map(p -> new TextChunker.Part(p.text(), p.number())).toList();
+        List<TextChunker.Chunk> chunks = chunker().chunk(parts);
+        if (chunks.isEmpty()) {
+            throw new PdfText.PdfException("The PDF has no text to index");
+        }
+        int characters = chunks.stream().mapToInt(c -> c.text().length()).sum();
+        progress.accept("Embedding " + chunks.size() + " chunks of " + pages.size() + " pages (" + embeddings.model() + ")");
+        String header = macroHeader(meta);
+        List<float[]> vectors = embeddings.embed(chunks.stream().map(c -> header + c.text()).toList());
+        progress.accept("Storing " + chunks.size() + " chunks in the vector store (" + meta.countryName() + ")");
+        Instant published = meta.publishedOn().atStartOfDay(JAKARTA).toInstant();
+        long id = repository.storeMacro(new RagRepository.NewMacroDocument(meta.country(), checksum, meta.title(),
+                meta.issuer(), meta.documentType(), published, fileId, fileName, pages.size(), characters,
+                embeddings.model(), jobId), chunks, vectors);
+        int withText = (int) pages.stream().filter(p -> !p.text().isBlank()).count();
+        return new MacroPdfResult(id, meta.country(), meta.countryName(), meta.title(), meta.issuer(), meta.documentType(),
+                meta.publishedOn(), fileName, pages.size(), withText, characters, chunks.size(), embeddings.model());
+    }
+
+    /** "Bank Indonesia - Monetary Policy Review August 2026 (monetary policy, Indonesia, 2026-08-20)\n" */
+    static String macroHeader(MacroMeta meta) {
+        StringBuilder b = new StringBuilder();
+        if (meta.issuer() != null && !meta.issuer().isBlank()) {
+            b.append(meta.issuer().trim()).append(" - ");
+        }
+        b.append(meta.title()).append(" (").append(meta.documentType().label().toLowerCase(java.util.Locale.ROOT))
+                .append(", ").append(meta.countryName()).append(", ").append(meta.publishedOn()).append(")\n");
+        return b.toString();
+    }
+
     /** "FinancialStatement-2025-Tahunan-HRTA.pdf" -> "FinancialStatement-2025-Tahunan-HRTA" */
-    static String title(String fileName) {
+    public static String title(String fileName) {
         return fileName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf") ? fileName.substring(0, fileName.length() - 4) : fileName;
     }
 

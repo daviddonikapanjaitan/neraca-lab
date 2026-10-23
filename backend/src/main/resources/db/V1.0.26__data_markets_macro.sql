@@ -41,6 +41,16 @@
 --                             of wood pulp (BLS WPU0911, 1982 = 100): an index, not a price
 --   Bauxite                   no free source: no exchange trades it, the Pink Sheet and the IMF have no bauxite price,
 --                             and FRED's producer price index of bauxite (PCU2122992122992) stopped in 1990. Not added
+-- Currency pairs added on 2026-10-23 (every source checked that day; Yahoo Finance chart API, London close):
+--   CNY=X (2001-), AUDJPY=X, INR=X, PHP=X, MYR=X, KRW=X and EURUSD=X (2003-12-). max_spike was set on each whole
+--                             history with the cleaner, to drop only prints that jump away and come straight back and
+--                             never a real day: USD/CNY 2 % (a managed currency; 5.863 on 2011-07-18, 7.1587 on
+--                             2023-10-30), USD/INR 3.5 % (the stale 52.493 of 2012-01-27 and -31; lower would drop the
+--                             real 49.388 between them), USD/PHP 2.7 % (2016-11-17, 2017-03-06, 2021-12-13, 2025-06-13;
+--                             2012-01-30's 42.619 between two stale 43.714 is kept), USD/MYR 4 % (four prints of
+--                             2006 - 2007), USD/KRW 6 % (none: the real 1,160 of 2008-09-16, Lehman week, comes back
+--                             5.6 %), EUR/USD 4 % (five prints of 2008, e.g. 1.4918 between 1.2717 and 1.2926 on
+--                             2008-12-08), AUD/JPY 10 % (none: its real October 2008 crash and rebounds exceed 9 %)
 --   FRED                      fredgraph.csv?id=... (no API key)
 --   Bank Indonesia            BI-Rate and inflation pages (their "Download" export), SEKI tables (.xls)
 --   CNBC                      ID10Y-ID daily bars (2011-)
@@ -58,6 +68,20 @@ VALUES
      'US dollar in Indonesian rupiah (Yahoo Finance IDR=X, London close)'),
     ('USDJPY',   'FOREX',     'USD/JPY',             'yahoo',     'JPY=X',            'JPY', 'JPY per USD',          'DAILY',   0.001, 0.05, DATE '1996-01-01', 20,
      'US dollar in Japanese yen (Yahoo Finance JPY=X, London close)'),
+    ('USDCNY',   'FOREX',     'USD/CNY',             'yahoo',     'CNY=X',            'CNY', 'CNY per USD',          'DAILY',   0.0001, 0.02, DATE '2001-01-01', 30,
+     'US dollar in Chinese yuan, onshore (Yahoo Finance CNY=X, London close)'),
+    ('USDMYR',   'FOREX',     'USD/MYR',             'yahoo',     'MYR=X',            'MYR', 'MYR per USD',          'DAILY',   0.0001, 0.04, DATE '2003-12-01', 40,
+     'US dollar in Malaysian ringgit (Yahoo Finance MYR=X, London close)'),
+    ('USDPHP',   'FOREX',     'USD/PHP',             'yahoo',     'PHP=X',            'PHP', 'PHP per USD',          'DAILY',   0.001, 0.027, DATE '2003-12-01', 50,
+     'US dollar in Philippine peso (Yahoo Finance PHP=X, London close)'),
+    ('USDINR',   'FOREX',     'USD/INR',             'yahoo',     'INR=X',            'INR', 'INR per USD',          'DAILY',   0.001, 0.035, DATE '2003-12-01', 60,
+     'US dollar in Indian rupee (Yahoo Finance INR=X, London close)'),
+    ('USDKRW',   'FOREX',     'USD/KRW',             'yahoo',     'KRW=X',            'KRW', 'KRW per USD',          'DAILY',   0.01,  0.06, DATE '2003-12-01', 70,
+     'US dollar in South Korean won (Yahoo Finance KRW=X, London close)'),
+    ('EURUSD',   'FOREX',     'EUR/USD',             'yahoo',     'EURUSD=X',         'USD', 'USD per EUR',          'DAILY',   0.0001, 0.04, DATE '2003-12-01', 80,
+     'Euro in US dollars (Yahoo Finance EURUSD=X, London close): a rise is a weaker dollar'),
+    ('AUDJPY',   'FOREX',     'AUD/JPY',             'yahoo',     'AUDJPY=X',         'JPY', 'JPY per AUD',          'DAILY',   0.001, 0.10, DATE '2003-12-01', 90,
+     'Australian dollar in Japanese yen (Yahoo Finance AUDJPY=X, London close): a gauge of risk appetite and carry trades'),
     -- energy
     ('BRENT',        'COMMODITY', 'Crude Oil (Brent)',       'yahoo',     'BZ=F',             'USD', 'USD per barrel',       'DAILY',   0.01,   0.15, DATE '2007-01-01', 10,
      'Brent crude oil front-month future (ICE / NYMEX BZ=F); the benchmark of Indonesian crude (ICP)'),

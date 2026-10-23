@@ -134,6 +134,21 @@ export interface MarketBoard {
     unfavourable: string[]
     summary: string
   }
+  /** the rupiah against its Asian peers over 3 months; absent in answers of before 2026-10-23 */
+  regionalCurrencies?: RegionalCurrencies
+}
+
+/** USD/IDR's 3-month change beside the median of USD/CNY, USD/MYR, USD/PHP, USD/INR and USD/KRW (MarketBoard). */
+export interface RegionalCurrencies {
+  /** UNDERPERFORMING: the rupiah weaker than the region (a pressure of its own); null: too few current pairs */
+  state: "UNDERPERFORMING" | "IN_LINE" | "OUTPERFORMING" | null
+  tone: Tone
+  rupiah3mPct: number | null
+  peersMedian3mPct: number | null
+  /** the rupiah's change minus the peers' median, in points (positive: weaker than the region) */
+  gapPts: number | null
+  peers: { code: string; name: string; change3mPct: number }[]
+  summary: string
 }
 
 export interface Condition {

@@ -53,11 +53,11 @@ start), then change its password in Admin Center > User Management.
 | [`SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md)       | AI stock screening: daily ETL, Stage 1, agents (tool calling, ReAct, Reflection, Reflexion), cost, report, PDF |
 | [`ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md)         | AI analysis of one stock: company data, research agent over its documents (RAG), agents, cost, report, PDF |
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
-| [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion, chunking, embeddings, search API |
+| [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion of the companies, macro PDFs of a country, chunking, embeddings, search API |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
-| [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex and indexes, the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
+| [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex, indexes and the macro documents (RAG), the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
 | [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 3, technical only) the future technical agents read |
 | [`macro.md`](macro.md)                                      | requirements of the macro data (Druckenmiller, Tudor Jones) and how they were implemented |
 | [`commodities.md`](commodities.md)                          | which further commodities matter for screening IDX stocks (nickel, copper, tin, HBA, ...): insight, not built yet |
@@ -116,6 +116,7 @@ neraca_lab/
 │               ├── V1.0.23__schema_technical.sql  (technical analysis: IHSG, events, macro, snapshots, chart settings)
 │               ├── V1.0.25__schema_markets_macro.sql (Forex / commodity bars, macro catalog, release dates)
 │               ├── V1.0.27__schema_macro_analysis.sql (AI macro analysis: runs, agent scores, lessons, llm_usage)
+│               ├── V1.0.28__schema_rag_macro.sql  (macro documents of a country in the RAG vector store)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -124,13 +125,14 @@ neraca_lab/
 │               ├── V1.0.22__data_TUGU_shares.sql  (TUGU's 1:2 stock split of 2023-05-24, no filing restates it)
 │               ├── V1.0.24__data_BACH_shares.sql  (BACH share count after its IPO of 2026-07-08)
 │               ├── V1.0.6__data_metrics_valuation.sql
-│               └── V1.0.26__data_markets_macro.sql (catalog: 28 instruments, 25 macro series)
+│               └── V1.0.26__data_markets_macro.sql (catalog: 35 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
 ├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
 ├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
+├── data/macro/<country>/        macro PDFs of a country (indonesia/: Bank Indonesia, Ministry of Finance) for the macro upload
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
 │   ├── pdf/                     the same filings as PDF (upload them on Ingestion > PDF Documents (RAG))
 │   └── price/                   daily prices (<TICKER>.JK_daily_yahoo.csv)
@@ -190,6 +192,11 @@ neraca_lab/
 │                                P&L by nature, no gross profit), KLBF, MAPI, SCMA (2022 .. 2025 annual, 2026-II),
 │                                MBMA (USD; 2023 .. 2025 annual, 2026-II) - MDKA's and PGAS's 2024 xlsx are Excel
 │                                lock files (165 bytes), not workbooks, and are not committed
+│                                ABMM (USD; also pdf/), BJBR (bank), BWPT, IRSX, KETR (Infrastructure Industry
+│                                taxonomy), LPPF (FY2023 leaves rows off the face of its balance sheet), MNCN (P&L by
+│                                nature, no gross profit), RMKE (2022 .. 2025 annual, 2026-II - RMKE's 2024 xlsx is an
+│                                Excel lock file and is not committed), CYBR (2023 .. 2025 annual, 2026-II), RANS
+│                                (2026-II); GGRM's pdf/ (2022 .. 2025 annual, 2026-II)
 │                                xlsx: load them with the upload (Ingestion page)
 └── docs/v1_docs/                DOCKER_DOCS.md, FRONTEND_DOCS.md, COMPANY_API_DOCS.md,
                                  AI_INGESTION_DOCS.md, PRICE_INGESTION_DOCS.md,
@@ -280,7 +287,7 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 
 When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
 statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
-extraction** takes over: its own model (Claude Haiku 5.5, `neracalab.ingestion.fallback.model` /
+extraction** takes over: its own model (Claude Sonnet 5.5, `neracalab.ingestion.fallback.model` /
 `INGESTION_FALLBACK_MODEL`; the standard extraction stays on `OPENAI_MODEL`, DeepSeek) gets the text of the
 whole workbook - every sheet of the file, whatever its taxonomy - and **decides every value that is not stored
 yet** - which rows make up every database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
@@ -298,7 +305,7 @@ empty on the face is shown to the model with the total of the filing's revenue b
 is checked against the filing: rows below operating profit counted in it (ISAT's 'Other gains (losses)') and, by nature,
 operating expenses other than the expense rows it subtracts (ISAT FY2023, PGEO FY2023) are shown to the model when the
 corrected figure and the rows below it give the filed profit before tax - by nature, where none of the model's rows do,
-the template's own figures - and the correction is used when the model keeps its answer. The result is saved
+the template's own figures - and the correction is used when the model keeps its answer. In a filing by nature, rows the model names as cost of revenue that its operating income subtracts are counted in operating expenses (MNCN's 'Program and broadcasting expenses'). The result is saved
 and verified by the standard steps (`neracalab.ingestion.fallback.*`). Every upload that was refused, taken
 over, INCOMPLETE or FAILED is recorded in the table **`ingestion_error`** - the work list of Claude Code, with
 `fixed_by_claude_code` set once the cause is fixed:
@@ -313,7 +320,7 @@ an error and leaves no row. A row of the error log names the model of the full-t
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
-review (DeepSeek) and the full-text extraction's answers (Haiku) - is a row of `llm_usage` tied to the job
+review (DeepSeek) and the full-text extraction's answers (Sonnet) - is a row of `llm_usage` tied to the job
 (`llm_usage.job_id`), with its stage, model, tokens and the cost OpenRouter reports, as for a screening run.
 The IDX XBRL Ingestion page shows the cost of each job in the jobs table and the breakdown per stage and model
 under "Model cost" in the job details; `GET /api/v1/ingestions` returns it as `cost`,
@@ -444,7 +451,7 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/prices/ingestions                 
 | `GET /api/v1/prices/status?exchange=IDX`                      | how far the stored prices reach: last completed trading day, companies up to date / behind / without prices, the IHSG index            |
 | `POST /api/v1/prices/updates?exchange=IDX[&index=true]`       | **"Update all companies to today"**: queues every active company whose prices end before the last completed trading day - only its missing days (ANTM stored up to 9 Oct: 9 Oct to today) - and the IHSG and LQ45 indexes (one job; queued unless both are up to date); up-to-date companies are skipped |
 | `POST /api/v1/prices/index-ingestions?exchange=IDX[&full=true]` | the IHSG index (Yahoo Finance `^JKSE`) into `index_daily` through the same queue: **202** new job, **200** job already active          |
-| `GET /api/v1/markets`                                          | **Forex and Commodities**: the markets with their instruments (USD/IDR, USD/JPY; 26 commodities: energy, metals, agriculture, materials, fertilizers) and how far their bars reach |
+| `GET /api/v1/markets`                                          | **Forex and Commodities**: the markets with their instruments (9 currency pairs: USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY; 26 commodities: energy, metals, agriculture, materials, fertilizers) and how far their bars reach |
 | `POST /api/v1/markets/{FOREX\|COMMODITY}/ingestions?code=USDIDR[&full=true]` | one Forex pair / commodity through the same queue (`PRICE` job, exchange = the market): **202** / **200** |
 | `POST /api/v1/markets/{FOREX\|COMMODITY}/updates`              | "Update all currencies / commodities to today": every instrument whose bars end before its last completed day |
 
@@ -452,7 +459,8 @@ On the page (Ingestion › Price Ingestion) the left card fetches one company, o
 **Commodities** one currency / commodity (the second dropdown becomes Currency / Commodity). The right-hand cards update
 every company of the exchange to today (IDX for now) - or every currency / commodity of the market - and ingest IHSG.
 
-Forex and commodities come from Yahoo Finance (`IDR=X`, `JPY=X`; Brent `BZ=F`, WTI `CL=F`, natural gas `NG=F`, gold `GC=F`,
+Forex and commodities come from Yahoo Finance (`IDR=X`, `JPY=X`, `CNY=X`, `MYR=X`, `PHP=X`, `INR=X`, `KRW=X`, `EURUSD=X`,
+`AUDJPY=X`; Brent `BZ=F`, WTI `CL=F`, natural gas `NG=F`, gold `GC=F`,
 silver `SI=F`, copper `HG=F`, aluminium `ALI=F`, iron ore `TIO=F`, steel hot-rolled coil `HRC=F`, palm oil `CPO=F`,
 soybean oil `ZL=F`, soybean meal `ZM=F`, corn `ZC=F`, wheat `ZW=F`, sugar `SB=F`; corn, wheat, sugar and soybean oil in US
 cents as quoted). Coal, LNG (Japan), nickel, tin, rubber (TSR 20), urea, DAP and potash have no free daily source, so
@@ -501,7 +509,8 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: like "Update all companies" - the `IDX` companies behind, IHSG and LQ45 |
 | `neracalab.ingestion.prices-after-upload` / `INGESTION_PRICES_AFTER_UPLOAD` | `true` | a stored filing queues the daily prices of its company (nothing when they are up to date) |
 | `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
-| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
+| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-sonnet-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
+| `neracalab.ingestion.fallback.reasoning-effort` / `INGESTION_FALLBACK_REASONING_EFFORT` | `low` | OpenRouter reasoning effort of the full-text extraction's calls (Claude Sonnet 5.5 refuses reasoning switched off: HTTP 400); empty = `neracalab.ingestion.model-reasoning` |
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 | `neracalab.markets.world-bank.file-url` / `WORLD_BANK_PINK_SHEET_URL` | empty     | the Pink Sheet workbook (coal, LNG, nickel, tin, rubber, urea, DAP, potash); empty = the link on the World Bank Commodity Markets page |
@@ -512,14 +521,20 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 ingestion and a re-adjusted history switch to it automatically. Details, job fields and known
 limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md).
 
-## RAG vector store (PDF documents and news)
+## RAG vector store (PDF documents, news and macro documents)
 
 Two Ingestion pages fill a pgvector store that the AI features can search by meaning; every
-document is linked to its company (`rag_document.company_id` -> `company`):
+document is linked to its company (`rag_document.company_id` -> `company`) or, a macro document, to
+its country (`rag_document.country`):
 
-- **PDF Documents (RAG)**: upload a `.pdf` with a text layer (e.g. `data/IDX_XBRL/HRTA/pdf`) for a stored
+- **PDF Documents (RAG)**, left card: upload a `.pdf` with a text layer (e.g. `data/IDX_XBRL/HRTA/pdf`) for a stored
   company (picked automatically from a file name ending with the ticker). Its text is read page by
   page (PDFBox), split into ~1,500-character chunks, embedded and stored.
+- **PDF Documents (RAG)**, right card (**Macro document upload**): a macro PDF of a country - Bank
+  Indonesia, the Ministry of Finance, the IMF, the World Bank, ... - with its document type,
+  publication date, title and issuer. Indonesia now; the United States and China are listed as coming
+  later. The research agent of **Macro › AI Analysis** searches the documents of the analysed country
+  that were published by the analysis' as-of date. What to collect: `instruction/pdf_rag_macro.md`.
 - **News (RAG)**: choose an IDX company and a date range (this month, last 7 / 30 days, previous
   month or custom, Jakarta time, up to 366 days). Articles from EmitenNews, Investor.id, IDX Channel
   and Pasardana published in the range are read and stored; articles already stored are skipped.
@@ -528,6 +543,9 @@ document is linked to its company (`rag_document.company_id` -> `company`):
 curl -H "$AUTH" -F file=@data/IDX_XBRL/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
 curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=gold%20sales%202025"   # closest chunks
+curl -H "$AUTH" -F file=@Monetary-Policy-Review-August-2026.pdf -F country=ID -F documentType=MONETARY_POLICY \
+     -F publishedOn=2026-08-20 -F issuer="Bank Indonesia" http://localhost:8080/api/v1/rag/macro/pdf     # a macro PDF
+curl -H "$AUTH" "http://localhost:8080/api/v1/rag/macro/search?country=ID&q=rupiah%20stabilisation"  # its chunks
 ```
 
 Embeddings: `openai/text-embedding-3-small` (1536 dimensions) through OpenRouter with the same
@@ -547,7 +565,7 @@ again and downloaded as PDF.
             when the screener returns no listings, the known listings are quoted 50 per request)
 [Stage 1, Java, no AI] tier, price, trading, liquidity, earnings, equity filters
                        -> quantitative scorecard per agent -> shortlist = top N x 3 (max 100)
-[Stage 2, DeepSeek V4 Flash] research agent (tool calling + ReAct: EmitenNews, Pasardana,
+[Stage 2, DeepSeek V4.1 Flash] research agent (tool calling + ReAct: EmitenNews, Pasardana,
                        IDX Channel, Investor.id, Tavily) -> six independent investor agents
                        -> Reflection (validator + critic) -> Reflexion (lessons across runs)
 [Synthesis, Claude Opus 5.5] executive summary, conviction, thesis, +-5 point adjustments
@@ -702,12 +720,14 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/macro/outlook?country=ID&index=LQ4
 ```
 
 Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6a. The page also shows the commodities
-and currency pairs with what each means for Indonesia (exports, imports, the rupiah; the terms of trade) and, in its
-right column, the latest AI macro analysis and the country's indexes.
+and currency pairs with what each means for Indonesia (exports, imports, the rupiah, the yuan, the dollar, risk appetite;
+the terms of trade), the rupiah against its Asian peers (USD/IDR's 3-month change beside the median of USD/CNY, USD/MYR,
+USD/PHP, USD/INR and USD/KRW: weaker than the region is a pressure of Indonesia's own) and, in its right column, the latest AI macro analysis and the country's indexes.
 
 **AI macro analysis** (sidebar › Macro › AI Analysis; permission COMPANIES): a background job like the AI stock
 screening. A research agent (DeepSeek, ReAct with tool calling) reads the stored history of the macro series,
-commodities, currency pairs and IHSG / LQ45; four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
+commodities, currency pairs (the rupiah, its Asian peers, EUR/USD, AUD/JPY) and IHSG / LQ45 and searches the country's macro documents (PDFs uploaded on Ingestion › PDF
+Documents (RAG), only those published by the as-of date; refs D1, D2, ...); four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
 Dalio - each score how investable the country is (0 - 100), checked by a validator and a critic (Reflection) and
 taught by earlier runs (Reflexion); Claude Opus 5.5 writes the synthesis (summary, bull / bear case, risks, what to
 monitor, sector tilts, at most +-5 points). Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
@@ -751,7 +771,7 @@ npm run dev                   # http://localhost:3000
 | `/ingestion/prices`              | Price Ingestion: fetch daily prices of one company (exchange / ticker dropdowns), or of one currency / commodity (market Forex / Commodities); on the right, update every company of the exchange (or every currency / commodity) to today and ingest the IHSG index |
 | `/ingestion/macro`               | Macro: "Update all macro data to today", the series per region with their source, latest value, state and actions (fetch, full history, CSV upload, history chart) |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
-| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company into the pgvector store; stored documents (10 per page: 5 / 10 / 20 / 50) and a search test |
+| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company (left) or a macro `.pdf` of a country (right) into the pgvector store; stored documents of the companies and macro documents of a country (10 per page: 5 / 10 / 20 / 50), each with a search test |
 | `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles (10 per page: 5 / 10 / 20 / 50) and a search test |
 |                                  | Every Ingestion page ends with the jobs table: it opens on the page's own job type (tabs for the others and "All"), 10 jobs per page (5 / 10 / 20 / 50) |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
@@ -772,7 +792,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 696 tests
+(cd backend && ./mvnw test)                      # 707 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -799,16 +819,16 @@ classification while the column still fails;
 twice, a 3 rupiah slip) and TPIA's self-contradicting comparatives; `FilingMapperRiseSmbrTest` an FX effect the filed
 cash roll-forward leaves out (RISE) and SMBR's comparative that counts investing flows twice; `IngestionVerifierSegmentsTest` a refused comparative
 breakdown of a period already stored as a note; `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
-EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model, a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
+EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model and reasoning effort (Sonnet 5.5 refuses reasoning switched off), a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism; a currency pair read through its own trend; no macro data); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
-`InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API);
+`InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories and those the thresholds of the seven pairs of 2026-10-23 were set on, the 9 currency pairs in order, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
 `MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
-`MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the validator's rules, the blend and the action; the commodities board for Indonesia);
-`IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API);
+`MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools and a search in the macro documents published by the as-of date, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the document search's refs and limits, the validator's rules, the blend and the action; the commodities board for Indonesia, the yuan, the dollar and risk appetite, the rupiah against its Asian peers; a pair's code as the model writes it);
+`IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API; a currency pair's `tickSize` in the bars' header);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
-`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `FilingMapperAdroTest`, `IngestionVerifierRoundingTest` and `FilingMapperAdmrArtoBrmsTest` the filings behind the error log of 2026-10-18 (ADRO: revenue from the breakdown when only gross profit is tagged; UNTR: ending cash with decimals within the filing's unit; ADMR: lines with decimals outside a rounded total; ARTO: syirkah funds from their lines; BRMS: EPS filed per 1,000 shares); `FilingMapperCoinDewaEnrgHealTest`, `FullTextExtractorTest` and `IngestionVerifierRoundingTest` the filings behind the error log of 2026-10-19 (COIN: a final tax deducted twice; DEWA: 'Other income' inside 'Other gains (losses)'; ENRG: one amount on two lines a unit apart; HEAL: a tax expense filed as a benefit; ESSA: a cash roll-forward that contradicts itself, still refused; BUVA: share counts from the par value of a filing by nature when no published count fits; GMFI, KRAS: no rupiah par value for a share capital in dollars; EXCL, BUVA: revenue is the 'Sales and revenue' row, from the breakdown where the row is empty; EXCL FY2022: a breakdown with decimals within the filing's unit); `FilingMapperItmgMdkaMedcHrumTest`, `FullTextExtractorTest` and `IngestionVerifierRoundingTest` the filings behind the error log of 2026-10-21 (ITMG FY2023: full amounts the EPS does not tell apart; ITMG, MDKA H1 2025: 'Other gains (losses)' inside a residual line of its direction; ITMG H1 2025, MDKA H1 2026: one column's EPS a power of ten off, told by the published counts; MEDC, HRUM: a discontinued EPS row that is no such EPS, while UNVR, EMTK, MPMX and KRAS keep theirs; MEDC FY2022: a balance sheet 0.30 USD apart; ISAT, PGEO: operating income and expenses by nature); `FilingMapperWebSplitsTest` the filings behind the notes of 2026-10-16 (BKSL: a par value only one column's EPS fits; CUAN, DSSA: published counts on the count of before a later split; BUKA, DSSA: a period-end count after a buyback); `IngestionServiceCurrencyTest` that a filing in another currency than the company's stored data is refused (CUAN's IDR FY2023); `CompanyControllerTest` and `TechnicalControllerTest` also the IDX quote of a USD reporter (Rp 540.00, not 539.9999); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
+`FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `FilingMapperAdroTest`, `IngestionVerifierRoundingTest` and `FilingMapperAdmrArtoBrmsTest` the filings behind the error log of 2026-10-18 (ADRO: revenue from the breakdown when only gross profit is tagged; UNTR: ending cash with decimals within the filing's unit; ADMR: lines with decimals outside a rounded total; ARTO: syirkah funds from their lines; BRMS: EPS filed per 1,000 shares); `FilingMapperCoinDewaEnrgHealTest`, `FullTextExtractorTest` and `IngestionVerifierRoundingTest` the filings behind the error log of 2026-10-19 (COIN: a final tax deducted twice; DEWA: 'Other income' inside 'Other gains (losses)'; ENRG: one amount on two lines a unit apart; HEAL: a tax expense filed as a benefit; ESSA: a cash roll-forward that contradicts itself, still refused; BUVA: share counts from the par value of a filing by nature when no published count fits; GMFI, KRAS: no rupiah par value for a share capital in dollars; EXCL, BUVA: revenue is the 'Sales and revenue' row, from the breakdown where the row is empty; EXCL FY2022: a breakdown with decimals within the filing's unit); `FilingMapperItmgMdkaMedcHrumTest`, `FullTextExtractorTest` and `IngestionVerifierRoundingTest` the filings behind the error log of 2026-10-21 (ITMG FY2023: full amounts the EPS does not tell apart; ITMG, MDKA H1 2025: 'Other gains (losses)' inside a residual line of its direction; ITMG H1 2025, MDKA H1 2026: one column's EPS a power of ten off, told by the published counts; MEDC, HRUM: a discontinued EPS row that is no such EPS, while UNVR, EMTK, MPMX and KRAS keep theirs; MEDC FY2022: a balance sheet 0.30 USD apart; ISAT, PGEO: operating income and expenses by nature); `FilingMapperKetrLppfTest`, `FullTextExtractorTest` and `IngestionVerifierOverdraftTest` the filings behind the error log of 2026-10-22 (KETR FY2024: 'Finance income' filed again within 'Other income'; LPPF FY2023: rows left off the face of the balance sheet are not stored as 0, and overdrafts within the stored short-term debt; MNCN H1 2026: an expense by nature named as cost of revenue is an operating expense); `FilingMapperWebSplitsTest` the filings behind the notes of 2026-10-16 (BKSL: a par value only one column's EPS fits; CUAN, DSSA: published counts on the count of before a later split; BUKA, DSSA: a period-end count after a buyback); `IngestionServiceCurrencyTest` that a filing in another currency than the company's stored data is refused (CUAN's IDR FY2023); `CompanyControllerTest` and `TechnicalControllerTest` also the IDX quote of a USD reporter (Rp 540.00, not 539.9999); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `ShareSplitTest` the share splits (also that a split-adjusted USD EPS keeps its decimals: RAJA 0.0054 / 5 = 0.00108); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
 exchange and company APIs against the HRTA seed data, `CompanyUniquenessTest` checks that a
@@ -834,9 +854,9 @@ flagged and excluded stocks; a company reporting in USD: converted metrics, fisc
 reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningControllerTest`
 (pipeline mocked: validation, job, report, PDF; selectable companies, selection validation, runs by scope); see `docs/v1_docs/SCREENING_DOCS.md`, section 9.
 RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
-(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, rolled back)
-and `RagControllerTest` (a PDF through the worker into the store with stub embeddings, validation,
-permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
+(date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, macro documents of a country by publication date, rolled back)
+and `RagControllerTest` (a company PDF and a macro PDF of Indonesia through the worker into the store with stub
+embeddings, validation, the United States and China not available yet, permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
@@ -889,7 +909,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.22__data_TUGU_shares.sql`       | TUGU's 1:2 stock split of 2023-05-24 (par Rp 100 -> Rp 50), which no filing restates: counts 3,555,575,600 split-adjusted from 2021-12-31, the per-share figures before it (/ 2) |
 | `V1.0.24__data_BACH_shares.sql`       | BACH's IPO of 2026-07-08 (615,000,000 new shares at Rp 442), after its only filing: 4,084,430,000 shares from the listing (the filing gives 3,469,430,000 before it) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
-| `V1.0.26__data_markets_macro.sql`     | the catalogs: 28 instruments (USD/IDR, USD/JPY and 26 commodities) and 25 macro series with their sources |
+| `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |
 
 Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md).
 

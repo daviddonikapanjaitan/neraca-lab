@@ -139,7 +139,8 @@ public class IngestionVerifier {
             if (column == StatementColumn.CURRENT_PERIOD && p.balanceSheetCash() != null && p.endingCash() != null
                     && p.balanceSheetCash().compareTo(p.endingCash()) != 0) {
                 String rounding = roundingExplanation(session, p);
-                String overdrafts = rounding != null ? null : overdraftExplanation(session, column, p);
+                String overdrafts = rounding != null ? null : overdraftExplanation(session, column, p,
+                        storedField(companyId, period, "balance_sheet", "short_term_debt"));
                 if (rounding != null) {
                     notes.add(period.key() + ": " + rounding);
                 } else if (overdrafts != null) {
@@ -232,9 +233,21 @@ public class IngestionVerifier {
      * difference is positive and within the filing's short-term borrowings. Otherwise {@code null}.
      */
     static String overdraftExplanation(IngestionSession session, StatementColumn column, StoredPeriod p) {
+        return overdraftExplanation(session, column, p, null);
+    }
+
+    /**
+     * @param storedShortTermDebt the period's stored short-term debt, used when the filing's balance sheet leaves its
+     *                            borrowing rows off the face (LPPF FY2023: cash flow ending cash 457,628 million is the
+     *                            balance sheet's 507,631 less overdrafts of 50,003, within the bank loans of 550,003 that
+     *                            only its bank loan note and the FY2024 comparative show; FilingMapper leaves the field empty)
+     */
+    static String overdraftExplanation(IngestionSession session, StatementColumn column, StoredPeriod p,
+                                       BigDecimal storedShortTermDebt) {
         BigDecimal filedCash = mapped(session, column, "balance_sheet", "cash_and_equivalents");
         BigDecimal filedEnding = mapped(session, column, "cash_flow_statement", "ending_cash");
-        BigDecimal shortTermDebt = mapped(session, column, "balance_sheet", "short_term_debt");
+        BigDecimal mappedDebt = mapped(session, column, "balance_sheet", "short_term_debt");
+        BigDecimal shortTermDebt = mappedDebt != null ? mappedDebt : storedShortTermDebt;
         if (filedCash == null || filedEnding == null || shortTermDebt == null
                 || filedCash.compareTo(p.balanceSheetCash()) != 0 || filedEnding.compareTo(p.endingCash()) != 0) {
             return null;
@@ -265,6 +278,12 @@ public class IngestionVerifier {
         return "cash-flow ending cash " + filedEnding.toPlainString() + " is balance-sheet cash " + filedCash.toPlainString()
                 + " plus " + excess.toPlainString() + ", within other current financial assets " + deposits.toPlainString()
                 + ": deposits or restricted funds counted as cash in the cash flow statement, stored as filed";
+    }
+
+    /** A field of the period's stored row; {@code null} when not stored. */
+    private BigDecimal storedField(long companyId, PeriodRef period, String table, String field) {
+        return repository.periodId(companyId, period).flatMap(id -> repository.readStatement(table, id))
+                .map(row -> row.get(field)).map(v -> new BigDecimal(v.toString())).orElse(null);
     }
 
     private static BigDecimal mapped(IngestionSession session, StatementColumn column, String table, String field) {

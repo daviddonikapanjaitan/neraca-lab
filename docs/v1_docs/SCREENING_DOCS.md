@@ -1,7 +1,7 @@
 # Neraca Lab - AI Stock Screening (v1)
 
 Screens an exchange (IDX for now) through the eyes of six investor agents and keeps the top N
-stocks. Built with **Spring AI 2.0** on OpenRouter: DeepSeek V4 Flash for the research and
+stocks. Built with **Spring AI 2.0** on OpenRouter: DeepSeek V4.1 Flash for the research and
 investor agents, Claude Opus 5.5 for the final synthesis. Every run is a background job; the report
 is saved in the database, shown on the Screening page and downloadable as PDF.
 
@@ -255,7 +255,7 @@ OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 | `large-cap-min`, `mid-cap-min`    | Rp 10T, Rp 1T                    | tiers                                         |
 | `min-price`, `min-avg-daily-value-*`, `max-trade-age` | 50, 5B / 1B / 200M, 10d | Stage 1 filters                |
 | `require-positive-earnings`, `excluded-tickers`, `min-fundamentals-coverage` | true, [], 0.5 | Stage 1 filters |
-| `llm.research-model`, `llm.agent-model` | `deepseek/deepseek-v4-flash-0731` | OpenRouter ids                       |
+| `llm.research-model`, `llm.agent-model` | `deepseek/deepseek-v4.1-flash-1017` | OpenRouter ids                       |
 | `llm.synthesis-model` (`SCREENING_SYNTHESIS_MODEL`) | `anthropic/claude-opus-5.5` | synthesis                      |
 | `llm.synthesis-effort`, `llm.provider-sort`, `llm.concurrency` | low, price, 8 | model options, parallel calls     |
 | `llm.provider-ignore` (`SCREENING_PROVIDER_IGNORE`) | OpenInference | OpenRouter providers never used for the DeepSeek calls (comma-separated) |

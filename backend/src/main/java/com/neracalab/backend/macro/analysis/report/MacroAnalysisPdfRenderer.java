@@ -202,7 +202,11 @@ public class MacroAnalysisPdfRenderer {
             return;
         }
         JsonNode brief = research.path("brief");
-        heading(doc, "Research brief (stored macro history)");
+        JsonNode documents = research.path("documents");
+        int documentCount = documents.isArray() ? documents.size() : 0;
+        heading(doc, documentCount == 0 ? "Research brief (stored macro history)"
+                : "Research brief (stored macro history and " + documentCount + " macro "
+                + (documentCount == 1 ? "document" : "documents") + ")");
         field(doc, "Regime", brief.path("regime"));
         field(doc, "Liquidity", brief.path("liquidity"));
         field(doc, "Inflation and rates", brief.path("inflationRates"));
@@ -235,6 +239,21 @@ public class MacroAnalysisPdfRenderer {
                 table.addCell(cell(r.path("summary").asString(""), SMALL_MUTED, Element.ALIGN_LEFT));
             }
             doc.add(table);
+        }
+        if (documentCount > 0) {
+            Paragraph h = new Paragraph("Macro documents the research could search (published by the as-of date)", H2);
+            h.setSpacingBefore(4);
+            doc.add(h);
+            int shown = 0;
+            for (JsonNode d : documents) {
+                if (shown++ == 15) {
+                    doc.add(new Paragraph("... and " + (documentCount - 15) + " older", SMALL_MUTED));
+                    break;
+                }
+                String issuer = text(d.path("issuer"));
+                doc.add(new Paragraph(d.path("publishedOn").asString("") + "  " + (issuer == null ? "" : issuer + ": ")
+                        + d.path("title").asString("") + " (" + d.path("documentTypeLabel").asString("") + ")", SMALL));
+            }
         }
         if (text(research.path("note")) != null) {
             doc.add(new Paragraph("Note: " + text(research.path("note")), SMALL_MUTED));
@@ -295,6 +314,9 @@ public class MacroAnalysisPdfRenderer {
         if (text(markets.path("termsOfTrade").path("summary")) != null) {
             doc.add(new Paragraph(text(markets.path("termsOfTrade").path("summary")), BODY));
         }
+        if (text(markets.path("regionalCurrencies").path("summary")) != null) {
+            doc.add(new Paragraph(text(markets.path("regionalCurrencies").path("summary")), BODY));
+        }
         List<JsonNode> rows = new ArrayList<>();
         markets.path("commodities").forEach(rows::add);
         markets.path("currencyPairs").forEach(rows::add);
@@ -311,7 +333,9 @@ public class MacroAnalysisPdfRenderer {
         for (JsonNode r : rows) {
             table.addCell(cell(r.path("name").asString("") + " (" + r.path("lastDate").asString("") + ")", SMALL,
                     Element.ALIGN_LEFT));
-            table.addCell(cell(String.format(Locale.ROOT, "%,.2f", r.path("last").asDouble()), SMALL, Element.ALIGN_RIGHT));
+            double last = r.path("last").asDouble();
+            // a currency below 100 (EUR/USD 1.1202, USD/MYR 4.0830) needs its four decimals, as on the page
+            table.addCell(cell(String.format(Locale.ROOT, last >= 100 ? "%,.2f" : "%,.4f", last), SMALL, Element.ALIGN_RIGHT));
             table.addCell(cell(pct(r.path("change1mPct")), SMALL, Element.ALIGN_RIGHT));
             table.addCell(cell(pct(r.path("change3mPct")), SMALL, Element.ALIGN_RIGHT));
             table.addCell(cell(pct(r.path("change1yPct")), SMALL, Element.ALIGN_RIGHT));

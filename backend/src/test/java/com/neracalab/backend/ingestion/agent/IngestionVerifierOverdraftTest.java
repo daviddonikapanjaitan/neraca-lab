@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -48,6 +49,29 @@ class IngestionVerifierOverdraftTest {
         // stored figures that are not the filing's own are still a problem
         assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending.add(BigDecimal.ONE)))).isNull();
         assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash.add(BigDecimal.ONE), ending))).isNull();
+    }
+
+    /**
+     * LPPF FY2023 (error 809) leaves its bank loans off the face of the balance sheet, so the filing gives no short-term
+     * debt; the cash flow's 457,628 million is the balance sheet's 507,631 less overdrafts of 50,003, within the 550,003
+     * stored for that date from the FY2024 comparative.
+     */
+    @Test
+    void overdraftsWithinTheStoredShortTermDebtWhenTheFilingLeavesItsLoansOffTheFace() throws Exception {
+        Path file = Path.of("..", "data", "IDX_XBRL", "LPPF", "xlsx", "FinancialStatement-2023-Tahunan-LPPF.xlsx");
+        assumeTrue(Files.exists(file), "LPPF source data not available: " + file);
+        IngestionSession session;
+        try (InputStream in = Files.newInputStream(file)) {
+            session = new IngestionSession(new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString())));
+        }
+        BigDecimal cash = new BigDecimal("507631000000");
+        BigDecimal ending = new BigDecimal("457628000000");
+
+        assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending))).isNull();
+        assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending), new BigDecimal("550003000000")))
+                .contains("bank overdrafts", "less 50003000000", "within short-term borrowings 550003000000");
+        assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending), new BigDecimal("50002000000")))
+                .isNull();
     }
 
     private static StoredPeriod stored(BigDecimal balanceSheetCash, BigDecimal endingCash) {

@@ -1,8 +1,10 @@
 package com.neracalab.backend.macro.analysis;
 
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -17,6 +19,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.analysis.Texts;
+import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.agent.JsonReplies;
 import com.neracalab.backend.screening.agent.JsonReplies.InvalidReplyException;
@@ -31,10 +34,12 @@ import tools.jackson.databind.json.JsonMapper;
  * The research agent of a macro analysis: reads the history behind the rules' reading and writes the brief the macro
  * agents share.
  * <ul>
- *   <li><b>Tool Calling</b>: month-end histories and correlations of the stored series ({@link MacroTools}).</li>
+ *   <li><b>Tool Calling</b>: month-end histories and correlations of the stored series and, when the country has
+ *       any, a search in its macro documents published by the as-of date ({@link MacroTools}).</li>
  *   <li><b>ReAct</b>: Thought -> tool calls -> observations, at most {@code research-iterations} model turns, then a
  *       forced final answer.</li>
- *   <li><b>Conditional tool calling</b>: the tools are offered only until their limit is used.</li>
+ *   <li><b>Conditional tool calling</b>: the tools are offered only until their limit is used; the document search
+ *       only when there are documents to search.</li>
  *   <li><b>Reflexion within the run</b>: an unusable answer is retried once with the error as feedback; evidence citing
  *       a result that was never returned is dropped.</li>
  * </ul>
@@ -44,6 +49,9 @@ public class MacroResearchAgent {
 
     private static final Logger log = LoggerFactory.getLogger(MacroResearchAgent.class);
     static final String STAGE = "RESEARCH";
+    /** Most documents named in the agent's task (the newest; the search reads all of them). */
+    static final int LISTED_DOCUMENTS = 15;
+    private static final ZoneId JAKARTA = ZoneId.of("Asia/Jakarta");
     private static final int TURN_TOKENS = 700;
     private static final int ANSWER_TOKENS = 1000;
 
@@ -97,17 +105,14 @@ public class MacroResearchAgent {
     }
 
     private MacroBrief react(UsageMeter meter, String subject, String summary, MacroTools tools, List<Step> trace) {
-        Map<String, ToolCallback> catalog = new LinkedHashMap<>();
-        for (ToolCallback cb : ToolCallbacks.from(tools)) {
-            catalog.put(cb.getToolDefinition().name(), cb);
-        }
+        Map<String, ToolCallback> catalog = catalog(tools);
         List<Message> history = new ArrayList<>();
         history.add(new SystemMessage(MacroAnalysisPrompts.RESEARCH));
         history.add(new UserMessage(subjectBlock(subject, summary, tools, properties)));
         Purpose purpose = new Purpose(STAGE, "RESEARCH", subject);
 
         for (int iteration = 1; iteration <= properties.researchIterations(); iteration++) {
-            List<ToolCallback> offered = tools.calls() < properties.maxToolCalls() ? List.copyOf(catalog.values()) : List.of();
+            List<ToolCallback> offered = offered(catalog, tools, properties);
             LlmGateway.Reply reply = llm.worker(meter, purpose, models.researchModel(), history, offered,
                     offered.isEmpty() ? ANSWER_TOKENS : TURN_TOKENS);
             AssistantMessage message = reply.message();
@@ -129,6 +134,32 @@ public class MacroResearchAgent {
         LlmGateway.Reply last = llm.worker(meter, purpose, models.researchModel(), history, List.of(), ANSWER_TOKENS);
         trace.add(new Step(properties.researchIterations() + 1, "(final answer requested)", List.of()));
         return parse(meter, purpose, history, last.text());
+    }
+
+    /** The tools of the agent by name; the document search only when there are documents to search. */
+    static Map<String, ToolCallback> catalog(MacroTools tools) {
+        Map<String, ToolCallback> catalog = new LinkedHashMap<>();
+        for (ToolCallback cb : ToolCallbacks.from(tools)) {
+            if (!MacroTools.DOCUMENT_TOOL.equals(cb.getToolDefinition().name()) || tools.hasDocuments()) {
+                catalog.put(cb.getToolDefinition().name(), cb);
+            }
+        }
+        return catalog;
+    }
+
+    /** The tools whose limit is not used up: history and correlation, the document search. */
+    static List<ToolCallback> offered(Map<String, ToolCallback> catalog, MacroTools tools,
+                                      MacroAnalysisProperties properties) {
+        List<ToolCallback> out = new ArrayList<>();
+        catalog.forEach((name, cb) -> {
+            boolean open = MacroTools.DOCUMENT_TOOL.equals(name)
+                    ? tools.documentSearches() < properties.maxDocumentSearches()
+                    : tools.calls() < properties.maxToolCalls();
+            if (open) {
+                out.add(cb);
+            }
+        });
+        return out;
     }
 
     private static String execute(Map<String, ToolCallback> catalog, AssistantMessage.ToolCall call) {
@@ -165,8 +196,26 @@ public class MacroResearchAgent {
         b.append("Codes the tools know (code: name, unit):\n");
         tools.catalog().forEach((code, meta) -> b.append("- ").append(code).append(": ").append(meta.name())
                 .append(meta.unit() == null ? "" : ", " + meta.unit()).append('\n'));
-        b.append("Limits: ").append(properties.maxToolCalls()).append(" tool calls, ").append(properties.historyMonths())
-                .append(" months of history, ").append(properties.researchIterations()).append(" turns.");
+        List<RagRepository.MacroDocumentRow> documents = tools.documents();
+        if (documents.isEmpty()) {
+            b.append("Macro documents: none stored for this country by the as-of date (no searchDocuments tool).\n");
+        } else {
+            b.append("Macro documents searchDocuments can read (").append(documents.size())
+                    .append(", published by the as-of date, latest first):\n");
+            documents.stream().limit(LISTED_DOCUMENTS).forEach(d -> b.append("- ")
+                    .append(d.publishedAt() == null ? "" : d.publishedAt().atZone(JAKARTA).toLocalDate() + " ")
+                    .append(d.issuer() == null ? "" : d.issuer() + ": ").append(d.title())
+                    .append(" (").append(d.documentType().label().toLowerCase(Locale.ROOT)).append(")\n"));
+            if (documents.size() > LISTED_DOCUMENTS) {
+                b.append("- ... and ").append(documents.size() - LISTED_DOCUMENTS).append(" older\n");
+            }
+        }
+        b.append("Limits: ").append(properties.maxToolCalls()).append(" history / correlation calls, ");
+        if (!documents.isEmpty()) {
+            b.append(properties.maxDocumentSearches()).append(" document searches, ");
+        }
+        b.append(properties.historyMonths()).append(" months of history, ").append(properties.researchIterations())
+                .append(" turns.");
         return b.toString();
     }
 

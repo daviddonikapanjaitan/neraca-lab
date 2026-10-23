@@ -16,7 +16,7 @@ public final class TestScreeningProperties {
     public static ScreeningProperties create(double budgetUsd, String tavilyKey) {
         return new ScreeningProperties(budgetUsd, Math.min(0.15, budgetUsd / 3), 3, 100, 50, 0.4, 0.2, 10e12, 1e12, 50,
                 5e9, 1e9, 2e8, Duration.ofDays(10), true, List.of("EXCL"), 0.5,
-                new ScreeningProperties.Llm("deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4-flash-0731",
+                new ScreeningProperties.Llm("deepseek/deepseek-v4.1-flash-1017", "deepseek/deepseek-v4.1-flash-1017",
                         "anthropic/claude-opus-5.5", "low", "price", List.of("OpenInference"), 4, 3, 450, 12000, 2,
                         Duration.ZERO, null),
                 new ScreeningProperties.News(tavilyKey, "https://api.tavily.com", 5, Duration.ofHours(12),

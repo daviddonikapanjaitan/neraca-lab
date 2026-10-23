@@ -25,10 +25,18 @@ final class MacroAnalysisPrompts {
             - history(code, months): month-end history of a macro series, commodity, currency pair or index, with a ref.
             - correlation(a, b, months): correlation of the monthly changes of two series (e.g. IHSG with USDIDR, \
             COAL or US_10Y), with a ref.
+            - searchDocuments(query), only when the task lists macro documents: excerpts of the country's documents \
+            published by the as-of date (central bank, ministry of finance, IMF, World Bank ...), with a ref (D1, D2 \
+            ...). Use them for the reasons, guidance, forecasts and risks the series cannot show; a figure in a \
+            document is as of its date, and the stored series win when they disagree. A document of type research \
+            is an opinion: say so.
             Work in the ReAct style: write one line "Thought: <what you need and why>", then call tools (several in one \
             turn when independent), read the observations, continue. Prefer the series that decide the call: the BI \
             rate and real rate, the rupiah, reserves, the US 10Y and the dollar, credit spreads, the export \
-            commodities (coal, nickel, palm oil) and the index itself. Stop as soon as the main questions are \
+            commodities (coal, nickel, palm oil) and the index itself. Read the rupiah against its Asian peers \
+            (USDCNY, USDMYR, USDPHP, USDINR, USDKRW): weaker than the region is a pressure of the country's own, \
+            weaker with it is the dollar's; EURUSD is the dollar (a rise is a weaker dollar) and AUDJPY risk \
+            appetite (a fall: carry trades unwinding). Stop as soon as the main questions are \
             answered; never repeat a call. The range of a history is of its window only: call a value a record only \
             when it is the storedHigh or storedLow the tool returns (and say since when the data are stored).
 
@@ -39,7 +47,7 @@ final class MacroAnalysisPrompts {
             "growth":"<= 40 words","risks":["<= 15 words"],"catalysts":["<= 15 words"],\
             "evidence":[{"ref":"T1","fact":"<= 25 words"}]}
             At most 4 risks, 4 catalysts and 8 evidence items. Every fact must come from a tool result or the dossier; \
-            cite the ref of a tool result. Say "not in the data" rather than guessing.""";
+            cite the ref of a tool result (T1 ... or D1 ...). Say "not in the data" rather than guessing.""";
 
     static final String RESEARCH_FINAL = "Tool budget used up. Give the final JSON brief now, without tools.";
 
@@ -53,15 +61,17 @@ final class MacroAnalysisPrompts {
             look-ahead), the liquidity and risk regimes with their votes and their state three months before, the \
             four investor presets of the rules with their stance and evidence, the rules' investability score with \
             its parts, the country's indexes, its commodity prices and currency pairs with what each means for the \
-            country, and a research brief built from the stored history with references (T1, T2, ...). Last come \
-            your persona, your rules prior and your task.
+            country, the rupiah against its Asian peers (regionalCurrencies: a rupiah weaker than the region is a \
+            pressure of the country's own, one weaker with it the dollar's), and a research brief built from the stored history and the country's macro documents with \
+            references (T1, T2, ... for the stored data; D1, D2, ... for document excerpts, as of their publication \
+            date). Last come your persona, your rules prior and your task.
             Rules: use only the data given and never invent numbers. Changes are percent (prices) or points (rates). \
             Macro data lag the market; a series marked stale is unknown now. A high or low of a window or a 52-week \
             range is not a record (the research brief names a record only from the stored history). Your rules prior is \
             the preset of your investor: depart from it only for reasons visible in the dossier. Cite brief references (e.g. T2) in your \
             thesis when you rely on them. Be decisive and concise.
             Reply with one JSON object only, no markdown. In signalsUsed list keys or codes of the dossier \
-            (e.g. liquidity, risk, BI_RATE, USD_IDR, COAL, termsOfTrade).""";
+            (e.g. liquidity, risk, BI_RATE, USD_IDR, COAL, termsOfTrade, regionalCurrencies, AUDJPY).""";
 
     /** The reply format of a macro agent. */
     static final String ASSESSMENT_FORMAT = """
@@ -109,7 +119,7 @@ final class MacroAnalysisPrompts {
             investable it is now (0-100); each final score blends the rules' preset of that investor with the agent's \
             judgement, after a reflection review. You get their scores, stances and reasoning, the overall \
             investability score (the agents' mean blended with the rules' score), the rules' conclusion, the regimes, \
-            the index trend, the commodity terms of trade and the research brief.
+            the index trend, the commodity terms of trade, the rupiah against its Asian peers and the research brief.
 
             Your tasks:
             1. Write an executive summary for an investment committee: the macro regime, where the agents agree and \

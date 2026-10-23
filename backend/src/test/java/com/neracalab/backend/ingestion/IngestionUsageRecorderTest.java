@@ -42,14 +42,14 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The cost of an upload job: every model call of the ingestion - the standard extraction's DeepSeek calls and the
- * full-text extraction's Haiku calls - is recorded for the job with its stage, the model asked, its tokens and the
+ * full-text extraction's Sonnet calls - is recorded for the job with its stage, the model asked, its tokens and the
  * cost OpenRouter reports. An OpenAI-compatible server on localhost answers the calls, so the tokens and the cost
  * are read from a real response.
  */
 class IngestionUsageRecorderTest {
 
-    private static final String DEEPSEEK = "deepseek/deepseek-v4-flash-0731";
-    private static final String HAIKU = "anthropic/claude-haiku-5.5";
+    private static final String DEEPSEEK = "deepseek/deepseek-v4.1-flash-1017";
+    private static final String SONNET = "anthropic/claude-sonnet-5.5";
 
     /** OpenRouter's usage of a call: 1,200 prompt tokens (200 from the cache), 300 completion tokens, USD 0.00042. */
     private static final String USAGE_WITH_COST = """
@@ -81,11 +81,11 @@ class IngestionUsageRecorderTest {
         trace.stage(ModelCallListener.PLAN);
         agent.call(new Prompt("plan", agent.options().build()), trace, Duration.ofSeconds(30));
         trace.stage(ModelCallListener.FULL_TEXT);
-        agent.call(new Prompt("map", agent.options().model(HAIKU).build()), trace, Duration.ofSeconds(30));
+        agent.call(new Prompt("map", agent.options().model(SONNET).build()), trace, Duration.ofSeconds(30));
 
         List<IngestionJob.ModelCall> calls = recorded(2);
         assertThat(calls).extracting(IngestionJob.ModelCall::stage).containsExactly("PLAN", "FULL_TEXT");
-        assertThat(calls).extracting(IngestionJob.ModelCall::model).containsExactly(DEEPSEEK, HAIKU);
+        assertThat(calls).extracting(IngestionJob.ModelCall::model).containsExactly(DEEPSEEK, SONNET);
         assertThat(calls).allSatisfy(call -> {
             assertThat(call.ticker()).isEqualTo("NSSS");
             assertThat(call.promptTokens()).isEqualTo(1200);
@@ -103,7 +103,7 @@ class IngestionUsageRecorderTest {
             assertThat(json.readTree(body).path("usage").path("include").asBoolean()).isTrue();
         }
         assertThat(json.readTree(bodies.get(0)).path("model").asString()).isEqualTo(DEEPSEEK);
-        assertThat(json.readTree(bodies.get(1)).path("model").asString()).isEqualTo(HAIKU);
+        assertThat(json.readTree(bodies.get(1)).path("model").asString()).isEqualTo(SONNET);
     }
 
     @Test
@@ -112,11 +112,11 @@ class IngestionUsageRecorderTest {
         AgentTrace trace = new AgentTrace(JobDeadline.NONE, recorder.forJob(job, "NSSS"));
         trace.stage(ModelCallListener.FULL_TEXT);
 
-        agent.call(new Prompt("map", agent.options().model(HAIKU).build()), trace, Duration.ofSeconds(30));
+        agent.call(new Prompt("map", agent.options().model(SONNET).build()), trace, Duration.ofSeconds(30));
 
         IngestionJob.ModelCall call = recorded(1).getFirst();
-        // Haiku 5.5: USD 0.10 / 0.50 per million tokens -> 1,200 x 0.10 + 300 x 0.50 = 270 millionths
-        assertThat(call.costUsd()).isEqualTo(0.00027, within(1e-12));
+        // Sonnet 5.5: USD 2 / 10 per million tokens -> 1,200 x 2 + 300 x 10 = 5,400 millionths
+        assertThat(call.costUsd()).isEqualTo(0.0054, within(1e-12));
         assertThat(call.costEstimated()).isTrue();
         assertThat(call.promptTokens()).isEqualTo(1200);
     }

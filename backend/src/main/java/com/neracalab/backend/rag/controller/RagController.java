@@ -3,9 +3,12 @@ package com.neracalab.backend.rag.controller;
 import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -31,8 +34,12 @@ import com.neracalab.backend.company.Tickers;
 import com.neracalab.backend.company.Tickers.InvalidTickerException;
 import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.Requester;
+import com.neracalab.backend.macro.outlook.MacroOutlookService;
 import com.neracalab.backend.rag.EmbeddingClient;
+import com.neracalab.backend.rag.MacroDocumentType;
 import com.neracalab.backend.rag.PdfText;
+import com.neracalab.backend.rag.RagIngestionService;
+import com.neracalab.backend.rag.RagIngestionService.MacroMeta;
 import com.neracalab.backend.rag.RagProperties;
 import com.neracalab.backend.rag.RagQueue;
 import com.neracalab.backend.rag.RagQueue.Submission;
@@ -41,11 +48,14 @@ import com.neracalab.backend.rag.RagRepository.Company;
 import com.neracalab.backend.rag.RagRepository.Counts;
 import com.neracalab.backend.rag.RagRepository.DocumentPage;
 import com.neracalab.backend.rag.RagRepository.Hit;
+import com.neracalab.backend.rag.RagRepository.MacroDocumentPage;
+import com.neracalab.backend.rag.RagRepository.MacroHit;
 import com.neracalab.backend.rag.RagRepository.SourceType;
 
 /**
- * RAG vector store of the companies (pgvector): PDF documents and news articles, chunked, embedded and linked to
- * their company. Ingestions are asynchronous jobs ({@code GET /api/v1/ingestions/{id}}).
+ * RAG vector store (pgvector): PDF documents and news articles of the companies, chunked, embedded and linked to
+ * their company, and macro PDFs of the countries, linked to their country (read by the AI macro analysis). Ingestions
+ * are asynchronous jobs ({@code GET /api/v1/ingestions/{id}}).
  * <ul>
  *   <li>{@code POST /api/v1/rag/pdf} (multipart {@code file}, {@code exchange}, {@code ticker}) - queue a PDF; 202
  *       with the new job, 200 with the job already queued / running for the same file and company; 422 for a file
@@ -56,6 +66,13 @@ import com.neracalab.backend.rag.RagRepository.SourceType;
  *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF|NEWS&limit&offset]} - one page
  *       of the stored documents, with the number matching the filters</li>
  *   <li>{@code GET /api/v1/rag/search?q=...[&exchange&ticker&source&limit]} - the closest chunks (cosine)</li>
+ *   <li>{@code POST /api/v1/rag/macro/pdf} (multipart {@code file}, {@code country}, {@code documentType},
+ *       {@code publishedOn}, optional {@code title} and {@code issuer}) - queue a macro PDF of a country (Indonesia;
+ *       the United States and China later: 400); 202 / 200 / 422 as a company PDF</li>
+ *   <li>{@code GET /api/v1/rag/macro/documents[?country&documentType&limit&offset]} - one page of the stored macro
+ *       documents, latest publication first</li>
+ *   <li>{@code GET /api/v1/rag/macro/search?q=...[&country=ID&limit]} - the closest chunks of the country's macro
+ *       documents</li>
  * </ul>
  */
 @RestController
@@ -67,9 +84,26 @@ public class RagController {
     static final int MAX_RANGE_DAYS = 366;
     static final int MAX_QUERY_CHARS = 2000;
 
-    /** @param pending RAG jobs waiting in the queue (excluding the running one) */
+    /** Longest title of a macro document. */
+    static final int MAX_TITLE_CHARS = 300;
+    /** Longest issuer of a macro document. */
+    static final int MAX_ISSUER_CHARS = 100;
+
+    /**
+     * @param pending            RAG jobs waiting in the queue (excluding the running one)
+     * @param macroCountries     the countries of the macro documents (only the available ones take uploads)
+     * @param macroDocumentTypes the types of a macro document
+     */
     public record Status(String embeddingModel, int embeddingDimensions, int chunkChars, int chunkOverlap,
-                         int newsMaxArticles, int newsMaxPages, int maxRangeDays, int pending, Counts stored) {
+                         int newsMaxArticles, int newsMaxPages, int maxRangeDays, int pending, Counts stored,
+                         List<MacroCountry> macroCountries, List<DocumentTypeOption> macroDocumentTypes) {
+    }
+
+    /** A country of the macro documents and how many are stored for it. */
+    public record MacroCountry(String code, String name, boolean available, long documents) {
+    }
+
+    public record DocumentTypeOption(String code, String label, String examples) {
     }
 
     private final RagQueue queue;
@@ -86,9 +120,126 @@ public class RagController {
 
     @GetMapping("/status")
     public Status status() {
+        Map<String, Long> perCountry = repository.macroDocumentCounts();
+        List<MacroCountry> countries = MacroOutlookService.COUNTRIES.stream()
+                .map(c -> new MacroCountry(c.code(), c.name(), c.available(), perCountry.getOrDefault(c.code(), 0L)))
+                .toList();
+        List<DocumentTypeOption> types = Arrays.stream(MacroDocumentType.values())
+                .map(t -> new DocumentTypeOption(t.name(), t.label(), t.examples())).toList();
         return new Status(embeddings.model(), properties.embeddingDimensions(), properties.chunkChars(),
                 properties.chunkOverlap(), properties.newsMaxArticles(), properties.newsMaxPages(), MAX_RANGE_DAYS,
-                queue.pendingCount(), repository.counts());
+                queue.pendingCount(), repository.counts(), countries, types);
+    }
+
+    /**
+     * A macro PDF of a country (Bank Indonesia, the Ministry of Finance, the IMF, ...): queued as a RAG_PDF job of
+     * exchange MACRO. {@code publishedOn} is the publication date (the AI macro analysis reads only the documents
+     * published by its as-of date); the title defaults to the file name.
+     */
+    @PostMapping(path = "/macro/pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<IngestionJob> macroPdf(@RequestParam("file") MultipartFile file,
+                                                 @RequestParam(name = "country", defaultValue = "ID") String country,
+                                                 @RequestParam(name = "documentType", required = false) String documentType,
+                                                 @RequestParam(name = "publishedOn", required = false) String publishedOn,
+                                                 @RequestParam(name = "title", required = false) String title,
+                                                 @RequestParam(name = "issuer", required = false) String issuer,
+                                                 AuthenticatedUser user) throws IOException {
+        MacroOutlookService.Country c = availableCountry(country);
+        MacroDocumentType type = MacroDocumentType.of(documentType).orElseThrow(() -> new InvalidRequestException(
+                documentType == null || documentType.isBlank() ? "Choose the type of the document"
+                        : "Unknown document type '" + documentType + "'; use one of: " + String.join(", ",
+                        Arrays.stream(MacroDocumentType.values()).map(Enum::name).toList())));
+        LocalDate published = publishedOn(publishedOn);
+        if (file.isEmpty()) {
+            throw new InvalidRequestException("The uploaded file is empty");
+        }
+        String fileName = fileName(file.getOriginalFilename());
+        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+            throw new InvalidRequestException("Only .pdf files are accepted");
+        }
+        String name = title == null || title.isBlank() ? RagIngestionService.title(fileName) : compact(title);
+        if (name.isEmpty() || name.length() > MAX_TITLE_CHARS) {
+            throw new InvalidRequestException("The title must have 1 to " + MAX_TITLE_CHARS + " characters");
+        }
+        String by = issuer == null || issuer.isBlank() ? null : compact(issuer);
+        if (by != null && by.length() > MAX_ISSUER_CHARS) {
+            throw new InvalidRequestException("The issuer must have at most " + MAX_ISSUER_CHARS + " characters");
+        }
+        byte[] content = file.getBytes();
+        if (!isPdf(content)) {
+            throw new InvalidRequestException("The file is not a PDF (no %PDF header)");
+        }
+        PdfText.pages(content);    // rejects an unreadable, protected or scanned PDF before anything is stored
+        MacroMeta meta = new MacroMeta(c.code(), c.name(), name, by, type, published);
+        return response(queue.submitMacroPdf(meta, content, fileName, "application/pdf", Requester.of(user)));
+    }
+
+    @GetMapping("/macro/documents")
+    public MacroDocumentPage macroDocuments(@RequestParam(name = "country", required = false) String country,
+                                            @RequestParam(name = "documentType", required = false) String documentType,
+                                            @RequestParam(name = "limit", defaultValue = "100") int limit,
+                                            @RequestParam(name = "offset", defaultValue = "0") int offset) {
+        if (offset < 0) {
+            throw new InvalidRequestException("offset must be 0 or more");
+        }
+        String code = country == null || country.isBlank() ? null : knownCountry(country).code();
+        MacroDocumentType type = documentType == null || documentType.isBlank() ? null
+                : MacroDocumentType.of(documentType).orElseThrow(() -> new InvalidRequestException(
+                        "Unknown document type '" + documentType + "'"));
+        return repository.macroDocuments(code, type, Math.clamp(limit, 1, 500), offset);
+    }
+
+    @GetMapping("/macro/search")
+    public List<MacroHit> macroSearch(@RequestParam("q") String q,
+                                      @RequestParam(name = "country", defaultValue = "ID") String country,
+                                      @RequestParam(name = "limit", defaultValue = "8") int limit) {
+        String query = q.trim();
+        if (query.isEmpty() || query.length() > MAX_QUERY_CHARS) {
+            throw new InvalidRequestException("The query must have 1 to " + MAX_QUERY_CHARS + " characters");
+        }
+        String code = knownCountry(country).code();
+        return repository.searchMacro(code, null, embeddings.embed(query), Math.clamp(limit, 1, 50));
+    }
+
+    /** A country of the list ("id" too), available or not. */
+    private static MacroOutlookService.Country knownCountry(String code) {
+        return MacroOutlookService.findCountry(code).orElseThrow(() -> new InvalidRequestException(
+                "Unknown country '" + code + "'; use " + String.join(", ",
+                        MacroOutlookService.COUNTRIES.stream().map(MacroOutlookService.Country::code).toList())));
+    }
+
+    /** A country that takes macro documents now (Indonesia; the United States and China later). */
+    private static MacroOutlookService.Country availableCountry(String code) {
+        MacroOutlookService.Country c = knownCountry(code);
+        if (!c.available()) {
+            throw new InvalidRequestException(c.name() + " is not available yet: only Indonesia (ID) for now");
+        }
+        return c;
+    }
+
+    /** The publication date: required, ISO (2026-08-20), not in the future (Jakarta time). */
+    private static LocalDate publishedOn(String value) {
+        if (value == null || value.isBlank()) {
+            throw new InvalidRequestException("Give the publication date of the document");
+        }
+        LocalDate date;
+        try {
+            date = LocalDate.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            throw new InvalidRequestException("The publication date '" + value + "' is not a date (yyyy-mm-dd)");
+        }
+        LocalDate today = LocalDate.now(Exchange.IDX.zone());
+        if (date.isAfter(today)) {
+            throw new InvalidRequestException("The publication date " + date + " is in the future (today is " + today + ")");
+        }
+        if (date.getYear() < 1945) {
+            throw new InvalidRequestException("The publication date " + date + " is before 1945");
+        }
+        return date;
+    }
+
+    private static String compact(String text) {
+        return text.trim().replaceAll("\\s+", " ");
     }
 
     @PostMapping(path = "/pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

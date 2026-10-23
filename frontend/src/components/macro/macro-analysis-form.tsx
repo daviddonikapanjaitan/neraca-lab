@@ -7,6 +7,7 @@ import {
   CircleAlertIcon,
   CoinsIcon,
   DatabaseIcon,
+  FileTextIcon,
   LandmarkIcon,
   LoaderIcon,
   PlayIcon,
@@ -40,6 +41,8 @@ export function MacroAnalysisForm({ options }: { options: MacroAnalysisOptions }
   const chosen = indexes.find((i) => i.code === index) ?? null
   const canSubmit = country !== null && chosen !== null && agents.length > 0 && !pending
   const data = options.data
+  const documents = country ? data.macroDocuments?.[country] ?? 0 : 0
+  const countryName = options.countries.find((c) => c.code === country)?.name ?? country
 
   function toggle(code: MacroAgentCode, checked: boolean) {
     setAgents((current) =>
@@ -74,9 +77,10 @@ export function MacroAnalysisForm({ options }: { options: MacroAnalysisOptions }
           New macro analysis
         </CardTitle>
         <CardDescription>
-          A research agent reads the history of the stored macro series, commodities, currencies and indexes; then
-          each macro agent judges the country through its own lens, from the Macro page&apos;s rules and that research,
-          the answers are reviewed, and a final synthesis writes the investability score and the overall view.
+          A research agent reads the history of the stored macro series, commodities, currencies and indexes and
+          searches the country&apos;s macro documents (PDFs published by the as-of date); then each macro agent judges
+          the country through its own lens, from the Macro page&apos;s rules and that research, the answers are
+          reviewed, and a final synthesis writes the investability score and the overall view.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -163,6 +167,15 @@ export function MacroAnalysisForm({ options }: { options: MacroAnalysisOptions }
               data.currencyPairs > 0
                 ? `${data.currencyPairs} currency ${data.currencyPairs === 1 ? "pair" : "pairs"} with prices`
                 : "No currency pairs (Ingestion > Price Ingestion, Forex)"
+            }
+          />
+          <DataLine
+            icon={FileTextIcon}
+            ok={documents > 0}
+            text={
+              documents > 0
+                ? `${documents} macro ${documents === 1 ? "document" : "documents"} of ${countryName} (RAG)`
+                : `No macro documents of ${countryName} (Ingestion > PDF Documents (RAG))`
             }
           />
         </div>

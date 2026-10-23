@@ -7,8 +7,8 @@ spring:
     import: optional:file:.env[.properties]
   servlet:
     multipart:
-      max-file-size: 20MB
-      max-request-size: 21MB
+      max-file-size: 50MB
+      max-request-size: 51MB
   ai:
     # Spring AI is used for chat only (Spring AI's own embedding / image / audio models are off). The RAG
     # embeddings call OpenRouter's OpenAI-compatible /embeddings directly (neracalab.rag below).
@@ -23,7 +23,7 @@ spring:
       api-key: ${OPENAI_API_KEY:}
       base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}
       chat:
-        model: ${OPENAI_MODEL:deepseek/deepseek-v4-flash-0731}
+        model: ${OPENAI_MODEL:deepseek/deepseek-v4.1-flash-1017}
         parallel-tool-calls: true
         timeout: 180s
   datasource:
@@ -55,6 +55,7 @@ spring:
         - classpath:db/V1.0.23__schema_technical.sql           # technical analysis: index, events, macro, snapshots, chart settings
         - classpath:db/V1.0.25__schema_markets_macro.sql       # Forex / commodity bars, macro series catalog and release dates
         - classpath:db/V1.0.27__schema_macro_analysis.sql      # AI macro analysis of a country (Macro > AI Analysis)
+        - classpath:db/V1.0.28__schema_rag_macro.sql           # macro documents of a country in the RAG vector store
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -71,6 +72,11 @@ spring:
       # Schema is owned by the SQL scripts above; Hibernate must not alter it.
       ddl-auto: ${JPA_DDL_AUTO:none}
     open-in-view: false
+
+server:
+  tomcat:
+    # Read the rest of an upload over the multipart limit (default 2 MB) so the client gets the 413, not a reset connection
+    max-swallow-size: 60MB
 
 neracalab:
   # Login (POST /api/v1/auth/login); every other API needs the bearer token of a session
@@ -107,7 +113,10 @@ neracalab:
     # Every such upload is recorded in the table ingestion_error (fixed_by_claude_code).
     fallback:
       # its own model (OpenRouter id), stronger than the standard extraction's; empty = spring.ai.openai.chat.model
-      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-haiku-5.5}
+      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-sonnet-5.5}
+      # OpenRouter reasoning effort of its calls; Sonnet 5.5 refuses reasoning switched off (HTTP 400, error 878).
+      # Empty = neracalab.ingestion.model-reasoning, as the standard extraction
+      reasoning-effort: ${INGESTION_FALLBACK_REASONING_EFFORT:low}
       enabled: ${INGESTION_FALLBACK_ENABLED:true}
       after: ${INGESTION_FALLBACK_AFTER:3m}       # longest the standard extraction runs before the full-text one takes over
       timeout: ${INGESTION_FALLBACK_TIMEOUT:5m}   # longest the full-text extraction runs (room for two provider retries); then FAILED
@@ -276,6 +285,10 @@ neracalab:
     research-iterations: 4                         # model turns of the research agent (ReAct guard)
     max-tool-calls: 8                              # history and correlation lookups of the research agent
     history-months: 36                             # most months one history lookup returns
+    max-document-searches: 4                       # searches in the country's macro documents (RAG), if any are stored
+    document-results: 4                            # chunks returned per document search
+    excerpt-chars: 700                             # longest excerpt returned per chunk
+    embedding-price-per-million: 0.02              # USD per million tokens of the embedding model (estimated cost)
     agent-max-tokens: 1000                         # output limit of a macro agent answer or review
     prior-weight: 0.6                              # agent score = 60% its rules preset + 40% its AI judgement
     rules-weight: 0.2                              # investability = 80% the agents' mean + 20% the rules score
@@ -300,8 +313,8 @@ neracalab:
     excluded-tickers: []                            # e.g. known watchlist-board stocks
     min-fundamentals-coverage: 0.5
     llm:
-      research-model: ${SCREENING_RESEARCH_MODEL:deepseek/deepseek-v4-flash-0731}
-      agent-model: ${SCREENING_AGENT_MODEL:deepseek/deepseek-v4-flash-0731}
+      research-model: ${SCREENING_RESEARCH_MODEL:deepseek/deepseek-v4.1-flash-1017}
+      agent-model: ${SCREENING_AGENT_MODEL:deepseek/deepseek-v4.1-flash-1017}
       synthesis-model: ${SCREENING_SYNTHESIS_MODEL:anthropic/claude-opus-5.5}
       synthesis-effort: low
       provider-sort: price                          # OpenRouter: cheapest provider for the DeepSeek calls

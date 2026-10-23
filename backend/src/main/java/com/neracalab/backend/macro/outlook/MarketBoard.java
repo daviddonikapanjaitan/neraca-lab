@@ -20,10 +20,20 @@ import com.neracalab.backend.technical.engine.Candle;
  *       earnings, the rupiah), a headwind (NEGATIVE) when it fell 5 % or more; an <b>import</b> the other way round;
  *       a <b>mixed</b> one (gold: a haven as well as an export) and the yen are NEUTRAL;</li>
  *   <li>USD/IDR rising 2 % or more in 3 months (the rupiah weakening) is a headwind, falling 1 % or more supportive;</li>
+ *   <li>USD/CNY rising 2 % or more (a weaker yuan: China is Indonesia's largest trading partner, and the yuan pulls
+ *       Asian currencies with it) is a headwind, falling 2 % or more supportive; EUR/USD rising 2 % or more (a weaker
+ *       dollar, as {@code MacroSignals} reads the DXY) supportive, falling 2 % or more a headwind; AUD/JPY (risk
+ *       appetite and carry trades) rising 5 % or more supportive, falling 5 % or more a headwind; the other pairs
+ *       are NEUTRAL on their own;</li>
  *   <li>a daily series without a bar in the last 10 days, a monthly one without a bar in the last 75 days, is stale
  *       (NEUTRAL, with a note).</li>
  * </ul>
  * The terms of trade sum the export (+1 / -1) and import (-1 / +1) tones: from +2 favourable, from -2 unfavourable.
+ * <p>
+ * The rupiah against its Asian peers ({@link #regional}): USD/IDR's 3-month change beside the median of USD/CNY,
+ * USD/MYR, USD/PHP, USD/INR and USD/KRW (at least 3 of them current). Within {@value #PEER_GAP_PTS} points of the
+ * median the rupiah moves with the region (IN_LINE: the dollar and global money drive it); weaker by that much or
+ * more it UNDERPERFORMS (a pressure of Indonesia's own, a headwind); firmer it OUTPERFORMS (supportive).
  */
 public final class MarketBoard {
 
@@ -76,7 +86,22 @@ public final class MarketBoard {
             Map.entry("ALUMINIUM", new Relevance(Role.REFERENCE, "aluminium smelting and its users")),
             Map.entry("USDIDR", new Relevance(Role.CURRENCY, "the rupiah: a rise is a weaker rupiah - foreign investors' "
                     + "returns, imported inflation, BI's room to cut")),
-            Map.entry("USDJPY", new Relevance(Role.REFERENCE, "the yen: a fall (a stronger yen) often comes with global "
+            Map.entry("USDCNY", new Relevance(Role.CURRENCY, "the yuan: China is Indonesia's largest trading partner "
+                    + "(coal, nickel, palm oil); a rise (a weaker yuan) pulls Asian currencies, the rupiah among them, "
+                    + "down and makes Chinese goods cheaper")),
+            Map.entry("USDMYR", new Relevance(Role.CURRENCY, "the ringgit: Malaysia's currency, the closest peer of the "
+                    + "rupiah and its rival in palm oil; read with the rupiah")),
+            Map.entry("USDPHP", new Relevance(Role.CURRENCY, "the peso: an ASEAN peer of the rupiah; read with the "
+                    + "rupiah")),
+            Map.entry("USDINR", new Relevance(Role.CURRENCY, "the rupee: India buys Indonesian coal and palm oil; an "
+                    + "emerging-market peer of the rupiah")),
+            Map.entry("USDKRW", new Relevance(Role.CURRENCY, "the won: a gauge of Asia's exports and the tech cycle; a "
+                    + "peer of the rupiah")),
+            Map.entry("EURUSD", new Relevance(Role.CURRENCY, "the dollar against the euro: a rise is a weaker dollar, "
+                    + "easier global money for emerging markets")),
+            Map.entry("AUDJPY", new Relevance(Role.CURRENCY, "risk appetite: a fall comes with risk aversion and the "
+                    + "unwinding of carry trades, when foreign money leaves emerging markets")),
+            Map.entry("USDJPY", new Relevance(Role.CURRENCY, "the yen: a fall (a stronger yen) often comes with global "
                     + "risk aversion and the unwinding of carry trades")));
 
     /** 3-month move of a commodity that turns its tone. */
@@ -84,6 +109,17 @@ public final class MarketBoard {
     /** 3-month move of USD/IDR: weakening from +2 %, strengthening from -1 % (as {@code MacroSignals} reads it). */
     static final double RUPIAH_WEAK_PCT = 2;
     static final double RUPIAH_STRONG_PCT = -1;
+    /** 3-month move of USD/CNY (the yuan) and of EUR/USD (the dollar, as {@code MacroSignals} reads the DXY). */
+    static final double YUAN_MOVE_PCT = 2;
+    static final double EURO_MOVE_PCT = 2;
+    /** 3-month move of AUD/JPY (risk appetite). */
+    static final double RISK_MOVE_PCT = 5;
+    /** The rupiah's Asian peers, read against it ({@link #regional}). */
+    static final List<String> PEERS = List.of("USDCNY", "USDMYR", "USDPHP", "USDINR", "USDKRW");
+    /** Peers needed for the regional reading. */
+    static final int MIN_PEERS = 3;
+    /** Points of 3-month change between the rupiah and its peers' median that tell the rupiah's own move. */
+    static final double PEER_GAP_PTS = 1.5;
 
     /** A stored instrument: its catalog fields and bars (oldest first). */
     public record Input(String code, String name, String market, String unit, String frequency, List<Candle> bars) {
@@ -141,7 +177,91 @@ public final class MarketBoard {
         out.put("commodities", commodities);
         out.put("forex", forex);
         out.put("termsOfTrade", terms);
+        out.put("regionalCurrencies", regional(forex));
         return out;
+    }
+
+    /**
+     * The rupiah against its Asian peers over 3 months: USD/IDR's change beside the median of the peers' (a rise is a
+     * weaker currency in every pair). Only current pairs (not stale, with a 3-month change) are read; without USD/IDR
+     * or with fewer than {@link #MIN_PEERS} peers the state is null.
+     */
+    static Map<String, Object> regional(List<Map<String, Object>> forex) {
+        Map<String, Map<String, Object>> current = new LinkedHashMap<>();
+        for (Map<String, Object> row : forex) {
+            if (!Boolean.TRUE.equals(row.get("stale")) && row.get("change3mPct") != null) {
+                current.put((String) row.get("code"), row);
+            }
+        }
+        List<Map<String, Object>> peers = new ArrayList<>();
+        List<Double> changes = new ArrayList<>();
+        for (String code : PEERS) {
+            Map<String, Object> row = current.get(code);
+            if (row != null) {
+                Map<String, Object> peer = new LinkedHashMap<>();
+                peer.put("code", code);
+                peer.put("name", row.get("name"));
+                peer.put("change3mPct", row.get("change3mPct"));
+                peers.add(peer);
+                changes.add((Double) row.get("change3mPct"));
+            }
+        }
+        Map<String, Object> rupiah = current.get("USDIDR");
+        Double idr = rupiah == null ? null : (Double) rupiah.get("change3mPct");
+        Double median = changes.size() < MIN_PEERS ? null : median(changes);
+        Double gap = idr == null || median == null ? null : idr - median;
+        String state = gap == null ? null : gap >= PEER_GAP_PTS ? "UNDERPERFORMING"
+                : gap <= -PEER_GAP_PTS ? "OUTPERFORMING" : "IN_LINE";
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("state", state);
+        out.put("tone", state == null ? "NEUTRAL" : switch (state) {
+            case "UNDERPERFORMING" -> "NEGATIVE";
+            case "OUTPERFORMING" -> "POSITIVE";
+            default -> "NEUTRAL";
+        });
+        out.put("rupiah3mPct", idr);
+        out.put("peersMedian3mPct", round(median, 2));
+        out.put("gapPts", round(gap, 2));
+        out.put("peers", peers);
+        out.put("summary", regionalSummary(state, idr, median, gap, peers));
+        return out;
+    }
+
+    static String regionalSummary(String state, Double idr, Double median, Double gap, List<Map<String, Object>> peers) {
+        if (idr == null) {
+            return "No current USD/IDR price is stored (Ingestion › Price Ingestion, market Forex): the rupiah cannot be "
+                    + "read against its Asian peers.";
+        }
+        if (state == null) {
+            return "Only " + peers.size() + " of the rupiah's Asian peers (USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW) "
+                    + "have current prices; " + MIN_PEERS + " are needed to read the rupiah against the region "
+                    + "(Ingestion › Price Ingestion, market Forex).";
+        }
+        StringBuilder t = new StringBuilder("Over 3 months USD/IDR moved ").append(pct(idr))
+                .append(" (a rise is a weaker rupiah), its Asian peers a median ").append(pct(median)).append(" (");
+        for (int i = 0; i < peers.size(); i++) {
+            t.append(i == 0 ? "" : ", ").append(peers.get(i).get("name")).append(' ')
+                    .append(pct((Double) peers.get(i).get("change3mPct")));
+        }
+        t.append("). ");
+        String gapText = MacroOutlook.f(Math.abs(gap), 1) + " points";
+        t.append(switch (state) {
+            case "UNDERPERFORMING" -> "The rupiah is " + gapText + " weaker than the region: a pressure of Indonesia's "
+                    + "own (foreign outflows, the fiscal and policy outlook), a headwind for foreign money in its stocks.";
+            case "OUTPERFORMING" -> "The rupiah is " + gapText + " firmer than the region: money favours Indonesia "
+                    + "over its peers, supportive.";
+            default -> "The rupiah moves with the region (within " + MacroOutlook.f(PEER_GAP_PTS, 1)
+                    + " points of its peers): " + (median >= RUPIAH_WEAK_PCT ? "a strong dollar weighs on all of Asia, "
+                    + "not on Indonesia alone." : median <= RUPIAH_STRONG_PCT ? "a weaker dollar lifts all of Asia." : "no "
+                    + "pressure of Indonesia's own.");
+        });
+        return t.toString();
+    }
+
+    private static double median(List<Double> values) {
+        List<Double> sorted = values.stream().sorted().toList();
+        int n = sorted.size();
+        return n % 2 == 1 ? sorted.get(n / 2) : (sorted.get(n / 2 - 1) + sorted.get(n / 2)) / 2;
     }
 
     static String termsSummary(String state, int score, int voting, List<String> favourable, List<String> unfavourable) {
@@ -218,8 +338,21 @@ public final class MarketBoard {
         if (change3m == null) {
             return "NEUTRAL";
         }
-        if ("USDIDR".equals(code)) {
-            return change3m >= RUPIAH_WEAK_PCT ? "NEGATIVE" : change3m <= RUPIAH_STRONG_PCT ? "POSITIVE" : "NEUTRAL";
+        switch (code) {
+            case "USDIDR" -> {
+                return change3m >= RUPIAH_WEAK_PCT ? "NEGATIVE" : change3m <= RUPIAH_STRONG_PCT ? "POSITIVE" : "NEUTRAL";
+            }
+            case "USDCNY" -> {
+                return change3m >= YUAN_MOVE_PCT ? "NEGATIVE" : change3m <= -YUAN_MOVE_PCT ? "POSITIVE" : "NEUTRAL";
+            }
+            case "EURUSD" -> {
+                return change3m >= EURO_MOVE_PCT ? "POSITIVE" : change3m <= -EURO_MOVE_PCT ? "NEGATIVE" : "NEUTRAL";
+            }
+            case "AUDJPY" -> {
+                return change3m >= RISK_MOVE_PCT ? "POSITIVE" : change3m <= -RISK_MOVE_PCT ? "NEGATIVE" : "NEUTRAL";
+            }
+            default -> {
+            }
         }
         return switch (role) {
             case EXPORT -> change3m >= COMMODITY_MOVE_PCT ? "POSITIVE" : change3m <= -COMMODITY_MOVE_PCT ? "NEGATIVE" : "NEUTRAL";
@@ -236,14 +369,24 @@ public final class MarketBoard {
         }
         String moves = "3M " + pct(c3m) + ", 1Y " + pct(c1y)
                 + (monthly ? " (monthly averages, World Bank)" : "");
-        String what = switch (tone) {
-            case "POSITIVE" -> "USDIDR".equals(in.code()) ? "a firmer rupiah: supportive" : r.role() == Role.IMPORT
-                    ? "a cheaper import: supportive" : "a stronger export price: supportive";
-            case "NEGATIVE" -> "USDIDR".equals(in.code()) ? "a weaker rupiah: a headwind" : r.role() == Role.IMPORT
-                    ? "a dearer import: a headwind" : "a weaker export price: a headwind";
-            default -> "no strong move";
+        return moves + " - " + what(in.code(), r.role(), tone) + (r.text() == null ? "." : "; " + r.text() + ".");
+    }
+
+    /** What a tone means, in words: "a weaker rupiah: a headwind". */
+    static String what(String code, Role role, String tone) {
+        boolean positive = "POSITIVE".equals(tone);
+        if (!positive && !"NEGATIVE".equals(tone)) {
+            return "no strong move";
+        }
+        String reading = switch (code) {
+            case "USDIDR" -> positive ? "a firmer rupiah" : "a weaker rupiah";
+            case "USDCNY" -> positive ? "a firmer yuan" : "a weaker yuan";
+            case "EURUSD" -> positive ? "a weaker dollar" : "a stronger dollar";
+            case "AUDJPY" -> positive ? "risk appetite rising" : "risk aversion, carry trades unwinding";
+            default -> role == Role.IMPORT ? positive ? "a cheaper import" : "a dearer import"
+                    : positive ? "a stronger export price" : "a weaker export price";
         };
-        return moves + " - " + what + (r.text() == null ? "." : "; " + r.text() + ".");
+        return reading + (positive ? ": supportive" : ": a headwind");
     }
 
     /** Percent change of the close against the last bar on or before a day (null before the first bar). */

@@ -9,7 +9,7 @@ import { SESSION_COOKIE } from "@/lib/session-cookie"
  * call (the dashboard layout also verifies the session and the pages their permission).
  *
  * API routes (/api/...) are excluded: they pass the session to the backend, which answers 401
- * without one, and a proxy would buffer request bodies (uploads up to 20 MB) with a 10 MB limit.
+ * without one, and a proxy would buffer request bodies (uploads up to 50 MB) with a 10 MB limit.
  */
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl

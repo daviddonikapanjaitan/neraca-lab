@@ -163,7 +163,7 @@ unknown country or index in the URL shows Indonesia / IHSG.
 | Index | a plain line chart (Recharts), no indicators; close, 1M / 3M / YTD / 1Y, 52-week range; the investability score and the action badge |
 | Macro panel | "Macro panel (liquidity and risk regimes, rates, dollar)": both regimes with every vote and their state 3 months before; a chart per series grouped Indonesia / Global liquidity and risk, each with its last value, a Supportive / Headwind / Neutral badge, the summary and the preset that reads it |
 | Preset summaries | Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio (two per row on a wide screen): stance, label, score, thesis, buy when / sell when, the evidence on request |
-| Commodities and currencies | exports, imports and other instruments: last, 1M / 3M / 1Y, 52-week range, a 1Y sparkline, a Supportive / Headwind / Neutral badge with what it means for the country; the terms of trade on top |
+| Commodities and currencies | exports, imports, currencies (the nine pairs) and havens / references: last, 1M / 3M / 1Y, 52-week range, a 1Y sparkline, a Supportive / Headwind / Neutral badge with what it means for the country; the terms of trade on top, then the rupiah against its Asian peers (weaker than / in line with / firmer than the region, with its summary) |
 | Conclusion | the score (0 - 100) on a bar with the 40 / 60 marks, verdict and action, the summary, the buy / accumulate / sell conditions with met ones ticked (the group that applies now highlighted), what would change the call, the six parts of the score (weight, reading, points, why) |
 | Right column | sticky on a wide screen (`xl`, 340 px): the AI panel (`components/macro/macro-ai-panel.tsx`: the latest AI macro analysis of the index - investability, verdict, action, the agents' stances, the thesis, the rules' score - "Run AI analysis", a link to the report; polls every 3 s while one is active) and the country's indexes (IHSG, LQ45) |
 | Other | notes (series without data, an index not stored yet) and the disclaimer |
@@ -175,7 +175,7 @@ Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6a.
 | Page | Content |
 |---|---|
 | `/macro/analysis` | `macro-analysis-form.tsx`: country (Indonesia; the others "coming later"), index, the four agents, the models, the budget and what the database holds; "Run analysis" opens the report. `macro-analyses-table.tsx`: the analyses of every country and index, most recent first (country · index, status, investability, action, conviction, cost, requested), paged, polled while one is active |
-| `/macro/analysis/[id]` | `macro-analysis-report.tsx`: progress while it runs (polls every 3 s), then the tiles (investability, action, rules score, AI cost, duration), the executive summary (thesis, bull / bear case, risks, monitor, sector tilts, data gaps, adjustment), one card per agent (prior, AI, final score, stance, thesis, supports, risks, buy / sell when, reflection), the research brief (evidence refs, tool results, ReAct steps), the rules the agents read, the commodities and currencies, notes, model calls and the PDF download |
+| `/macro/analysis/[id]` | `macro-analysis-report.tsx`: progress while it runs (polls every 3 s), then the tiles (investability, action, rules score, AI cost, duration), the executive summary (thesis, bull / bear case, risks, monitor, sector tilts, data gaps, adjustment), one card per agent (prior, AI, final score, stance, thesis, supports, risks, buy / sell when, reflection), the research brief (evidence refs, tool results, ReAct steps), the rules the agents read, the commodities and currencies (with the rupiah against its Asian peers), notes, model calls and the PDF download |
 
 Route handlers: `/api/macro/analyses` (GET list, POST), `/api/macro/analyses/[id]`, `/api/macro/analyses/[id]/pdf`.
 Details: [MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md).
@@ -208,12 +208,12 @@ The jobs table has a "Cost" column: the USD cost and the number of model calls o
 priced from the list prices, a dash for a job without model calls. The job details show "Model cost"
 (`components/ingestion/job-usage.tsx`): the calls per stage and model with prompt, cached and completion
 tokens and the cost, and their total - for an upload the standard extraction (plan, tool turns, review;
-DeepSeek) and the full-text extraction (Haiku) side by side
+DeepSeek) and the full-text extraction (Sonnet) side by side
 ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 7).
 
 | Element                    | Content                                                                                                                         |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 20 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
+| Financial statement upload | description of the accepted format (IDX XBRL `.xlsx` only, 50 MB, stored once per checksum); drop zone / file picker; client-side check of extension and size; result notice (queued, stored file reused, already running) |
 | Price ingestion            | exchange and ticker dropdowns (companies stored per exchange), "re-fetch the full history" option, latest stored price date     |
 | PDF document upload        | exchange and company dropdowns (`company-picker.tsx`; a file name ending with a stored ticker selects it), `.pdf` drop zone, client-side check of extension and size, result notice |
 | News ingestion             | exchange (IDX) and company dropdowns, presets This month / Last 7 days / Last 30 days / Previous month / Custom range, From / To date inputs (Jakarta time; today comes from the server), live check of the range (`src/lib/date-range.ts`: start after end, future, over 366 days) |

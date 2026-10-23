@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     return problem(400, "Invalid request", "Only .pdf files are accepted")
   }
   if (file.size > MAX_UPLOAD_BYTES) {
-    return problem(413, "File too large", "The file exceeds the upload limit of 20 MB")
+    return problem(413, "File too large", "The file exceeds the upload limit of 50 MB")
   }
   const body = new FormData()
   body.append("file", file, file.name)
