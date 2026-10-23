@@ -113,6 +113,13 @@ stored in `instrument_daily`, in the quote currency and the unit of each instrum
 |---|---|---|---|---|---|---|
 | Forex | `USDIDR` | USD/IDR (IDR per USD) | Yahoo Finance `IDR=X` (London close) | 2001- | 1 | 3 % |
 | Forex | `USDJPY` | USD/JPY (JPY per USD) | Yahoo Finance `JPY=X` | 1996- | 0.001 | 5 % |
+| Forex | `USDCNY` | USD/CNY (CNY per USD, onshore yuan) | Yahoo Finance `CNY=X` | 2001- | 0.0001 | 2 % |
+| Forex | `USDMYR` | USD/MYR (MYR per USD) | Yahoo Finance `MYR=X` | Dec 2003- | 0.0001 | 4 % |
+| Forex | `USDPHP` | USD/PHP (PHP per USD) | Yahoo Finance `PHP=X` | Dec 2003- | 0.001 | 2.7 % |
+| Forex | `USDINR` | USD/INR (INR per USD) | Yahoo Finance `INR=X` | Dec 2003- | 0.001 | 3.5 % |
+| Forex | `USDKRW` | USD/KRW (KRW per USD) | Yahoo Finance `KRW=X` | Dec 2003- | 0.01 | 6 % |
+| Forex | `EURUSD` | EUR/USD (USD per EUR; a rise is a weaker dollar) | Yahoo Finance `EURUSD=X` | Dec 2003- | 0.0001 | 4 % |
+| Forex | `AUDJPY` | AUD/JPY (JPY per AUD; risk appetite, carry trades) | Yahoo Finance `AUDJPY=X` | Dec 2003- | 0.001 | 10 % |
 | Commodities | `BRENT` | Crude Oil (Brent), USD per barrel | Yahoo Finance `BZ=F` (front month) | 2007- | 0.01 | 15 % |
 | Commodities | `WTI` | Crude Oil (WTI), USD per barrel | Yahoo Finance `CL=F` (front month) | 2000- | 0.01 | 30 % |
 | Commodities | `NATURAL_GAS` | Natural Gas (Henry Hub), USD per MMBtu | Yahoo Finance `NG=F` | 2000- | 0.001 | 40 % |
@@ -148,6 +155,23 @@ Natural gas keeps 27 Jan 2022 (the February contract's expiry squeeze, 6.265 bet
 2000 (the May expiry, 5.16 between 6.18 and 6.53), copper the 4.49 low of 30 Jul 2025 (the US tariff exemption), wheat
 the 1,065 - 1,334.5 range of 27 Feb 2008. The silver squeeze of 1 Feb 2021 and wheat on 5 Aug 2010 (Russia's export
 ban) and 25 Feb 2022 (the invasion of Ukraine) are below the thresholds.
+
+**Currency pairs added on 2026-10-23** (USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY): the rupiah's
+Asian peers, the dollar and risk appetite, read for Indonesia on the Macro page and in the AI macro analysis
+([MACRO_DOCS.md](MACRO_DOCS.md) section 6a). Their thresholds were set the same way, on each whole Yahoo history: drop
+the prints that jump away and come straight back, never a real day.
+- **USD/CNY 2 %** (a managed currency): 5.863 on 2011-07-18 between 6.43 and 6.47, 7.1587 on 2023-10-30 inside 7.31.
+- **USD/INR 3.5 %:** the stale 52.493 of 2012-01-27 and -31. At 2 % the cleaner would drop the real 49.388 between
+  them instead; 85.194 of 2023-11-02 (2.3 % off) cannot be dropped without that error and stays.
+- **USD/PHP 2.7 %:** 2016-11-17 (43.703 inside 49), 2017-03-06, 2021-12-13, 2025-06-13; 2012-01-30's 42.619 between
+  two stale 43.714 is kept.
+- **USD/MYR 4 %:** four prints of 2006 - 2007 (e.g. 3.4609 on 2006-06-05 inside 3.63).
+- **USD/KRW 6 %:** none. The real 1,160 of 2008-09-16 (Lehman week) comes back 5.6 % the next day; at 4.5 % it would
+  be dropped, so the 2005 prints near 1,000 inside 1,045 stay.
+- **EUR/USD 4 %:** five prints of 2008 (1.5571 twice, 1.505, 1.4957, 1.4918 between 1.2717 and 1.2926); the real
+  1.2933 of 2009-02-20 is kept.
+- **AUD/JPY 10 %:** none. Its October 2008 carry-trade crash (58.4 on the 24th) and the rally of 13 - 14 October are
+  real and move 9 - 13 % a day.
 
 **Palm oil in ringgit.** Bursa Malaysia's crude palm oil future (FCPO) has no free source a program may read: Yahoo
 Finance does not serve it, MPOB's price data are a paid subscription. `PALM_OIL_MYR` is therefore `CPO=F` (the CME
@@ -222,6 +246,10 @@ curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/markets/COMMODITY/updates"
 - Coal: 573 months (1979-01 .. 2026-09).
 
 All jobs `SUCCEEDED` within a minute. Companies › Technicals charts every instrument (`TECHNICAL_DOCS.md`, section 9).
+
+**The pairs of 2026-10-23, first full load** (latest day 2026-10-22, all seven `SUCCEEDED` within 11 seconds; days stored,
+bad prints dropped): USD/CNY 6,340 (2), USD/MYR 5,956 (4), USD/PHP 5,929 (4), USD/INR 5,935 (2), USD/KRW 5,938 (0),
+EUR/USD 5,935 (5), AUD/JPY 5,959 (0) - exactly the drops of the calibration above.
 The USD/IDR pair is also the `USD_IDR` series of the macro view (`MACRO_DOCS.md`).
 
 Every state change of a job is also recorded in the `ingestion_job` table (type `PRICE`,
@@ -468,10 +496,10 @@ exchange and IHSG; Forex and Commodities are updated from the page.
 | `PriceUpdateControllerTest`   | status, update of an exchange and the IHSG ingestion over MockMvc against the Docker Postgres (stub provider, mocked index): the index job in the queue, recorded in `ingestion_job` with ticker IHSG |
 | `IndexIngestionServiceTest`   | the IHSG ingestion: from the latest stored day, today's bar only after the cutoff, no request when up to date, the whole history the first time |
 | `InstrumentIngestionServiceTest` | a Forex pair / commodity: the last completed day by the market's zone, no request when up to date, the overlap window, today's bar and a bad print not stored (and deleted), coal monthly up to the month before, palm oil in ringgit as CPO=F x MYR=X (the last rate up to 5 days before), cobalt from the IMF and the wood pulp index from FRED monthly, the whole history the first time |
-| `BarCleanerTest`              | the bad prints of the real USD/IDR and USD/JPY histories dropped (one to three days), a real move kept, wicks cut, the first and last bar never judged |
+| `BarCleanerTest`              | the bad prints of the real USD/IDR and USD/JPY histories dropped (one to three days), a real move kept, wicks cut, the first and last bar never judged; the prints the thresholds of the 2026-10-23 pairs were set on (USD/CNY, USD/INR's stale 52.493 with the real 49.388 kept, USD/PHP, USD/MYR, USD/KRW's Lehman day kept, EUR/USD, AUD/JPY's October 2008 kept) |
 | `WorldBankPinkSheetClientTest`| the Pink Sheet workbook: the months of one column, "…" months skipped, a column found without its footnote mark ("Rubber, TSR20 **"), one download per update (kept 10 minutes), an unknown column / sheet failing |
 | `ImfPcpsClientTest`           | the IMF PCPS answer (SDMX-JSON): the months in order, a month without a price left out; not JSON, a period that is not a month, a price that is not positive, no value, no series failing |
-| `MarketControllerTest`        | the markets and instruments, one instrument queued and recorded (exchange FOREX), "Update all" of a market, 404 / 400 |
+| `MarketControllerTest`        | the markets and instruments (the 9 currency pairs in order), one instrument queued and recorded (exchange FOREX), "Update all" of a market, 404 / 400 |
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
 | `PricesAfterUploadTest`       | prices of a stored filing's company: queued when missing or behind, for the uploader, never `full`; the active job is reused; nothing when up to date, for an unknown company or when switched off (`PriceIngestionServiceTest`: up to date only when the last completed trading day is stored) |
 | `YahooPriceProviderTest`      | parsing of a real Yahoo response (HRTA.JK around the Rp40 dividend and a holiday), symbol mapping, `Retry-After`                              |

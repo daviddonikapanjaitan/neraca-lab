@@ -114,6 +114,9 @@ neracalab:
     fallback:
       # its own model (OpenRouter id), stronger than the standard extraction's; empty = spring.ai.openai.chat.model
       model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-sonnet-5.5}
+      # OpenRouter reasoning effort of its calls; Sonnet 5.5 refuses reasoning switched off (HTTP 400, error 878).
+      # Empty = neracalab.ingestion.model-reasoning, as the standard extraction
+      reasoning-effort: ${INGESTION_FALLBACK_REASONING_EFFORT:low}
       enabled: ${INGESTION_FALLBACK_ENABLED:true}
       after: ${INGESTION_FALLBACK_AFTER:3m}       # longest the standard extraction runs before the full-text one takes over
       timeout: ${INGESTION_FALLBACK_TIMEOUT:5m}   # longest the full-text extraction runs (room for two provider retries); then FAILED

@@ -13,7 +13,8 @@ Macro page does).
 ```
 [Macro page rules, no AI]  MacroOutlookService.outlook(country, index, 1Y)  (docs: MACRO_DOCS.md section 6a)
   regimes, the reading of every macro series, the four presets, the rules' investability score,
-  the country's indexes (IHSG, LQ45), commodities and currency pairs with what each means for the country
+  the country's indexes (IHSG, LQ45), commodities and currency pairs with what each means for the country,
+  the rupiah against its Asian peers
       |
 [Research agent]  ReAct + tool calling over the STORED history and the country's macro documents (no web)
   history(code, months), correlation(a, b, months)          -> refs T1, T2, ...
@@ -82,14 +83,24 @@ All from the database, as of today (Jakarta) and point in time (a macro observat
   its 1M / 3M / 1Y change and **what it means for Indonesia** - an export (coal, nickel, palm oil, LNG, rubber, ...)
   rising 5 % or more in 3 months is supportive, an import (crude oil, wheat, soybean meal, ...) rising 5 % or more a
   headwind, USD/IDR up 2 % or more a headwind (down 1 % supportive); a stale price (10 days daily, 75 days monthly) is
-  neutral. The **terms of trade** sum the votes: FAVOURABLE at +2, UNFAVOURABLE at -2.
+  neutral. The **terms of trade** sum the votes: FAVOURABLE at +2, UNFAVOURABLE at -2. Since 2026-10-23 the nine
+  currency pairs: USD/IDR, USD/JPY, the rupiah's Asian peers (USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW), EUR/USD
+  (the dollar: a rise 2 % or more supportive) and AUD/JPY (risk appetite: a fall 5 % or more a headwind); a weaker yuan
+  (USD/CNY up 2 % or more) is a headwind.
+- **The rupiah against its Asian peers** (`markets.regionalCurrencies`, `MarketBoard.regional`): USD/IDR's 3-month
+  change beside the median of the five peers - **weaker than the region** by 1.5 points or more (a pressure of
+  Indonesia's own, a headwind), **firmer** (supportive) or **in line** (the dollar moves all of Asia); unknown with
+  fewer than 3 current peers ([MACRO_DOCS.md](MACRO_DOCS.md) section 6a). The synthesis gets it beside the terms of
+  trade, the report and its PDF show its summary. The prompts tell the research agent to read the rupiah against its
+  peers (weaker than the region: the country's own pressure; weaker with it: the dollar's), EUR/USD as the dollar
+  and AUD/JPY as risk appetite, and the agents that `regionalCurrencies` and the pair codes are signals they may cite.
 
 The research agent's tools (`MacroTools`) read the stored histories:
 
 | Tool | Returns |
 |---|---|
 | `history(code, months)` | Month-end values (a flow such as `ID_FOREIGN_NET_BUY`: the sum of the month) up to `history-months`, the latest value, the window's range and change (percent for prices, points for rates and series with values of zero or less), and the **stored high and low** of everything stored with their dates and since when (not for flows). |
-| `correlation(a, b, months)` | Pearson correlation of the monthly changes of two series (e.g. IHSG with USDIDR, COAL or US_10Y), with the months used. |
+| `correlation(a, b, months)` | Pearson correlation of the monthly changes of two series (e.g. IHSG with USDIDR, COAL, AUDJPY or US_10Y, or USDIDR with USDCNY), with the months used. A code is accepted as the model writes it (`usd/cny` is `USDCNY`). |
 
 Each result has a ref (T1, T2, ...). A repeated call or one past `max-tool-calls` is refused. The prompts say a value is
 a **record** only when it is the stored high or low - a window's or a 52-week high is not.
@@ -201,7 +212,7 @@ The models are those of the screening (`neracalab.screening.llm`: `research-mode
 |---|---|
 | `MacroAnalysisControllerTest` | The options; an analysis of Indonesia end to end on stored macro data, commodities and indexes with a scripted model (research with tools, four agents assessed or revised, the synthesis, scores, verdict, action, usage rows, the PDF), with two macro documents stored: the one published by the as-of date listed to the research agent and found by its document search (D1, kept as evidence and in the dossier), the one published after it not read and noted; an active analysis of the same index returned, not queued again; invalid requests (400) and agent names by code, preset or surname. |
 | `MacroAnalysisRulesTest` | `history` reads only what was published by the as-of date (stored high and low); a flow summed per month with changes in points; correlation and the tool limits; the document search (refs D1, D2 kept for the same chunk, excerpts, a repeated query refused, its own limit) offered only when the country has documents; the report's notes on documents not read; the validator holding each investor to his own rules; answers normalized; the prior from the preset; the blend and the action table; the synthesis bounded to +-5. |
-| `MarketBoardTest` | Exports, imports and the rupiah read for Indonesia (tones, terms of trade); stale data neutral, an empty board says so. |
+| `MarketBoardTest` | Exports, imports and the rupiah read for Indonesia (tones, terms of trade); stale data neutral, an empty board says so; the yuan, the dollar (EUR/USD) and risk appetite (AUD/JPY) read, a peer neutral on its own and none voting in the terms of trade; the rupiah weaker than, in line with and firmer than its Asian peers, unknown with fewer than 3 peers or without USD/IDR. |
 | `AccessControlTest` | The macro analyses need COMPANIES. |
 
 ## 10. Results (2026-10-21, live)
@@ -211,10 +222,16 @@ The models are those of the screening (`neracalab.screening.llm`: `research-mode
 | IHSG | 22 | 29.2 | NOT_INVESTABLE | SELL | MEDIUM | $0.051 | 9 | 48 s |
 | LQ45 | 22 | 29.2 | NOT_INVESTABLE | SELL | HIGH | $0.051 | 9 | 27 s |
 | IHSG | 22 | 28.8 | NOT_INVESTABLE | SELL | HIGH | $0.054 | 9 | 49 s |
+| IHSG (2026-10-23, with the nine currency pairs) | 31 | 29.9 | NOT_INVESTABLE | SELL | MEDIUM | $0.058 | 13 | 51 s |
 
 The last run: IHSG 23.7 % below its falling 200-day average, liquidity tightening (-5 of 7), BI hiking to 5.75 %,
 foreign equity outflows, the rupiah near its stored record low; coal and LNG supportive. Tudor Jones 31.0 and
 Druckenmiller 12.6 AVOID, Soros 46.0 WAIT (foreign SBN inflows, a narrower country premium), Dalio 32.5 AVOID.
+
+The run of 2026-10-23 had the nine currency pairs and the rupiah 1.8 points weaker than its Asian peers' median (USD/IDR
++0.5 % in 3 months against -1.3 %). Three agents named it among their risks (Tudor Jones: "Rupiah 1.8pts weaker than
+Asian peers; foreign outflows persist"; Soros, Dalio) and the synthesis's thesis a "regionally weak rupiah". Tudor Jones
+32.2, Druckenmiller 14.2 and Dalio 26.8 AVOID, Soros 45.2 WAIT.
 
 ## 11. Limits
 

@@ -118,6 +118,43 @@ class MacroAnalysisRulesTest {
         assertThatThrownBy(() -> tools.history("USDIDR", 12)).hasMessageContaining("limit reached");
     }
 
+    /**
+     * The currency pairs added on 2026-10-23 are read by the research agent as the model writes them: the rupiah against
+     * the yuan ("usd/cny"), and AUD/JPY's history (risk appetite).
+     */
+    @Test
+    void theRupiahIsReadAgainstTheYuanAndRiskAppetiteFromAudJpy() {
+        Map<String, List<Candle>> prices = new LinkedHashMap<>();
+        List<Candle> idr = new ArrayList<>();
+        List<Candle> cny = new ArrayList<>();
+        List<Candle> audJpy = new ArrayList<>();
+        double r = 15000;
+        double y = 7.0;
+        double a = 100;
+        for (int m = 0; m < 30; m++) {
+            LocalDate d = LocalDate.of(2024, 4, 28).plusMonths(m);
+            double move = m % 3 == 0 ? 0.02 : -0.01;
+            r *= 1 + move;
+            y *= 1 + move / 2;          // the yuan moves with the rupiah, half as far
+            a *= 1 - move * 3;          // risk appetite falls when Asian currencies weaken
+            idr.add(Candle.daily(d, r, r, r, r, r, 0));
+            cny.add(Candle.daily(d, y, y, y, y, y, 0));
+            audJpy.add(Candle.daily(d, a, a, a, a, a, 0));
+        }
+        prices.put("USDIDR", idr);
+        prices.put("USDCNY", cny);
+        prices.put("AUDJPY", audJpy);
+        MacroTools tools = tools(Map.of(), prices);
+        Map<String, Object> together = tools.correlation("usd/idr", "USD/CNY", 24);
+        assertThat(together.get("a")).isEqualTo("USDIDR");
+        assertThat(together.get("b")).isEqualTo("USDCNY");
+        assertThat((Double) together.get("r")).isGreaterThan(0.95);
+        Map<String, Object> risk = tools.history("aud/jpy", 12);
+        assertThat(risk.get("code")).isEqualTo("AUDJPY");
+        assertThat(risk.get("months")).isEqualTo(12);
+        assertThat(tools.catalog()).containsKeys("USDIDR", "USDCNY", "AUDJPY");
+    }
+
     private static MacroTools tools(Map<String, List<Observation>> macro, Map<String, List<Candle>> prices) {
         Map<String, MacroTools.Meta> meta = new LinkedHashMap<>();
         macro.keySet().forEach(k -> meta.put(k, new MacroTools.Meta(k, "%", true, false)));

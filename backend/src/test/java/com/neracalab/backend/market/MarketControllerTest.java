@@ -100,6 +100,14 @@ class MarketControllerTest {
                 .andExpect(jsonPath("$[0].items[1].code").value("USDJPY"))
                 .andExpect(jsonPath("$[1].market").value("COMMODITY"))
                 .andExpect(jsonPath("$[1].itemLabel").value("Commodity"));
+        // the currency pairs (sort_order): the rupiah, the yen, the rupiah's Asian peers, the dollar, risk appetite
+        JsonNode forex = json.readTree(mvc.perform(get("/api/v1/markets/forex")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertThat(forex.get("items").findValuesAsString("code")).containsExactly("USDIDR", "USDJPY", "USDCNY", "USDMYR",
+                "USDPHP", "USDINR", "USDKRW", "EURUSD", "AUDJPY");
+        assertThat(forex.get("items").get(7).get("unit").asString()).isEqualTo("USD per EUR");
+        assertThat(forex.get("items").get(8).get("unit").asString()).isEqualTo("JPY per AUD");
+        assertThat(forex.get("items").get(8).get("source").asString()).isEqualTo("yahoo");
         String body = mvc.perform(get("/api/v1/markets/commodity")).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         JsonNode commodities = json.readTree(body);
@@ -134,7 +142,7 @@ class MarketControllerTest {
             Thread.sleep(50);
         }
         assertThat(stage).isEqualTo("Stored 2 new and 0 updated price days, latest 2026-10-15");
-        mvc.perform(post("/api/v1/markets/FOREX/ingestions").param("code", "EURUSD"))
+        mvc.perform(post("/api/v1/markets/FOREX/ingestions").param("code", "ZZNONE"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.title").value("Instrument not found"));
     }

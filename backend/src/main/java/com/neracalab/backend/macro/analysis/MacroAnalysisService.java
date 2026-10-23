@@ -276,6 +276,7 @@ public class MacroAnalysisService {
         input.put("index", context.get("index"));
         input.put("indexes", context.get("indexes"));
         input.put("termsOfTrade", markets == null ? null : markets.get("termsOfTrade"));
+        input.put("regionalCurrencies", markets == null ? null : markets.get("regionalCurrencies"));
         input.put("agents", rows);
         input.put("research", r.brief());
         input.put("dataNotes", List.copyOf(notes.messages));
@@ -338,7 +339,7 @@ public class MacroAnalysisService {
     /**
      * What the agents see (and the report keeps): the Macro page's view without its chart points and its dropdown
      * lists - the as-of date, the index and the country's other indexes, the regimes, the reading of every series, the
-     * presets, the rules' conclusion, the commodities and currency pairs.
+     * presets, the rules' conclusion, the commodities and currency pairs, and the rupiah against its Asian peers.
      */
     @SuppressWarnings("unchecked")
     static Map<String, Object> context(MacroOutlookService.Choice choice, Map<String, Object> view) {
@@ -374,6 +375,7 @@ public class MacroAnalysisService {
                     .map(MacroAnalysisService::withoutPoints).toList());
             m.put("currencyPairs", ((List<Object>) markets.getOrDefault("forex", List.of())).stream()
                     .map(MacroAnalysisService::withoutPoints).toList());
+            m.put("regionalCurrencies", markets.get("regionalCurrencies"));
             c.put("markets", m);
         }
         c.put("rulesVersion", view.get("rulesVersion"));

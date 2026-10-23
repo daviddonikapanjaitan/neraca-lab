@@ -266,6 +266,8 @@ class MacroAnalysisControllerTest {
         assertThat(ctx.path("series").path(0).has("points")).isFalse();
         assertThat(ctx.path("indexes").size()).isGreaterThanOrEqualTo(1);
         assertThat(ctx.path("markets").has("termsOfTrade")).isTrue();
+        // the rupiah against its Asian peers (a state, or null and a summary saying why, with the stored prices)
+        assertThat(ctx.path("markets").path("regionalCurrencies").path("summary").asString()).isNotBlank();
 
         // the research agent read the stored history and the macro document published by the as-of date; the made-up
         // ref was dropped

@@ -194,7 +194,7 @@ class IngestionServiceFallbackTest {
     // ------------------------------------------------------------------ helpers
 
     private void fallback(boolean enabled) {
-        when(fullText.properties()).thenReturn(new FallbackProperties("", enabled, Duration.ofMinutes(3), Duration.ofMinutes(3),
+        when(fullText.properties()).thenReturn(new FallbackProperties("", "", enabled, Duration.ofMinutes(3), Duration.ofMinutes(3),
                 Duration.ofSeconds(150), 120_000, 3));
     }
 

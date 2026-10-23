@@ -21,7 +21,7 @@ import {
 } from "lightweight-charts"
 
 import { BandPrimitive, type PriceBand, type PriceBox } from "@/components/technical/band-primitive"
-import { chartsAsLine, type Events, type IndicatorId, type IndicatorSeries, type Levels, type Ohlcv } from "@/lib/technical"
+import { chartsAsLine, decimalsOf, type Events, type IndicatorId, type IndicatorSeries, type Levels, type Ohlcv } from "@/lib/technical"
 
 export interface PriceChartHandle {
   /** PNG of the chart as shown (all panes), or null before the chart exists */
@@ -168,8 +168,10 @@ export default function PriceChart({ ohlcv, indicators, levels, events, selected
     const p = palette(dark)
     const has = (id: IndicatorId) => selected.includes(id)
     const series = indicators?.series ?? {}
-    const integerPrices = ohlcv.bars.every((b) => Number.isInteger(b[4]))
-    const priceFormat = { type: "price" as const, precision: integerPrices ? 0 : 2, minMove: integerPrices ? 1 : 0.01 }
+    // a currency pair or commodity: the decimals of its tick (EUR/USD 0.0001 -> 1.1202, USD/IDR 1 -> 16,250)
+    const precision =
+      ohlcv.tickSize != null ? decimalsOf(ohlcv.tickSize) : ohlcv.bars.every((b) => Number.isInteger(b[4])) ? 0 : 2
+    const priceFormat = { type: "price" as const, precision, minMove: 10 ** -precision }
 
     const chart = createChart(container, {
       autoSize: true,

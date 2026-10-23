@@ -172,7 +172,7 @@ the Next.js route handlers `/api/technical/...`, every response validated with z
 | `SnapshotCalculatorTest` | on about 300 real days of HRTA, SMSM and MYOR with IHSG (`src/test/resources/technical/*.csv`): the complete versioned schema, valid tick prices, determinism and the input hash, limited history, missing sessions vs stale prices, earnings reaction |
 | `TechnicalControllerTest` | every endpoint against the Docker Postgres (rolled back): search, bars, aggregation, indicators, levels, snapshot, events, market, settings, invalid parameters, unknown ticker, a 30-day listing and one without prices; IHSG as a listing (search, bars in points by `IHSG` and `^JKSE`, levels with 2 decimals, snapshot not stored, no events, summary); LQ45 as a listing (found after IHSG, its own bars by `LQ45` and `^JKLQ45`, relative strength vs IHSG, levels with 2 decimals, no events, summary); the summaries of a stock (valid IDX prices, stop < buy < sell) |
 | `PresetSummariesTest` | the four summaries on the real HRTA, SMSM and MYOR fixtures (stance, valid IDX prices, stop < buy < sell, reward to risk, thesis), determinism, an uptrend bought and a downtrend avoided (PTJ: a buy-stop above the close below the 200-day, 5:1 target), an index in points without relative strength vs itself, no prices with fewer than 15 bars; USD/JPY read through its own trend (prices at its 0.001 tick, no IHSG votes); no preset reads macro data |
-| `TechnicalControllerTest` (instruments) | a synthetic currency pair (markets dropdown, search, bars in its unit, levels at 0.001, no volume node, snapshot schema 2 with regimes, summary with `priceDecimals` 3, unknown instrument 404) and a monthly commodity (interval forced to M, 422 for levels / snapshot / summary) |
+| `TechnicalControllerTest` (instruments) | a synthetic currency pair (markets dropdown, search, bars in its unit with its `tickSize` 0.001 in the header, levels at 0.001, no volume node, snapshot schema 2 with regimes, summary with `priceDecimals` 3, unknown instrument 404) and a monthly commodity (interval forced to M, 422 for levels / snapshot / summary) |
 | `IndexIngestionServiceTest` | the IHSG ingestion: from the latest stored day, today's bar only after the cutoff, no request when up to date, the whole history the first time and with `full` |
 
 ## 7. Known limitations
@@ -214,7 +214,8 @@ AVOID (below the 200-day: buy-stop 3,420, target 4,570 = 5:1, stop 3,190); Druck
 ## 9. Forex pairs and commodities
 
 The dropdown of the page lists the exchanges, then **Forex** and **Commodities** (`GET /api/v1/technical/markets`).
-With a market, the search finds its currencies (USD/IDR, USD/JPY) or commodities (26: Brent, WTI, natural gas, LNG, coal, gold, silver, copper, aluminium, iron ore, steel hot-rolled coil,
+With a market, the search finds its currencies (9: USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW,
+EUR/USD, AUD/JPY) or commodities (26: Brent, WTI, natural gas, LNG, coal, gold, silver, copper, aluminium, iron ore, steel hot-rolled coil,
 nickel, tin, cobalt, palm oil in USD and in ringgit, soybean oil, soybean meal, corn, wheat, sugar, rubber, wood pulp
 index, urea, DAP, potash): the
 instruments of Price Ingestion ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md), section 1b). Every API above takes
@@ -223,8 +224,15 @@ the market as `{exchange}` and the instrument code as `{ticker}` (`/api/v1/techn
 - **Bars** from `instrument_daily` in the quote currency and unit ("IDR per USD", "USD per barrel"). The header has
   `type` FOREX / COMMODITY, `unit`, `frequency` and `source`, and `lotSize` null. There is nothing to adjust, so the page
   hides the price-basis toggle.
-- **Levels and preset prices** are rounded to the instrument's tick (USD/IDR 1, USD/JPY 0.001, Brent 0.01, gold 0.1,
-  palm oil 0.25, palm oil in ringgit 1, corn and wheat 0.25 US cents, copper 0.0005). The summary returns `priceDecimals` and `unit` for the page.
+- **Levels and preset prices** are rounded to the instrument's tick (USD/IDR 1, USD/JPY and AUD/JPY 0.001, USD/PHP and
+  USD/INR 0.001, USD/KRW 0.01, USD/CNY, USD/MYR and EUR/USD 0.0001, Brent 0.01, gold 0.1, palm oil 0.25, palm oil in
+  ringgit 1, corn and wheat 0.25 US cents, copper 0.0005). The summary returns `priceDecimals` and `unit` for the page.
+- **Decimals on the page** follow the tick (since 2026-10-23): the bars' header (`ohlcv`, `indicators`) carries the
+  instrument's `tickSize`, and the chart's price scale, the header price and the snapshot's ATR and MACD (which are in
+  price units) use its decimals - EUR/USD 1.1235 with an ATR of 0.0062, where 2 decimals showed 1.12 and an ATR of 0.
+  A stock or index has no `tickSize` in the header and its chart keeps its formatting; the snapshot's ATR and MACD use
+  at least the decimals of the snapshot's `price.tickSize` (a stock, tick 1 or more: unchanged; IHSG, tick 0.01: the
+  ATR with 2 decimals instead of 1).
 - **What does not apply** (as for IHSG): relative strength vs IHSG and the comparison line, events, auto-rejection, the
   lot.
 - **The snapshot** is computed on request and kept in memory. These fields are null, with a note:

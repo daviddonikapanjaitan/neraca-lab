@@ -681,11 +681,39 @@ public class FullTextExtractorTest {
     void usesItsOwnModelWhenOneIsConfigured() {
         when(agent.options()).thenAnswer(call -> OpenAiChatOptions.builder().model("test"));
         FullTextExtractor own = new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),
-                new FallbackProperties("anthropic/claude-sonnet-5.5", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
+                new FallbackProperties("anthropic/claude-sonnet-5.5", "low", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
                         Duration.ofSeconds(150), 120_000, 3));
 
         assertThat(own.model()).isEqualTo("anthropic/claude-sonnet-5.5");
         assertThat(extractor(3).model()).isEqualTo("test");
+    }
+
+    /**
+     * WINE FY2023 (error 878): Claude Sonnet 5.5 refuses a request with reasoning switched off ("Reasoning is
+     * mandatory for this endpoint and cannot be disabled", HTTP 400), so every full-text extraction failed on its
+     * first call. Its calls send the configured reasoning effort instead of the standard extraction's
+     * {@code "enabled": false}, and keep the provider exclusions and the cost request.
+     */
+    @Test
+    void sendsItsOwnReasoningEffortInsteadOfTheStandardExtractionsReasoningOff() {
+        IngestionAgent standard = new IngestionAgent(null, null, null, new AgentProperties(30, 2, 0.0, 2, Duration.ofMillis(1)),
+                null, "deepseek/deepseek-v4.1-flash-1017", false, Duration.ofSeconds(45), List.of("OpenInference"));
+        FullTextExtractor sonnet = new FullTextExtractor(standard, null, null, JsonMapper.builder().build(),
+                new FallbackProperties("anthropic/claude-sonnet-5.5", "low", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
+                        Duration.ofSeconds(150), 120_000, 3));
+        FullTextExtractor inherited = new FullTextExtractor(standard, null, null, JsonMapper.builder().build(),
+                new FallbackProperties("", " ", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
+                        Duration.ofSeconds(150), 120_000, 3));
+
+        OpenAiChatOptions options = sonnet.options();
+        assertThat(options.getModel()).isEqualTo("anthropic/claude-sonnet-5.5");
+        assertThat(options.getTemperature()).isEqualTo(0.0);
+        assertThat(options.getExtraBody()).isEqualTo(Map.of("reasoning", Map.of("effort", "low"),
+                "provider", Map.of("ignore", List.of("OpenInference")), "usage", Map.of("include", true)));
+        // the standard extraction's own requests are unchanged
+        assertThat(standard.options().build().getExtraBody().get("reasoning")).isEqualTo(Map.of("enabled", false));
+        // no effort configured: the standard extraction's setting
+        assertThat(inherited.options().getExtraBody().get("reasoning")).isEqualTo(Map.of("enabled", false));
     }
 
     /**
@@ -996,7 +1024,7 @@ public class FullTextExtractorTest {
 
     private FullTextExtractor extractor(int rounds) {
         return new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),
-                new FallbackProperties("", true, Duration.ofMinutes(3), Duration.ofMinutes(3), Duration.ofSeconds(150), 120_000, rounds));
+                new FallbackProperties("", "", true, Duration.ofMinutes(3), Duration.ofMinutes(3), Duration.ofSeconds(150), 120_000, rounds));
     }
 
     private void answers(String... answers) {

@@ -12,7 +12,12 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param model            model of the full-text extraction (an OpenRouter id), by default a stronger one than the
  *                         standard extraction's: it has to keep a whole statement consistent in one answer; blank =
  *                         the standard extraction's model ({@code spring.ai.openai.chat.model})
- * @param enabled          false: an upload ends where the standard extraction ends (as before)
+ * @param reasoningEffort  OpenRouter reasoning effort of its model calls (low, medium, high), sent as
+ *                         {@code "reasoning": {"effort": ...}} instead of the standard extraction's
+ *                         {@code neracalab.ingestion.model-reasoning}: Claude Sonnet 5.5 refuses a request with
+ *                         reasoning switched off (HTTP 400 "Reasoning is mandatory for this endpoint and cannot be
+ *                         disabled", error 878); blank = the standard extraction's setting
+ * @param enabled         false: an upload ends where the standard extraction ends (as before)
  * @param after            longest the standard extraction (the AI agent) may run before the full-text
  *                         extraction takes over; never more than {@code neracalab.ingestion.job-timeout}
  * @param timeout          longest the full-text extraction may run; the upload is stopped and FAILED after it
@@ -25,6 +30,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 @ConfigurationProperties("neracalab.ingestion.fallback")
 public record FallbackProperties(
         @DefaultValue("anthropic/claude-sonnet-5.5") String model,
+        @DefaultValue("low") String reasoningEffort,
         @DefaultValue("true") boolean enabled,
         @DefaultValue("3m") Duration after,
         @DefaultValue("5m") Duration timeout,

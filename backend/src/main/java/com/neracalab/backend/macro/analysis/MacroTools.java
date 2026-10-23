@@ -97,8 +97,8 @@ public class MacroTools {
 
     @Tool(description = """
             Monthly history of one stored series: a macro series (e.g. BI_RATE, ID_CPI_YOY, SBN_10Y, US_10Y, DXY, VIX, \
-            ID_FX_RESERVES), a commodity (e.g. COAL, NICKEL, PALM_OIL, BRENT, GOLD), a currency pair (USDIDR) or an index \
-            (IHSG, LQ45). Returns the last value of each month (a flow such as ID_FOREIGN_NET_BUY: the sum of the month), \
+            ID_FX_RESERVES), a commodity (e.g. COAL, NICKEL, PALM_OIL, BRENT, GOLD), a currency pair (e.g. USDIDR, \
+            USDCNY, USDMYR, EURUSD, AUDJPY) or an index (IHSG, LQ45). Returns the last value of each month (a flow such as ID_FOREIGN_NET_BUY: the sum of the month), \
             the latest value, the range and the change over the window, and the highest and lowest value of everything \
             stored with their dates (a record only when it is the stored high or low), with a ref (T1, T2, ...).""")
     public Map<String, Object> history(@ToolParam(description = "the code exactly as listed, e.g. COAL") String code,
@@ -163,7 +163,7 @@ public class MacroTools {
 
     @Tool(description = """
             Correlation of the monthly changes of two stored series over a window (Pearson, -1 .. +1), e.g. IHSG with \
-            USDIDR, COAL or US_10Y: how the index moved when the other moved. Percent changes for prices and indexes, \
+            USDIDR, COAL, AUDJPY or US_10Y, or USDIDR with USDCNY: how the index moved when the other moved. Percent changes for prices and indexes, \
             point changes for rates. Needs 12 months or more; returns r, the months used and a ref.""")
     public Map<String, Object> correlation(@ToolParam(description = "first code, e.g. IHSG") String a,
                                            @ToolParam(description = "second code, e.g. COAL") String b,

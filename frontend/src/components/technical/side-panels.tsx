@@ -183,6 +183,10 @@ export function SnapshotCard({ snapshot }: { snapshot: Snapshot }) {
   const exportCsv = () =>
     downloadCsv(`${snapshot.ticker}-snapshot-${snapshot.asOfDate}.csv`, ["field", "value"], flatten(snapshot).map(([k, v]) => [k, v]))
   const pct = (v: number | null) => (v === null ? EMPTY : formatPercent(v / 100))
+  // ATR and MACD are in price units: at least the decimals of the tick (EUR/USD 0.0001: an ATR of 0.0062, not 0)
+  const tickDecimals = decimalsOf(n(snapshot.price as Group, "tickSize"))
+  const atrDigits = Math.max(1, tickDecimals)
+  const macdDigits = Math.max(2, tickDecimals)
   return (
     <Card>
       <CardHeader>
@@ -208,13 +212,13 @@ export function SnapshotCard({ snapshot }: { snapshot: Snapshot }) {
         </Section>
         <Section title="Momentum">
           <Row label="RSI 14" value={formatNumber(n(momentum, "rsi14"), 1)} />
-          <Row label="MACD / signal / hist" value={`${formatNumber(n(macd, "line"), 2)} / ${formatNumber(n(macd, "signal"), 2)} / ${formatNumber(n(macd, "histogram"), 2)}`} />
+          <Row label="MACD / signal / hist" value={`${formatNumber(n(macd, "line"), macdDigits)} / ${formatNumber(n(macd, "signal"), macdDigits)} / ${formatNumber(n(macd, "histogram"), macdDigits)}`} />
           <Row label="Stochastic %K / %D" value={`${formatNumber(n(stoch, "k"), 1)} / ${formatNumber(n(stoch, "d"), 1)}`} />
           <Row label="Change 1M / 3M / 6M / 12M" value={`${signed(n(roc, "d21"), 1)} ${signed(n(roc, "d63"), 1)} ${signed(n(roc, "d126"), 1)} ${signed(n(roc, "d252"), 1)}`} />
           <Row label="12-1 month momentum" value={signed(n(momentum, "momentum12_1Pct"), 1)} />
         </Section>
         <Section title="Volatility">
-          <Row label="ATR 14 / ATR %" value={`${formatNumber(n(vol, "atr14"), 1)} / ${formatNumber(n(vol, "atrPct"), 2)}%`} />
+          <Row label="ATR 14 / ATR %" value={`${formatNumber(n(vol, "atr14"), atrDigits)} / ${formatNumber(n(vol, "atrPct"), 2)}%`} />
           <Row label="ATR % percentile (1Y)" value={formatNumber(n(vol, "atrPctPercentile252"), 0)} />
           <Row label="Bollinger width" value={`${formatNumber(n(bb, "bandwidthPct"), 2)}%`} />
         </Section>

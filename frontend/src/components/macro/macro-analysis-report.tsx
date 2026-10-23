@@ -629,7 +629,15 @@ function MarketsSnapshot({ report }: { report: Report }) {
         </CardTitle>
         <CardDescription>{markets?.termsOfTrade.summary ?? "No commodity or currency prices were stored."}</CardDescription>
       </CardHeader>
-      <CardContent className="px-0">
+      <CardContent className="space-y-3 px-0">
+        {markets?.regionalCurrencies && (
+          <p className="px-4 text-sm leading-relaxed">
+            <span className={cn("font-medium", TONE_CLASS[markets.regionalCurrencies.tone])}>
+              The rupiah against its Asian peers:
+            </span>{" "}
+            {markets.regionalCurrencies.summary}
+          </p>
+        )}
         {rows.length > 0 && (
           <div className="overflow-x-auto">
             <Table>

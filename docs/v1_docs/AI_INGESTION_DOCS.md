@@ -893,6 +893,7 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 |---------------------------------------------|---------|------------------------------------------------------------|
 | `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
 | `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-sonnet-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash and dearer per token (USD 2 / 10 per million against 0.15 / 0.60; one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
+| `reasoning-effort` (`INGESTION_FALLBACK_REASONING_EFFORT`) | `low` | OpenRouter reasoning effort of its calls, sent as `"reasoning": {"effort": "low"}` in place of the standard extraction's `"enabled": false` (`model-reasoning`): Claude Sonnet 5.5 refuses reasoning switched off with HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled" (error 878, every full-text extraction failed on its first call); empty = the standard extraction's setting |
 | `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
 | `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
 | `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
@@ -931,6 +932,21 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-10-23 (errors 877 - 880): WINE
+
+| What was wrong | Rows | Fix |
+|----------------|------|-----|
+| **The full-text extraction's model refused every call.** Since the switch to Claude Sonnet 5.5 its requests carried the standard extraction's `"reasoning": {"enabled": false}` (`model-reasoning: false`), and Sonnet 5.5 refuses that: HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled" (80 ms, no answer). WINE's FY2023 upload ended `INCOMPLETE` with nothing of FY2023 stored. The only such call in `llm_usage`. | 878 | `fallback.reasoning-effort` (`INGESTION_FALLBACK_REASONING_EFFORT`, default `low`): `FullTextExtractor.options` sends `"reasoning": {"effort": "low"}` in its place, the provider exclusions and the cost request kept; the standard extraction's DeepSeek calls still switch reasoning off. Uploaded again: three Sonnet calls (USD 0.0897), FY2023 stored (error 880). |
+| **A filing that contradicts itself.** WINE's FY2023 cash flow (direct method) files no investing row and no investing total in the FY2023 column (FY2022: -3,267,185,857), and its financing lines add up to 29,103,486,541 beside the filed total 29,500,370,253 (difference 396,883,712). Operating -14,044,367,603 + financing 29,500,370,253 is not the net change 7,750,478,932 (beginning 9,166,930,763, ending 16,917,409,695), so investing would be -7,705,523,718 - but the filing does not say it. | 880 | Not changed: nothing in the workbook decides it. Stored by the full-text extraction as filed - operating, financing (the filed total), its lines, the net change and the ending cash - with investing and capital expenditure left empty; `INCOMPLETE`. WINE's FY2024 workbook would fill them from its comparative (a comparative fills an empty field). |
+| **A broken download.** WINE's FY2024 xlsx is a 165-byte Excel lock file ('Administrator'), not a workbook. | 877 | Rightly refused (422). Download it from IDX again in place of the file in `data/IDX_XBRL/WINE/xlsx`: its FY2023 comparative fills FY2023's investing. |
+
+The negative cash of WINE's FY2024 (-6,347,846,792), FY2025 (-13,842,609,224) and H1 2025 (-2,998,446,986) cash
+flows is as filed: WINE reports cash net of bank overdrafts there (the balance sheet: 8,652,153,208 and 2,856,625,986).
+ASLC, BBRM, GZCO, IKBI, MHKI, NAIK, SRSN and UNIQ, uploaded with WINE: every filing `SUCCEEDED`.
+
+Tests: `FullTextExtractorTest` (its own reasoning effort in place of the standard extraction's reasoning off); 707
+passing.
 
 ### The review of 2026-10-22 (errors 802 - 809): KETR, CYBR, IRSX, MNCN, RMKE and LPPF
 

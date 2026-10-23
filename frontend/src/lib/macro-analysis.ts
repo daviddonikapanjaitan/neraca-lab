@@ -1,7 +1,15 @@
 // AI macro analysis of a country (docs/v1_docs/MACRO_ANALYSIS_DOCS.md): GET /api/v1/macro/analyses and its report.
 
 import { EMPTY } from "@/lib/format"
-import { MACRO_ANALYSIS_HREF, type MacroCountry, type MarketRow, type MacroIndexRow, type MacroPreset, type Tone } from "@/lib/macro"
+import {
+  MACRO_ANALYSIS_HREF,
+  type MacroCountry,
+  type MarketRow,
+  type MacroIndexRow,
+  type MacroPreset,
+  type RegionalCurrencies,
+  type Tone,
+} from "@/lib/macro"
 import type { IngestionJobCreator, IngestionJobStatus, ScreeningOption, ScreeningUsage } from "@/lib/types"
 
 export type MacroAgentCode = "TUDOR_JONES" | "DRUCKENMILLER" | "SOROS" | "DALIO"
@@ -174,6 +182,8 @@ export interface MacroAnalysisContext {
     termsOfTrade: { state: string | null; score: number | null; signals: number; summary: string }
     commodities: Omit<MarketRow, "points">[]
     currencyPairs: Omit<MarketRow, "points">[]
+    /** the rupiah against its Asian peers; absent in analyses of before 2026-10-23 */
+    regionalCurrencies?: RegionalCurrencies | null
   }
   rulesVersion: string
 }

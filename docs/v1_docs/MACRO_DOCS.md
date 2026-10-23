@@ -277,6 +277,27 @@ rules (`macro.outlook.MacroOutlook`, rules version `2026-10-16.1`), no AI model;
   and what it means for the country: an export up 5 % or more in 3 months supportive (down 5 % a headwind), an import
   the reverse, USD/IDR up 2 % or more a headwind (down 1 % supportive), a stale price (10 days daily, 75 days monthly)
   neutral. The **terms of trade** sum the export and import votes: FAVOURABLE at +2, UNFAVOURABLE at -2.
+- **Currencies** (2026-10-23): the nine pairs of the Forex price ingestion in a group of their own (the rest of
+  "Havens and references": gold, silver and the reference commodities), each with what a rise means for Indonesia.
+  Each pair's tone over 3 months:
+
+  | Pair | Supportive | Headwind | Why |
+  |---|---|---|---|
+  | USD/IDR | -1 % or more | +2 % or more | the rupiah (as the dollar signal of section 5) |
+  | USD/CNY | -2 % or more | +2 % or more | China is Indonesia's largest trading partner; a weaker yuan pulls Asian currencies down |
+  | EUR/USD | +2 % or more | -2 % or more | a rise is a weaker dollar (as the DXY of section 5) |
+  | AUD/JPY | +5 % or more | -5 % or more | risk appetite; a fall is risk aversion and carry trades unwinding |
+  | USD/MYR, USD/PHP, USD/INR, USD/KRW, USD/JPY | - | - | neutral on their own; the peers are read together (below) |
+
+  None of them votes in the terms of trade or in the investability score (the rules version is unchanged).
+- **The rupiah against its Asian peers** (`regionalCurrencies`, under the terms of trade): USD/IDR's 3-month change
+  beside the median of USD/CNY, USD/MYR, USD/PHP, USD/INR and USD/KRW (at least 3 current, not stale; the median, so one
+  extreme peer does not decide). 1.5 points or more weaker than the median: **weaker than the region** - a pressure of
+  Indonesia's own (foreign outflows, the fiscal and policy outlook), a headwind. 1.5 points or more firmer: **firmer than
+  the region**, supportive. Between them: **in line** - the dollar moves all of Asia (a strong dollar when the median is
+  +2 % or more, a weak one at -1 % or less). Fewer than 3 peers or no USD/IDR: unknown, and the summary says which data
+  are missing. On 2026-10-23: USD/IDR +0.5 %, the peers' median -1.3 % (USD/KRW -10.4 %): 1.8 points weaker than the
+  region.
 - **Right column** (sticky on a wide screen): the **AI panel** - the latest AI macro analysis of the chosen index
   (investability, verdict, action, the four agents' stances, the thesis, beside the rules' score) with **Run AI
   analysis** and a link to its report - and **Indexes**: the country's indexes (IHSG, LQ45) with close, 1M / 3M / 1Y and
@@ -291,7 +312,7 @@ sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
 | Endpoint (permission COMPANIES) | Returns |
 |---|---|
 | `GET /api/v1/macro/outlook/countries` | the countries (`available`) and their indexes (`rows`, `lastDate`) |
-| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros` with `loop`, `dalio` with `quadrant`), `indexes` (the country's indexes), `markets` (`rows` with `role`, `tone`, `summary`, `points`; `termsOfTrade`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
+| `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros` with `loop`, `dalio` with `quadrant`), `indexes` (the country's indexes), `markets` (`commodities` and `forex`: rows with `role`, `tone`, `summary`, `points`; `termsOfTrade`; `regionalCurrencies`: `state`, `tone`, `rupiah3mPct`, `peersMedian3mPct`, `gapPts`, `peers`, `summary`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
 
 ## 7. Limitations
 

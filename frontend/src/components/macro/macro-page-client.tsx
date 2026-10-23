@@ -37,6 +37,7 @@ import {
   type MacroRegimeThen,
   type MacroStance,
   type MarketRow,
+  type RegionalCurrencies,
   type Tone,
   type Verdict,
 } from "@/lib/macro"
@@ -280,22 +281,30 @@ function toneOf(value: number | null | undefined): string {
 const ROLE_GROUPS: { title: string; roles: MarketRow["role"][] }[] = [
   { title: "What Indonesia exports", roles: ["EXPORT"] },
   { title: "What Indonesia imports", roles: ["IMPORT"] },
-  { title: "Havens, currencies and references", roles: ["MIXED", "CURRENCY", "REFERENCE"] },
+  { title: "Currencies", roles: ["CURRENCY"] },
+  { title: "Havens and references", roles: ["MIXED", "REFERENCE"] },
 ]
+
+const REGIONAL_LABEL: Record<NonNullable<RegionalCurrencies["state"]>, string> = {
+  UNDERPERFORMING: "Weaker than the region",
+  IN_LINE: "In line with the region",
+  OUTPERFORMING: "Firmer than the region",
+}
 
 /** The commodities and currency pairs of the price ingestion, read for the country, and its terms of trade. */
 function MarketsCard({ data }: { data: MacroOutlook }) {
   const markets = data.markets
   const rows = markets ? [...markets.commodities, ...markets.forex] : []
   const terms = markets?.termsOfTrade
+  const regional = markets?.regionalCurrencies
   return (
     <Card>
       <CardHeader>
         <CardTitle>Commodities and currencies</CardTitle>
         <CardDescription>
           {data.country.name} exports coal, nickel, palm oil, tin, gold and LNG and imports crude oil, wheat and soybeans:
-          what their prices mean for its trade balance, the rupiah and the resource sectors · data from Ingestion › Price
-          Ingestion
+          what their prices mean for its trade balance, the rupiah and the resource sectors; the rupiah read against its
+          Asian peers, the dollar and risk appetite · data from Ingestion › Price Ingestion
         </CardDescription>
         {terms?.state && (
           <CardAction>
@@ -314,6 +323,19 @@ function MarketsCard({ data }: { data: MacroOutlook }) {
       </CardHeader>
       <CardContent className="space-y-5">
         {terms && <p className="text-sm leading-relaxed">{terms.summary}</p>}
+        {regional && (
+          <div className="space-y-1.5 rounded-lg border px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold">The rupiah against its Asian peers</h3>
+              {regional.state && (
+                <Badge variant="outline" className={cn(TONE_STYLE[regional.tone])}>
+                  {REGIONAL_LABEL[regional.state]}
+                </Badge>
+              )}
+            </div>
+            <p className="text-sm leading-relaxed">{regional.summary}</p>
+          </div>
+        )}
         {rows.length === 0 ? (
           <EmptyState
             variant="chart"

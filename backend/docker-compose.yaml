@@ -73,6 +73,7 @@ services:
       # full-text extraction when the standard extraction cannot store a workbook, and when it takes over
       INGESTION_FALLBACK_ENABLED: ${INGESTION_FALLBACK_ENABLED:-true}
       INGESTION_FALLBACK_MODEL: ${INGESTION_FALLBACK_MODEL:-anthropic/claude-sonnet-5.5}
+      INGESTION_FALLBACK_REASONING_EFFORT: ${INGESTION_FALLBACK_REASONING_EFFORT:-low}
       # OpenRouter providers the ingestion never uses (OpenInference: its DeepSeek endpoint loops for 60 s)
       INGESTION_PROVIDER_IGNORE: ${INGESTION_PROVIDER_IGNORE:-OpenInference}
       INGESTION_FALLBACK_AFTER: ${INGESTION_FALLBACK_AFTER:-3m}

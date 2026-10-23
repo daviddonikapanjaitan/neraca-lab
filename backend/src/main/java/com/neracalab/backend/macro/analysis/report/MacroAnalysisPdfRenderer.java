@@ -314,6 +314,9 @@ public class MacroAnalysisPdfRenderer {
         if (text(markets.path("termsOfTrade").path("summary")) != null) {
             doc.add(new Paragraph(text(markets.path("termsOfTrade").path("summary")), BODY));
         }
+        if (text(markets.path("regionalCurrencies").path("summary")) != null) {
+            doc.add(new Paragraph(text(markets.path("regionalCurrencies").path("summary")), BODY));
+        }
         List<JsonNode> rows = new ArrayList<>();
         markets.path("commodities").forEach(rows::add);
         markets.path("currencyPairs").forEach(rows::add);
@@ -330,7 +333,9 @@ public class MacroAnalysisPdfRenderer {
         for (JsonNode r : rows) {
             table.addCell(cell(r.path("name").asString("") + " (" + r.path("lastDate").asString("") + ")", SMALL,
                     Element.ALIGN_LEFT));
-            table.addCell(cell(String.format(Locale.ROOT, "%,.2f", r.path("last").asDouble()), SMALL, Element.ALIGN_RIGHT));
+            double last = r.path("last").asDouble();
+            // a currency below 100 (EUR/USD 1.1202, USD/MYR 4.0830) needs its four decimals, as on the page
+            table.addCell(cell(String.format(Locale.ROOT, last >= 100 ? "%,.2f" : "%,.4f", last), SMALL, Element.ALIGN_RIGHT));
             table.addCell(cell(pct(r.path("change1mPct")), SMALL, Element.ALIGN_RIGHT));
             table.addCell(cell(pct(r.path("change3mPct")), SMALL, Element.ALIGN_RIGHT));
             table.addCell(cell(pct(r.path("change1yPct")), SMALL, Element.ALIGN_RIGHT));

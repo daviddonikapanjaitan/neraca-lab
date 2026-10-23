@@ -25,6 +25,7 @@ import { EMPTY, formatDate, formatNumber, formatPrice } from "@/lib/format"
 import { companyHref } from "@/lib/links"
 import {
   DISCLAIMER,
+  decimalsOf,
   eventsSchema,
   fetchValidated,
   indicatorsSchema,
@@ -272,10 +273,13 @@ function TechnicalsView({ markets, start }: { markets: TechnicalMarket[]; start:
   const picker = (
     <IndicatorPicker selected={indicators} onToggle={toggle} levelsDisabled={levelsDisabled} index={isIndex} comparable={comparable} monthly={monthly} />
   )
-  // decimals of the header price: an index 2, an instrument by its size (USD/JPY 3), a stock as the price formatter
+  // decimals of the header price: an index 2, an instrument those of its tick (EUR/USD 4, USD/JPY 3; by its size
+  // when the tick is unknown), a stock as the price formatter
+  const instrumentDecimals = (value: number) =>
+    data?.tickSize != null ? decimalsOf(data.tickSize) : value < 1000 ? 3 : 2
   const priceText = (value: number) =>
     isIndex && !isInstrument ? `${formatPrice(value)} points`
-      : isInstrument ? `${formatNumber(value, value < 1000 ? 3 : 2)} ${data?.unit ?? ""}`.trim()
+      : isInstrument ? `${formatNumber(value, instrumentDecimals(value))} ${data?.unit ?? ""}`.trim()
         : `${data!.currency} ${formatPrice(value)}`
 
   return (

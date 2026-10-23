@@ -1182,6 +1182,8 @@ public class TechnicalService {
         out.put("frequency", instrument == null ? "DAILY" : instrument.frequency());
         out.put("source", instrument != null ? sourceLabel(instrument)
                 : isIndex(listing) ? "Yahoo Finance " + indexOf(listing).yahooSymbol() : null);
+        // a currency pair or commodity: its tick, which sets the decimals of the chart (EUR/USD 0.0001: 1.1202)
+        out.put("tickSize", instrument == null ? null : instrument.tickSize().doubleValue());
         return out;
     }
 

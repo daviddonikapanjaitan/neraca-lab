@@ -198,13 +198,23 @@ public class FullTextExtractor {
         return properties;
     }
 
-    /** The agent's request options with the full-text extraction's own model, when one is configured. */
-    private OpenAiChatOptions options() {
+    /**
+     * The agent's request options with the full-text extraction's own model and reasoning effort, when configured.
+     */
+    OpenAiChatOptions options() {
         OpenAiChatOptions.Builder builder = agent.options();
         if (properties.model() != null && !properties.model().isBlank()) {
             builder.model(properties.model().trim());
         }
-        return builder.build();
+        OpenAiChatOptions options = builder.build();
+        if (properties.reasoningEffort() == null || properties.reasoningEffort().isBlank()) {
+            return options;
+        }
+        Map<String, Object> extra = new LinkedHashMap<>(options.getExtraBody() == null ? Map.of() : options.getExtraBody());
+        extra.put("reasoning", Map.of("effort", properties.reasoningEffort().trim()));
+        OpenAiChatOptions.Builder withEffort = options.mutate();
+        withEffort.extraBody(extra);
+        return withEffort.build();
     }
 
     /** The model that maps the workbook: its own, or the standard extraction's when none is configured. */
