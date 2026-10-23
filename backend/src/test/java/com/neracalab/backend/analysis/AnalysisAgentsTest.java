@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -28,6 +29,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 
 import com.neracalab.backend.company.CompanyDetailResponse.Period;
+import com.neracalab.backend.rag.CompanyDocumentType;
 import com.neracalab.backend.rag.EmbeddingClient;
 import com.neracalab.backend.rag.RagProperties;
 import com.neracalab.backend.rag.RagRepository;
@@ -97,7 +99,7 @@ class AnalysisAgentsTest {
         EmbeddingClient embeddings = mock(EmbeddingClient.class);
         when(embeddings.embed(anyString())).thenReturn(new float[RagProperties.STORE_DIMENSIONS]);
         when(embeddings.model()).thenReturn("stub-embedding");
-        when(rag.search(anyLong(), any(), any(), anyInt())).thenReturn(List.of(new Hit(11, 5, "TEST", SourceType.PDF,
+        when(rag.search(anyLong(), any(), any(), any(), anyInt())).thenReturn(List.of(new Hit(11, 5, "TEST", SourceType.PDF,
                 "FS 2025", null, "FS-2025.pdf", null, 12, 13, "Revenue   by segment:\n jewellery 80%", 0.21)));
         Scripted model = new Scripted();
         model.replies.add(AssistantMessage.builder().content("Thought: segments")
@@ -139,7 +141,7 @@ class AnalysisAgentsTest {
         RagRepository rag = mock(RagRepository.class);
         EmbeddingClient embeddings = mock(EmbeddingClient.class);
         when(embeddings.embed(anyString())).thenReturn(new float[RagProperties.STORE_DIMENSIONS]);
-        when(rag.search(anyLong(), any(), any(), anyInt())).thenReturn(List.of());
+        when(rag.search(anyLong(), any(), any(), any(), anyInt())).thenReturn(List.of());
         ContextTools tools = tools(meter(new ArrayList<>()), true, false, rag, embeddings);
         assertThat(tools.searchFilings("dividend policy")).isEmpty();
         assertThatThrownBy(() -> tools.searchFilings("Dividend  policy")).hasMessageContaining("searched already");
@@ -148,7 +150,55 @@ class AnalysisAgentsTest {
         assertThat(tools.getStatement("2025 fy")).containsEntry("period", "2025 FY");
 
         ContextTools none = tools(meter(new ArrayList<>()), false, false, rag, embeddings);
-        assertThatThrownBy(() -> none.searchFilings("x")).hasMessageContaining("No PDF documents");
+        assertThatThrownBy(() -> none.searchFilings("x")).hasMessageContaining("No financial statement PDFs");
+        assertThatThrownBy(() -> none.searchRegistrations("x")).hasMessageContaining("No monthly registration reports");
+    }
+
+    /**
+     * The monthly registration reports are searched apart from the financial statements (their own tool, document
+     * type and refs R1, ...); the tool is offered only when they are stored.
+     */
+    @Test
+    void registrationReportsAreSearchedApartFromTheFilings() {
+        RagRepository rag = mock(RagRepository.class);
+        EmbeddingClient embeddings = mock(EmbeddingClient.class);
+        when(embeddings.embed(anyString())).thenReturn(new float[RagProperties.STORE_DIMENSIONS]);
+        when(embeddings.model()).thenReturn("stub-embedding");
+        when(rag.search(anyLong(), eq(SourceType.PDF), eq(CompanyDocumentType.REGISTRATION), any(), anyInt()))
+                .thenReturn(List.of(new Hit(21, 7, "TEST", SourceType.PDF, "registrasi", null, "registrasi_test_juni.pdf",
+                        null, 2, 2, "PT INDUK 71% Pengendali", 0.18)));
+        when(rag.search(anyLong(), eq(SourceType.PDF), eq(CompanyDocumentType.FINANCIAL_STATEMENT), any(), anyInt()))
+                .thenReturn(List.of(new Hit(11, 5, "TEST", SourceType.PDF, "FS 2025", null, "FS-2025.pdf", null, 12, 12,
+                        "Revenue by segment", 0.2)));
+        Scripted model = new Scripted();
+        model.replies.add(AssistantMessage.builder().content("Thought: owners and segments")
+                .toolCalls(List.of(new AssistantMessage.ToolCall("c1", "function", "searchRegistrations",
+                                "{\"query\":\"pemegang saham 5% pengendali\"}"),
+                        new AssistantMessage.ToolCall("c2", "function", "searchFilings", "{\"query\":\"segments\"}")))
+                .build());
+        model.replies.add(new AssistantMessage("""
+                {"business":"Jewellery","ownership":"PT Induk controls 71%","newsSentiment":"NONE",\
+                "evidence":[{"ref":"R1","fact":"PT Induk holds 71%"},{"ref":"F1","fact":"Segments"}]}"""));
+        AnalysisResearchAgent agent = new AnalysisResearchAgent(new LlmGateway(model, screening), screening, properties, mapper);
+        UsageMeter meter = meter(new ArrayList<>());
+        ContextTools tools = new ContextTools(1, "TEST", FactSheet.of(TestFacts.detail(), 4), embeddings, rag, meter,
+                properties, true, false, true);
+        AnalysisResearchAgent.Subject subject = new AnalysisResearchAgent.Subject("TEST", "PT Test Tbk", "Industrials",
+                List.of("2025 FY"), List.of("FS-2025.pdf"), 1, List.of(), 0, List.of("registrasi_test_juni.pdf"), 1);
+
+        AnalysisResearchAgent.Result r = agent.research(meter, subject, tools, true);
+
+        List<String> offered = ((OpenAiChatOptions) model.prompts.getFirst().getOptions()).getToolCallbacks().stream()
+                .map(ToolCallback::getToolDefinition).map(d -> d.name()).toList();
+        assertThat(offered).containsExactlyInAnyOrder("searchFilings", "searchRegistrations", "getStatement");
+        assertThat(model.prompts.getFirst().getInstructions().get(1).getText())
+                .contains("Stored monthly registration reports: 1 (registrasi_test_juni.pdf)");
+        assertThat(r.retrieved()).extracting(ContextTools.Retrieved::ref, ContextTools.Retrieved::source)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("R1", "REGISTRATION"),
+                        org.assertj.core.groups.Tuple.tuple("F1", "PDF"));
+        assertThat(r.brief().evidence()).extracting(ResearchBrief.Evidence::ref).containsExactly("R1", "F1");
+        assertThat(r.brief().ownership()).isEqualTo("PT Induk controls 71%");
+        assertThat(r.droppedRefs()).isZero();
     }
 
     @Test
@@ -175,7 +225,7 @@ class AnalysisAgentsTest {
                 new AnalysisSynthesisAgent.AgentRow("RISK", "Risk Agent", null, null, null, null, null, List.of(), List.of(),
                         List.of()));
         AnalysisSynthesisAgent.Synthesis fallback = AnalysisSynthesisAgent.fallback("TEST", rows,
-                new ResearchBrief("Makes jewellery.", null, null, null, List.of("Gold price"), List.of("Exports"), "NONE",
+                new ResearchBrief("Makes jewellery.", null, null, null, null, List.of("Gold price"), List.of("Exports"), "NONE",
                         null, List.of()), 64.0, "budget");
         assertThat(fallback.executiveSummary()).contains("overall score 64/100").contains("Warren Buffett 64 (FIT)")
                 .contains("Makes jewellery.").contains("without the synthesis model");

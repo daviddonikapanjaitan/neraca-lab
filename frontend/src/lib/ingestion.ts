@@ -1,10 +1,43 @@
 // Ingestion page helpers shared by the client components and the route handlers.
 
 import { EMPTY } from "@/lib/format"
-import type { IndexEntry, IndexPriceStatus, IngestionJobCreator, IngestionJobStatus, IngestionJobType } from "@/lib/types"
+import type {
+  CompanyDocumentType,
+  IndexEntry,
+  IndexPriceStatus,
+  IngestionJobCreator,
+  IngestionJobStatus,
+  IngestionJobType,
+} from "@/lib/types"
 
 /** Backend upload limit (spring.servlet.multipart.max-file-size: 50MB). */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+/** The types of a company PDF (CompanyDocumentType on the backend), the default first. */
+export const COMPANY_DOCUMENT_TYPES: { code: CompanyDocumentType; label: string; description: string }[] = [
+  {
+    code: "FINANCIAL_STATEMENT",
+    label: "Financial Statement",
+    description: "Financial statements and annual reports, e.g. FinancialStatement-2025-Tahunan-HRTA.pdf",
+  },
+  {
+    code: "REGISTRATION",
+    label: "Registration",
+    description:
+      "Monthly registration report of securities holders (Laporan Bulanan Registrasi Pemegang Efek) from idx.co.id",
+  },
+]
+
+export const DEFAULT_COMPANY_DOCUMENT_TYPE: CompanyDocumentType = "FINANCIAL_STATEMENT"
+
+export function companyDocumentTypeLabel(code: CompanyDocumentType | null | undefined): string {
+  return COMPANY_DOCUMENT_TYPES.find((t) => t.code === code)?.label ?? EMPTY
+}
+
+/** A file name that looks like a registration report: "registrasi_hrta_juni.pdf", "Registration-HRTA.pdf", LBRE. */
+export function looksLikeRegistration(fileName: string): boolean {
+  return /registrasi|registration|lbre/i.test(fileName)
+}
 
 /** Rows per page of the jobs table and the stored documents (RAG), and the default. */
 export const TABLE_PAGE_SIZES = [5, 10, 20, 50] as const

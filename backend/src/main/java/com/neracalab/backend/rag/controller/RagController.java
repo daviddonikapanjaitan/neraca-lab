@@ -35,6 +35,7 @@ import com.neracalab.backend.company.Tickers.InvalidTickerException;
 import com.neracalab.backend.job.IngestionJob;
 import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.macro.outlook.MacroOutlookService;
+import com.neracalab.backend.rag.CompanyDocumentType;
 import com.neracalab.backend.rag.EmbeddingClient;
 import com.neracalab.backend.rag.MacroDocumentType;
 import com.neracalab.backend.rag.PdfText;
@@ -51,20 +52,22 @@ import com.neracalab.backend.rag.RagRepository.Hit;
 import com.neracalab.backend.rag.RagRepository.MacroDocumentPage;
 import com.neracalab.backend.rag.RagRepository.MacroHit;
 import com.neracalab.backend.rag.RagRepository.SourceType;
+import com.neracalab.backend.registration.RegistrationParser.RegistrationFormatException;
 
 /**
  * RAG vector store (pgvector): PDF documents and news articles of the companies, chunked, embedded and linked to
  * their company, and macro PDFs of the countries, linked to their country (read by the AI macro analysis). Ingestions
  * are asynchronous jobs ({@code GET /api/v1/ingestions/{id}}).
  * <ul>
- *   <li>{@code POST /api/v1/rag/pdf} (multipart {@code file}, {@code exchange}, {@code ticker}) - queue a PDF; 202
- *       with the new job, 200 with the job already queued / running for the same file and company; 422 for a file
- *       that is not a readable text PDF</li>
+ *   <li>{@code POST /api/v1/rag/pdf} (multipart {@code file}, {@code exchange}, {@code ticker}, optional
+ *       {@code documentType}: FINANCIAL_STATEMENT, the default, or REGISTRATION) - queue a PDF; 202 with the new job,
+ *       200 with the job already queued / running for the same file and company; 422 for a file that is not a
+ *       readable text PDF, or, as a REGISTRATION, not a readable registration report of the company</li>
  *   <li>{@code POST /api/v1/rag/news?exchange=IDX&ticker=HRTA&from=2026-10-01&to=2026-10-08} - queue the news of a
  *       date range (inclusive, Jakarta time, at most 366 days, not in the future); 202 / 200 as above</li>
  *   <li>{@code GET /api/v1/rag/status} - settings (embedding model, chunking, news limits) and what is stored</li>
- *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF|NEWS&limit&offset]} - one page
- *       of the stored documents, with the number matching the filters</li>
+ *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF|NEWS&documentType&limit&offset]} -
+ *       one page of the stored documents, with the number matching the filters</li>
  *   <li>{@code GET /api/v1/rag/search?q=...[&exchange&ticker&source&limit]} - the closest chunks (cosine)</li>
  *   <li>{@code POST /api/v1/rag/macro/pdf} (multipart {@code file}, {@code country}, {@code documentType},
  *       {@code publishedOn}, optional {@code title} and {@code issuer}) - queue a macro PDF of a country (Indonesia;
@@ -93,10 +96,12 @@ public class RagController {
      * @param pending            RAG jobs waiting in the queue (excluding the running one)
      * @param macroCountries     the countries of the macro documents (only the available ones take uploads)
      * @param macroDocumentTypes the types of a macro document
+     * @param companyDocumentTypes the types of a company PDF (the first is the default)
      */
     public record Status(String embeddingModel, int embeddingDimensions, int chunkChars, int chunkOverlap,
                          int newsMaxArticles, int newsMaxPages, int maxRangeDays, int pending, Counts stored,
-                         List<MacroCountry> macroCountries, List<DocumentTypeOption> macroDocumentTypes) {
+                         List<MacroCountry> macroCountries, List<DocumentTypeOption> macroDocumentTypes,
+                         List<DocumentTypeOption> companyDocumentTypes) {
     }
 
     /** A country of the macro documents and how many are stored for it. */
@@ -126,9 +131,11 @@ public class RagController {
                 .toList();
         List<DocumentTypeOption> types = Arrays.stream(MacroDocumentType.values())
                 .map(t -> new DocumentTypeOption(t.name(), t.label(), t.examples())).toList();
+        List<DocumentTypeOption> companyTypes = Arrays.stream(CompanyDocumentType.values())
+                .map(t -> new DocumentTypeOption(t.name(), t.label(), t.examples())).toList();
         return new Status(embeddings.model(), properties.embeddingDimensions(), properties.chunkChars(),
                 properties.chunkOverlap(), properties.newsMaxArticles(), properties.newsMaxPages(), MAX_RANGE_DAYS,
-                queue.pendingCount(), repository.counts(), countries, types);
+                queue.pendingCount(), repository.counts(), countries, types, companyTypes);
     }
 
     /**
@@ -242,11 +249,18 @@ public class RagController {
         return text.trim().replaceAll("\\s+", " ");
     }
 
+    /**
+     * A PDF of a company: a financial statement (the default) or a monthly registration report of securities holders.
+     * A registration report is read here already, so a file that is not one, or is another company's, is refused
+     * (422) before anything is stored.
+     */
     @PostMapping(path = "/pdf", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<IngestionJob> pdf(@RequestParam("file") MultipartFile file,
                                             @RequestParam(name = "exchange", defaultValue = "IDX") String exchange,
                                             @RequestParam("ticker") String ticker,
+                                            @RequestParam(name = "documentType", required = false) String documentType,
                                             AuthenticatedUser user) throws IOException {
+        CompanyDocumentType type = companyDocumentType(documentType);
         Company company = company(exchange, ticker);
         if (file.isEmpty()) {
             throw new InvalidRequestException("The uploaded file is empty");
@@ -260,7 +274,20 @@ public class RagController {
             throw new InvalidRequestException("The file is not a PDF (no %PDF header)");
         }
         PdfText.pages(content);    // rejects an unreadable, protected or scanned PDF before anything is stored
-        return response(queue.submitPdf(company, content, fileName, "application/pdf", Requester.of(user)));
+        if (type == CompanyDocumentType.REGISTRATION) {
+            RagIngestionService.registrationOf(company, content);
+        }
+        return response(queue.submitPdf(company, type, content, fileName, "application/pdf", Requester.of(user)));
+    }
+
+    /** The type of a company PDF: FINANCIAL_STATEMENT when not given. */
+    private static CompanyDocumentType companyDocumentType(String code) {
+        if (code == null || code.isBlank()) {
+            return CompanyDocumentType.FINANCIAL_STATEMENT;
+        }
+        return CompanyDocumentType.of(code).orElseThrow(() -> new InvalidRequestException("Unknown document type '"
+                + code + "'; use one of: " + String.join(", ",
+                Arrays.stream(CompanyDocumentType.values()).map(Enum::name).toList())));
     }
 
     @PostMapping("/news")
@@ -288,16 +315,19 @@ public class RagController {
                                   @RequestParam(name = "ticker", required = false) String ticker,
                                   @RequestParam(name = "tickerPrefix", required = false) String tickerPrefix,
                                   @RequestParam(name = "source", required = false) String source,
+                                  @RequestParam(name = "documentType", required = false) String documentType,
                                   @RequestParam(name = "limit", defaultValue = "100") int limit,
                                   @RequestParam(name = "offset", defaultValue = "0") int offset) {
         if (offset < 0) {
             throw new InvalidRequestException("offset must be 0 or more");
         }
+        CompanyDocumentType type = documentType == null || documentType.isBlank() ? null
+                : companyDocumentType(documentType);
         String ex = exchange == null || exchange.isBlank() ? null : Exchange.of(exchange).code();
         String t = ticker == null || ticker.isBlank() ? null : Tickers.normalize(ticker);
         // the beginning of a ticker: the same characters as a ticker (no LIKE wildcards)
         String prefix = tickerPrefix == null || tickerPrefix.isBlank() ? null : Tickers.normalize(tickerPrefix);
-        return repository.documents(ex, t, prefix, sourceType(source), Math.clamp(limit, 1, 500), offset);
+        return repository.documents(ex, t, prefix, sourceType(source), type, Math.clamp(limit, 1, 500), offset);
     }
 
     @GetMapping("/search")
@@ -381,6 +411,13 @@ public class RagController {
     ProblemDetail invalidPdf(PdfText.PdfException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
         problem.setTitle("Invalid PDF");
+        return problem;
+    }
+
+    @ExceptionHandler(RegistrationFormatException.class)
+    ProblemDetail notARegistrationReport(RegistrationFormatException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
+        problem.setTitle("Not a readable registration report");
         return problem;
     }
 

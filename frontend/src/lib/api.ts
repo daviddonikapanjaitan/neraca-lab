@@ -9,6 +9,7 @@ import { redirect } from "next/navigation"
 import { SESSION_COOKIE } from "@/lib/session-cookie"
 import type { MacroOutlook } from "@/lib/macro"
 import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } from "@/lib/macro-analysis"
+import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
 import type {
   AnalysisOptions,
   AnalysisPage,
@@ -195,6 +196,14 @@ export const getRagDocuments = cache((source: RagSourceType, limit: number) =>
 /** GET /api/v1/rag/macro/documents?country=&limit= (macro documents of a country, latest publication first) */
 export const getRagMacroDocuments = cache((country: string, limit: number) =>
   get<MacroRagDocumentPage>(`/api/v1/rag/macro/documents?country=${encodeURIComponent(country)}&limit=${limit}`)
+)
+
+/** GET /api/v1/registrations/companies (the companies with registration reports, the filter options) */
+export const getRegistrationOptions = cache(() => get<RegistrationOptions>("/api/v1/registrations/companies"))
+
+/** GET /api/v1/registrations?tickers&transaction&role&from&to&limit&offset (directors' and commissioners' shares) */
+export const getRegistrations = cache((query: string) =>
+  get<InsiderPage>(`/api/v1/registrations${query ? `?${query}` : ""}`)
 )
 
 /** GET /api/v1/screenings/options */

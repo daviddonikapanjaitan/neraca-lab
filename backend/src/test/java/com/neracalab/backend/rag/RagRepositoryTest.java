@@ -73,8 +73,9 @@ class RagRepositoryTest {
         Company hrta = hrta();
         StoredFile file = files.store(("%PDF-test " + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8), "test.pdf",
                 "application/pdf");
-        NewDocument doc = new NewDocument(hrta.companyId(), SourceType.PDF, file.checksumSha256(),
-                "Test PDF", "PDF upload", null, file.fileId(), "test.pdf", null, 3, 30, "test-model", null);
+        NewDocument doc = new NewDocument(hrta.companyId(), SourceType.PDF, CompanyDocumentType.FINANCIAL_STATEMENT,
+                file.checksumSha256(), "Test PDF", "PDF upload", null, file.fileId(), "test.pdf", null, 3, 30,
+                "test-model", null);
         long id = repository.store(doc, chunks("emas", "laba", "utang"), List.of(axis(0), axis(1), axis(2)));
         assertThat(repository.hasDocument(hrta.companyId(), SourceType.PDF, doc.sourceKey())).isTrue();
         assertThat(repository.hasDocument(hrta.companyId(), SourceType.NEWS, doc.sourceKey())).isFalse();
@@ -92,11 +93,41 @@ class RagRepositoryTest {
         assertThat(again).isEqualTo(id);
         assertThat(jdbc.sql("SELECT count(*) FROM rag_chunk WHERE document_id = :d").param("d", id).query(Long.class).single())
                 .isEqualTo(1);
-        DocumentRow row = repository.documents("IDX", "HRTA", null, SourceType.PDF, 500, 0).documents().stream()
+        DocumentRow row = repository.documents("IDX", "HRTA", null, SourceType.PDF, null, 500, 0).documents().stream()
                 .filter(d -> d.documentId() == id).findFirst().orElseThrow();
         assertThat(row.chunks()).isEqualTo(1);
         assertThat(row.fileName()).isEqualTo("test.pdf");
         assertThat(row.ticker()).isEqualTo("HRTA");
+        assertThat(row.documentType()).isEqualTo(CompanyDocumentType.FINANCIAL_STATEMENT);
+        assertThat(repository.documents("IDX", "HRTA", null, SourceType.PDF, CompanyDocumentType.REGISTRATION, 500, 0)
+                .documents()).noneMatch(d -> d.documentId() == id);
+
+        // the same file again as a registration report: the type given now
+        repository.store(new NewDocument(hrta.companyId(), SourceType.PDF, CompanyDocumentType.REGISTRATION,
+                doc.sourceKey(), "Test PDF", "PDF upload", null, file.fileId(), "test.pdf", null, 3, 30, "test-model",
+                null), chunks("perak"), List.of(axis(5)));
+        assertThat(repository.documents("IDX", "HRTA", null, null, CompanyDocumentType.REGISTRATION, 500, 0).documents())
+                .anyMatch(d -> d.documentId() == id && d.documentType() == CompanyDocumentType.REGISTRATION);
+    }
+
+    /** A company PDF has a company document type (V1.0.29: FINANCIAL_STATEMENT or REGISTRATION), never a macro one. */
+    @Test
+    void aCompanyPdfHasACompanyDocumentType() {
+        Company hrta = hrta();
+        StoredFile file = files.store(("%PDF-type " + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8), "type.pdf",
+                "application/pdf");
+        long id = repository.store(new NewDocument(hrta.companyId(), SourceType.PDF,
+                CompanyDocumentType.FINANCIAL_STATEMENT, file.checksumSha256(), "Type", "PDF upload", null,
+                file.fileId(), "type.pdf", null, 1, 10, "test-model", null), chunks("emas"), List.of(axis(3)));
+        // every company PDF stored before the types existed was given FINANCIAL_STATEMENT
+        assertThat(jdbc.sql("""
+                        SELECT count(*) FROM rag_document
+                        WHERE company_id IS NOT NULL AND source_type = 'PDF' AND document_type IS NULL""")
+                .query(Long.class).single()).isZero();
+        // the last statement: it aborts the transaction
+        assertThatThrownBy(() -> jdbc.sql("UPDATE rag_document SET document_type = 'FISCAL' WHERE document_id = :d")
+                .param("d", id).update())
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
     @Test
@@ -130,7 +161,7 @@ class RagRepositoryTest {
 
         // never mixed with the company documents
         assertThat(repository.search(null, null, axis(21), 50)).noneMatch(h -> h.documentId() == id);
-        assertThat(repository.documents(null, null, null, SourceType.PDF, 500, 0).documents())
+        assertThat(repository.documents(null, null, null, SourceType.PDF, null, 500, 0).documents())
                 .noneMatch(d -> d.documentId() == id);
 
         // the listing, by country and type
@@ -170,23 +201,24 @@ class RagRepositoryTest {
         Company hrta = hrta();
         String url = "https://example.com/news/" + UUID.randomUUID();
         Instant published = Instant.parse("2026-10-01T03:00:00Z");
-        repository.store(new NewDocument(hrta.companyId(), SourceType.NEWS, url, "Berita", "EmitenNews", url, null, null,
-                published, null, 10, "test-model", null), chunks("berita emas"), List.of(axis(7)));
+        repository.store(new NewDocument(hrta.companyId(), SourceType.NEWS, null, url, "Berita", "EmitenNews", url, null,
+                null, published, null, 10, "test-model", null), chunks("berita emas"), List.of(axis(7)));
         assertThat(repository.hasDocument(hrta.companyId(), SourceType.NEWS, url)).isTrue();
-        DocumentRow row = repository.documents(null, "HRTA", null, SourceType.NEWS, 500, 0).documents().stream()
+        DocumentRow row = repository.documents(null, "HRTA", null, SourceType.NEWS, null, 500, 0).documents().stream()
                 .filter(d -> url.equals(d.sourceUrl())).findFirst().orElseThrow();
 
         // pages: the tickers starting with "HR", one document per page; past the last page, none
-        RagRepository.DocumentPage first = repository.documents(null, null, "HR", SourceType.NEWS, 1, 0);
+        RagRepository.DocumentPage first = repository.documents(null, null, "HR", SourceType.NEWS, null, 1, 0);
         assertThat(first.total()).isPositive();
         assertThat(first.documents()).singleElement().satisfies(d -> assertThat(d.ticker()).startsWith("HR"));
         assertThat(first.documents().getFirst().documentId()).isEqualTo(row.documentId());   // stored last
-        RagRepository.DocumentPage past = repository.documents(null, null, "HR", SourceType.NEWS, 1, (int) first.total());
+        RagRepository.DocumentPage past = repository.documents(null, null, "HR", SourceType.NEWS, null, 1, (int) first.total());
         assertThat(past.total()).isEqualTo(first.total());
         assertThat(past.documents()).isEmpty();
-        assertThat(repository.documents(null, null, "HRTAX", SourceType.NEWS, 10, 0).total()).isZero();
+        assertThat(repository.documents(null, null, "HRTAX", SourceType.NEWS, null, 10, 0).total()).isZero();
         assertThat(row.publishedAt()).isEqualTo(published);
         assertThat(row.sourceName()).isEqualTo("EmitenNews");
+        assertThat(row.documentType()).isNull();
 
         // deleting the company removes its documents and chunks (foreign keys ON DELETE CASCADE)
         assertThat(jdbc.sql("""

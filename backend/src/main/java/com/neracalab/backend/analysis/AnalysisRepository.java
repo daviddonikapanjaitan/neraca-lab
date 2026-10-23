@@ -292,9 +292,15 @@ public class AnalysisRepository {
                                  WHERE rp.company_id = c.company_id
                                  ORDER BY rp.period_end DESC, rp.period_start ASC NULLS LAST, rp.period_id LIMIT 1) AS latest_period,
                                (SELECT count(*) FROM rag_document d
-                                 WHERE d.company_id = c.company_id AND d.source_type = 'PDF' AND d.chunks > 0) AS pdfs,
+                                 WHERE d.company_id = c.company_id AND d.source_type = 'PDF'
+                                   AND d.document_type = 'FINANCIAL_STATEMENT' AND d.chunks > 0) AS pdfs,
                                (SELECT count(*) FROM rag_document d
                                  WHERE d.company_id = c.company_id AND d.source_type = 'NEWS' AND d.chunks > 0) AS news,
+                               (SELECT count(*) FROM registration_report r WHERE r.company_id = c.company_id) AS registrations,
+                               (SELECT to_char(min(r.period), 'YYYY-MM') FROM registration_report r
+                                 WHERE r.company_id = c.company_id) AS first_registration,
+                               (SELECT to_char(max(r.period), 'YYYY-MM') FROM registration_report r
+                                 WHERE r.company_id = c.company_id) AS last_registration,
                                (SELECT max(s.snapshot_date) FROM fundamental_snapshot s
                                  JOIN stock_listing l ON l.listing_id = s.listing_id
                                  WHERE l.exchange = c.exchange AND l.ticker = c.ticker) AS market_date,
@@ -305,7 +311,8 @@ public class AnalysisRepository {
                 .query((rs, i) -> new CompanyOption(rs.getString("exchange"), rs.getString("ticker"),
                         rs.getString("company_name"), rs.getString("sector"), rs.getInt("periods"),
                         rs.getString("latest_period"), rs.getLong("pdfs"), rs.getLong("news"),
-                        dateText(rs, "market_date"), dateText(rs, "price_date")))
+                        dateText(rs, "market_date"), dateText(rs, "price_date"), rs.getInt("registrations"),
+                        rs.getString("first_registration"), rs.getString("last_registration")))
                 .list();
     }
 
@@ -328,26 +335,43 @@ public class AnalysisRepository {
                 .optional();
     }
 
-    /** PDF and news documents of a company in the vector store. */
-    public record StoredDocuments(long filings, long news, List<String> filingTitles, List<String> newsTitles) {
+    /**
+     * Documents of a company in the vector store: financial statement PDFs ({@code filings}), news, and monthly
+     * registration reports (REGISTRATION PDFs).
+     */
+    public record StoredDocuments(long filings, long news, List<String> filingTitles, List<String> newsTitles,
+                                  long registrations, List<String> registrationTitles) {
     }
 
     /** Counts and the latest titles of a company's stored documents (told to the research agent). */
     public StoredDocuments storedDocuments(long companyId, int titles) {
-        long filings = documentCount(companyId, "PDF");
+        long filings = pdfCount(companyId, "FINANCIAL_STATEMENT");
+        long registrations = pdfCount(companyId, "REGISTRATION");
         long news = documentCount(companyId, "NEWS");
-        List<String> filingTitles = jdbc.sql("""
-                        SELECT COALESCE(file_name, title) FROM rag_document
-                        WHERE company_id = :c AND source_type = 'PDF' AND chunks > 0
-                        ORDER BY updated_at DESC, document_id DESC LIMIT :n""")
-                .param("c", companyId).param("n", titles).query(String.class).list();
+        List<String> filingTitles = pdfTitles(companyId, "FINANCIAL_STATEMENT", titles);
+        List<String> registrationTitles = pdfTitles(companyId, "REGISTRATION", titles);
         List<String> newsTitles = jdbc.sql("""
                         SELECT COALESCE(to_char(published_at AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD') || ' ', '') || title
                         FROM rag_document
                         WHERE company_id = :c AND source_type = 'NEWS' AND chunks > 0
                         ORDER BY published_at DESC NULLS LAST, document_id DESC LIMIT :n""")
                 .param("c", companyId).param("n", titles).query(String.class).list();
-        return new StoredDocuments(filings, news, filingTitles, newsTitles);
+        return new StoredDocuments(filings, news, filingTitles, newsTitles, registrations, registrationTitles);
+    }
+
+    private long pdfCount(long companyId, String documentType) {
+        return jdbc.sql("""
+                        SELECT count(*) FROM rag_document
+                        WHERE company_id = :c AND source_type = 'PDF' AND document_type = :t AND chunks > 0""")
+                .param("c", companyId).param("t", documentType).query(Long.class).single();
+    }
+
+    private List<String> pdfTitles(long companyId, String documentType, int titles) {
+        return jdbc.sql("""
+                        SELECT COALESCE(file_name, title) FROM rag_document
+                        WHERE company_id = :c AND source_type = 'PDF' AND document_type = :t AND chunks > 0
+                        ORDER BY updated_at DESC, document_id DESC LIMIT :n""")
+                .param("c", companyId).param("t", documentType).param("n", titles).query(String.class).list();
     }
 
     private long documentCount(long companyId, String type) {

@@ -28,6 +28,7 @@ foreign key.
 | `V1.0.25__schema_markets_macro.sql`       | Forex / commodity prices and macro data ([PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 1b, [MACRO_DOCS.md](MACRO_DOCS.md)): `market_instrument` (the catalog: market FOREX / COMMODITY, source yahoo / worldbank / imf / fred (the check re-created on every start), symbol, quote currency, unit, DAILY / MONTHLY, tick size, `max_spike` of the bad-print cleaning), `instrument_daily` (their bars, unique instrument + trading_date), `macro_series_def` (the macro catalog: source, `source_ref`, unit, frequency, `release_lag_days`, priority, `used_by`, sanity range `min_value` / `max_value`, `max_change`); `macro_series` gains `period_end`, `release_date` (point in time), `revision`, `updated_at`. `ingestion_job.job_type` gains `MACRO` (in V1.0.10 and V1.0.14, which re-create the check) |
 | `V1.0.27__schema_macro_analysis.sql`      | AI macro analysis of a country ([MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md)): `macro_analysis_run`, `macro_analysis_agent_score`, `macro_analysis_lesson`, `llm_usage.macro_analysis_id`; `ingestion_job.job_type` gains `MACRO_ANALYSIS` (in V1.0.10 and V1.0.14, which re-create the check) (section 4.14) |
 | `V1.0.28__schema_rag_macro.sql`           | macro documents of a country in the RAG vector store ([RAG_DOCS.md](RAG_DOCS.md) section 2a): `rag_document` / `rag_chunk` gain `country` (`company_id` NULL for them; one of the two, check), `rag_document` gains `issuer` and `document_type`; unique per country, type and file (section 4.12) |
+| `V1.0.29__schema_registration.sql`        | the type of a company PDF in `rag_document.document_type` (`FINANCIAL_STATEMENT`, set for every company PDF stored before, or `REGISTRATION`; `ck_rag_document_company_type`), `registration_report` and `registration_insider`: the monthly registration reports of securities holders and the directors' and commissioners' shares in them ([REGISTRATION_DOCS.md](REGISTRATION_DOCS.md); section 4.12a) |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -692,6 +693,50 @@ Indexes: `ix_rag_document_company` (`company_id, source_type, published_at DESC`
 (`country, published_at DESC`), `ix_rag_chunk_company`, `ix_rag_chunk_country`, `ix_rag_chunk_embedding` (HNSW,
 `vector_cosine_ops`). Storing a document again (same
 file or URL for the same company) updates its row and replaces all its chunks in one transaction.
+
+`V1.0.29__schema_registration.sql` adds the company PDF types to `rag_document.document_type`: `FINANCIAL_STATEMENT`
+(every company PDF stored before; the default) or `REGISTRATION`. `ck_rag_document_company_type`: a company PDF has
+one of the two, a news article none, a macro document a macro type (`ck_rag_document_type` lists all; `V1.0.28`
+lists them too, as it runs first on every start).
+
+### 4.12a Monthly registration reports (`V1.0.29__schema_registration.sql`)
+
+`registration_report`: one per company and month, read from a `REGISTRATION` PDF (REGISTRATION_DOCS.md).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `report_id` | BIGSERIAL PK | |
+| `company_id` | BIGINT NOT NULL | -> `company`, `ON DELETE CASCADE` |
+| `period` | DATE NOT NULL | first day of the month the report closes (`ck_registration_report_period`) |
+| `document_id` | BIGINT | -> `rag_document` it was read from, `ON DELETE CASCADE` |
+| `file_id` / `file_name` | BIGINT / VARCHAR(255) | -> `ingestion_file` |
+| `letter_number`, `subject` | VARCHAR(200), VARCHAR(500) | Nomor Surat, Perihal |
+| `correction` | BOOLEAN NOT NULL | the report corrects one filed before (KOREKSI) |
+| `filed_at` | TIMESTAMPTZ | Tanggal dan Waktu (Jakarta time); a later filing of the month replaces the report, an earlier one does not |
+| `registrar` | VARCHAR(200) | Biro Administrasi Efek |
+| `listed_shares_previous`, `listed_shares_current` | BIGINT | shares listed at the end of the previous month / of the month |
+| `insiders` | INTEGER NOT NULL | rows in `registration_insider` |
+| `warnings` | TEXT | percentages that do not match their share count, one per line; NULL when none |
+| `job_id`, `created_at`, `updated_at` | | |
+
+Unique `(company_id, period)`; indexes `ix_registration_report_document`, `ix_registration_report_period`.
+
+`registration_insider`: the shares of a director or commissioner in a report.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `insider_id` | BIGSERIAL PK | |
+| `report_id` | BIGINT NOT NULL | -> `registration_report`, `ON DELETE CASCADE` |
+| `company_id`, `period` | BIGINT, DATE | repeated from the report for filtering |
+| `row_index` | INTEGER NOT NULL | 1-based row of the table; unique with `report_id` |
+| `holder_name`, `position` | VARCHAR(300), VARCHAR(200) | as filed (addresses are not stored) |
+| `role` | VARCHAR(20) | `DIRECTOR`, `COMMISSIONER` or `OTHER`, read from the position |
+| `shares_previous`, `percent_previous` | BIGINT, NUMERIC(9,4) | end of the previous month; NULL = empty cell |
+| `shares_current`, `percent_current` | BIGINT, NUMERIC(9,4) | end of the month |
+| `change_shares` | BIGINT, generated | `shares_current - shares_previous`: bought (+), sold (-) |
+| `controller`, `controller_affiliate` | BOOLEAN | marked Pengendali / Afiliasi Pengendali |
+
+Indexes `ix_registration_insider_company` (`company_id, period DESC`), `ix_registration_insider_period`.
 
 ### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)
 

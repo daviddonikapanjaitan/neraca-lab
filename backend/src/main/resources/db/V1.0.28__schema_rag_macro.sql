@@ -38,7 +38,10 @@ ALTER TABLE rag_document
     ADD  CONSTRAINT ck_rag_document_type
         CHECK (document_type IS NULL OR document_type IN ('MONETARY_POLICY', 'FINANCIAL_STABILITY', 'FISCAL',
                                                           'EXTERNAL_SECTOR', 'ECONOMIC_OUTLOOK', 'STATISTICS',
-                                                          'DEVELOPMENT_PLAN', 'RESEARCH', 'OTHER'));
+                                                          'DEVELOPMENT_PLAN', 'RESEARCH', 'OTHER',
+                                                          -- the company PDF types of V1.0.29: this script runs first on
+                                                          -- every start, so it must accept them too
+                                                          'FINANCIAL_STATEMENT', 'REGISTRATION'));
 
 -- one document per file and country (uq_rag_document_source keys the company documents)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_document_country_source

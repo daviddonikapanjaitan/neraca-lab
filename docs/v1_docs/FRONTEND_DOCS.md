@@ -129,10 +129,24 @@ Statement tables:
 
 Unknown company: not-found page. Invalid ticker or unsupported exchange: the backend's 400 message.
 
+### 3.2b Registration - `/companies/registration` (`COMPANIES`)
+
+`app/(dashboard)/companies/registration/page.tsx` reads the filters from the URL (`?tickers=HRTA,BBRI&transaction=BUY&
+role=DIRECTOR&from=2026-05&to=2026-08`, `lib/registration.ts`), loads the companies with reports and the first page on
+the server, and renders `components/registration/registration-page-client.tsx`: summary tiles, the filters (tickers,
+transaction, title, from / to month; Apply pushes the URL, the client is re-mounted with the new filters), with one
+ticker the **holdings by month** (insider x month: shares and change), and the table (month, ticker, insider with the
+controller / affiliate badges, title, Buy / Sell / No change / New, shares before and after, change, % owned, the
+report's letter and Correction badge; 50 rows per page through `/api/registrations`). The months are chosen with
+a month range calendar (`components/registration/month-range-picker.tsx` on `components/ui/popover.tsx`, Base UI
+Popover): first click the first month, second click the last, presets Last 3 / 6 / 12 months, Clear; months after
+the current one (Jakarta, computed by the page on the server) are not offered. Route handlers:
+`app/api/registrations` and `app/api/registrations/companies`. Details: [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md).
+
 ### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
 
-The Companies entry of the sidebar is a dropdown: **Fundamentals** (`/companies` and the company pages) and
-**Technicals**. The chart page is a client component (`components/technical/technicals-page-client.tsx`); the chart
+The Companies entry of the sidebar is a dropdown: **Fundamentals** (`/companies` and the company pages),
+**Technicals** and **Registration** (section 3.2b). The chart page is a client component (`components/technical/technicals-page-client.tsx`); the chart
 (`price-chart.tsx`) is a small wrapper around Lightweight Charts loaded with `next/dynamic` (`ssr: false`), rebuilt when
 its data, indicators or the theme change, removed on unmount. The browser computes no indicator: every series comes
 from `/api/technical/{exchange}/{ticker}/{ohlcv|indicators|levels|snapshot|events|summary}`, `/api/technical/market`,
@@ -192,7 +206,7 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | IDX XBRL (`/ingestion/xbrl`) | Financial statement upload                                                            |
 | Price Ingestion (`/ingestion/prices`) | Left: price ingestion of one company, or with the market **Forex** / **Commodities** of one currency / commodity (the second dropdown becomes Currency / Commodity; `/api/markets/{market}/ingestions`). Right: "Update all companies to today" (`price-update-card.tsx`: companies up to date / behind / without prices against the last completed trading day, the IHSG and LQ45 indexes with them (each with its stored date); with a market "Update all currencies / commodities to today": each instrument with its last date, `/api/markets/{market}/updates`) and the IHSG and LQ45 indexes (`index-price-card.tsx`: the stored range of each, one fetch for both, full history, a link to each chart). Exchanges, stored companies, `GET /api/v1/prices/status` per exchange, `GET /api/v1/markets` and the price provider are loaded for this page only |
 | Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
-| PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload, then the stored PDF documents ([RAG_DOCS.md](RAG_DOCS.md)) |
+| PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload (exchange, company, document type: Financial Statement, the default, or Registration), then the stored PDF documents with their type ([RAG_DOCS.md](RAG_DOCS.md), [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md)) |
 | News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |
 | Macro (`/ingestion/macro`) | `macro-card.tsx`: "Update all macro data to today" (counts per state), then one table per region (Indonesia, United States, Global and China): series with code, frequency, unit and the presets using it; source (link) and its publication lag; latest value and date; state (up to date, behind and when due, not fetched, failing and why, CSV upload); Fetch, Full, CSV upload, Chart (a sheet with the history and the latest observations with their release dates). `GET /api/v1/macro/series`; route handlers `/api/macro/ingestions`, `/updates`, `/series/{code}`, `/series/{code}/upload` ([MACRO_DOCS.md](MACRO_DOCS.md)) |
 

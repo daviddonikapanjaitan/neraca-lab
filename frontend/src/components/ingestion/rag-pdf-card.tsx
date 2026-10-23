@@ -6,9 +6,16 @@ import { CircleAlertIcon, CircleCheckIcon, FileTextIcon, FileUpIcon, LoaderIcon,
 import { CompanyPicker, tickerInFileName } from "@/components/ingestion/company-picker"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { requestJson } from "@/lib/client-api"
-import { formatBytes, MAX_UPLOAD_BYTES } from "@/lib/ingestion"
-import type { CompanySummary, Exchange, IngestionJob } from "@/lib/types"
+import {
+  COMPANY_DOCUMENT_TYPES,
+  DEFAULT_COMPANY_DOCUMENT_TYPE,
+  formatBytes,
+  looksLikeRegistration,
+  MAX_UPLOAD_BYTES,
+} from "@/lib/ingestion"
+import type { CompanyDocumentType, CompanySummary, Exchange, IngestionJob } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 type Notice = { tone: "success" | "error"; text: string }
@@ -25,9 +32,13 @@ function fileProblem(file: File): string | null {
   return null
 }
 
+const DOCUMENT_TYPE_ITEMS = COMPANY_DOCUMENT_TYPES.map((t) => ({ value: t.code, label: t.label }))
+
 /**
  * Upload of a PDF document of a company into the RAG vector store: the backend reads its text, splits it into
- * chunks, embeds them and stores them in pgvector, linked to the company.
+ * chunks, embeds them and stores them in pgvector, linked to the company. Its type is a financial statement (the
+ * default) or a monthly registration report of securities holders, whose directors' and commissioners' shares are
+ * also stored for Companies > Registration.
  */
 export function RagPdfCard({
   exchanges,
@@ -41,6 +52,7 @@ export function RagPdfCard({
   const input = useRef<HTMLInputElement>(null)
   const [exchange, setExchange] = useState<string | null>(exchanges[0]?.code ?? null)
   const [ticker, setTicker] = useState<string | null>(null)
+  const [documentType, setDocumentType] = useState<CompanyDocumentType>(DEFAULT_COMPANY_DOCUMENT_TYPE)
   const [file, setFile] = useState<File | null>(null)
   const [dragging, setDragging] = useState(false)
   const [pending, setPending] = useState(false)
@@ -74,13 +86,18 @@ export function RagPdfCard({
       body.append("file", file, file.name)
       body.append("exchange", exchange)
       body.append("ticker", ticker)
+      body.append("documentType", documentType)
       const { status, body: job } = await requestJson<IngestionJob>("/api/rag/pdf", { method: "POST", body })
       setNotice({
         tone: "success",
         text:
-          status === 202
-            ? `Queued ${file.name} for ${ticker}. Its text is embedded and stored in the vector store in the background.`
-            : `${file.name} is already being ingested for ${ticker}. Follow the job in the table below.`,
+          status !== 202
+            ? `${file.name} is already being ingested for ${ticker}. Follow the job in the table below.`
+            : documentType === "REGISTRATION"
+              ? `Queued ${file.name} for ${ticker} as a registration report. Its text is embedded and stored in the ` +
+                "vector store, and the shares of the directors and commissioners are stored for Companies > " +
+                "Registration, in the background."
+              : `Queued ${file.name} for ${ticker}. Its text is embedded and stored in the vector store in the background.`,
       })
       setFile(null)
       onSubmitted(job)
@@ -116,8 +133,15 @@ export function RagPdfCard({
             automatically.
           </li>
           <li>
+            Choose the document type. <span className="font-medium text-foreground">Financial Statement</span> is
+            the default. <span className="font-medium text-foreground">Registration</span> is the monthly registration
+            report of securities holders (Laporan Bulanan Registrasi Pemegang Efek, e.g.{" "}
+            <span className="font-mono text-foreground">registrasi_hrta_juni.pdf</span>): besides the vector store,
+            the shares of the directors and commissioners are read from it and shown on Companies &gt; Registration.
+          </li>
+          <li>
             Maximum size {formatBytes(MAX_UPLOAD_BYTES)}. Uploading the same file again for the same company
-            replaces its stored chunks.
+            replaces its stored chunks and its type.
           </li>
           <li>Processing runs in the background and usually takes under a minute.</li>
         </ul>
@@ -138,6 +162,34 @@ export function RagPdfCard({
           }}
           disabled={pending}
         />
+
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-muted-foreground">Document type</span>
+          <Select
+            items={DOCUMENT_TYPE_ITEMS}
+            value={documentType}
+            onValueChange={(value) => {
+              if (value) {
+                setDocumentType(value as CompanyDocumentType)
+                setNotice(null)
+              }
+            }}
+          >
+            <SelectTrigger aria-label="Document type" className="w-full sm:w-1/2" disabled={pending}>
+              <SelectValue placeholder="Choose the document type" />
+            </SelectTrigger>
+            <SelectContent>
+              {COMPANY_DOCUMENT_TYPES.map((t) => (
+                <SelectItem key={t.code} value={t.code}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-xs text-muted-foreground">
+            {COMPANY_DOCUMENT_TYPES.find((t) => t.code === documentType)?.description}
+          </span>
+        </div>
 
         <label
           onDragOver={(e) => {
@@ -184,6 +236,16 @@ export function RagPdfCard({
               <XIcon />
             </Button>
           </div>
+        )}
+
+        {file && documentType !== "REGISTRATION" && looksLikeRegistration(file.name) && (
+          <p role="status" className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400">
+            <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+            <span>
+              {file.name} looks like a registration report. Choose the Registration type to read its directors&apos;
+              and commissioners&apos; shares.
+            </span>
+          </p>
         )}
 
         {notice && (

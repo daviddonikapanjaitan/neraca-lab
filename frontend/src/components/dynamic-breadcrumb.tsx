@@ -12,7 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import { TECHNICALS_HREF } from "@/lib/companies-sections"
+import { REGISTRATION_HREF, TECHNICALS_HREF } from "@/lib/companies-sections"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { MACRO_ANALYSIS_HREF, MACRO_HREF } from "@/lib/macro"
 import { ANALYSIS_HREF, SELECTED_STOCKS_HREF } from "@/lib/screening-sections"
@@ -86,6 +86,9 @@ function crumbs(pathname: string): Crumb[] {
   const result: Crumb[] = [{ label: "Companies", href: "/companies" }]
   if (segments[1] === "technicals") {
     return [...result, { label: "Technicals", href: TECHNICALS_HREF }]
+  }
+  if (segments[1] === "registration") {
+    return [...result, { label: "Registration", href: REGISTRATION_HREF }]
   }
   const [, exchange, ticker] = segments
   if (exchange) {

@@ -75,14 +75,18 @@ public final class AnalysisViews {
      *
      * @param periods          stored reporting periods
      * @param latestPeriod     the most recent one, e.g. "2026 H1"
-     * @param pdfDocuments     PDF documents in the vector store
+     * @param pdfDocuments     financial statement PDFs in the vector store (the registration reports are counted apart)
      * @param newsDocuments    news articles in the vector store
      * @param marketDataDate   latest Yahoo Finance snapshot (null: not in the screening data)
      * @param latestPriceDate  latest stored daily price
+     * @param registrationReports       monthly registration reports stored (Companies > Registration)
+     * @param firstRegistrationPeriod   the first month of them ("2026-05"); null when none
+     * @param latestRegistrationPeriod  the latest month of them; null when none
      */
     public record CompanyOption(String exchange, String ticker, String companyName, String sector, int periods,
                                 String latestPeriod, long pdfDocuments, long newsDocuments, String marketDataDate,
-                                String latestPriceDate) {
+                                String latestPriceDate, int registrationReports, String firstRegistrationPeriod,
+                                String latestRegistrationPeriod) {
     }
 
     /** {@code GET /api/v1/analyses/options}. */

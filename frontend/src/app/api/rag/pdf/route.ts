@@ -6,9 +6,10 @@ function problem(status: number, title: string, detail: string) {
 }
 
 /**
- * POST /api/rag/pdf (multipart: file, exchange, ticker) -> backend POST /api/v1/rag/pdf. The backend checks that
- * the PDF has text, stores it and queues its RAG ingestion for the company; it answers 202 with the job (200 when
- * the same file is already queued for that company).
+ * POST /api/rag/pdf (multipart: file, exchange, ticker, documentType) -> backend POST /api/v1/rag/pdf. The backend
+ * checks that the PDF has text (and, for a REGISTRATION, that it is the company's registration report), stores it and
+ * queues its RAG ingestion for the company; it answers 202 with the job (200 when the same file is already queued for
+ * that company). The document type is FINANCIAL_STATEMENT when not given.
  */
 export async function POST(request: Request) {
   let form: FormData
@@ -20,6 +21,7 @@ export async function POST(request: Request) {
   const file = form.get("file")
   const exchange = form.get("exchange")
   const ticker = form.get("ticker")
+  const documentType = form.get("documentType")
   if (!(file instanceof File)) {
     return problem(400, "Invalid upload", "No file selected")
   }
@@ -36,5 +38,8 @@ export async function POST(request: Request) {
   body.append("file", file, file.name)
   body.append("exchange", exchange.trim())
   body.append("ticker", ticker.trim())
+  if (typeof documentType === "string" && documentType.trim()) {
+    body.append("documentType", documentType.trim())
+  }
   return forward("/api/v1/rag/pdf", { method: "POST", body })
 }

@@ -13,6 +13,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { EMPTY, formatDate, formatNumber, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
 import {
+  companyDocumentTypeLabel,
   creatorLabel,
   formatBytes,
   formatDuration,
@@ -22,7 +23,7 @@ import {
   TYPE_LABEL,
 } from "@/lib/ingestion"
 import { companyHref, INDEX_TICKERS, MARKET_CODES, technicalsHref } from "@/lib/links"
-import type { IngestionJob, MacroResult } from "@/lib/types"
+import type { CompanyDocumentType, IngestionJob, MacroResult } from "@/lib/types"
 
 /** Fields of the financial statement upload result (IngestionResponse) shown here. */
 interface FilingResult {
@@ -77,10 +78,28 @@ interface PriceResult {
 }
 
 /**
- * Fields of the RAG PDF result (RagIngestionService.PdfResult); a macro PDF of a country (MacroPdfResult) also has
- * its country, title, issuer, type and publication date.
+ * What a registration report held (RagIngestionService.RegistrationResult): the month, the letter, the directors and
+ * commissioners, and whether it was stored (KEPT_LATER_FILING: the report of the month stored before was filed later).
+ */
+interface RegistrationResult {
+  period?: string
+  letterNumber?: string | null
+  correction?: boolean
+  filedAt?: string | null
+  insiders?: number
+  changes?: number
+  outcome?: "STORED" | "REPLACED" | "KEPT_LATER_FILING"
+  keptFiledAt?: string | null
+  warnings?: string[]
+}
+
+/**
+ * Fields of the RAG PDF result (RagIngestionService.PdfResult: of a company, with its document type and, for a
+ * registration report, what it held); a macro PDF of a country (MacroPdfResult) also has its country, title, issuer,
+ * type and publication date.
  */
 interface RagPdfResult {
+  registration?: RegistrationResult | null
   documentId?: number
   country?: string
   countryName?: string
@@ -264,7 +283,60 @@ function isMacroDocumentJob(job: { type: string; exchange: string | null }): boo
   return job.type === "RAG_PDF" && job.exchange === MACRO_DOCUMENT_EXCHANGE
 }
 
-function RagPdfSummary({ result }: { result: RagPdfResult }) {
+/** "2026-06" -> "June 2026" */
+function monthLabel(period: string | undefined): string {
+  const match = period?.match(/^(\d{4})-(\d{2})$/)
+  if (!match) return period ?? EMPTY
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1)).toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  })
+}
+
+/** "2026-08-10T15:14" (Jakarta time, as printed) -> "2026-08-10 15:14 WIB" */
+function jakartaTime(value: string | null | undefined): string {
+  return value ? `${value.replace("T", " ")} WIB` : EMPTY
+}
+
+function RegistrationSummary({ result, ticker }: { result: RegistrationResult; ticker: string | null }) {
+  const outcome =
+    result.outcome === "KEPT_LATER_FILING"
+      ? `Not stored: the report of ${monthLabel(result.period)} filed later (${jakartaTime(result.keptFiledAt)}) is kept`
+      : result.outcome === "REPLACED"
+        ? "Stored, replacing the report of the month stored before"
+        : "Stored"
+  return (
+    <>
+      <Field label="Month">
+        {monthLabel(result.period)}
+        {result.correction ? " (correction)" : ""}
+      </Field>
+      <Field label="Letter">{result.letterNumber}</Field>
+      <Field label="Filed">{jakartaTime(result.filedAt)}</Field>
+      <Field label="Insiders">
+        {count(result.insiders)} directors and commissioners · {count(result.changes)} changed their shares
+      </Field>
+      <Field label="Registration">
+        {outcome}
+        {ticker && result.outcome !== "KEPT_LATER_FILING" && (
+          <>
+            {" · "}
+            <Link
+              href={`/companies/registration?tickers=${encodeURIComponent(ticker)}`}
+              className="text-primary hover:underline"
+            >
+              Open Companies &gt; Registration
+            </Link>
+          </>
+        )}
+      </Field>
+      {(result.warnings?.length ?? 0) > 0 && <Field label="Warnings">{result.warnings!.join("; ")}</Field>}
+    </>
+  )
+}
+
+function RagPdfSummary({ result, ticker }: { result: RagPdfResult; ticker: string | null }) {
   return (
     <dl className="flex flex-col gap-2">
       {result.country && (
@@ -275,6 +347,10 @@ function RagPdfSummary({ result }: { result: RagPdfResult }) {
           <Field label="Published">{formatDate(result.publishedOn)}</Field>
         </>
       )}
+      {!result.country && result.documentType && (
+        <Field label="Type">{companyDocumentTypeLabel(result.documentType as CompanyDocumentType)}</Field>
+      )}
+      {result.registration && <RegistrationSummary result={result.registration} ticker={ticker} />}
       <Field label="Pages">
         {count(result.pages)} ({count(result.pagesWithText)} with text)
       </Field>
@@ -469,7 +545,7 @@ export function JobDetailSheet({
                   {shown.type === "FINANCIAL_STATEMENT" && <FilingSummary result={shown.result as FilingResult} />}
                   {shown.type === "PRICE" && <PriceSummary result={shown.result as PriceResult} />}
                   {shown.type === "MACRO" && <MacroSummary result={shown.result as MacroResult} />}
-                  {shown.type === "RAG_PDF" && <RagPdfSummary result={shown.result as RagPdfResult} />}
+                  {shown.type === "RAG_PDF" && <RagPdfSummary result={shown.result as RagPdfResult} ticker={shown.ticker} />}
                   {shown.type === "RAG_NEWS" && <RagNewsSummary result={shown.result as RagNewsResult} />}
                   <details className="rounded-lg border">
                     <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
