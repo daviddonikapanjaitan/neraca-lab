@@ -23,7 +23,7 @@ spring:
       api-key: ${OPENAI_API_KEY:}
       base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}
       chat:
-        model: ${OPENAI_MODEL:deepseek/deepseek-v4-flash-0731}
+        model: ${OPENAI_MODEL:deepseek/deepseek-v4.1-flash-1017}
         parallel-tool-calls: true
         timeout: 180s
   datasource:
@@ -113,7 +113,7 @@ neracalab:
     # Every such upload is recorded in the table ingestion_error (fixed_by_claude_code).
     fallback:
       # its own model (OpenRouter id), stronger than the standard extraction's; empty = spring.ai.openai.chat.model
-      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-haiku-5.5}
+      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-sonnet-5.5}
       enabled: ${INGESTION_FALLBACK_ENABLED:true}
       after: ${INGESTION_FALLBACK_AFTER:3m}       # longest the standard extraction runs before the full-text one takes over
       timeout: ${INGESTION_FALLBACK_TIMEOUT:5m}   # longest the full-text extraction runs (room for two provider retries); then FAILED
@@ -310,8 +310,8 @@ neracalab:
     excluded-tickers: []                            # e.g. known watchlist-board stocks
     min-fundamentals-coverage: 0.5
     llm:
-      research-model: ${SCREENING_RESEARCH_MODEL:deepseek/deepseek-v4-flash-0731}
-      agent-model: ${SCREENING_AGENT_MODEL:deepseek/deepseek-v4-flash-0731}
+      research-model: ${SCREENING_RESEARCH_MODEL:deepseek/deepseek-v4.1-flash-1017}
+      agent-model: ${SCREENING_AGENT_MODEL:deepseek/deepseek-v4.1-flash-1017}
       synthesis-model: ${SCREENING_SYNTHESIS_MODEL:anthropic/claude-opus-5.5}
       synthesis-effort: low
       provider-sort: price                          # OpenRouter: cheapest provider for the DeepSeek calls

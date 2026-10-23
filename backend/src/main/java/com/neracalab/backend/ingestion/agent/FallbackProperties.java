@@ -24,7 +24,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties("neracalab.ingestion.fallback")
 public record FallbackProperties(
-        @DefaultValue("anthropic/claude-haiku-5.5") String model,
+        @DefaultValue("anthropic/claude-sonnet-5.5") String model,
         @DefaultValue("true") boolean enabled,
         @DefaultValue("3m") Duration after,
         @DefaultValue("5m") Duration timeout,

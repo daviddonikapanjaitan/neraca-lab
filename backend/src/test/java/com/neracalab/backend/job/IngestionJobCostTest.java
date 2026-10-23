@@ -24,8 +24,8 @@ import com.neracalab.backend.ingestion.file.IngestionFileRepository;
 @Transactional
 class IngestionJobCostTest {
 
-    private static final String DEEPSEEK = "deepseek/deepseek-v4-flash-0731";
-    private static final String HAIKU = "anthropic/claude-haiku-5.5";
+    private static final String DEEPSEEK = "deepseek/deepseek-v4.1-flash-1017";
+    private static final String SONNET = "anthropic/claude-sonnet-5.5";
 
     @Autowired
     private IngestionJobRepository jobs;
@@ -45,9 +45,9 @@ class IngestionJobCostTest {
         jobs.recordModelCall(job, call("EXECUTE", DEEPSEEK, 5000, 300, 0, 1500, 0.00045, false, null));
         jobs.recordModelCall(job, call("EXECUTE", DEEPSEEK, 6000, 200, 0, 4000, 0.00034, false, null));
         jobs.recordModelCall(job, call("REVIEW", DEEPSEEK, 3000, 150, 0, 0, 0.00023, false, null));
-        // the full-text extraction (Haiku): two answers, the second without a reported cost
-        jobs.recordModelCall(job, call("FULL_TEXT", HAIKU, 40000, 6000, 10, 0, 0.007, false, null));
-        jobs.recordModelCall(job, call("FULL_TEXT", HAIKU, 47000, 5000, 20, 38000, 0.0072, true, null));
+        // the full-text extraction (Sonnet): two answers, the second without a reported cost
+        jobs.recordModelCall(job, call("FULL_TEXT", SONNET, 40000, 6000, 10, 0, 0.007, false, null));
+        jobs.recordModelCall(job, call("FULL_TEXT", SONNET, 47000, 5000, 20, 38000, 0.0072, true, null));
 
         IngestionJob found = jobs.find(job).orElseThrow();
 
@@ -72,7 +72,7 @@ class IngestionJobCostTest {
         assertThat(execute.costUsd()).isEqualTo(0.00079, within(1e-9));
         assertThat(execute.costEstimated()).isFalse();
         IngestionJob.Usage fullText = found.usage().get(3);
-        assertThat(fullText.model()).isEqualTo(HAIKU);
+        assertThat(fullText.model()).isEqualTo(SONNET);
         assertThat(fullText.calls()).isEqualTo(2);
         assertThat(fullText.completionTokens()).isEqualTo(11_000);
         assertThat(fullText.costUsd()).isEqualTo(0.0142, within(1e-9));
@@ -88,7 +88,7 @@ class IngestionJobCostTest {
         UUID other = upload("cost-test-c.xlsx");
         UUID none = upload("cost-test-d.xlsx");
         jobs.recordModelCall(costly, call("PLAN", DEEPSEEK, 1000, 100, 0, 0, 0.0002, false, null));
-        jobs.recordModelCall(costly, call("FULL_TEXT", HAIKU, 30000, 4000, 0, 0, 0.005, false, null));
+        jobs.recordModelCall(costly, call("FULL_TEXT", SONNET, 30000, 4000, 0, 0, 0.005, false, null));
         jobs.recordModelCall(other, call("PLAN", DEEPSEEK, 500, 50, 0, 0, 0.0001, false, null));
 
         List<IngestionJob> listed = jobs.list(IngestionJobType.FINANCIAL_STATEMENT, List.of(), 500, 0);
@@ -119,11 +119,11 @@ class IngestionJobCostTest {
                 .param("id", job).query(Boolean.class).single()).isTrue();
 
         // the failed calls of the job, for the error log
-        jobs.recordModelCall(job, call("FULL_TEXT", HAIKU, 30000, 4000, 0, 0, 0.005, false, null));
-        jobs.recordModelCall(job, call("FULL_TEXT", HAIKU, 0, 0, 0, 0, 0, false, "no model response within 150 s"));
+        jobs.recordModelCall(job, call("FULL_TEXT", SONNET, 30000, 4000, 0, 0, 0.005, false, null));
+        jobs.recordModelCall(job, call("FULL_TEXT", SONNET, 0, 0, 0, 0, 0, false, "no model response within 150 s"));
         assertThat(jobs.failedModelCalls(job)).extracting(IngestionJob.FailedCall::stage, IngestionJob.FailedCall::model)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple("EXECUTE", DEEPSEEK),
-                        org.assertj.core.groups.Tuple.tuple("FULL_TEXT", HAIKU));
+                        org.assertj.core.groups.Tuple.tuple("FULL_TEXT", SONNET));
         assertThat(jobs.failedModelCalls(job).get(1).error()).isEqualTo("no model response within 150 s");
         assertThat(jobs.failedModelCalls(job).get(1).durationMs()).isEqualTo(1234);
         assertThat(jobs.failedModelCalls(UUID.randomUUID())).isEmpty();

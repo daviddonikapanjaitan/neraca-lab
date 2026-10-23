@@ -287,7 +287,7 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 
 When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
 statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
-extraction** takes over: its own model (Claude Haiku 5.5, `neracalab.ingestion.fallback.model` /
+extraction** takes over: its own model (Claude Sonnet 5.5, `neracalab.ingestion.fallback.model` /
 `INGESTION_FALLBACK_MODEL`; the standard extraction stays on `OPENAI_MODEL`, DeepSeek) gets the text of the
 whole workbook - every sheet of the file, whatever its taxonomy - and **decides every value that is not stored
 yet** - which rows make up every database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
@@ -320,7 +320,7 @@ an error and leaves no row. A row of the error log names the model of the full-t
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
-review (DeepSeek) and the full-text extraction's answers (Haiku) - is a row of `llm_usage` tied to the job
+review (DeepSeek) and the full-text extraction's answers (Sonnet) - is a row of `llm_usage` tied to the job
 (`llm_usage.job_id`), with its stage, model, tokens and the cost OpenRouter reports, as for a screening run.
 The IDX XBRL Ingestion page shows the cost of each job in the jobs table and the breakdown per stage and model
 under "Model cost" in the job details; `GET /api/v1/ingestions` returns it as `cost`,
@@ -508,7 +508,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: like "Update all companies" - the `IDX` companies behind, IHSG and LQ45 |
 | `neracalab.ingestion.prices-after-upload` / `INGESTION_PRICES_AFTER_UPLOAD` | `true` | a stored filing queues the daily prices of its company (nothing when they are up to date) |
 | `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
-| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
+| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-sonnet-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 | `neracalab.markets.world-bank.file-url` / `WORLD_BANK_PINK_SHEET_URL` | empty     | the Pink Sheet workbook (coal, LNG, nickel, tin, rubber, urea, DAP, potash); empty = the link on the World Bank Commodity Markets page |
@@ -563,7 +563,7 @@ again and downloaded as PDF.
             when the screener returns no listings, the known listings are quoted 50 per request)
 [Stage 1, Java, no AI] tier, price, trading, liquidity, earnings, equity filters
                        -> quantitative scorecard per agent -> shortlist = top N x 3 (max 100)
-[Stage 2, DeepSeek V4 Flash] research agent (tool calling + ReAct: EmitenNews, Pasardana,
+[Stage 2, DeepSeek V4.1 Flash] research agent (tool calling + ReAct: EmitenNews, Pasardana,
                        IDX Channel, Investor.id, Tavily) -> six independent investor agents
                        -> Reflection (validator + critic) -> Reflexion (lessons across runs)
 [Synthesis, Claude Opus 5.5] executive summary, conviction, thesis, +-5 point adjustments

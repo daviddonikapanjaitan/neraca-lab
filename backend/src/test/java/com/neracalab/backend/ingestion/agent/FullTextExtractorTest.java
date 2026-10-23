@@ -681,10 +681,10 @@ public class FullTextExtractorTest {
     void usesItsOwnModelWhenOneIsConfigured() {
         when(agent.options()).thenAnswer(call -> OpenAiChatOptions.builder().model("test"));
         FullTextExtractor own = new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),
-                new FallbackProperties("anthropic/claude-haiku-5.5", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
+                new FallbackProperties("anthropic/claude-sonnet-5.5", true, Duration.ofMinutes(3), Duration.ofMinutes(3),
                         Duration.ofSeconds(150), 120_000, 3));
 
-        assertThat(own.model()).isEqualTo("anthropic/claude-haiku-5.5");
+        assertThat(own.model()).isEqualTo("anthropic/claude-sonnet-5.5");
         assertThat(extractor(3).model()).isEqualTo("test");
     }
 

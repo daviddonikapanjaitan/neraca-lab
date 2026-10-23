@@ -3,7 +3,7 @@
 Judges whether a **country's stock market** (its main index) is investable now through the eyes of four macro
 investors - **Paul Tudor Jones**, **Stanley Druckenmiller**, **George Soros** and **Ray Dalio** - and gives an
 **investability score from 0 to 100**. Built like the AI stock screening ([SCREENING_DOCS.md](SCREENING_DOCS.md)):
-Spring AI on OpenRouter, DeepSeek V4 Flash for the research and the macro agents, Claude Opus 5.5 for the synthesis.
+Spring AI on OpenRouter, DeepSeek V4.1 Flash for the research and the macro agents, Claude Opus 5.5 for the synthesis.
 Every analysis is a background job (`ingestion_job` type `MACRO_ANALYSIS`); the report is saved in the database, shown
 on **Macro › AI Analysis** and downloadable as PDF.
 

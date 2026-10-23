@@ -100,7 +100,7 @@ public final class AgentTrace {
         return modelRetries.get();
     }
 
-    /** Records the model a response reports (the provider's id, e.g. deepseek/deepseek-v4-flash-0731). */
+    /** Records the model a response reports (the provider's id, e.g. deepseek/deepseek-v4.1-flash-1017). */
     public void modelUsed(String model) {
         if (model != null && !model.isBlank()) {
             modelsUsed.add(model);

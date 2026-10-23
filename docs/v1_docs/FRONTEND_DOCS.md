@@ -208,7 +208,7 @@ The jobs table has a "Cost" column: the USD cost and the number of model calls o
 priced from the list prices, a dash for a job without model calls. The job details show "Model cost"
 (`components/ingestion/job-usage.tsx`): the calls per stage and model with prompt, cached and completion
 tokens and the cost, and their total - for an upload the standard extraction (plan, tool turns, review;
-DeepSeek) and the full-text extraction (Haiku) side by side
+DeepSeek) and the full-text extraction (Sonnet) side by side
 ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 7).
 
 | Element                    | Content                                                                                                                         |

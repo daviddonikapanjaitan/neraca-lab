@@ -3,7 +3,7 @@
 Analyses one stock of the `company` table in depth through the eyes of the same six investor agents
 as the screening (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk). Unlike the screening, it works
 from what the database holds for that company: its stored financial statements and metrics, prices
-and valuations, and its PDF documents and news in the RAG vector store. DeepSeek V4 Flash researches
+and valuations, and its PDF documents and news in the RAG vector store. DeepSeek V4.1 Flash researches
 and analyses, Claude Opus 5.5 writes the synthesis (the screening's models and prices). Every
 analysis is a background job; the report and its cost are saved, shown on **Screening > Analysis**
 and downloadable as PDF.

@@ -94,7 +94,7 @@ FY2025 ran 8-9 minutes on three timed-out OpenRouter responses before the limit 
 ```properties
 OPENAI_API_KEY=sk-or-v1-...
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
-OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+OPENAI_MODEL=deepseek/deepseek-v4.1-flash-1017
 ```
 
 `application.yaml` imports it (`spring.config.import: optional:file:.env[.properties]`) and points
@@ -108,7 +108,7 @@ every ingestion call went to `openai/gpt-5-mini` on OpenRouter, whatever `OPENAI
 stock screening was not affected: `LlmGateway` always sets its model). `IngestionAgent.options()` now
 sets the configured model on every request (`IngestionAgentModelTest` pins both the Spring AI default
 and the fix), and the job result lists the models the responses report (`metrics.models`, e.g.
-`["deepseek/deepseek-v4-flash-0731"]`), so a substitution is visible in the job.
+`["deepseek/deepseek-v4.1-flash-1017"]`), so a substitution is visible in the job.
 
 | Property                                | Default | Meaning                                         |
 |-----------------------------------------|---------|-------------------------------------------------|
@@ -828,7 +828,7 @@ For a workbook of a taxonomy the rules do not map, nothing of the rule-based ext
 model and nothing can be adopted.
 
 Measured with DeepSeek V4 Flash, the model of the full-text extraction until it got its own
-(`neracalab.ingestion.fallback.model`, Claude Haiku 5.5; the NSSS row below):
+(`neracalab.ingestion.fallback.model`, Claude Haiku 5.5 when these were measured, Claude Sonnet 5.5 since 2026-10-23; the NSSS row below):
 
 | Workbook | What the model decided | Calls, time | Result |
 |----------|------------------------|-------------|--------|
@@ -892,7 +892,7 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 | Property (`neracalab.ingestion.fallback.*`) | Default | Meaning                                                    |
 |---------------------------------------------|---------|------------------------------------------------------------|
 | `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
-| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-haiku-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash at about the same cost per upload (one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
+| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-sonnet-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash and dearer per token (USD 2 / 10 per million against 0.15 / 0.60; one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
 | `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
 | `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
 | `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
@@ -1272,7 +1272,7 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
 |--------|---------|
 | `job_id` | the upload job (`ingestion_job`); deleted with it |
 | `stage` | `PLAN` (the planner), `EXECUTE` (a tool turn of the agent loop), `REVIEW` (the reviewer) of the standard extraction; `FULL_TEXT` (an answer of the full-text extraction) |
-| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Haiku 5.5) for the full-text extraction |
+| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4.1 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Sonnet 5.5) for the full-text extraction |
 | `ticker` | the filing's company |
 | `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens` | as the provider reports them |
 | `cost_usd`, `cost_estimated` | the cost OpenRouter reports for the call (`usage.cost`; every request asks for it with `"usage": {"include": true}`). A call without one is priced from `neracalab.screening.llm.prices` and flagged |
@@ -1290,7 +1290,7 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
 - Uploads stored before this was added have no rows, so no cost is shown for them.
 - **Failed calls go to the error log too.** When an upload is recorded in `ingestion_error` (section 6), the
   row's `details.failedModelCalls` lists the job's failed model calls from these rows, so a full-text
-  extraction whose model (Haiku) timed out or was refused shows what the provider said:
+  extraction whose model (Sonnet) timed out or was refused shows what the provider said:
 
   ```sql
   SELECT e.error_id, e.ticker, e.period, e.final_status, c->>'model' AS model, c->>'stage' AS stage,
@@ -1322,6 +1322,6 @@ GROUP BY j.job_id ORDER BY j.requested_at DESC LIMIT 20;
 ```
 
 Tests: `IngestionUsageRecorderTest` (an OpenAI-compatible server on localhost answers the calls: stage, the
-model asked - DeepSeek and Haiku -, tokens and the reported cost; a call without a cost is estimated and
+model asked - DeepSeek and Sonnet -, tokens and the reported cost; a call without a cost is estimated and
 flagged; a failed attempt and its retry are both recorded; a row that cannot be written does not fail the
 ingestion), `IngestionJobCostTest` (the sums per job and per stage and model, against Postgres).
