@@ -61,8 +61,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * One screening run, end to end (called by the {@link ScreeningQueue} worker):
- * A run screens a market-cap tier (Screening Stocks) or the stocks the user selected from the companies table
- * (Selected Stocks; {@link RunParameters#selection()}); both take the same steps:
+ * A run screens a market-cap tier (Fundamental (All)) or the stocks the user selected from the companies table
+ * (Fundamental (Selected); {@link RunParameters#selection()}); both take the same steps:
  * <ol>
  *   <li><b>Data</b>: today's market data (Yahoo screener) unless stored, and fresh fundamentals for the
  *       stocks that pass the market-data filters of the tier (or of the selection).</li>

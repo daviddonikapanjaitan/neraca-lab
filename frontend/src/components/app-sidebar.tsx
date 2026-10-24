@@ -97,7 +97,7 @@ function isActive(pathname: string, url: string) {
   return pathname === url || pathname.startsWith(`${url}/`)
 }
 
-/** The sub-page shown: the longest matching URL (/screening/analysis/x is Analysis, not Screening Stocks). */
+/** The sub-page shown: the longest matching URL (/screening/analysis/x is Analysis, not Fundamental (All)). */
 function activePage(pathname: string, pages: NavPage[]): string | null {
   const matching = pages.filter((page) => isActive(pathname, page.url))
   return matching.length === 0 ? null : matching.reduce((a, b) => (b.url.length > a.url.length ? b : a)).url

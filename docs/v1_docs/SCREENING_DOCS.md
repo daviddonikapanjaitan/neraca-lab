@@ -27,8 +27,8 @@ is saved in the database, shown on the Screening page and downloadable as PDF.
 
 ## 1. Using it
 
-Frontend: **Screening > Screening Stocks** in the sidebar (below Companies; the Screening entry is a
-dropdown with Screening Stocks, Selected Stocks and Analysis), permission `SCREENING` (the built-in Administrator role
+Frontend: **Screening > Fundamental (All)** in the sidebar (below Companies; the Screening entry is a
+dropdown with Fundamental (All), Fundamental (Selected) and Analysis), permission `SCREENING` (the built-in Administrator role
 has it; give it to other roles in Role Management). The in-depth analysis of one stock (Screening >
 Analysis) reuses the investor agents, Reflection and Reflexion of this page: [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md).
 
@@ -41,7 +41,7 @@ Analysis) reuses the investor agents, Reflection and Reflexion of this page: [AN
    the shortlist, the Stage 1 funnel, notes and lessons, token usage per stage and model.
 4. **Download PDF**. Saved screenings stay listed on the Screening page.
 
-**Screening > Selected Stocks** screens stocks you choose instead of a market-cap tier, with the same steps
+**Screening > Fundamental (Selected)** screens stocks you choose instead of a market-cap tier, with the same steps
 (data refresh, Stage 1, Stage 2, ranking, synthesis, report, PDF):
 
 1. Pick stocks from the companies table of the exchange (IDX; searchable multi-select, 1-100 stocks, i.e.
@@ -63,7 +63,7 @@ Analysis) reuses the investor agents, Reflection and Reflexion of this page: [AN
 3. The agents see each stock's own tier in its dossier; the synthesis is told the stocks were selected by
    the user. The run is `INCOMPLETE` when fewer stocks pass than the top N.
 
-The page lists only screenings of selected stocks; Screening Stocks lists only tier screenings.
+The page lists only screenings of selected stocks; Fundamental (All) lists only tier screenings.
 
 The **Ingestion** page has a "Screening data" card to run the ETL by hand, and its jobs table opens
 on the ETL runs (`FUNDAMENTALS`); the screenings (`SCREENING`) and the other jobs are under the other tabs.

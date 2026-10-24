@@ -46,7 +46,7 @@ browser ──> Next.js server (Server Components, Route Handlers /api/...) ─�
 | `GET /api/v1/prices/ingestions`             | Price Ingestion page: configured price provider |
 | `GET /api/v1/rag/status`, `GET /api/v1/rag/documents?source=PDF\|NEWS&limit=10&offset=&tickerPrefix=` | RAG pages: embedding model, news limits, stored documents one page at a time |
 | `GET /api/v1/analyses/options`, `GET /api/v1/analyses?limit=10&offset=0`, `GET /api/v1/analyses/{id}` | Analysis pages: companies with their stored data, saved analyses, report |
-| `GET /api/v1/screenings/options`, `GET /api/v1/screenings?limit=50&scope=TIER\|SELECTION`, `GET /api/v1/screenings/companies?exchange=IDX` | Screening Stocks and Selected Stocks pages: form options, saved screenings, the companies that can be selected |
+| `GET /api/v1/screenings/options`, `GET /api/v1/screenings?limit=50&scope=TIER\|SELECTION`, `GET /api/v1/screenings/companies?exchange=IDX` | Fundamental (All) and Fundamental (Selected) pages: form options, saved screenings, the companies that can be selected |
 
 The Ingestion pages also call the backend from the browser through Next.js Route Handlers in
 `src/app/api/` (same server-side `NERACA_API_URL`; `forward()` in `src/lib/api.ts` passes status and
@@ -245,13 +245,13 @@ a new company appears in the ticker list, the latest price date is current and n
 ### 3.3a Screening - `/screening`, `/screening/{id}`, `/screening/selected`, `/screening/selected/{id}` (`SCREENING`)
 
 Below Companies in the sidebar, a dropdown like Ingestion and the Admin Center with three pages
-(`lib/screening-sections.ts`): **Screening Stocks** (`/screening`, this section), **Selected Stocks**
+(`lib/screening-sections.ts`): **Fundamental (All)** (`/screening`, this section), **Fundamental (Selected)**
 (`/screening/selected`, below) and **Analysis** (`/screening/analysis`, section 3.3b). The sidebar
 highlights the sub-page with the longest matching URL, so `/screening/analysis/{id}` is Analysis, not
-Screening Stocks; the breadcrumb reads "Screening / Screening Stocks", "Screening / Selected Stocks" or
+Fundamental (All); the breadcrumb reads "Screening / Fundamental (All)", "Screening / Fundamental (Selected)" or
 "Screening / Analysis" (and "/ Report" on a report).
 
-The Screening Stocks form chooses the stock exchange (IDX), the market cap (large,
+The Fundamental (All) form chooses the stock exchange (IDX), the market cap (large,
 mid, small), the top N (1-50) and the investor agents (multi-select checkboxes: Buffett, Munger,
 Lynch, Fisher, Keith Gill, Risk); **Start screening** queues the run and opens its report. The
 saved screenings are listed below (refreshed every 3 s while one runs). The report page polls while
@@ -261,7 +261,7 @@ and the research agent's ReAct steps, headlines, metrics, every agent's reasonin
 scorecard), the rest of the shortlist, the Stage 1 funnel, notes and Reflexion lessons, token usage,
 and **Download PDF**. Details: [SCREENING_DOCS.md](SCREENING_DOCS.md).
 
-**Selected Stocks** (`/screening/selected`, report `/screening/selected/{id}`) screens stocks chosen from
+**Fundamental (Selected)** (`/screening/selected`, report `/screening/selected/{id}`) screens stocks chosen from
 the companies table instead of a market-cap tier, with the same steps and the same report. The form
 (`components/screening/selection-form.tsx`) lists the exchange's companies (`GET /api/v1/screenings/companies`)
 with a search (ticker, name, sector), a checkbox per stock (up to 100), the stored market cap and data date
@@ -354,8 +354,8 @@ frontend/
     │   │   ├── companies/page.tsx         page 1 (+ loading.tsx)
     │   │   ├── companies/[exchange]/[ticker]/page.tsx   page 2 (+ loading.tsx, not-found.tsx)
     │   │   ├── ingestion/xbrl, prices, screening-data, rag-pdf, rag-news/page.tsx   page 3 (+ loading.tsx; ingestion/page.tsx redirects)
-    │   │   ├── screening/page.tsx, screening/[id]/page.tsx   Screening Stocks and its reports
-    │   │   ├── screening/selected/page.tsx, screening/selected/[id]/page.tsx   Selected Stocks and its reports
+    │   │   ├── screening/page.tsx, screening/[id]/page.tsx   Fundamental (All) and its reports
+    │   │   ├── screening/selected/page.tsx, screening/selected/[id]/page.tsx   Fundamental (Selected) and its reports
     │   │   ├── screening/analysis/page.tsx, screening/analysis/[id]/page.tsx   Analysis and its reports
     │   │   ├── admin/users/page.tsx, admin/roles/page.tsx   Admin Center (admin/page.tsx redirects)
     │   │   └── profile/page.tsx           own profile

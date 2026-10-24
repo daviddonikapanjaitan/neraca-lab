@@ -107,7 +107,7 @@ export function SelectionForm({ options, companies }: { options: ScreeningOption
           New screening of selected stocks
         </CardTitle>
         <CardDescription>
-          The same steps as Screening Stocks on the stocks you choose: Stage 1 checks and scores them in Java (no AI),
+          The same steps as Fundamental (All) on the stocks you choose: Stage 1 checks and scores them in Java (no AI),
           every stock that passes goes to the AI agents, which read the news, score it from their investor&apos;s
           perspective and review their own answers. A final synthesis ranks the top N. A stock you chose is not dropped
           for low liquidity, a price below Rp 50, no recent trade or the watchlist board: it is analysed and flagged.

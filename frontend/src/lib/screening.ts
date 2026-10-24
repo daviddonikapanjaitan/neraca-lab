@@ -78,7 +78,7 @@ export function scopeLabel(run: Pick<ScreeningRun, "marketCapTier" | "tickers">)
   return `${n} selected ${n === 1 ? "stock" : "stocks"}`
 }
 
-/** The page a run was started from: Screening Stocks or Selected Stocks. */
+/** The page a run was started from: Fundamental (All) or Fundamental (Selected). */
 export function runsPageHref(run: Pick<ScreeningRun, "tickers">): string {
   return run.tickers ? SELECTED_STOCKS_HREF : "/screening"
 }

@@ -19,7 +19,7 @@ public final class ScreeningViews {
      * {@code POST /api/v1/screenings}: either a market-cap tier or selected stocks.
      *
      * @param marketCapTier LARGE, MID (or MEDIUM) or SMALL; omitted when {@code tickers} are given
-     * @param tickers       stocks of the companies table to screen (Screening > Selected Stocks); omitted for a tier
+     * @param tickers       stocks of the companies table to screen (Screening > Fundamental (Selected)); omitted for a tier
      * @param topN          stocks in the final ranking (1..max-top-n, at most the number of selected stocks)
      * @param agents        investor agents: BUFFETT, MUNGER, LYNCH, FISHER, GILL, RISK (at least one)
      */

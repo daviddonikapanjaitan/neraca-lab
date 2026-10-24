@@ -40,7 +40,7 @@ and downloadable as PDF.
 ## 1. Using it
 
 Frontend: the **Screening** entry of the sidebar is a dropdown (like Ingestion and the Admin Center)
-with **Screening Stocks** (`/screening`, the exchange screening), **Selected Stocks**
+with **Fundamental (All)** (`/screening`, the exchange screening), **Fundamental (Selected)**
 (`/screening/selected`, a screening of stocks chosen from the companies table) and **Analysis**
 (`/screening/analysis`). Permission `SCREENING`.
 
