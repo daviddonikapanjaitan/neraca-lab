@@ -52,7 +52,8 @@ class MacroIngestionServiceTest {
         }
     };
     private final MacroIngestionService service = new MacroIngestionService(repository, List.of(source),
-            new MacroProperties("f", "c", "t", "s", 45, 300, new MacroProperties.Schedule(false, "0 0 20 * * *", "Asia/Jakarta")),
+            new MacroProperties("f", "c", "t", "s", 45, 300, new MacroProperties.Schedule(false, "0 0 20 * * *", "Asia/Jakarta"),
+                    new MacroProperties.OutlookCache(true, java.time.Duration.ofHours(1))),
             Clock.fixed(ZonedDateTime.of(2026, 10, 16, 9, 0, 0, 0, JAKARTA).toInstant(), JAKARTA));
 
     private static MacroSource.Observation obs(String date, String value) {

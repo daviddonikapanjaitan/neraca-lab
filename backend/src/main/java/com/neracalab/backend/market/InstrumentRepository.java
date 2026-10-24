@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -53,10 +54,12 @@ public class InstrumentRepository {
 
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
+    private final ApplicationEventPublisher events;
 
-    public InstrumentRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate) {
+    public InstrumentRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate, ApplicationEventPublisher events) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
+        this.events = events;
     }
 
     /** The active instruments of a market in display order. */
@@ -129,8 +132,12 @@ public class InstrumentRepository {
         if (dates.isEmpty()) {
             return 0;
         }
-        return jdbc.sql("DELETE FROM instrument_daily WHERE instrument_code = :code AND trading_date IN (:dates)")
+        int deleted = jdbc.sql("DELETE FROM instrument_daily WHERE instrument_code = :code AND trading_date IN (:dates)")
                 .param("code", code).param("dates", dates).update();
+        if (deleted > 0) {
+            events.publishEvent(new MarketDataChanged("instrument_daily"));
+        }
+        return deleted;
     }
 
     /** Upserts bars; returns the rows inserted or changed (an unchanged bar is not written). */
@@ -163,6 +170,9 @@ public class InstrumentRepository {
             for (int c : batch) {
                 changed += c > 0 ? 1 : 0;
             }
+        }
+        if (MarketDataChanged.written(counts)) {
+            events.publishEvent(new MarketDataChanged("instrument_daily"));
         }
         return changed;
     }

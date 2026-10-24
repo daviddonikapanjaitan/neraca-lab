@@ -314,6 +314,21 @@ sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
 | `GET /api/v1/macro/outlook/countries` | the countries (`available`) and their indexes (`rows`, `lastDate`) |
 | `GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y` | `country`, `range`, `countries`, `asOfDate`, `index` (with `points` `[epoch s, close]`), `regimes` (`stateThen`, `scoreThen`), `panels` (`points`, `lastValue`, `tone`, `summary`, `readBy`), `presets` (`ptj`, `druckenmiller`, `soros` with `loop`, `dalio` with `quadrant`), `indexes` (the country's indexes), `markets` (`commodities` and `forex`: rows with `role`, `tone`, `summary`, `points`; `termsOfTrade`; `regionalCurrencies`: `state`, `tone`, `rupiah3mPct`, `peersMedian3mPct`, `gapPts`, `peers`, `summary`), `conclusion` (`score`, `verdict`, `action`, `components`, `buyWhen` / `accumulateWhen` / `sellWhen` with `met`, `watch`), `notes`, `disclaimer`. 400: a country not available yet, an unknown country, index or range |
 
+**Cache (Redis).** Computing the outlook reads every index bar, macro series, commodity and currency pair (about 0.5 s;
+the MAX range is 1.3 MB of JSON). `MacroOutlookCache` keeps the JSON in Redis by country, index, range and day (the
+exchange's; the outlook is as of today); a cached request takes about 10 - 30 ms. Header `X-Cache: HIT` or `MISS`.
+
+- Cleared by every write that changes rows of `index_daily`, `instrument_daily`, `macro_series` or `fx_rate_daily`
+  (the repositories publish `market.MarketDataChanged`; the cache is cleared after the commit, not by a rolled-back
+  write) and by every backend start (the SQL scripts reload the catalogs). Clearing counts up a Redis generation
+  (`neracalab:macro-outlook:generation`) that is part of every key, so an outlook computed while the data changed is
+  never read again.
+- `neracalab.macro.outlook-cache.ttl` (default `1h`) bounds a change made outside the application (SQL by hand);
+  `enabled` (`MACRO_OUTLOOK_CACHE_ENABLED`, default `true`) turns it off.
+- Redis unreachable: the outlook is computed for every request (logged as a warning); the page keeps working.
+- Tests: `MacroOutlookCacheTest` (a hit equal to the computed outlook, cleared after a commit only, refusals not
+  cached).
+
 ## 7. Limitations
 
 - **No vintages**: a revision replaces the value, so an earlier as-of date sees the revised figure.

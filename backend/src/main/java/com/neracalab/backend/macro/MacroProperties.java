@@ -13,6 +13,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param overlapDays  an incremental fetch starts this many days before the latest stored observation, so that recent
  *                     revisions are picked up
  * @param jobHistory   finished jobs kept in memory
+ * @param outlookCache the Macro page's outlook kept in Redis
  */
 @ConfigurationProperties("neracalab.macro")
 public record MacroProperties(
@@ -22,12 +23,27 @@ public record MacroProperties(
         @DefaultValue("https://www.bi.go.id/SEKI/tabel") String biSekiBaseUrl,
         @DefaultValue("45") int overlapDays,
         @DefaultValue("300") int jobHistory,
-        @DefaultValue Schedule schedule) {
+        @DefaultValue Schedule schedule,
+        @DefaultValue OutlookCache outlookCache) {
 
     public MacroProperties {
         if (overlapDays < 0) {
             throw new IllegalArgumentException("neracalab.macro.overlap-days must not be negative");
         }
+        if (outlookCache.ttl().isNegative() || outlookCache.ttl().isZero()) {
+            throw new IllegalArgumentException("neracalab.macro.outlook-cache.ttl must be positive");
+        }
+    }
+
+    /**
+     * The Macro page's outlook ({@code GET /api/v1/macro/outlook}) kept in Redis, by country, index, range and day. A
+     * write of the data it reads (index, macro series, commodities, currency pairs) and every start clear it; the ttl
+     * bounds a change made outside the application (e.g. SQL by hand).
+     *
+     * @param enabled false: every request computes the outlook
+     */
+    public record OutlookCache(@DefaultValue("true") boolean enabled,
+                               @DefaultValue("1h") java.time.Duration ttl) {
     }
 
     /**

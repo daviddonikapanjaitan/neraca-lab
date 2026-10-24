@@ -1,11 +1,13 @@
 package com.neracalab.backend.macro.outlook;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,7 +24,8 @@ import com.neracalab.backend.auth.RequiresPermission;
  *       United States and China coming later)</li>
  *   <li>{@code GET /api/v1/macro/outlook?country=ID&index=IHSG&range=1Y} - the index line, the macro panel (a chart and
  *       a summary per series, the liquidity and risk regimes), the Paul Tudor Jones and Druckenmiller summaries and the
- *       conclusion (investability score, when to buy and when to sell); {@link MacroOutlook}</li>
+ *       conclusion (investability score, when to buy and when to sell); {@link MacroOutlook}, kept in Redis
+ *       ({@link MacroOutlookCache}; header {@code X-Cache: HIT} or {@code MISS})</li>
  * </ul>
  */
 @RestController
@@ -31,9 +34,11 @@ import com.neracalab.backend.auth.RequiresPermission;
 public class MacroOutlookController {
 
     private final MacroOutlookService service;
+    private final MacroOutlookCache cache;
 
-    public MacroOutlookController(MacroOutlookService service) {
+    public MacroOutlookController(MacroOutlookService service, MacroOutlookCache cache) {
         this.service = service;
+        this.cache = cache;
     }
 
     @GetMapping("/countries")
@@ -42,10 +47,12 @@ public class MacroOutlookController {
     }
 
     @GetMapping
-    public Map<String, Object> outlook(@RequestParam(name = "country", defaultValue = "ID") String country,
-                                       @RequestParam(name = "index", required = false) String index,
-                                       @RequestParam(name = "range", defaultValue = "1Y") String range) {
-        return service.outlook(country, index, range);
+    public ResponseEntity<byte[]> outlook(@RequestParam(name = "country", defaultValue = "ID") String country,
+                                          @RequestParam(name = "index", required = false) String index,
+                                          @RequestParam(name = "range", defaultValue = "1Y") String range) {
+        MacroOutlookCache.Outlook out = cache.outlook(country, index, range);
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).header("X-Cache", out.cached() ? "HIT" : "MISS")
+                .body(out.json().getBytes(StandardCharsets.UTF_8));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

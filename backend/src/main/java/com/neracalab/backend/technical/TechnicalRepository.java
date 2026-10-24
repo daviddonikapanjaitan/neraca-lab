@@ -10,12 +10,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.neracalab.backend.company.Exchange;
+import com.neracalab.backend.market.MarketDataChanged;
 import com.neracalab.backend.technical.engine.Candle;
 
 /**
@@ -68,10 +70,12 @@ public class TechnicalRepository {
 
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
+    private final ApplicationEventPublisher events;
 
-    public TechnicalRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate) {
+    public TechnicalRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate, ApplicationEventPublisher events) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
+        this.events = events;
     }
 
     // ------------------------------------------------------------------ listings
@@ -232,6 +236,9 @@ public class TechnicalRepository {
             for (int c : batch) {
                 changed += Math.max(c, 0);
             }
+        }
+        if (MarketDataChanged.written(counts)) {
+            events.publishEvent(new MarketDataChanged("index_daily"));
         }
         return changed;
     }
