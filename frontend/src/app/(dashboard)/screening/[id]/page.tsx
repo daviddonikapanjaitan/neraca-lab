@@ -6,7 +6,7 @@ export async function generateMetadata({ params }: { params: ReportParams }): Pr
   return reportMetadata(params)
 }
 
-/** Screening > Screening Stocks > Report: the report of a screening of a market-cap tier. */
+/** Screening > Fundamental (All) > Report: the report of a screening of a market-cap tier. */
 export default async function Page({ params }: { params: ReportParams }) {
   return <ScreeningReportPage params={params} scope="TIER" />
 }

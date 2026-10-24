@@ -10,11 +10,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import com.neracalab.backend.company.Exchange;
+import com.neracalab.backend.market.MarketDataChanged;
 import com.neracalab.backend.price.provider.DailyBar;
 import com.neracalab.backend.price.provider.FxRateProvider.FxRate;
 
@@ -54,10 +56,12 @@ public class PriceDailyRepository {
 
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
+    private final ApplicationEventPublisher events;
 
-    public PriceDailyRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate) {
+    public PriceDailyRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate, ApplicationEventPublisher events) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
+        this.events = events;
     }
 
     public Optional<CompanyRef> company(Exchange exchange, String ticker) {
@@ -151,8 +155,8 @@ public class PriceDailyRepository {
                 .filter(r -> r.date() != null && r.rate() != null && r.rate().signum() > 0)
                 .map(r -> new Object[] {base, quote, r.date(), r.rate(), source})
                 .toList();
-        if (!args.isEmpty()) {
-            jdbcTemplate.batchUpdate(FX_UPSERT, args, FX_UPSERT_TYPES);
+        if (!args.isEmpty() && MarketDataChanged.written(jdbcTemplate.batchUpdate(FX_UPSERT, args, FX_UPSERT_TYPES))) {
+            events.publishEvent(new MarketDataChanged("fx_rate_daily"));
         }
     }
 

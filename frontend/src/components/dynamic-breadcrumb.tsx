@@ -33,9 +33,9 @@ const ADMIN_PAGES: Record<string, string> = {
  * /companies/IDX/HRTA       -> Companies / IDX / HRTA
  * /admin/users              -> Admin Center / User Management
  * /ingestion/prices         -> Ingestion / Price Ingestion
- * /screening                -> Screening / Screening Stocks
- * /screening/<id>           -> Screening / Screening Stocks / Report
- * /screening/selected/<id>  -> Screening / Selected Stocks / Report
+ * /screening                -> Screening / Fundamental (All)
+ * /screening/<id>           -> Screening / Fundamental (All) / Report
+ * /screening/selected/<id>  -> Screening / Fundamental (Selected) / Report
  * /screening/analysis/<id>  -> Screening / Analysis / Report
  * /macro                    -> Macro / Outlook
  * /macro/analysis/<id>      -> Macro / AI Analysis / Report
@@ -60,8 +60,8 @@ function crumbs(pathname: string): Crumb[] {
       segments[1] === "analysis"
         ? { label: "Analysis", href: ANALYSIS_HREF }
         : segments[1] === "selected"
-          ? { label: "Selected Stocks", href: SELECTED_STOCKS_HREF }
-          : { label: "Screening Stocks", href: "/screening" }
+          ? { label: "Fundamental (Selected)", href: SELECTED_STOCKS_HREF }
+          : { label: "Fundamental (All)", href: "/screening" }
     const report = segments[1] === "analysis" || segments[1] === "selected" ? segments.length > 2 : segments.length > 1
     return [
       { label: "Screening", href: "/screening" },

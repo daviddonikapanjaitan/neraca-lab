@@ -74,9 +74,9 @@ public class ScreeningRepository {
     public enum Scope {
         /** every run */
         ALL,
-        /** screenings of a market-cap tier (Screening Stocks) */
+        /** screenings of a market-cap tier (Fundamental (All)) */
         TIER,
-        /** screenings of selected stocks (Selected Stocks) */
+        /** screenings of selected stocks (Fundamental (Selected)) */
         SELECTION;
 
         /** Case-insensitive; null when unknown. */

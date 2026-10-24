@@ -6,7 +6,7 @@ export async function generateMetadata({ params }: { params: ReportParams }): Pr
   return reportMetadata(params)
 }
 
-/** Screening > Selected Stocks > Report: the report of a screening of selected stocks. */
+/** Screening > Fundamental (Selected) > Report: the report of a screening of selected stocks. */
 export default async function Page({ params }: { params: ReportParams }) {
   return <ScreeningReportPage params={params} scope="SELECTION" />
 }

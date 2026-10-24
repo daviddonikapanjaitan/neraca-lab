@@ -134,7 +134,7 @@ neraca_lab/
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
-├── data/                        local only, not in the repository (.gitignore): download the filings from idx.co.id
+├── data/                        local only, not in the repository (.gitignore): see "Where to get the data for ingestion"
 ├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
 ├── data/IDX_OWNERSHIP/<TICKER>/ monthly registration reports of securities holders (registrasi_<ticker>_<bulan>.pdf)
 ├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
@@ -252,7 +252,7 @@ role has one or more permissions, and the backend checks them on every API reque
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
 | `INGESTION` | Ingestion pages, upload / price / RAG / job APIs (and the company list)  |
 | `COMPANIES` | Companies pages and company APIs                                         |
-| `SCREENING` | Screening pages (Screening Stocks, Selected Stocks, Analysis): runs, analyses, reports, PDF export |
+| `SCREENING` | Screening pages (Fundamental (All), Fundamental (Selected), Analysis): runs, analyses, reports, PDF export |
 
 The root user `admin` (initial password `admin`, dummy profile data) has the built-in
 Administrator role with every permission; it cannot be deleted, deactivated or lose that role.
@@ -266,6 +266,26 @@ AUTH="Authorization: Bearer $TOKEN"     # used by the examples below
 ```
 
 Details: [`docs/v1_docs/AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md).
+
+## Where to get the data for ingestion
+
+`data/` is not in the repository (`.gitignore`). Download the files to ingest from the Indonesia
+Stock Exchange (IDX) website, put them under `data/` as in [Project structure](#project-structure),
+and upload them on the Ingestion page (or with the APIs below):
+
+| Source (idx.co.id)                                                                                                       | What to download                                                                                         | Put it in                                  | Upload it with                                                                  |
+|--------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|--------------------------------------------|---------------------------------------------------------------------------------|
+| [Laporan Keuangan dan Tahunan](https://www.idx.co.id/id/perusahaan-tercatat/laporan-keuangan-dan-tahunan)               | financial statements of a listed company: the XBRL workbook (`FinancialStatement-<period>-<TICKER>.xlsx`) and the PDF | `data/IDX_XBRL/<TICKER>/xlsx/`, `pdf/`     | xlsx: `POST /api/v1/financial-statements/upload`; PDF: `POST /api/v1/rag/pdf`    |
+| [Keterbukaan Informasi](https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi)                             | information disclosures of listed companies (company announcements and reports filed with IDX)           | `data/IDX_OWNERSHIP/<TICKER>/` (registration reports) | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
+| [Data Kepemilikan Saham](https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/)                           | share ownership data of listed companies                                                                 | `data/IDX_OWNERSHIP/<TICKER>/`             | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
+
+The monthly registration reports of securities holders (registrasi / LBRE PDFs) are what the
+Companies › Registration page reads ([`REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md)).
+
+Daily prices are not downloaded by hand: the price ingestion fetches them (see
+[Daily price ingestion](#daily-price-ingestion)). Macro documents of a country (Bank Indonesia,
+Ministry of Finance) go to `data/macro/<country>/` and the Macro document upload
+(see [RAG vector store](#rag-vector-store-pdf-documents-news-and-macro-documents)).
 
 ## Uploading financial statements (AI ingestion)
 
@@ -610,7 +630,7 @@ Each agent score is 60% quantitative scorecard + 40% AI judgement; the overall s
 average of the investor agents, blended 20% with the Risk agent (safety). Cost is capped at
 **$0.45 per run** (`SCREENING_BUDGET_USD`); a large-cap top 10 with all six agents (30 stocks
 analysed) cost $0.12. The daily ETL runs Monday-Friday 18:00 WIB and before each screening; the
-Ingestion page can start it by hand. **Screening > Selected Stocks** screens stocks chosen from the companies
+Ingestion page can start it by hand. **Screening > Fundamental (Selected)** screens stocks chosen from the companies
 table (searchable multi-select, up to 100) with the same steps and report; a chosen stock that fails a tradability
 check (liquidity, price below Rp 50, no recent trade, watchlist board) is kept and flagged instead of dropped, while
 one without the data the scorecards need is left out and named in the notes. Details: [`docs/v1_docs/SCREENING_DOCS.md`](docs/v1_docs/SCREENING_DOCS.md).
@@ -621,11 +641,11 @@ years in USD, and its own P/B and EV / EBITDA mix the two (INDY: 2,610 IDR / 0.2
 screening stores the currency of the fundamentals (`fundamental_snapshot.financial_currency`, `V1.0.20`) and
 converts with the stored USD/IDR rate (`fx_rate_daily`): P/B, FCF yield, EV / EBITDA and Altman Z compare like with
 like (INDY P/B 0.63), and the agents get the fiscal years in IDR billions. Without a stored rate those four metrics
-are unknown rather than wrong. The same metrics feed Screening Stocks, Selected Stocks and the Analysis scorecards.
+are unknown rather than wrong. The same metrics feed Fundamental (All), Fundamental (Selected) and the Analysis scorecards.
 
 ## AI analysis of one stock
 
-**Screening > Analysis** in the sidebar (the Screening entry is a dropdown with Screening Stocks, Selected
+**Screening > Analysis** in the sidebar (the Screening entry is a dropdown with Fundamental (All), Selected
 Stocks and Analysis; permission `SCREENING`): choose a stock of the companies table and the investor agents.
 The form shows what the database holds for it (statements, market data, PDF documents, news). The
 analysis is a background job; its report and cost are saved and can be downloaded as PDF.
@@ -744,6 +764,9 @@ panels are technical only.
 curl -H "$AUTH" "http://localhost:8080/api/v1/macro/outlook?country=ID&index=LQ45&range=1Y"
 ```
 
+The outlook is cached in Redis (about 10 - 30 ms instead of 0.5 s; header `X-Cache`), cleared whenever index, macro,
+commodity or currency data are stored and on every backend start (`neracalab.macro.outlook-cache`).
+
 Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6a. The page also shows the commodities
 and currency pairs with what each means for Indonesia (exports, imports, the rupiah, the yuan, the dollar, risk appetite;
 the terms of trade), the rupiah against its Asian peers (USD/IDR's 3-month change beside the median of USD/CNY, USD/MYR,
@@ -786,8 +809,8 @@ npm run dev                   # http://localhost:3000
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
 | `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
-| `/screening`                     | Screening dropdown (like Ingestion), Screening Stocks: exchange, market cap, top N, investor agents (multi-select); saved screenings |
-| `/screening/selected`            | Selected Stocks: stocks chosen from the companies table (search, multi-select), top N, investor agents; saved screenings of selected stocks |
+| `/screening`                     | Screening dropdown (like Ingestion), Fundamental (All): exchange, market cap, top N, investor agents (multi-select); saved screenings |
+| `/screening/selected`            | Fundamental (Selected): stocks chosen from the companies table (search, multi-select), top N, investor agents; saved screenings of selected stocks |
 | `/screening/selected/{id}`       | report of a screening of selected stocks (same content; the selected stocks and their flags shown) |
 | `/screening/{id}`                | screening report: progress, executive summary, ranking with per-agent scores, stock details (news, reasoning, reflection), funnel, token usage, PDF download |
 | `/screening/analysis`            | Analysis: one stock of the companies table (with its stored data) and the investor agents; saved analyses (10 per page: 5 / 10 / 20 / 50) |

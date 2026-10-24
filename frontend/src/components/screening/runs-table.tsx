@@ -25,8 +25,8 @@ const ACTIVE_POLL_MS = 3000
 const IDLE_POLL_MS = 15000
 
 /**
- * The screening runs of one page (most recent first): those of a market-cap tier (Screening Stocks) or of selected
- * stocks (Selected Stocks). Refreshed every 3 s while one is active. Saved reports open on click.
+ * The screening runs of one page (most recent first): those of a market-cap tier (Fundamental (All)) or of selected
+ * stocks (Fundamental (Selected)). Refreshed every 3 s while one is active. Saved reports open on click.
  */
 export function RunsTable({ initial, scope }: { initial: ScreeningRun[]; scope: ScreeningScope }) {
   const [runs, setRuns] = useState(initial)

@@ -10,7 +10,7 @@ import { RUN_LIMIT } from "@/lib/screening"
 import type { ScreeningOptions, ScreeningRun, SelectableCompanies } from "@/lib/types"
 
 export const metadata: Metadata = {
-  title: "Selected Stocks",
+  title: "Fundamental (Selected)",
 }
 
 async function load(): Promise<
@@ -28,7 +28,7 @@ async function load(): Promise<
   }
 }
 
-/** Screening > Selected Stocks: the screening of stocks chosen from the companies table (SCREENING). */
+/** Screening > Fundamental (Selected): the screening of stocks chosen from the companies table (SCREENING). */
 export default async function Page() {
   const user = await requireUser()
   if (!hasPermission(user, "SCREENING")) {
@@ -51,7 +51,7 @@ export default async function Page() {
         <h1 className="text-xl font-semibold tracking-tight">AI screening of selected stocks</h1>
         <p className="text-sm text-muted-foreground">
           Choose stocks from the companies table and screen them through the eyes of great investors, with the same
-          steps as Screening Stocks. Each run is a background job; its report is saved and can be opened again or
+          steps as Fundamental (All). Each run is a background job; its report is saved and can be opened again or
           downloaded as PDF.
         </p>
       </div>

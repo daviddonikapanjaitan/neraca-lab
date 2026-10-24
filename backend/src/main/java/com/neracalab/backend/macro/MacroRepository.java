@@ -10,10 +10,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+
+import com.neracalab.backend.market.MarketDataChanged;
 
 /** {@code macro_series_def} (the catalog) and {@code macro_series} (the observations). */
 @Repository
@@ -44,10 +47,12 @@ public class MacroRepository {
 
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
+    private final ApplicationEventPublisher events;
 
-    public MacroRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate) {
+    public MacroRepository(JdbcClient jdbc, JdbcTemplate jdbcTemplate, ApplicationEventPublisher events) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
+        this.events = events;
     }
 
     /** The active series in display order. */
@@ -138,7 +143,7 @@ public class MacroRepository {
      */
     @Transactional
     public void upsert(String code, String source, List<Row> rows) {
-        jdbcTemplate.batchUpdate("""
+        int[][] counts = jdbcTemplate.batchUpdate("""
                         INSERT INTO macro_series (series_code, obs_date, value, source, period_end, release_date, revision,
                                                   updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, 0, now())
@@ -161,5 +166,8 @@ public class MacroRepository {
                     ps.setObject(5, row.periodEnd());
                     ps.setObject(6, row.releaseDate());
                 });
+        if (MarketDataChanged.written(counts)) {
+            events.publishEvent(new MarketDataChanged("macro_series"));
+        }
     }
 }

@@ -148,6 +148,9 @@ container keeps the old image (compose prints `Running` instead of `Recreated`),
 |----------|----------------------|----------------------------------|-----------|----------------------------------------------|
 | postgres | `neracalab-postgres` | built from `backend/postgres/Dockerfile` (`neracalab-postgres:17-pgvector`) | `5432` | `pg_isready` |
 | redis    | `neracalab-redis`    | `redis:7-alpine`                 | `6379`    | `redis-cli ping`                             |
+
+Redis holds the Macro page's outlook cache (`MACRO_DOCS.md`, section 6a); the backend reads `SPRING_DATA_REDIS_HOST`,
+`SPRING_DATA_REDIS_PORT` and `SPRING_DATA_REDIS_PASSWORD` (outside Docker: `localhost:6379`, `REDIS_PASSWORD`).
 | backend  | `neracalab-backend`  | built from `backend/Dockerfile`  | `8080`    | `GET /api/v1/health` (120 s start period)    |
 | frontend | `neracalab-frontend` | built from `frontend/Dockerfile` | `3000`    | `GET /login`                                 |
 

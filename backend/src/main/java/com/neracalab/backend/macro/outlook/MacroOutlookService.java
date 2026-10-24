@@ -91,14 +91,17 @@ public class MacroOutlookService {
      * @throws IllegalArgumentException an unknown or not yet available country, an unknown index or range
      */
     public Map<String, Object> outlook(String countryCode, String indexCode, String range) {
+        return outlook(countryCode, indexCode, range, LocalDate.now(Exchange.of(country(countryCode).exchange()).zone()));
+    }
+
+    /** {@link #outlook(String, String, String)} as of {@code today} (the country's exchange's day; the cache's key). */
+    Map<String, Object> outlook(String countryCode, String indexCode, String range, LocalDate today) {
         Country country = country(countryCode);
         List<TechnicalProperties.Index> indexes = indexes(country.exchange());
         TechnicalProperties.Index index = index(country, indexes, indexCode);
-        Exchange exchange = Exchange.of(country.exchange());
         List<Candle> bars = repository.indexBars(index.code());
         // as of today: every observation stored and public by now is read (the latest Forex close of USD/IDR as soon
         // as the price ingestion stored it), not only those up to the index's last trading day
-        LocalDate today = LocalDate.now(exchange.zone());
         LocalDate asOf = bars.isEmpty() || bars.getLast().date().isBefore(today) ? today : bars.getLast().date();
         LocalDate from = rangeStart(range, asOf);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -290,6 +293,17 @@ public class MacroOutlookService {
                     .map(o -> new Observation(o.date(), o.value(), o.released())).toList());
         }
         return macro;
+    }
+
+    /**
+     * A range as the outlook names it (blank: 1Y, upper case).
+     *
+     * @throws IllegalArgumentException an unknown range
+     */
+    static String range(String range) {
+        String r = range == null || range.isBlank() ? "1Y" : range.trim().toUpperCase(Locale.ROOT);
+        rangeStart(r, LocalDate.EPOCH);
+        return r;
     }
 
     static LocalDate rangeStart(String range, LocalDate end) {
