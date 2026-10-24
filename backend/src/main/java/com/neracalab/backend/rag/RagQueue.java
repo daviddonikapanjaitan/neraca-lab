@@ -2,6 +2,7 @@ package com.neracalab.backend.rag;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,7 +28,10 @@ import com.neracalab.backend.rag.RagIngestionService.MacroMeta;
 import com.neracalab.backend.rag.RagIngestionService.MacroPdfResult;
 import com.neracalab.backend.rag.RagIngestionService.NewsResult;
 import com.neracalab.backend.rag.RagIngestionService.PdfResult;
+import com.neracalab.backend.rag.RagIngestionService.RegistrationResult;
 import com.neracalab.backend.rag.RagRepository.Company;
+import com.neracalab.backend.registration.RegistrationParser;
+import com.neracalab.backend.registration.RegistrationRepository;
 
 /**
  * Asynchronous RAG ingestions (job types RAG_PDF and RAG_NEWS in {@code ingestion_job}; a macro PDF of a country is a
@@ -55,7 +59,8 @@ public class RagQueue implements SmartLifecycle {
     private sealed interface Task permits PdfTask, NewsTask, MacroPdfTask {
     }
 
-    private record PdfTask(Company company, long fileId, String fileName, String checksum) implements Task {
+    private record PdfTask(Company company, CompanyDocumentType documentType, long fileId, String fileName,
+                           String checksum) implements Task {
     }
 
     private record NewsTask(Company company, LocalDate from, LocalDate to) implements Task {
@@ -80,9 +85,12 @@ public class RagQueue implements SmartLifecycle {
 
     // ------------------------------------------------------------------ API
 
-    /** Stores the PDF (or reuses the stored file with the same checksum) and queues its ingestion for the company. */
-    public synchronized Submission submitPdf(Company company, byte[] content, String fileName, String contentType,
-                                             Requester requestedBy) {
+    /**
+     * Stores the PDF (or reuses the stored file with the same checksum) and queues its ingestion for the company as a
+     * document of the type given.
+     */
+    public synchronized Submission submitPdf(Company company, CompanyDocumentType documentType, byte[] content,
+                                             String fileName, String contentType, Requester requestedBy) {
         StoredFile file = files.store(content, fileName, contentType);
         Optional<IngestionJob> active = jobs.activeFileJobOf(IngestionJobType.RAG_PDF, file.fileId(), company.exchange(),
                 company.ticker()).flatMap(jobs::find);
@@ -92,10 +100,12 @@ public class RagQueue implements SmartLifecycle {
         UUID id = UUID.randomUUID();
         String name = fileName.length() <= IngestionFileRepository.NAME_LENGTH
                 ? fileName : fileName.substring(0, IngestionFileRepository.NAME_LENGTH);
-        jobs.insertFileJob(new NewUpload(id, file.fileId(), name, file.reused(), "Waiting in the RAG queue", requestedBy),
+        jobs.insertFileJob(new NewUpload(id, file.fileId(), name, file.reused(), "Waiting in the RAG queue ("
+                        + documentType.label().toLowerCase(Locale.ROOT) + ")", requestedBy),
                 IngestionJobType.RAG_PDF, company.exchange(), company.ticker());
-        enqueue(id, new PdfTask(company, file.fileId(), name, file.checksumSha256()));
-        log.info("RAG PDF job {} queued by {}: {} {} ({})", id, requester(requestedBy), company.ticker(), name, file.fileId());
+        enqueue(id, new PdfTask(company, documentType, file.fileId(), name, file.checksumSha256()));
+        log.info("RAG PDF job {} queued by {}: {} {} {} ({})", id, requester(requestedBy), company.ticker(), documentType,
+                name, file.fileId());
         return new Submission(jobs.find(id).orElseThrow(), true);
     }
 
@@ -191,17 +201,38 @@ public class RagQueue implements SmartLifecycle {
                 .orElseThrow(() -> new IllegalStateException("Stored file " + task.fileId() + " not found"));
         PdfResult result;
         try {
-            result = service.ingestPdf(id, task.company(), task.fileId(), task.fileName(), task.checksum(), content,
-                    stage -> jobs.progress(id, stage, null, null));
+            result = service.ingestPdf(id, task.company(), task.documentType(), task.fileId(), task.fileName(),
+                    task.checksum(), content, stage -> jobs.progress(id, stage, null, null));
         } catch (PdfText.PdfException e) {
             jobs.finish(id, IngestionJobStatus.FAILED, "Invalid PDF", e.getMessage(), null);
+            return;
+        } catch (RegistrationParser.RegistrationFormatException e) {
+            jobs.finish(id, IngestionJobStatus.FAILED, "Not a readable registration report", e.getMessage(), null);
             return;
         } catch (EmbeddingClient.EmbeddingException e) {
             jobs.finish(id, IngestionJobStatus.FAILED, "Embedding failed", e.getMessage(), null);
             return;
         }
-        jobs.finish(id, IngestionJobStatus.SUCCEEDED, "Stored " + result.chunks() + " chunks of " + result.pages()
-                + " pages for " + task.company().ticker(), null, result);
+        String stored = "Stored " + result.chunks() + " chunks of " + result.pages() + " pages for " + task.company().ticker();
+        RegistrationResult r = result.registration();
+        if (r == null) {
+            jobs.finish(id, IngestionJobStatus.SUCCEEDED, stored, null, result);
+            return;
+        }
+        String report = "registration " + r.period() + (r.correction() ? " (correction)" : "") + ": ";
+        report += switch (r.outcome()) {
+            case KEPT_LATER_FILING -> "not stored, the report of " + r.period() + " filed later (" + r.keptFiledAt()
+                    + ") is kept";
+            case STORED, REPLACED -> r.insiders() + (r.insiders() == 1 ? " director or commissioner, "
+                    : " directors and commissioners, ") + r.changes()
+                    + (r.changes() == 1 ? " change" : " changes")
+                    + (r.outcome() == RegistrationRepository.Outcome.REPLACED ? " (replaced the report stored)" : "");
+        };
+        if (r.warnings().isEmpty()) {
+            jobs.finish(id, IngestionJobStatus.SUCCEEDED, stored + "; " + report, null, result);
+        } else {
+            jobs.finish(id, IngestionJobStatus.INCOMPLETE, stored + "; " + report, String.join("; ", r.warnings()), result);
+        }
     }
 
     private void processNews(UUID id, NewsTask task) {

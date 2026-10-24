@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import com.neracalab.backend.rag.RagRepository.Company;
 import com.neracalab.backend.rag.RagRepository.NewDocument;
+import com.neracalab.backend.registration.RegistrationRepository;
 import com.neracalab.backend.screening.news.Headline;
 import com.neracalab.backend.screening.news.NewsHttpClient;
 import com.neracalab.backend.screening.news.NewsSource;
@@ -59,7 +60,8 @@ class RagNewsIngestionTest {
                 .map(t -> new float[RagProperties.STORE_DIMENSIONS]).toList());
         when(collector.collect(eq("ASGR"), anyString(), eq(FROM), eq(TO), any())).thenReturn(new NewsCollector.Collected(
                 List.of(HEADLINE), List.of(new NewsCollector.SourceResult(NewsSource.EMITENNEWS, 1, 1, 1, null))));
-        service = new RagIngestionService(repository, embeddings, collector, http, EmbeddingClientTest.properties());
+        service = new RagIngestionService(repository, mock(RegistrationRepository.class), embeddings, collector, http,
+                EmbeddingClientTest.properties());
     }
 
     @Test

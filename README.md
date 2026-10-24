@@ -54,6 +54,7 @@ start), then change its password in Admin Center > User Management.
 | [`ANALYSIS_DOCS.md`](docs/v1_docs/ANALYSIS_DOCS.md)         | AI analysis of one stock: company data, research agent over its documents (RAG), agents, cost, report, PDF |
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
 | [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion of the companies, macro PDFs of a country, chunking, embeddings, search API |
+| [`REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md) | Companies › Registration: monthly registration reports (LBRE) uploaded as Registration PDFs, the directors' and commissioners' shares month by month, buy / sell, API, tests |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
@@ -93,8 +94,10 @@ neraca_lab/
 │       │                        Reflexion, synthesis), report/ (PDF), queue, service, controller
 │       ├── java/.../rag/        RAG vector store: PDF text, chunker, embeddings, news collector,
 │       │                        pgvector repository, queue, controller
-│       ├── java/.../analysis/   AI analysis of one stock: fact sheet, research agent and its tools
-│       │                        (RAG search, statements), synthesis, report/ (PDF), queue, service, controller
+│       ├── java/.../registration/ monthly registration reports: PDF words by position, parser, repository,
+│       │                        controller (Companies › Registration)
+│       ├── java/.../analysis/   AI analysis of one stock: fact sheet, insider ownership, research agent and its
+│       │                        tools (RAG search, statements), synthesis, report/ (PDF), queue, service, controller
 │       └── resources/
 │           ├── application.yaml
 │           └── db/              SQL scripts (no Flyway)
@@ -117,6 +120,7 @@ neraca_lab/
 │               ├── V1.0.25__schema_markets_macro.sql (Forex / commodity bars, macro catalog, release dates)
 │               ├── V1.0.27__schema_macro_analysis.sql (AI macro analysis: runs, agent scores, lessons, llm_usage)
 │               ├── V1.0.28__schema_rag_macro.sql  (macro documents of a country in the RAG vector store)
+│               ├── V1.0.29__schema_registration.sql (company PDF types; registration_report, registration_insider)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -130,7 +134,9 @@ neraca_lab/
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
+├── data/                        local only, not in the repository (.gitignore): download the filings from idx.co.id
 ├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
+├── data/IDX_OWNERSHIP/<TICKER>/ monthly registration reports of securities holders (registrasi_<ticker>_<bulan>.pdf)
 ├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
 ├── data/macro/<country>/        macro PDFs of a country (indonesia/: Bank Indonesia, Ministry of Finance) for the macro upload
 │   ├── xlsx/                    IDX XBRL financial statements (FinancialStatement-<period>-<TICKER>.xlsx)
@@ -553,6 +559,25 @@ Embeddings: `openai/text-embedding-3-small` (1536 dimensions) through OpenRouter
 (`postgres:17-alpine` + pgvector 0.8.7), so the existing data volume keeps working. Details:
 [`docs/v1_docs/RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md).
 
+A company PDF has a **document type**: **Financial Statement** (the default, and the type of every company PDF
+stored before) or **Registration**, the monthly registration report of securities holders (Laporan Bulanan
+Registrasi Pemegang Efek) from idx.co.id. A registration report is stored in the vector store like any PDF, and the
+shares of its directors and commissioners at the end of the previous month and of the report's month are read from
+its table into `registration_report` / `registration_insider`, shown on **Companies › Registration** (filters:
+tickers, buy, sell, title director or commissioner, a month range calendar; with one ticker, the holdings month by
+month). The AI stock analysis (Screening › Analysis) reads them too: the directors' and commissioners' holdings and
+dealings are in every agent's dossier, and its research agent searches the reports' RAG chunks (controller, holders
+of 5 % or more, free float). The
+reports of April - September 2026 of HRTA, INDF, GGRM and TRUK are in `data/IDX_OWNERSHIP/<TICKER>/`.
+
+```bash
+curl -H "$AUTH" -F file=@data/IDX_OWNERSHIP/HRTA/registrasi_hrta_juni.pdf -F ticker=HRTA -F documentType=REGISTRATION \
+     http://localhost:8080/api/v1/rag/pdf
+curl -H "$AUTH" "http://localhost:8080/api/v1/registrations?tickers=HRTA&transaction=BUY&role=DIRECTOR"
+```
+
+Details: [`docs/v1_docs/REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md).
+
 ## AI stock screening
 
 **Screening** in the sidebar (permission `SCREENING`): choose the exchange (IDX), the market cap
@@ -756,7 +781,7 @@ npm run dev                   # http://localhost:3000
 
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
+| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals, Registration); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
 | `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
@@ -771,7 +796,8 @@ npm run dev                   # http://localhost:3000
 | `/ingestion/prices`              | Price Ingestion: fetch daily prices of one company (exchange / ticker dropdowns), or of one currency / commodity (market Forex / Commodities); on the right, update every company of the exchange (or every currency / commodity) to today and ingest the IHSG index |
 | `/ingestion/macro`               | Macro: "Update all macro data to today", the series per region with their source, latest value, state and actions (fetch, full history, CSV upload, history chart) |
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
-| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company (left) or a macro `.pdf` of a country (right) into the pgvector store; stored documents of the companies and macro documents of a country (10 per page: 5 / 10 / 20 / 50), each with a search test |
+| `/companies/registration`        | Registration: the directors' and commissioners' shares month by month from the monthly registration reports, in the manner of openinsider.com: tickers, transaction (all, buy, sell, buy or sell), title, months; holdings by month of one ticker |
+| `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company (left; exchange, company and document type: Financial Statement or Registration) or a macro `.pdf` of a country (right) into the pgvector store; stored documents of the companies and macro documents of a country (10 per page: 5 / 10 / 20 / 50), each with a search test |
 | `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles (10 per page: 5 / 10 / 20 / 50) and a search test |
 |                                  | Every Ingestion page ends with the jobs table: it opens on the page's own job type (tabs for the others and "All"), 10 jobs per page (5 / 10 / 20 / 50) |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
@@ -792,9 +818,13 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 707 tests
+(cd backend && ./mvnw test)                      # 734 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
+
+Many tests read the IDX workbooks and PDFs in `data/`, which is kept locally and not pushed
+(`.gitignore`). In a clone without it those tests are skipped (JUnit assumption), not failed; put the
+files back in `data/` to run them.
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
 data; `FilingMapperLegacyTemplateTest` maps the pre-2023 INDF FY2022 filing and compares it with the
@@ -901,6 +931,9 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.20__schema_screening_currency.sql` | `fundamental_snapshot.financial_currency`: the currency Yahoo reports a listing's fundamentals in (USD for INDY, ADRO, ...); the screening metrics convert with `fx_rate_daily` |
 | `V1.0.23__schema_technical.sql`       | technical analysis: `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series`, `indicator_snapshot`, `chart_setting` (new tables only) |
 | `V1.0.25__schema_markets_macro.sql`   | Forex / commodity prices (`market_instrument`, `instrument_daily`), the macro catalog (`macro_series_def`), release dates and revisions of `macro_series`; job type `MACRO` |
+| `V1.0.27__schema_macro_analysis.sql`  | AI macro analysis of a country: `macro_analysis_run`, `macro_analysis_agent_score`, `macro_analysis_lesson`, `llm_usage.macro_analysis_id`; job type `MACRO_ANALYSIS` |
+| `V1.0.28__schema_rag_macro.sql`       | macro documents of a country in the RAG vector store: `country`, `issuer`, `document_type` on `rag_document` / `rag_chunk` |
+| `V1.0.29__schema_registration.sql`    | the type of a company PDF (`FINANCIAL_STATEMENT`, the default, or `REGISTRATION`); `registration_report` and `registration_insider`: the directors' and commissioners' shares month by month (Companies › Registration) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |

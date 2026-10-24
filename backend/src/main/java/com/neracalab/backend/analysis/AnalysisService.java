@@ -2,6 +2,7 @@ package com.neracalab.backend.analysis;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -38,6 +39,7 @@ import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.price.provider.PriceProviderException;
 import com.neracalab.backend.rag.EmbeddingClient;
 import com.neracalab.backend.rag.RagRepository;
+import com.neracalab.backend.registration.RegistrationRepository;
 import com.neracalab.backend.screening.InvestorAgent;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.ScreeningProperties.ModelPrice;
@@ -61,10 +63,11 @@ import tools.jackson.databind.json.JsonMapper;
  * One analysis of one stock, end to end (called by the {@link AnalysisQueue} worker):
  * <ol>
  *   <li><b>Company data</b> (no model): the fact sheet from the stored statements, metrics, prices and valuations
- *       ({@link FactSheet}); the Yahoo Finance market data (its fundamentals refreshed when stale) and the
- *       quantitative scorecard of every agent ({@link QuantScorer}, as in the screening).</li>
- *   <li><b>Research agent</b> (ReAct + tool calling over the company's stored PDF documents and news,
- *       {@link AnalysisResearchAgent}): a brief with references.</li>
+ *       ({@link FactSheet}); the directors' and commissioners' shares month by month from the monthly registration
+ *       reports ({@link InsiderOwnership}); the Yahoo Finance market data (its fundamentals refreshed when stale) and
+ *       the quantitative scorecard of every agent ({@link QuantScorer}, as in the screening).</li>
+ *   <li><b>Research agent</b> (ReAct + tool calling over the company's stored financial statement PDFs, monthly
+ *       registration reports and news, {@link AnalysisResearchAgent}): a brief with references.</li>
  *   <li><b>Investor agents</b>: one independent call each, sharing the system prompt and the dossier (cacheable
  *       prefix); <b>Reflection</b>: the validator checks every answer, a critic reviews the flagged ones;
  *       <b>Reflexion</b>: lessons of earlier runs are in the prompts, the issues of this one become lessons.</li>
@@ -81,6 +84,8 @@ public class AnalysisService {
     private static final Logger log = LoggerFactory.getLogger(AnalysisService.class);
     /** Titles of the stored documents named to the research agent. */
     private static final int DOCUMENT_TITLES = 8;
+    /** Holdings read for the insider section (12 months of a board of 20 is 240). */
+    private static final int INSIDER_ROWS = 500;
 
     private final CompanyService companies;
     private final FundamentalEtlService etl;
@@ -93,6 +98,7 @@ public class AnalysisService {
     private final IngestionJobRepository jobs;
     private final EmbeddingClient embeddings;
     private final RagRepository rag;
+    private final RegistrationRepository registrations;
     private final ScreeningProperties screening;
     private final AnalysisProperties properties;
     private final JsonReplies json;
@@ -100,8 +106,8 @@ public class AnalysisService {
     public AnalysisService(CompanyService companies, FundamentalEtlService etl, FundamentalRepository fundamentals,
                            AnalysisResearchAgent research, InvestorPanel panel, AnalysisSynthesisAgent synthesis,
                            ReflexionMemory memory, AnalysisRepository repository, IngestionJobRepository jobs,
-                           EmbeddingClient embeddings, RagRepository rag, ScreeningProperties screening,
-                           AnalysisProperties properties, JsonMapper mapper) {
+                           EmbeddingClient embeddings, RagRepository rag, RegistrationRepository registrations,
+                           ScreeningProperties screening, AnalysisProperties properties, JsonMapper mapper) {
         this.companies = companies;
         this.etl = etl;
         this.fundamentals = fundamentals;
@@ -113,6 +119,7 @@ public class AnalysisService {
         this.jobs = jobs;
         this.embeddings = embeddings;
         this.rag = rag;
+        this.registrations = registrations;
         this.screening = screening;
         this.properties = properties;
         this.json = new JsonReplies(mapper);
@@ -172,7 +179,8 @@ public class AnalysisService {
         Market market = market(exchange, ticker, p.agents(), notes);
         StoredDocuments documents = repository.storedDocuments(p.companyId(), DOCUMENT_TITLES);
         Map<String, Object> marketData = marketData(market, exchange.currency());
-        repository.saveContext(id, context(facts, marketData, documents, market),
+        Map<String, Object> insiders = insiderOwnership(exchange, ticker, notes);
+        repository.saveContext(id, context(facts, marketData, documents, market, insiders),
                 market == null ? null : market.snapshot().snapshotDate());
         checkInterrupted();
 
@@ -181,16 +189,17 @@ public class AnalysisService {
         ModelPrice agentPrice = screening.llm().price(screening.llm().agentModel());
 
         // ---- research agent (ReAct + tools over the stored filings and news)
-        progress(id, meter, "Research agent: reading " + ticker + "'s filings and news");
+        progress(id, meter, "Research agent: reading " + ticker + "'s filings, registration reports and news");
         ContextTools tools = new ContextTools(p.companyId(), ticker, facts, embeddings, rag, meter, properties,
-                documents.filings() > 0, documents.news() > 0);
+                documents.filings() > 0, documents.news() > 0, documents.registrations() > 0);
         AnalysisResearchAgent.Subject subject = new AnalysisResearchAgent.Subject(ticker,
                 detail.company().companyName(), detail.company().sector(), facts.periodNames(), documents.filingTitles(),
-                documents.filings(), documents.newsTitles(), documents.news());
+                documents.filings(), documents.newsTitles(), documents.news(), documents.registrationTitles(),
+                documents.registrations());
         boolean allowResearch = meter.allows(researchPrice.cost(30_000, 3_000), reserve);
         AnalysisResearchAgent.Result r = research.research(meter, subject, tools, allowResearch);
         boolean researchDegraded = false;
-        if (documents.filings() == 0 && documents.news() == 0) {
+        if (documents.filings() == 0 && documents.news() == 0 && documents.registrations() == 0) {
             notes.add("No PDF documents or news are stored for " + ticker + "; upload them (Ingestion > PDF Documents "
                     + "(RAG), News (RAG)) so the research agent can read them.");
         } else if (r.note() != null) {
@@ -207,6 +216,8 @@ public class AnalysisService {
         Map<String, Object> dossier = new LinkedHashMap<>();
         dossier.put("financials", facts.overview());
         dossier.put("marketData", marketData == null ? "not available (the stock is not in the screening data)" : marketData);
+        dossier.put("insiderOwnership", insiders == null
+                ? "not available (no monthly registration reports of the company are stored)" : insiders);
         dossier.put("research", r.brief());
         String dossierText = "COMPANY DOSSIER\n" + json.write(dossier);
         Set<String> metricKeys = new LinkedHashSet<>(StockProfile.METRIC_KEYS);
@@ -311,6 +322,9 @@ public class AnalysisService {
         input.put("quantitativeOverall", quantOverall);
         input.put("agents", rows);
         input.put("keyFigures", keyFigures(facts.overview()));
+        if (insiders != null) {
+            input.put("insiderOwnership", insiderSummary(insiders));
+        }
         input.put("research", r.brief());
         input.put("dataNotes", List.copyOf(notes.messages));
         ModelPrice synthesisPrice = screening.llm().price(screening.llm().synthesisModel());
@@ -455,16 +469,50 @@ public class AnalysisService {
         return m;
     }
 
+    /**
+     * The directors' and commissioners' shares of the latest {@link InsiderOwnership#MONTHS} months of monthly
+     * registration reports (Companies > Registration); null, with a note, when none is stored.
+     */
+    private Map<String, Object> insiderOwnership(Exchange exchange, String ticker, Notes notes) {
+        List<RegistrationRepository.ReportRow> reports = registrations.reports(exchange.code(), ticker);
+        if (reports.isEmpty()) {
+            notes.add("No monthly registration reports are stored for " + ticker + ": the agents did not see the "
+                    + "directors' and commissioners' share dealings (upload them on Ingestion > PDF Documents (RAG) "
+                    + "with the Registration type).");
+            return null;
+        }
+        List<RegistrationRepository.ReportRow> read = reports.subList(0, Math.min(InsiderOwnership.MONTHS, reports.size()));
+        YearMonth from = YearMonth.parse(read.getLast().period());
+        List<RegistrationRepository.InsiderRow> rows = registrations.insiders(new RegistrationRepository.Filter(
+                exchange.code(), List.of(ticker), RegistrationRepository.Transaction.ALL, null, from, null),
+                INSIDER_ROWS, 0).rows();
+        return InsiderOwnership.of(reports, rows);
+    }
+
+    /** What the synthesis gets of the insider section: the reading, the totals and the transactions. */
+    static Map<String, Object> insiderSummary(Map<String, Object> insiders) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (String key : List.of("months", "reading", "totals", "transactions")) {
+            if (insiders.get(key) != null) {
+                out.put(key, insiders.get(key));
+            }
+        }
+        return out;
+    }
+
     private static Map<String, Object> context(FactSheet facts, Map<String, Object> marketData, StoredDocuments documents,
-                                               Market market) {
+                                               Market market, Map<String, Object> insiders) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("factSheet", facts.overview());
         c.put("marketData", marketData);
+        c.put("insiderOwnership", insiders);
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("pdfDocuments", documents.filings());
         d.put("newsArticles", documents.news());
         d.put("pdfTitles", documents.filingTitles());
         d.put("latestNews", documents.newsTitles());
+        d.put("registrationReports", documents.registrations());
+        d.put("registrationTitles", documents.registrationTitles());
         c.put("documents", d);
         c.put("periods", facts.periodNames());
         c.put("quantitativeScorecards", market != null && !market.scores().isEmpty());

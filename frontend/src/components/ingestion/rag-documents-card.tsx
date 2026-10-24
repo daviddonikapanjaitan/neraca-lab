@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { requestJson } from "@/lib/client-api"
 import { EMPTY, formatDate, formatNumber, formatTimestamp } from "@/lib/format"
-import { DEFAULT_TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/ingestion"
+import { companyDocumentTypeLabel, DEFAULT_TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/ingestion"
 import type { RagDocumentPage, RagHit, RagSourceType, RagStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -287,7 +287,17 @@ export function RagDocumentsCard({
                                 {doc.title}
                               </a>
                             ) : (
-                              <div className="truncate font-medium">{doc.fileName ?? doc.title}</div>
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="truncate font-medium">{doc.fileName ?? doc.title}</span>
+                                {doc.documentType && (
+                                  <Badge
+                                    variant={doc.documentType === "REGISTRATION" ? "secondary" : "outline"}
+                                    className="shrink-0"
+                                  >
+                                    {companyDocumentTypeLabel(doc.documentType)}
+                                  </Badge>
+                                )}
+                              </div>
                             )}
                             <div className="truncate text-xs text-muted-foreground">
                               {doc.sourceName ?? EMPTY} · {formatNumber(doc.characters, 0)} characters

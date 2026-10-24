@@ -3,6 +3,7 @@ package com.neracalab.backend.rag;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -18,6 +19,10 @@ import org.springframework.stereotype.Service;
 import com.neracalab.backend.rag.RagRepository.Company;
 import com.neracalab.backend.rag.RagRepository.NewDocument;
 import com.neracalab.backend.rag.RagRepository.SourceType;
+import com.neracalab.backend.registration.RegistrationParser;
+import com.neracalab.backend.registration.RegistrationParser.RegistrationFormatException;
+import com.neracalab.backend.registration.RegistrationParser.Report;
+import com.neracalab.backend.registration.RegistrationRepository;
 import com.neracalab.backend.screening.news.Headline;
 import com.neracalab.backend.screening.news.NewsHttpClient;
 import com.neracalab.backend.screening.news.NewsParsers;
@@ -25,7 +30,9 @@ import com.neracalab.backend.screening.news.NewsParsers.ArticleText;
 
 /**
  * Builds the RAG vector store: the text of a PDF or of news articles is chunked ({@link TextChunker}), embedded
- * ({@link EmbeddingClient}) and stored with its company, or a macro PDF with its country ({@link RagRepository}).
+ * ({@link EmbeddingClient}) and stored with its company, or a macro PDF with its country ({@link RagRepository}). A
+ * company PDF of type {@link CompanyDocumentType#REGISTRATION} is also read into the shares of the directors and
+ * commissioners ({@link RegistrationParser}, {@link RegistrationRepository}).
  */
 @Service
 public class RagIngestionService {
@@ -34,9 +41,31 @@ public class RagIngestionService {
     /** The publication date of a macro document is stored as 00:00 Jakarta time. */
     static final ZoneId JAKARTA = ZoneId.of("Asia/Jakarta");
 
-    /** Outcome of a PDF: what was stored. */
-    public record PdfResult(long documentId, String fileName, int pages, int pagesWithText, int characters, int chunks,
-                            String embeddingModel) {
+    /**
+     * Outcome of a PDF: what was stored.
+     *
+     * @param registration what was read from a registration report; null for a financial statement
+     */
+    public record PdfResult(long documentId, String fileName, CompanyDocumentType documentType, int pages,
+                            int pagesWithText, int characters, int chunks, String embeddingModel,
+                            RegistrationResult registration) {
+    }
+
+    /**
+     * What a registration report held (the job result of a REGISTRATION PDF).
+     *
+     * @param period      "2026-06": the month the report closes
+     * @param filedAt     filing time as printed (Jakarta time, "2026-08-10T15:14"); null when not printed
+     * @param insiders    directors and commissioners in the report
+     * @param changes     of them, those whose shares changed during the month
+     * @param outcome     STORED, REPLACED (the report of the month stored before), or KEPT_LATER_FILING (the report of
+     *                    the month stored before was filed later, e.g. its correction: it stays)
+     * @param keptFiledAt the filing time of the report kept (KEPT_LATER_FILING, Jakarta time)
+     * @param warnings    what did not add up (a percentage that does not match its share count)
+     */
+    public record RegistrationResult(String period, String letterNumber, boolean correction, String filedAt,
+                                     int insiders, int changes, RegistrationRepository.Outcome outcome,
+                                     String keptFiledAt, List<String> warnings) {
     }
 
     /** One article of a news ingestion. */
@@ -49,14 +78,16 @@ public class RagIngestionService {
     }
 
     private final RagRepository repository;
+    private final RegistrationRepository registrations;
     private final EmbeddingClient embeddings;
     private final NewsCollector collector;
     private final NewsHttpClient http;
     private final RagProperties properties;
 
-    public RagIngestionService(RagRepository repository, EmbeddingClient embeddings, NewsCollector collector,
-                               NewsHttpClient http, RagProperties properties) {
+    public RagIngestionService(RagRepository repository, RegistrationRepository registrations, EmbeddingClient embeddings,
+                               NewsCollector collector, NewsHttpClient http, RagProperties properties) {
         this.repository = repository;
+        this.registrations = registrations;
         this.embeddings = embeddings;
         this.collector = collector;
         this.http = http;
@@ -69,9 +100,21 @@ public class RagIngestionService {
 
     // ------------------------------------------------------------------ PDF
 
-    /** Chunks, embeds and stores a PDF of the company (the same file again replaces its document). */
-    public PdfResult ingestPdf(UUID jobId, Company company, long fileId, String fileName, String checksum, byte[] content,
-                               Consumer<String> progress) {
+    /**
+     * Chunks, embeds and stores a PDF of the company (the same file again replaces its document, with the type given
+     * now). A registration report is read first (a file that is not one, or is another company's, stops the job before
+     * anything is stored) and its directors' and commissioners' shares are stored after its chunks; a file stored as
+     * a registration report before and now as a financial statement loses its report.
+     *
+     * @throws RegistrationFormatException a REGISTRATION PDF that is not a readable registration report of the company
+     */
+    public PdfResult ingestPdf(UUID jobId, Company company, CompanyDocumentType documentType, long fileId,
+                               String fileName, String checksum, byte[] content, Consumer<String> progress) {
+        Report report = null;
+        if (documentType == CompanyDocumentType.REGISTRATION) {
+            progress.accept("Reading the registration report " + fileName);
+            report = registrationOf(company, content);
+        }
         progress.accept("Reading the text of " + fileName);
         List<PdfText.Page> pages = PdfText.pages(content);
         List<TextChunker.Part> parts = pages.stream().map(p -> new TextChunker.Part(p.text(), p.number())).toList();
@@ -83,10 +126,40 @@ public class RagIngestionService {
         progress.accept("Embedding " + chunks.size() + " chunks of " + pages.size() + " pages (" + embeddings.model() + ")");
         List<float[]> vectors = embeddings.embed(chunks.stream().map(TextChunker.Chunk::text).toList());
         progress.accept("Storing " + chunks.size() + " chunks in the vector store");
-        long id = repository.store(new NewDocument(company.companyId(), SourceType.PDF, checksum, title(fileName), "PDF upload",
-                null, fileId, fileName, null, pages.size(), characters, embeddings.model(), jobId), chunks, vectors);
+        long id = repository.store(new NewDocument(company.companyId(), SourceType.PDF, documentType, checksum,
+                title(fileName), "PDF upload", null, fileId, fileName, null, pages.size(), characters,
+                embeddings.model(), jobId), chunks, vectors);
+        RegistrationResult registration = null;
+        if (report != null) {
+            progress.accept("Storing the shares of " + report.insiders().size() + " directors and commissioners ("
+                    + report.period() + ")");
+            RegistrationRepository.Stored stored = registrations.store(company.companyId(), report, id, fileId, fileName, jobId);
+            registration = new RegistrationResult(report.period().toString(), report.letterNumber(), report.correction(),
+                    report.filedAt() == null ? null : report.filedAt().toString(), report.insiders().size(),
+                    (int) report.insiders().stream().filter(i -> i.change() != null && i.change() != 0).count(),
+                    stored.outcome(), stored.keptFiledAt() == null ? null
+                    : LocalDateTime.ofInstant(stored.keptFiledAt(), JAKARTA).toString(), report.warnings());
+        } else {
+            registrations.deleteOfDocument(id);
+        }
         int withText = (int) pages.stream().filter(p -> !p.text().isBlank()).count();
-        return new PdfResult(id, fileName, pages.size(), withText, characters, chunks.size(), embeddings.model());
+        return new PdfResult(id, fileName, documentType, pages.size(), withText, characters, chunks.size(),
+                embeddings.model(), registration);
+    }
+
+    /**
+     * The registration report in the PDF, which must be the company's (its Kode Emiten).
+     *
+     * @throws RegistrationFormatException not a readable registration report, or another company's
+     */
+    public static Report registrationOf(Company company, byte[] content) {
+        Report report = RegistrationParser.parse(content);
+        if (!report.ticker().equals(company.ticker())) {
+            throw new RegistrationFormatException("The report is " + report.ticker() + "'s (Kode Emiten "
+                    + report.ticker() + "), not " + company.ticker() + "'s: choose " + report.ticker()
+                    + " as the company");
+        }
+        return report;
     }
 
     // ------------------------------------------------------------------ macro PDF of a country
@@ -197,7 +270,7 @@ public class RagIngestionService {
                     continue;
                 }
                 List<float[]> vectors = embeddings.embed(chunks.stream().map(TextChunker.Chunk::text).toList());
-                repository.store(new NewDocument(company.companyId(), SourceType.NEWS, h.url(), title, h.source().label(),
+                repository.store(new NewDocument(company.companyId(), SourceType.NEWS, null, h.url(), title, h.source().label(),
                         h.url(), null, null, published, null, text.length(), embeddings.model(), jobId), chunks, vectors);
                 stored++;
                 articles.add(new ArticleResult(h.url(), h.source().label(), title, published, "STORED", chunks.size()));

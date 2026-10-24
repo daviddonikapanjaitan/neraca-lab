@@ -83,6 +83,7 @@ public class AnalysisPdfRenderer {
         synthesis(doc, report);
         agents(doc, report);
         research(doc, report.research());
+        insiders(doc, report.context());
         figures(doc, report.context());
         notes(doc, report.notes());
         usage(doc, report.usage());
@@ -189,11 +190,12 @@ public class AnalysisPdfRenderer {
             return;
         }
         JsonNode brief = research.path("brief");
-        heading(doc, "Research brief (company filings and news)");
+        heading(doc, "Research brief (company filings, registration reports and news)");
         field(doc, "Business", brief.path("business"));
         field(doc, "Moat", brief.path("moat"));
         field(doc, "Management", brief.path("management"));
         field(doc, "Growth", brief.path("growth"));
+        field(doc, "Ownership", brief.path("ownership"));
         list(doc, "Risks", brief.path("risks"), BAD);
         list(doc, "Catalysts", brief.path("catalysts"), GOOD);
         if (text(brief.path("newsSummary")) != null) {
@@ -228,6 +230,58 @@ public class AnalysisPdfRenderer {
         }
         if (text(research.path("note")) != null) {
             doc.add(new Paragraph("Note: " + text(research.path("note")), SMALL_MUTED));
+        }
+    }
+
+    /** The directors' and commissioners' shares from the monthly registration reports (when stored). */
+    private void insiders(Document doc, JsonNode context) {
+        JsonNode insiders = context == null ? null : context.path("insiderOwnership");
+        if (insiders == null || !insiders.isObject()) {
+            return;
+        }
+        heading(doc, "Insider ownership (monthly registration reports, latest " + nvl(text(insiders.path("latestMonth")))
+                + ")");
+        if (text(insiders.path("reading")) != null) {
+            doc.add(new Paragraph(text(insiders.path("reading")), BODY));
+        }
+        JsonNode holders = insiders.path("insiders");
+        if (holders.isArray() && !holders.isEmpty()) {
+            PdfPTable table = new PdfPTable(new float[] {34, 18, 18, 12, 18});
+            table.setWidthPercentage(100);
+            table.setSpacingBefore(4);
+            table.setHeaderRows(1);
+            for (String h : List.of("Director / commissioner", "Position", "Shares", "Ownership", "Net change")) {
+                table.addCell(headerCell(h));
+            }
+            for (JsonNode i : holders) {
+                String name = i.path("name").asString("")
+                        + (i.path("controller").asBoolean(false) ? " (controller)" : "")
+                        + (i.path("controllerAffiliate").asBoolean(false) ? " (affiliate of the controller)" : "");
+                table.addCell(cell(name, SMALL, Element.ALIGN_LEFT));
+                table.addCell(cell(i.path("position").asString(""), SMALL, Element.ALIGN_LEFT));
+                table.addCell(cell(i.path("shares").isNumber()
+                        ? String.format(Locale.ROOT, "%,d", i.path("shares").asLong()) : "-", SMALL, Element.ALIGN_RIGHT));
+                table.addCell(cell(i.path("ownership").isNumber()
+                        ? String.format(Locale.ROOT, "%.3f%%", i.path("ownership").asDouble() * 100) : "-", SMALL,
+                        Element.ALIGN_RIGHT));
+                table.addCell(cell(i.path("netChange").isNumber()
+                        ? String.format(Locale.ROOT, "%+,d", i.path("netChange").asLong()) : "-", SMALL,
+                        Element.ALIGN_RIGHT));
+            }
+            doc.add(table);
+        }
+        JsonNode transactions = insiders.path("transactions");
+        if (transactions.isArray() && !transactions.isEmpty()) {
+            Paragraph h = new Paragraph("Buys and sells", H2);
+            h.setSpacingBefore(4);
+            doc.add(h);
+            for (JsonNode t : transactions) {
+                long change = t.path("change").asLong();
+                doc.add(new Paragraph(t.path("month").asString("") + "  " + t.path("name").asString("") + "  "
+                        + (change > 0 ? "bought " : "sold ") + String.format(Locale.ROOT, "%,d", Math.abs(change))
+                        + " shares (" + String.format(Locale.ROOT, "%,d", t.path("sharesAfter").asLong()) + " after)",
+                        SMALL));
+            }
         }
     }
 

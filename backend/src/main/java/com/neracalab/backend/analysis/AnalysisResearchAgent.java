@@ -30,8 +30,8 @@ import tools.jackson.databind.json.JsonMapper;
  * The research agent of an analysis: reads the company's own stored documents and writes the brief the investor
  * agents share.
  * <ul>
- *   <li><b>Tool Calling</b>: semantic search in the company's PDF documents and news, full statements of a period
- *       ({@link ContextTools}).</li>
+ *   <li><b>Tool Calling</b>: semantic search in the company's financial statement PDFs, monthly registration reports
+ *       and news, full statements of a period ({@link ContextTools}).</li>
  *   <li><b>ReAct</b>: Thought -> tool calls -> observations, at most {@code research-iterations} model turns, then a
  *       forced final answer.</li>
  *   <li><b>Conditional tool calling</b>: a tool is offered only when it can help (documents of that kind are
@@ -62,9 +62,19 @@ public class AnalysisResearchAgent {
                          boolean modelUsed, int droppedRefs, String note) {
     }
 
-    /** What the agent is told about the company and its stored documents. */
+    /**
+     * What the agent is told about the company and its stored documents.
+     *
+     * @param registrationTitles the latest monthly registration reports stored (REGISTRATION PDFs)
+     */
     public record Subject(String ticker, String companyName, String sector, List<String> periods,
-                          List<String> filingTitles, long filings, List<String> newsTitles, long news) {
+                          List<String> filingTitles, long filings, List<String> newsTitles, long news,
+                          List<String> registrationTitles, long registrations) {
+
+        public Subject(String ticker, String companyName, String sector, List<String> periods,
+                       List<String> filingTitles, long filings, List<String> newsTitles, long news) {
+            this(ticker, companyName, sector, periods, filingTitles, filings, newsTitles, news, List.of(), 0);
+        }
     }
 
     private final LlmGateway llm;
@@ -82,7 +92,7 @@ public class AnalysisResearchAgent {
 
     /** @param allowModel the budget allows the research calls */
     public Result research(UsageMeter meter, Subject subject, ContextTools tools, boolean allowModel) {
-        if (!tools.hasFilings() && !tools.hasNews()) {
+        if (!tools.hasFilings() && !tools.hasNews() && !tools.hasRegistrations()) {
             return new Result(ResearchBrief.without("No PDF documents or news are stored for " + subject.ticker()
                     + "; the agents work from the financial statements alone."), List.of(), List.of(), false, 0,
                     "No stored documents");
@@ -146,6 +156,9 @@ public class AnalysisResearchAgent {
         if (tools.hasFilings() && searchesLeft) {
             offered.add(catalog.get("searchFilings"));
         }
+        if (tools.hasRegistrations() && searchesLeft) {
+            offered.add(catalog.get("searchRegistrations"));
+        }
         if (tools.hasNews() && searchesLeft) {
             offered.add(catalog.get("searchNews"));
         }
@@ -190,9 +203,15 @@ public class AnalysisResearchAgent {
         }
         b.append("\nStored reporting periods (for getStatement): ")
                 .append(s.periods().isEmpty() ? "none" : String.join(", ", s.periods())).append('\n');
-        b.append("Stored PDF documents: ").append(s.filings());
+        b.append("Stored financial statement PDFs: ").append(s.filings());
         if (!s.filingTitles().isEmpty()) {
             b.append(" (").append(String.join("; ", s.filingTitles())).append(')');
+        }
+        if (s.registrations() > 0) {
+            b.append("\nStored monthly registration reports: ").append(s.registrations());
+            if (!s.registrationTitles().isEmpty()) {
+                b.append(" (").append(String.join("; ", s.registrationTitles())).append(')');
+            }
         }
         b.append("\nStored news articles: ").append(s.news());
         if (!s.newsTitles().isEmpty()) {

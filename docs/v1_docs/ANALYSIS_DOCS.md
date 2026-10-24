@@ -3,7 +3,9 @@
 Analyses one stock of the `company` table in depth through the eyes of the same six investor agents
 as the screening (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk). Unlike the screening, it works
 from what the database holds for that company: its stored financial statements and metrics, prices
-and valuations, and its PDF documents and news in the RAG vector store. DeepSeek V4.1 Flash researches
+and valuations, the shares of its directors and commissioners from its monthly registration reports
+(Companies > Registration), and its PDF documents (financial statements and registration reports) and
+news in the RAG vector store. DeepSeek V4.1 Flash researches
 and analyses, Claude Opus 5.5 writes the synthesis (the screening's models and prices). Every
 analysis is a background job; the report and its cost are saved, shown on **Screening > Analysis**
 and downloadable as PDF.
@@ -11,14 +13,18 @@ and downloadable as PDF.
 ```
 [Company data, no AI]  company, reporting_period + statements + financial_metric, price_daily,
                        valuation_snapshot -> fact sheet (FactSheet)
+                       registration_report + registration_insider (12 latest months) -> insider
+                       ownership (InsiderOwnership)
                        Yahoo Finance snapshot (fundamentals refreshed when stale) -> metrics and the
                        quantitative scorecard of every agent (QuantScorer, as in the screening)
       |
 [Research agent]  DeepSeek, ReAct + tool calling over the company's own documents:
-                  searchFilings (PDF chunks), searchNews (news chunks), getStatement (one period)
-                  -> research brief with references (F1 = filing excerpt, N1 = news)
+                  searchFilings (financial statement PDF chunks), searchRegistrations (registration
+                  report chunks), searchNews (news chunks), getStatement (one period)
+                  -> research brief with references (F1 = filing, R1 = registration report, N1 = news)
       |
-[Investor agents] one independent call each, shared dossier (fact sheet + market data + brief)
+[Investor agents] one independent call each, shared dossier (fact sheet + market data + insider
+                  ownership + brief)
                   -> Reflection: validator checks every answer, a critic reviews the flagged ones
                   -> Reflexion: lessons of earlier runs in the prompts, new lessons stored
       |
@@ -117,6 +123,18 @@ the filings and the research brief still quote the reporting currency, `company.
 a note of the report states the rate. Without a stored rate the fact sheet stays in the reporting currency and a
 note says so.
 
+**Insider ownership** (`InsiderOwnership`, no model): from the company's stored monthly registration
+reports (`registration_report`, `registration_insider`; [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md)), the
+latest 12 months: every director and commissioner of the latest report with the shares held, the
+ownership (a fraction of the shares listed), the change in the latest month and the net change over the
+months; who left; the totals (shares, ownership, shares bought and sold, buys, sells, net); the
+transactions (each month with a purchase or a sale, latest first, at most 20); months without a report;
+and a one-line reading ("No director or commissioner bought or sold shares in May 2026 - Aug 2026; 4 hold
+25,102,200 shares (0.55% of the listed shares)."). It is `insiderOwnership` in the dossier of every agent
+(or "not available" and a note when no report is stored), the reading, totals and transactions go to the
+synthesis, and the report page and the PDF show it. The prompts tell the agents that insider buying or
+selling is a signal on management's alignment, to be weighed against its size, and no change is neutral.
+
 Market data: the stock's Yahoo Finance fundamentals are refreshed when older than the screening's
 `etl.fundamentals-max-age` (two requests, nothing when the stock is not listed in the screening
 data), then the latest snapshot gives the metrics (`StockProfile`) and each agent's quantitative
@@ -131,9 +149,9 @@ screening's (`screening/agent`: `InvestorPanel`, `ReflectionValidator`, `Reflexi
 
 | Pattern | Where |
 |---------|-------|
-| Tool calling | `ContextTools`: `searchFilings(query)` and `searchNews(query)` embed the query and search the company's own chunks in pgvector (cosine, `search-results` per search, excerpts of `excerpt-chars`); `getStatement(period)` returns every stored line and metric of one period. A search never leaves the company. |
+| Tool calling | `ContextTools`: `searchFilings(query)` (the financial statement PDFs), `searchRegistrations(query)` (the monthly registration reports: holders of 5% or more, the controller, free float, investor types, beneficial owner) and `searchNews(query)` embed the query and search the company's own chunks in pgvector (cosine, filtered by document type, `search-results` per search, excerpts of `excerpt-chars`); `getStatement(period)` returns every stored line and metric of one period. A search never leaves the company. Refs: F1 ... (filings), R1 ... (registration reports), N1 ... (news). The brief has an `ownership` field (controller, holders of 5% or more, free float) from the registration reports. |
 | ReAct | `AnalysisResearchAgent`: "Thought:" -> tool calls (several per turn) -> observations, at most `research-iterations` (4) turns, then a forced final answer |
-| Conditional tool calling | a search tool is offered only when documents of its kind are stored, and every tool only until its limit (`max-searches` 6 together, `max-statement-lookups` 3); a repeated query is refused |
+| Conditional tool calling | a search tool is offered only when documents of its kind are stored (financial statements, registration reports, news), and every tool only until its limit (`max-searches` 6 together, `max-statement-lookups` 3); a repeated query is refused |
 | Grounding check | evidence citing a ref that was never retrieved is dropped (`droppedRefs`) |
 | Independent agents | one call per agent; the system prompt and the dossier are identical for all six (cacheable prefix), only the persona block differs |
 | Reflection | `ReflectionValidator` (divergence from the scorecard, verdict outside its band, philosophy rules, metrics not in the dossier, empty thesis; the checks needing market data are skipped without it) + the critic on flagged answers only |
@@ -191,8 +209,9 @@ and `V1.0.14`. Details in [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md).
 
 | Test | What it proves |
 |------|----------------|
-| `AnalysisAgentsTest` | no documents: no research call; ReAct with a `searchFilings` call: only useful tools offered, excerpt refs and pages, whitespace collapsed, invented refs dropped, retrieval metered as estimated; tool limits (repeated query, unknown period, no documents); synthesis bounds (adjustment +-5, conviction filled in, none without score) and fallback; an agent without a quantitative prior; fact-sheet period selection and currency scaling; the fact sheet of a USD reporter translated into IDR (amounts, per-share amounts, the unit text the report page cuts, ratios untouched) and left as reported without a rate |
-| `AnalysisControllerTest` | HRTA end to end against the Docker Postgres (its stored statements and PDF chunks; model answering by role, stub embeddings, no Yahoo request): report, fact sheet periods, retrieved excerpts, six agents, capped adjustment, usage per stage, Opus for the synthesis, list paging, PDF; an active analysis returned instead of queued again; validation |
+| `InsiderOwnershipTest` | no report, no section; holdings, ownership fractions, buys and sells, net changes, a month without a report, an insider who left, the reading; HRTA's months without a change |
+| `AnalysisAgentsTest` | the registration reports searched apart from the filings (their own tool, document type and refs R1, offered only when stored, the ownership field of the brief); no documents: no research call; ReAct with a `searchFilings` call: only useful tools offered, excerpt refs and pages, whitespace collapsed, invented refs dropped, retrieval metered as estimated; tool limits (repeated query, unknown period, no documents); synthesis bounds (adjustment +-5, conviction filled in, none without score) and fallback; an agent without a quantitative prior; fact-sheet period selection and currency scaling; the fact sheet of a USD reporter translated into IDR (amounts, per-share amounts, the unit text the report page cuts, ratios untouched) and left as reported without a rate |
+| `AnalysisControllerTest` | HRTA end to end against the Docker Postgres (its stored statements, PDF chunks and registration reports: the insider section and the registration reports counted match the database; model answering by role, stub embeddings, no Yahoo request): report, fact sheet periods, retrieved excerpts, six agents, capped adjustment, usage per stage, Opus for the synthesis, list paging, PDF; an active analysis returned instead of queued again; validation |
 | `AccessControlTest` | the analysis APIs need SCREENING |
 
 The first HRTA analysis (2026-10-08) ended `INCOMPLETE`: with the screening's 450-token output limit,
@@ -208,6 +227,12 @@ answers to this dossier ran in loops to the output limit (about 66 s, so OpenRou
 DeepInfra and Reka answered correctly in 3-6 s for about $0.0002. Hence (shared with the screening):
 `llm.provider-ignore` (default OpenInference), `llm.model-retries` 2 for transient failures, and an
 answer without strengths and concerns retried as unusable.
+
+The HRTA analysis of 2026-10-24 with its four registration reports (`f311e76e`): SUCCEEDED, overall
+61.7 (NEUTRAL), conviction MEDIUM, $0.048. The research agent searched the registration reports twice
+(R1 - R5: free float 28.46 %, PT Terang Kopo Permai the controller), the brief's ownership names the
+controller, the free float and the insiders' 0.55 %; Fisher, Keith Gill and Risk cite the insiders' small,
+unchanged holdings, and the synthesis says they made no trades from May to August 2026.
 
 ## 9. Limits
 

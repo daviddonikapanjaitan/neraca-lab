@@ -29,6 +29,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { analysisTitle, figure, figureRows, RESEARCH_SENTIMENT_CLASS } from "@/lib/analysis"
+import { monthLabel, rangeLabel } from "@/lib/registration"
 import { EMPTY, formatDate, formatNumber, formatPercent, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
 import { creatorLabel, formatDuration, isActive } from "@/lib/ingestion"
@@ -228,6 +229,8 @@ export function AnalysisReport({ initial }: { initial: Report }) {
 
       <Research report={report} active={active} />
 
+      <InsiderOwnership report={report} active={active} />
+
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <Figures report={report} active={active} />
         <DataUsed report={report} />
@@ -332,8 +335,9 @@ function Research({ report, active }: { report: Report; active: boolean }) {
           )}
         </CardTitle>
         <CardDescription>
-          The research agent searched the company&apos;s stored PDF documents and news (ReAct with tools); refs point to
-          the excerpts it read (F = filing, N = news).
+          The research agent searched the company&apos;s stored financial statement PDFs, monthly registration reports
+          and news (ReAct with tools); refs point to the excerpts it read (F = filing, R = registration report, N =
+          news).
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
@@ -348,6 +352,7 @@ function Research({ report, active }: { report: Report; active: boolean }) {
                   ["Moat", brief.moat],
                   ["Management", brief.management],
                   ["Growth", brief.growth],
+                  ["Ownership", brief.ownership ?? null],
                 ] as const
               )
                 .filter(([, text]) => text)
@@ -414,7 +419,9 @@ function Research({ report, active }: { report: Report; active: boolean }) {
                 <TableBody>
                   {research.retrieved.map((r) => (
                     <TableRow key={r.ref}>
-                      <TableCell className="pl-3 font-mono">{r.ref}</TableCell>
+                      <TableCell className="pl-3 font-mono" title={SOURCE_LABEL[r.source] ?? r.source}>
+                        {r.ref}
+                      </TableCell>
                       <TableCell className="max-w-[320px]">
                         {r.url && /^https?:\/\//i.test(r.url) ? (
                           <a
@@ -520,6 +527,125 @@ function Figures({ report, active }: { report: Report; active: boolean }) {
   )
 }
 
+/** The source of an excerpt (RetrievedExcerpt.source). */
+const SOURCE_LABEL: Record<string, string> = {
+  PDF: "Financial statement",
+  REGISTRATION: "Registration report",
+  NEWS: "News article",
+}
+
+/** "+2,500,000" in green, "-1,000,000" in red, "0" muted. */
+function SignedShares({ value }: { value: number | null | undefined }) {
+  if (value === null || value === undefined) return <span className="text-muted-foreground">{EMPTY}</span>
+  if (value === 0) return <span className="text-muted-foreground">0</span>
+  return (
+    <span className={value > 0 ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400"}>
+      {value > 0 ? "+" : ""}
+      {formatNumber(value, 0)}
+    </span>
+  )
+}
+
+/** The directors' and commissioners' shares the agents saw (monthly registration reports, Companies > Registration). */
+function InsiderOwnership({ report, active }: { report: Report; active: boolean }) {
+  const insiders = report.context?.insiderOwnership
+  const ticker = report.run.ticker
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <UsersIcon className="size-4 text-primary" /> Insider ownership
+        </CardTitle>
+        <CardDescription>
+          The shares of the directors and commissioners from the monthly registration reports
+          {insiders ? ` (${rangeLabel(insiders.months[0], insiders.latestMonth)})` : ""}, given to every agent.{" "}
+          <Link
+            href={`/companies/registration?tickers=${encodeURIComponent(ticker)}`}
+            className="text-primary hover:underline"
+          >
+            Companies &gt; Registration
+          </Link>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 px-0 text-sm">
+        {!insiders ? (
+          <p className="px-4 text-muted-foreground">
+            {active && !report.context
+              ? "Loading..."
+              : "No monthly registration reports are stored for this company: upload them on Ingestion > PDF Documents (RAG) with the Registration type."}
+          </p>
+        ) : (
+          <>
+            <p className="px-4">{insiders.reading}</p>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-4">Director / commissioner</TableHead>
+                    <TableHead>Position</TableHead>
+                    <TableHead className="text-right">Shares ({monthLabel(insiders.latestMonth)})</TableHead>
+                    <TableHead className="text-right">Ownership</TableHead>
+                    <TableHead className="text-right">Latest month</TableHead>
+                    <TableHead className="pr-4 text-right">Net change</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {insiders.insiders.map((i) => (
+                    <TableRow key={i.name}>
+                      <TableCell className="pl-4">
+                        <div className="font-medium">{i.name}</div>
+                        {(i.controller || i.controllerAffiliate) && (
+                          <div className="text-xs text-muted-foreground">
+                            {i.controller ? "Controller" : "Affiliate of the controller"}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs">{i.position}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatNumber(i.shares, 0)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatPercent(i.ownership, 3)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <SignedShares value={i.changeLatestMonth} />
+                      </TableCell>
+                      <TableCell className="pr-4 text-right tabular-nums">
+                        <SignedShares value={i.netChange} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {insiders.transactions.length > 0 && (
+              <div className="px-4">
+                <p className="text-xs font-medium text-muted-foreground">Buys and sells</p>
+                <ul className="flex flex-col gap-0.5 text-xs">
+                  {insiders.transactions.map((t) => (
+                    <li key={`${t.month}-${t.name}`}>
+                      <span className="tabular-nums">{monthLabel(t.month)}</span> · {t.name}{" "}
+                      {t.change > 0 ? "bought" : "sold"} {formatNumber(Math.abs(t.change), 0)} shares (
+                      {formatNumber(t.sharesAfter, 0)} after)
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {(insiders.missingMonths?.length ?? 0) > 0 && (
+              <p className="px-4 text-xs text-muted-foreground">
+                Months without a stored report: {insiders.missingMonths!.map(monthLabel).join(", ")}.
+              </p>
+            )}
+            {(insiders.notInLatestReport?.length ?? 0) > 0 && (
+              <p className="px-4 text-xs text-muted-foreground">
+                In an earlier report but not in the latest: {insiders.notInLatestReport!.join(", ")}.
+              </p>
+            )}
+            {insiders.reportWarnings && <p className="px-4 text-xs text-amber-600">{insiders.reportWarnings}.</p>}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function num(value: number | string | undefined): number | null {
   return typeof value === "number" ? value : null
 }
@@ -559,6 +685,12 @@ function DataUsed({ report }: { report: Report }) {
               <span className="font-medium">PDF documents:</span> {documents?.pdfDocuments ?? 0}
               {documents && documents.pdfTitles.length > 0 && (
                 <span className="text-muted-foreground"> ({documents.pdfTitles.join("; ")})</span>
+              )}
+            </p>
+            <p>
+              <span className="font-medium">Registration reports:</span> {documents?.registrationReports ?? 0}
+              {documents?.registrationTitles && documents.registrationTitles.length > 0 && (
+                <span className="text-muted-foreground"> ({documents.registrationTitles.join("; ")})</span>
               )}
             </p>
             <p>

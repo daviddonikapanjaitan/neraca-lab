@@ -31,15 +31,20 @@ public class RagRepository {
     public record Company(long companyId, String exchange, String ticker, String companyName) {
     }
 
-    /** A document to store; {@code fileId} / {@code fileName} for a PDF, {@code sourceUrl} / {@code publishedAt} for news. */
-    public record NewDocument(long companyId, SourceType sourceType, String sourceKey, String title, String sourceName,
-                              String sourceUrl, Long fileId, String fileName, Instant publishedAt, Integer pages,
-                              int characters, String embeddingModel, UUID jobId) {
+    /**
+     * A document to store; {@code fileId} / {@code fileName} and {@code documentType} for a PDF (null for news),
+     * {@code sourceUrl} / {@code publishedAt} for news.
+     */
+    public record NewDocument(long companyId, SourceType sourceType, CompanyDocumentType documentType, String sourceKey,
+                              String title, String sourceName, String sourceUrl, Long fileId, String fileName,
+                              Instant publishedAt, Integer pages, int characters, String embeddingModel, UUID jobId) {
     }
 
+    /** A stored document of a company; {@code documentType} is null for news. */
     public record DocumentRow(long documentId, String exchange, String ticker, String companyName, SourceType sourceType,
-                              String title, String sourceName, String sourceUrl, String fileName, Instant publishedAt,
-                              Integer pages, int characters, int chunks, String embeddingModel, Instant updatedAt) {
+                              CompanyDocumentType documentType, String title, String sourceName, String sourceUrl,
+                              String fileName, Instant publishedAt, Integer pages, int characters, int chunks,
+                              String embeddingModel, Instant updatedAt) {
     }
 
     /**
@@ -125,12 +130,13 @@ public class RagRepository {
             throw new IllegalArgumentException(chunks.size() + " chunks but " + embeddings.size() + " embeddings");
         }
         long id = jdbc.sql("""
-                        INSERT INTO rag_document (company_id, source_type, source_key, title, source_name, source_url,
-                                                  file_id, file_name, published_at, pages, characters, chunks,
+                        INSERT INTO rag_document (company_id, source_type, document_type, source_key, title, source_name,
+                                                  source_url, file_id, file_name, published_at, pages, characters, chunks,
                                                   embedding_model, job_id)
-                        VALUES (:company, :type, :key, :title, :sourceName, :url, :fileId, :fileName, :published, :pages,
-                                :characters, :chunks, :model, :job)
+                        VALUES (:company, :type, :documentType, :key, :title, :sourceName, :url, :fileId, :fileName,
+                                :published, :pages, :characters, :chunks, :model, :job)
                         ON CONFLICT ON CONSTRAINT uq_rag_document_source DO UPDATE SET
+                            document_type = EXCLUDED.document_type,
                             title = EXCLUDED.title, source_name = EXCLUDED.source_name, source_url = EXCLUDED.source_url,
                             file_id = EXCLUDED.file_id, file_name = EXCLUDED.file_name,
                             published_at = EXCLUDED.published_at, pages = EXCLUDED.pages,
@@ -139,6 +145,7 @@ public class RagRepository {
                         RETURNING document_id""")
                 .param("company", doc.companyId())
                 .param("type", doc.sourceType().name())
+                .param("documentType", doc.documentType() == null ? null : doc.documentType().name(), Types.VARCHAR)
                 .param("key", truncate(doc.sourceKey(), 1000))
                 .param("title", truncate(doc.title(), 1000))
                 .param("sourceName", truncate(doc.sourceName(), 100), Types.VARCHAR)
@@ -215,7 +222,6 @@ public class RagRepository {
                         Types.VARCHAR, Types.VARCHAR});
     }
 
-    /** Stored documents, most recently updated first; exchange / ticker / type narrow the list when given. */
     /** Filters of {@link #documents}: rows match those given ({@code null} = any). */
     private static final String DOCUMENT_FILTER = """
             FROM rag_document d JOIN company c ON c.company_id = d.company_id
@@ -223,43 +229,47 @@ public class RagRepository {
               AND (CAST(:ticker AS varchar) IS NULL OR c.ticker = :ticker)
               AND (CAST(:prefix AS varchar) IS NULL OR c.ticker LIKE :prefix || '%')
               AND (CAST(:type AS varchar) IS NULL OR d.source_type = :type)
+              AND (CAST(:documentType AS varchar) IS NULL OR d.document_type = :documentType)
             """;
 
     /**
      * One page of stored documents, most recently stored first: {@code limit} documents after skipping
      * {@code offset}, of the exchange, the ticker, the tickers starting with {@code tickerPrefix} (a normalized
-     * ticker or its beginning: letters, digits, '.' and '-', no LIKE wildcards) and the source type given
-     * ({@code null} = any).
+     * ticker or its beginning: letters, digits, '.' and '-', no LIKE wildcards), the source type and the document
+     * type given ({@code null} = any).
      */
     @Transactional(readOnly = true)
-    public DocumentPage documents(String exchange, String ticker, String tickerPrefix, SourceType type, int limit,
-                                  int offset) {
-        long total = documentQuery("SELECT count(*) " + DOCUMENT_FILTER, exchange, ticker, tickerPrefix, type)
+    public DocumentPage documents(String exchange, String ticker, String tickerPrefix, SourceType type,
+                                  CompanyDocumentType documentType, int limit, int offset) {
+        long total = documentQuery("SELECT count(*) " + DOCUMENT_FILTER, exchange, ticker, tickerPrefix, type, documentType)
                 .query(Long.class).single();
         List<DocumentRow> rows = documentQuery("""
-                        SELECT d.document_id, c.exchange, c.ticker, c.company_name, d.source_type, d.title, d.source_name,
-                               d.source_url, d.file_name, d.published_at, d.pages, d.characters, d.chunks,
-                               d.embedding_model, d.updated_at
+                        SELECT d.document_id, c.exchange, c.ticker, c.company_name, d.source_type, d.document_type,
+                               d.title, d.source_name, d.source_url, d.file_name, d.published_at, d.pages, d.characters,
+                               d.chunks, d.embedding_model, d.updated_at
                         """ + DOCUMENT_FILTER + """
                         ORDER BY d.updated_at DESC, d.document_id DESC
-                        LIMIT :limit OFFSET :offset""", exchange, ticker, tickerPrefix, type)
+                        LIMIT :limit OFFSET :offset""", exchange, ticker, tickerPrefix, type, documentType)
                 .param("limit", limit)
                 .param("offset", offset)
                 .query((rs, i) -> new DocumentRow(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                        SourceType.valueOf(rs.getString(5)), rs.getString(6), rs.getString(7), rs.getString(8),
-                        rs.getString(9), instant(rs.getTimestamp(10)), (Integer) rs.getObject(11), rs.getInt(12),
-                        rs.getInt(13), rs.getString(14), instant(rs.getTimestamp(15))))
+                        SourceType.valueOf(rs.getString(5)),
+                        rs.getString(6) == null ? null : CompanyDocumentType.valueOf(rs.getString(6)), rs.getString(7),
+                        rs.getString(8), rs.getString(9), rs.getString(10), instant(rs.getTimestamp(11)),
+                        (Integer) rs.getObject(12), rs.getInt(13), rs.getInt(14), rs.getString(15),
+                        instant(rs.getTimestamp(16))))
                 .list();
         return new DocumentPage(total, limit, offset, rows);
     }
 
     private JdbcClient.StatementSpec documentQuery(String sql, String exchange, String ticker, String tickerPrefix,
-                                                   SourceType type) {
+                                                   SourceType type, CompanyDocumentType documentType) {
         return jdbc.sql(sql)
                 .param("exchange", exchange, Types.VARCHAR)
                 .param("ticker", ticker, Types.VARCHAR)
                 .param("prefix", tickerPrefix, Types.VARCHAR)
-                .param("type", type == null ? null : type.name(), Types.VARCHAR);
+                .param("type", type == null ? null : type.name(), Types.VARCHAR)
+                .param("documentType", documentType == null ? null : documentType.name(), Types.VARCHAR);
     }
 
     /**
@@ -268,6 +278,15 @@ public class RagRepository {
      */
     @Transactional
     public List<Hit> search(Long companyId, SourceType type, float[] query, int limit) {
+        return search(companyId, type, null, query, limit);
+    }
+
+    /**
+     * As {@link #search(Long, SourceType, float[], int)}, of the company PDFs of one document type when given (the
+     * financial statements, or the monthly registration reports).
+     */
+    @Transactional
+    public List<Hit> search(Long companyId, SourceType type, CompanyDocumentType documentType, float[] query, int limit) {
         jdbc.sql("SET LOCAL hnsw.iterative_scan = relaxed_order").update();
         List<Hit> hits = new ArrayList<>(jdbc.sql("""
                         SELECT k.chunk_id, k.document_id, c.ticker, d.source_type, d.title, d.source_url, d.file_name,
@@ -278,11 +297,13 @@ public class RagRepository {
                         JOIN company c ON c.company_id = k.company_id
                         WHERE (CAST(:company AS bigint) IS NULL OR k.company_id = :company)
                           AND (CAST(:type AS varchar) IS NULL OR d.source_type = :type)
+                          AND (CAST(:documentType AS varchar) IS NULL OR d.document_type = :documentType)
                         ORDER BY k.embedding <=> CAST(:query AS vector)
                         LIMIT :limit""")
                 .param("query", vector(query))
                 .param("company", companyId, Types.BIGINT)
                 .param("type", type == null ? null : type.name(), Types.VARCHAR)
+                .param("documentType", documentType == null ? null : documentType.name(), Types.VARCHAR)
                 .param("limit", limit)
                 .query((rs, i) -> new Hit(rs.getLong(1), rs.getLong(2), rs.getString(3), SourceType.valueOf(rs.getString(4)),
                         rs.getString(5), rs.getString(6), rs.getString(7), instant(rs.getTimestamp(8)),

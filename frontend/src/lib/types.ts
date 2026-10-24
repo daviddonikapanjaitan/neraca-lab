@@ -294,6 +294,19 @@ export type IngestionJobType =
 
 export type RagSourceType = "PDF" | "NEWS"
 
+/**
+ * What a PDF of a company is (Ingestion > PDF Documents (RAG)): a financial statement (the default) or a monthly
+ * registration report of securities holders, read into the shares of the directors and commissioners (Companies >
+ * Registration).
+ */
+export type CompanyDocumentType = "FINANCIAL_STATEMENT" | "REGISTRATION"
+
+export interface CompanyDocumentTypeOption {
+  code: CompanyDocumentType
+  label: string
+  examples: string
+}
+
 /** GET /api/v1/rag/status: settings of the RAG vector store and what it holds. */
 export interface RagStatus {
   embeddingModel: string
@@ -310,6 +323,8 @@ export interface RagStatus {
   /** the countries of the macro documents (only the available ones take uploads) */
   macroCountries: MacroDocumentCountry[]
   macroDocumentTypes: MacroDocumentTypeOption[]
+  /** the types of a company PDF, the default first */
+  companyDocumentTypes?: CompanyDocumentTypeOption[]
 }
 
 /** A country of the macro documents (Indonesia; the United States and China later) and its stored documents. */
@@ -402,6 +417,8 @@ export interface RagDocument {
   ticker: string
   companyName: string
   sourceType: RagSourceType
+  /** a PDF's type; null for a news article */
+  documentType: CompanyDocumentType | null
   title: string
   /** "PDF upload", or the news site */
   sourceName: string | null
@@ -985,11 +1002,16 @@ export interface AnalysisCompanyOption {
   /** stored reporting periods */
   periods: number
   latestPeriod: string | null
+  /** financial statement PDFs in the vector store */
   pdfDocuments: number
   newsDocuments: number
   /** latest Yahoo Finance snapshot (null: not in the screening data) */
   marketDataDate: string | null
   latestPriceDate: string | null
+  /** monthly registration reports stored (Companies > Registration), their first and latest month ("2026-05") */
+  registrationReports: number
+  firstRegistrationPeriod: string | null
+  latestRegistrationPeriod: string | null
 }
 
 /** GET /api/v1/analyses/options */
@@ -1043,18 +1065,21 @@ export interface ResearchBriefView {
   moat: string | null
   management: string | null
   growth: string | null
+  /** controlling shareholder, holders of 5% or more, free float (from the registration reports); null when none read */
+  ownership?: string | null
   risks: string[]
   catalysts: string[]
   newsSentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | "MIXED" | "NONE"
   newsSummary: string | null
-  /** facts with the ref of the excerpt they come from (F1 = filing, N1 = news) */
+  /** facts with the ref of the excerpt they come from (F1 = filing, R1 = registration report, N1 = news) */
   evidence: { ref: string; fact: string }[]
 }
 
 /** An excerpt the research agent retrieved from the vector store. */
 export interface RetrievedExcerpt {
   ref: string
-  source: RagSourceType
+  /** PDF (a financial statement), REGISTRATION (a monthly registration report) or NEWS */
+  source: RagSourceType | "REGISTRATION"
   title: string | null
   /** pages of a PDF, date of a news article */
   where: string | null
@@ -1094,9 +1119,52 @@ export interface AnalysisContext {
     latestPrice?: { date: string; close?: number; historyFrom?: string }
   } | null
   marketData: { source: string; date: string | null; metrics: Record<string, unknown> } | null
-  documents: { pdfDocuments: number; newsArticles: number; pdfTitles: string[]; latestNews: string[] } | null
+  documents: {
+    pdfDocuments: number
+    newsArticles: number
+    pdfTitles: string[]
+    latestNews: string[]
+    registrationReports?: number
+    registrationTitles?: string[]
+  } | null
+  /** the directors' and commissioners' shares from the monthly registration reports; null when none is stored */
+  insiderOwnership?: InsiderOwnershipView | null
   periods: string[]
   quantitativeScorecards: boolean
+}
+
+/** The insider section of an analysis (InsiderOwnership on the backend): ownership is a fraction of the shares listed. */
+export interface InsiderOwnershipView {
+  months: string[]
+  latestMonth: string
+  missingMonths?: string[]
+  listedShares: number | null
+  insiders: {
+    name: string
+    role: "DIRECTOR" | "COMMISSIONER" | "OTHER"
+    position: string
+    shares: number | null
+    ownership: number | null
+    changeLatestMonth: number | null
+    netChange: number | null
+    controller?: boolean
+    controllerAffiliate?: boolean
+  }[]
+  notInLatestReport?: string[]
+  totals: {
+    insiders: number
+    shares: number | null
+    ownership: number | null
+    sharesBought: number
+    sharesSold: number
+    netChange: number
+    buys: number
+    sells: number
+  }
+  transactions: { month: string; name: string; role: string; change: number; sharesAfter: number | null }[]
+  transactionsNote?: string
+  reportWarnings?: string
+  reading: string
 }
 
 export interface AnalysisSynthesisView {

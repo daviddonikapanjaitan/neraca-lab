@@ -563,6 +563,14 @@ Rules:
   gives the filed section total exactly, they are counted once - in the section and in the fields (debt issued
   784,086,901,997, debt repaid -15,495,302,170) - dropping the line whose filed sign contradicts its label, else
   the later one (warning `financing_section`). Tried after the single line outside the total.
+- **A pair of lines outside a restated comparative's total.** BEER's FY2025 filing restates FY2024: the advances
+  and loans to other parties (made 98,006,019, repaid 77,432,853) moved into operating (-21,402,282,339, was
+  -21,381,709,173), but the comparative still lists both lines under investing; its total -3,273,103,330 is the
+  sum of the other lines. SMGA's H1 2025 comparative does the same with the amounts due to related parties
+  (58,410,141,892 in, 4,671,737,586 out) under financing. When the filed operating + investing + financing give
+  the net change in cash, its roll-forward holds, and exactly one pair - an outflow and an inflow - explains the
+  gap, the pair is not counted (warning `investing_section` / `financing_section`; the fields are read from their
+  own rows as before). Tried last; errors 958 and 961.
 - **A slip of a few rupiah in a full-amount filing.** Full-amount filings must still reconcile, up to a difference
   of under a billionth of the amount, which is a warning, not an error: WIFI's FY2022 ending cash is filed
   20,928,775,242, beginning cash + net change is 20,928,775,245. The reported figures are stored. Filings in
@@ -650,6 +658,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FullTextExtractorTest` (unit, scripted model) | TINS FY2024: nothing is invented for the empty 2024 column, the model decides all three statements of the comparative 2023 and every amount is the cell x the rounding unit, the rule-based statement is passed as a reference only; a mapping that contradicts itself is shown to the model, which corrects it; its last answer is stored even when it does not add up, and that is reported; amounts and unknown rows in the answer are never used; a field made up of other rows in one column (`overrides`); the model may adopt a statement that passed every check, never one that failed; BFIN (Financing Industry): every sheet of the file is in the text and the model's rows are stored, nothing of the rules is shown; a sign that contradicts the field is pointed out once with the rows concerned; MSIN FY2025 (by nature): profit from operations left empty is asked for again and stored from the rows that compute it, and is an open item of the upload when the last answer leaves it empty too; ISAT FY2023 / FY2022 and PGEO FY2023 (by nature): operating expenses other than the rows operating income subtracts, a non-operating row in operating income, and an operating income no choice of the model's rows reconciles are shown to the model and corrected from its rows or the template's when it keeps them |
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
 | `FilingMapperWifiTpiaTest` (unit) | WIFI FY2025: the financing total that leaves out the dividends is counted at the sum of its lines (10,904,384,108,332), the FY2024 comparative unchanged; WIFI H1 2025 (in the H1 2026 filing): three amounts entered twice counted once, debt issued 784,086,901,997 and repaid -15,495,302,170, which line of a pair is dropped; WIFI FY2022: a 3 rupiah slip is a warning; TPIA's self-contradicting H1 2025 income statement and FY2024 breakdown are still refused |
+| `FilingMapperBeerIndoTest` (unit) | BEER's FY2024 comparative (in the FY2025 filing): the advances to other parties made and repaid, outside the restated investing total, are not counted (investing -3,273,103,330, operating -21,402,282,339), every statement of the filing storable; BEER's own FY2024 filing still counts them; INDO FY2022's roll-forward (20,000,000 off as filed) stays an error; a pair is taken only when it is the only one |
 | `FilingMapperRiseSmbrTest` (unit) | RISE H1 2025 (in the H1 2026 filing): an FX effect of 398,002 the filed roll-forward leaves out is not counted, ending cash 224,776,635,800, every check passes; FY2025's FX effect still counted; SMBR's FY2024 comparative (investing flows counted twice) still refused, its own filing reconciles |
 | `IngestionVerifierSegmentsTest` (unit) | TPIA FY2025: a refused comparative breakdown of a period whose stored breakdown adds up to its revenue is a note, not an open item; without a stored breakdown, or with one that does not add up, it stays open |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
@@ -678,7 +687,9 @@ years of statements and share counts and an empty valuation history. Switch off 
 | End-to-end (manual)              | uploading all six filings through the endpoint into an empty database reproduces the seed data                                                                                                                                                       |
 
 Run the unit tests with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432: the full
-stack from the start scripts, or `docker compose up -d postgres redis` in `backend/`).
+stack from the start scripts, or `docker compose up -d postgres redis` in `backend/`). The workbooks
+and PDFs the tests read are in `data/`, which is not in the repository (`.gitignore`): a test whose file
+is missing is skipped (JUnit assumption), not failed.
 
 End-to-end check of this version (empty database, all six HRTA filings uploaded through the
 endpoint via OpenRouter). Correction: these runs and every run below were made before the model fix

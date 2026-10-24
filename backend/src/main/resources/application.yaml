@@ -56,6 +56,7 @@ spring:
         - classpath:db/V1.0.25__schema_markets_macro.sql       # Forex / commodity bars, macro series catalog and release dates
         - classpath:db/V1.0.27__schema_macro_analysis.sql      # AI macro analysis of a country (Macro > AI Analysis)
         - classpath:db/V1.0.28__schema_rag_macro.sql           # macro documents of a country in the RAG vector store
+        - classpath:db/V1.0.29__schema_registration.sql        # company PDF types; monthly registration reports (Companies > Registration)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql

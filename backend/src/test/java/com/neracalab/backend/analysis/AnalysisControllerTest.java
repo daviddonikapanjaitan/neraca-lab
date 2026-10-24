@@ -214,6 +214,36 @@ class AnalysisControllerTest {
         assertThat(research.path("droppedRefs").asInt()).isEqualTo(1);
         assertThat(research.path("trace").path(0).path("tools").path(0).asString()).startsWith("searchFilings(");
 
+        // the directors' and commissioners' shares of HRTA's stored monthly registration reports (Companies >
+        // Registration), or a note that none is stored
+        String latestMonth = jdbc.sql("""
+                        SELECT to_char(max(r.period), 'YYYY-MM') FROM registration_report r
+                        JOIN company c ON c.company_id = r.company_id WHERE c.exchange = 'IDX' AND c.ticker = 'HRTA'""")
+                .query(String.class).single();
+        JsonNode insiders = report.path("context").path("insiderOwnership");
+        Prompt dossierPrompt = prompts.stream().filter(p -> p.getInstructions().getFirst().getText()
+                .startsWith("You are one of six")).findFirst().orElseThrow();
+        String dossier = dossierPrompt.getInstructions().get(1).getText();
+        if (latestMonth == null) {
+            assertThat(insiders.isNull()).isTrue();
+            assertThat(dossier).contains("not available (no monthly registration reports");
+        } else {
+            long holders = jdbc.sql("""
+                            SELECT count(*) FROM registration_insider i JOIN company c ON c.company_id = i.company_id
+                            WHERE c.exchange = 'IDX' AND c.ticker = 'HRTA' AND i.period = CAST(:m || '-01' AS date)""")
+                    .param("m", latestMonth).query(Long.class).single();
+            assertThat(insiders.path("latestMonth").asString()).isEqualTo(latestMonth);
+            assertThat(insiders.path("insiders").size()).isEqualTo((int) holders);
+            assertThat(insiders.path("reading").asString()).isNotBlank();
+            assertThat(dossier).contains("\"insiderOwnership\":{").contains(insiders.path("insiders").path(0)
+                    .path("name").asString());
+        }
+        long registrationPdfs = jdbc.sql("""
+                        SELECT count(*) FROM rag_document d JOIN company c ON c.company_id = d.company_id
+                        WHERE c.exchange = 'IDX' AND c.ticker = 'HRTA' AND d.document_type = 'REGISTRATION' AND d.chunks > 0""")
+                .query(Long.class).single();
+        assertThat(report.path("context").path("documents").path("registrationReports").asLong()).isEqualTo(registrationPdfs);
+
         // six agents, each answered; the synthesis adjustment is capped at 5 points
         assertThat(report.path("agents").size()).isEqualTo(6);
         for (JsonNode agent : report.path("agents")) {

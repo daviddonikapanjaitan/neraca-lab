@@ -12,6 +12,7 @@ import {
   NewspaperIcon,
   PlayIcon,
   TriangleAlertIcon,
+  UsersIcon,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/select"
 import { formatDate } from "@/lib/format"
 import { jsonBody, requestJson } from "@/lib/client-api"
+import { rangeLabel } from "@/lib/registration"
 import { formatUsd } from "@/lib/screening"
 import type { AnalysisOptions, AnalysisRun, InvestorAgentCode } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -127,6 +129,17 @@ export function AnalysisForm({ options }: { options: AnalysisOptions }) {
                 company.pdfDocuments > 0
                   ? `${company.pdfDocuments} PDF ${company.pdfDocuments === 1 ? "document" : "documents"} to research`
                   : "No PDF documents (Ingestion > PDF Documents (RAG))"
+              }
+            />
+            <DataLine
+              icon={UsersIcon}
+              ok={company.registrationReports > 0}
+              text={
+                company.registrationReports > 0
+                  ? `${company.registrationReports} monthly registration ${
+                      company.registrationReports === 1 ? "report" : "reports"
+                    } (${rangeLabel(company.firstRegistrationPeriod, company.latestRegistrationPeriod)}): insider dealings`
+                  : "No registration reports (Ingestion > PDF Documents (RAG), Registration type)"
               }
             />
             <DataLine

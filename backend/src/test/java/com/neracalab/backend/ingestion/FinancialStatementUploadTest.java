@@ -1,6 +1,7 @@
 package com.neracalab.backend.ingestion;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -9,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -112,7 +114,7 @@ class FinancialStatementUploadTest {
 
     @Test
     void storesTheFileOnceAndIngestsInTheBackground() throws Exception {
-        byte[] content = Files.readAllBytes(WORKBOOK);
+        byte[] content = workbook();
         String checksum = IngestionFileRepository.sha256(content);
 
         IngestionJob first = upload(content, status().isAccepted());
@@ -178,7 +180,7 @@ class FinancialStatementUploadTest {
 
     @Test
     void listsJobsWithCountsAndFilters() throws Exception {
-        IngestionJob job = upload(Files.readAllBytes(WORKBOOK), status().is2xxSuccessful());
+        IngestionJob job = upload(workbook(), status().is2xxSuccessful());
         awaitFinished(job.id());
 
         mvc.perform(get("/api/v1/ingestions").param("type", "financial_statement").param("status", "failed, succeeded"))
@@ -231,7 +233,7 @@ class FinancialStatementUploadTest {
 
     @Test
     void downloadsTheStoredFileUnderTheNameOfEachUpload() throws Exception {
-        byte[] content = Files.readAllBytes(WORKBOOK);
+        byte[] content = workbook();
         IngestionJob original = upload(content, status().is2xxSuccessful());
         awaitFinished(original.id());
         // same content under another name: one stored file, each job downloads under its own name
@@ -272,7 +274,7 @@ class FinancialStatementUploadTest {
             String body = mvc.perform(multipart("/api/v1/financial-statements/upload")
                             .file(new MockMultipartFile("file", WORKBOOK.getFileName().toString(),
                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    Files.readAllBytes(WORKBOOK)))
+                                    workbook()))
                             .header("Authorization", "Bearer " + userToken))
                     .andExpect(status().is2xxSuccessful())
                     .andReturn().getResponse().getContentAsString();
@@ -297,6 +299,12 @@ class FinancialStatementUploadTest {
         } finally {
             accounts.cleanup();
         }
+    }
+
+    /** The HRTA workbook of data/ (not in the repository: the test is skipped without it). */
+    private static byte[] workbook() throws IOException {
+        assumeTrue(Files.exists(WORKBOOK), "HRTA source data not available: " + WORKBOOK);
+        return Files.readAllBytes(WORKBOOK);
     }
 
     private IngestionJob upload(byte[] content, ResultMatcher expected) throws Exception {

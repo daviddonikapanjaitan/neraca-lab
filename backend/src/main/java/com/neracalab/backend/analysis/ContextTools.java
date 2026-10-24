@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
+import com.neracalab.backend.rag.CompanyDocumentType;
 import com.neracalab.backend.rag.EmbeddingClient;
 import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.rag.RagRepository.Hit;
@@ -22,10 +23,11 @@ import com.neracalab.backend.screening.agent.UsageMeter;
 
 /**
  * Tools of the analysis research agent for one company (Tool Calling Pattern), all reading the database:
- * semantic search in the company's stored PDF documents and news (pgvector, {@link RagRepository#search}) and the
- * full statements of one stored period ({@link FactSheet#statement}). Searches are limited to the company itself,
- * so the model cannot read other companies' documents. Every retrieved excerpt gets a stable reference (F1, N1,
- * ...) that the brief cites; the embedding of each query is metered.
+ * semantic search in the company's stored financial statement PDFs, its monthly registration reports of securities
+ * holders and its news (pgvector, {@link RagRepository#search}) and the full statements of one stored period
+ * ({@link FactSheet#statement}). Searches are limited to the company itself, so the model cannot read other
+ * companies' documents. Every retrieved excerpt gets a stable reference (F1 = filing, R1 = registration report, N1
+ * = news) that the brief cites; the embedding of each query is metered.
  */
 public class ContextTools {
 
@@ -36,9 +38,34 @@ public class ContextTools {
     public record Excerpt(String ref, String title, String where, String text) {
     }
 
-    /** An excerpt the agent retrieved (for the report). */
+    /**
+     * An excerpt the agent retrieved (for the report).
+     *
+     * @param source PDF (a financial statement), REGISTRATION (a monthly registration report) or NEWS
+     */
     public record Retrieved(String ref, String source, String title, String where, String url, double distance,
                             String query) {
+    }
+
+    /** What a search reads: its source, its document type, the letter of its refs. */
+    private enum Kind {
+        FILING(SourceType.PDF, CompanyDocumentType.FINANCIAL_STATEMENT, "F", "PDF", "financial statement PDFs"),
+        REGISTRATION(SourceType.PDF, CompanyDocumentType.REGISTRATION, "R", "REGISTRATION", "monthly registration reports"),
+        NEWS(SourceType.NEWS, null, "N", "NEWS", "news articles");
+
+        final SourceType source;
+        final CompanyDocumentType documentType;
+        final String prefix;
+        final String label;
+        final String what;
+
+        Kind(SourceType source, CompanyDocumentType documentType, String prefix, String label, String what) {
+            this.source = source;
+            this.documentType = documentType;
+            this.prefix = prefix;
+            this.label = label;
+            this.what = what;
+        }
     }
 
     private final long companyId;
@@ -50,16 +77,27 @@ public class ContextTools {
     private final AnalysisProperties properties;
     private final boolean hasFilings;
     private final boolean hasNews;
+    private final boolean hasRegistrations;
     private final AtomicInteger searches = new AtomicInteger();
     private final AtomicInteger lookups = new AtomicInteger();
     private final Map<Long, String> refs = new HashMap<>();
+    private final Map<Kind, Integer> counters = new HashMap<>();
     private final List<Retrieved> retrieved = new ArrayList<>();
     private final Set<String> queries = new HashSet<>();
-    private int filingRefs;
-    private int newsRefs;
 
     public ContextTools(long companyId, String ticker, FactSheet facts, EmbeddingClient embeddings, RagRepository rag,
                         UsageMeter meter, AnalysisProperties properties, boolean hasFilings, boolean hasNews) {
+        this(companyId, ticker, facts, embeddings, rag, meter, properties, hasFilings, hasNews, false);
+    }
+
+    /**
+     * @param hasFilings       financial statement PDFs are stored
+     * @param hasNews          news articles are stored
+     * @param hasRegistrations monthly registration reports (REGISTRATION PDFs) are stored
+     */
+    public ContextTools(long companyId, String ticker, FactSheet facts, EmbeddingClient embeddings, RagRepository rag,
+                        UsageMeter meter, AnalysisProperties properties, boolean hasFilings, boolean hasNews,
+                        boolean hasRegistrations) {
         this.companyId = companyId;
         this.ticker = ticker;
         this.facts = facts;
@@ -69,6 +107,7 @@ public class ContextTools {
         this.properties = properties;
         this.hasFilings = hasFilings;
         this.hasNews = hasNews;
+        this.hasRegistrations = hasRegistrations;
     }
 
     @Tool(description = """
@@ -76,7 +115,17 @@ public class ContextTools {
             Returns the closest excerpts with a ref (F1, F2, ...), document and pages. Use short, specific queries.""")
     public List<Excerpt> searchFilings(@ToolParam(description = "what to look for, e.g. 'segment revenue and customers'")
                                        String query) {
-        return search(query, SourceType.PDF);
+        return search(query, Kind.FILING);
+    }
+
+    @Tool(description = """
+            Semantic search in the company's stored monthly registration reports of securities holders (Laporan \
+            Bulanan Registrasi Pemegang Efek): shareholders of 5% or more and the controlling shareholder, the shares \
+            of the directors and commissioners, free float, investor types, beneficial owner. Returns excerpts with a \
+            ref (R1, R2, ...), report and pages.""")
+    public List<Excerpt> searchRegistrations(@ToolParam(description = "what to look for, e.g. 'pemegang saham 5% pengendali' or 'free float'")
+                                             String query) {
+        return search(query, Kind.REGISTRATION);
     }
 
     @Tool(description = """
@@ -84,7 +133,7 @@ public class ContextTools {
             date, title and URL.""")
     public List<Excerpt> searchNews(@ToolParam(description = "what to look for, e.g. 'dividend' or 'new contract'")
                                     String query) {
-        return search(query, SourceType.NEWS);
+        return search(query, Kind.NEWS);
     }
 
     @Tool(description = """
@@ -99,17 +148,21 @@ public class ContextTools {
                 "No stored period '" + period + "'; stored: " + String.join(", ", facts.periodNames())));
     }
 
-    private List<Excerpt> search(String query, SourceType type) {
+    private List<Excerpt> search(String query, Kind kind) {
         String q = query == null ? "" : Texts.compact(query);
         if (q.isEmpty() || q.length() > 300) {
             throw new IllegalArgumentException("The query must have 1 to 300 characters");
         }
-        if (type == SourceType.PDF ? !hasFilings : !hasNews) {
-            throw new IllegalStateException("No " + (type == SourceType.PDF ? "PDF documents" : "news articles")
-                    + " are stored for " + ticker);
+        boolean stored = switch (kind) {
+            case FILING -> hasFilings;
+            case REGISTRATION -> hasRegistrations;
+            case NEWS -> hasNews;
+        };
+        if (!stored) {
+            throw new IllegalStateException("No " + kind.what + " are stored for " + ticker);
         }
         synchronized (queries) {
-            if (!queries.add(type + "|" + q.toLowerCase(Locale.ROOT))) {
+            if (!queries.add(kind + "|" + q.toLowerCase(Locale.ROOT))) {
                 throw new IllegalStateException("This query was searched already; use its results");
             }
         }
@@ -117,16 +170,16 @@ public class ContextTools {
             throw new IllegalStateException("Search limit reached (" + properties.maxSearches() + ")");
         }
         float[] vector = embed(q);
-        List<Hit> hits = rag.search(companyId, type, vector, properties.searchResults());
+        List<Hit> hits = rag.search(companyId, kind.source, kind.documentType, vector, properties.searchResults());
         List<Excerpt> out = new ArrayList<>();
         for (Hit hit : hits) {
-            String ref = ref(hit);
-            String where = type == SourceType.PDF ? pages(hit) : date(hit);
-            String title = type == SourceType.PDF && hit.fileName() != null ? hit.fileName() : hit.title();
+            String ref = ref(hit, kind);
+            String where = kind.source == SourceType.PDF ? pages(hit) : date(hit);
+            String title = kind.source == SourceType.PDF && hit.fileName() != null ? hit.fileName() : hit.title();
             out.add(new Excerpt(ref, title, where, Texts.clip(Texts.compact(hit.content()), properties.excerptChars())));
             synchronized (retrieved) {
                 if (retrieved.stream().noneMatch(r -> r.ref().equals(ref))) {
-                    retrieved.add(new Retrieved(ref, type.name(), title, where, hit.sourceUrl(),
+                    retrieved.add(new Retrieved(ref, kind.label, title, where, hit.sourceUrl(),
                             Math.round(hit.distance() * 1000) / 1000.0, q));
                 }
             }
@@ -152,10 +205,9 @@ public class ContextTools {
         }
     }
 
-    /** The same chunk keeps its ref across searches. */
-    private synchronized String ref(Hit hit) {
-        return refs.computeIfAbsent(hit.chunkId(), id -> hit.sourceType() == SourceType.PDF ? "F" + (++filingRefs)
-                : "N" + (++newsRefs));
+    /** The same chunk keeps its ref across searches: F1, F2 ... (filings), R1 ... (registration reports), N1 ... (news). */
+    private synchronized String ref(Hit hit, Kind kind) {
+        return refs.computeIfAbsent(hit.chunkId(), id -> kind.prefix + counters.merge(kind, 1, Integer::sum));
     }
 
     private static String pages(Hit hit) {
@@ -178,6 +230,10 @@ public class ContextTools {
         return hasNews;
     }
 
+    boolean hasRegistrations() {
+        return hasRegistrations;
+    }
+
     int searches() {
         return searches.get();
     }
@@ -193,7 +249,7 @@ public class ContextTools {
         }
     }
 
-    /** The refs retrieved (F1, N2, ...). */
+    /** The refs retrieved (F1, R1, N2, ...). */
     public Set<String> refs() {
         Set<String> out = new LinkedHashSet<>();
         retrieved().forEach(r -> out.add(r.ref()));
