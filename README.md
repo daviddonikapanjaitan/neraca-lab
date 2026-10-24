@@ -134,7 +134,7 @@ neraca_lab/
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
-├── data/                        local only, not in the repository (.gitignore): download the filings from idx.co.id
+├── data/                        local only, not in the repository (.gitignore): see "Where to get the data for ingestion"
 ├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
 ├── data/IDX_OWNERSHIP/<TICKER>/ monthly registration reports of securities holders (registrasi_<ticker>_<bulan>.pdf)
 ├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
@@ -266,6 +266,26 @@ AUTH="Authorization: Bearer $TOKEN"     # used by the examples below
 ```
 
 Details: [`docs/v1_docs/AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md).
+
+## Where to get the data for ingestion
+
+`data/` is not in the repository (`.gitignore`). Download the files to ingest from the Indonesia
+Stock Exchange (IDX) website, put them under `data/` as in [Project structure](#project-structure),
+and upload them on the Ingestion page (or with the APIs below):
+
+| Source (idx.co.id)                                                                                                       | What to download                                                                                         | Put it in                                  | Upload it with                                                                  |
+|--------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|--------------------------------------------|---------------------------------------------------------------------------------|
+| [Laporan Keuangan dan Tahunan](https://www.idx.co.id/id/perusahaan-tercatat/laporan-keuangan-dan-tahunan)               | financial statements of a listed company: the XBRL workbook (`FinancialStatement-<period>-<TICKER>.xlsx`) and the PDF | `data/IDX_XBRL/<TICKER>/xlsx/`, `pdf/`     | xlsx: `POST /api/v1/financial-statements/upload`; PDF: `POST /api/v1/rag/pdf`    |
+| [Keterbukaan Informasi](https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi)                             | information disclosures of listed companies (company announcements and reports filed with IDX)           | `data/IDX_OWNERSHIP/<TICKER>/` (registration reports) | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
+| [Data Kepemilikan Saham](https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/)                           | share ownership data of listed companies                                                                 | `data/IDX_OWNERSHIP/<TICKER>/`             | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
+
+The monthly registration reports of securities holders (registrasi / LBRE PDFs) are what the
+Companies › Registration page reads ([`REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md)).
+
+Daily prices are not downloaded by hand: the price ingestion fetches them (see
+[Daily price ingestion](#daily-price-ingestion)). Macro documents of a country (Bank Indonesia,
+Ministry of Finance) go to `data/macro/<country>/` and the Macro document upload
+(see [RAG vector store](#rag-vector-store-pdf-documents-news-and-macro-documents)).
 
 ## Uploading financial statements (AI ingestion)
 
