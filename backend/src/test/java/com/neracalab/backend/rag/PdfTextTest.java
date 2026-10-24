@@ -2,6 +2,7 @@ package com.neracalab.backend.rag;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -23,6 +24,7 @@ class PdfTextTest {
 
     @Test
     void readsTheHrtaAnnualReportPageByPage() throws IOException {
+        assumeTrue(Files.exists(HRTA_PDF), "HRTA source data not available: " + HRTA_PDF);
         List<PdfText.Page> pages = PdfText.pages(Files.readAllBytes(HRTA_PDF));
         assertThat(pages).hasSizeGreaterThan(50);
         for (int i = 0; i < pages.size(); i++) {

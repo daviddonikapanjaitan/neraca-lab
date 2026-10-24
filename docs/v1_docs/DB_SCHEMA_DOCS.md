@@ -874,6 +874,9 @@ denominator yields `NULL` instead of an error.
 
 ## 6. Current data (PT Hartadinata Abadi Tbk, `HRTA`)
 
+The source files below are kept locally (`data/` is not in the repository, see `.gitignore`); the seed
+scripts hold their data, so a clone without `data/` starts with the same database.
+
 | Source                                                     | Content                                                             |
 |------------------------------------------------------------|---------------------------------------------------------------------|
 | `data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2025-I-HRTA.xlsx`       | Q1 2025 + Q1 2024 comparative, balance sheet 2025-03-31             |

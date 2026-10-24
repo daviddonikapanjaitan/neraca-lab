@@ -134,6 +134,7 @@ neraca_lab/
 │   ├── Dockerfile               standalone Next.js server (node server.js)
 │   ├── .env.example             template for frontend/.env.local (NERACA_API_URL)
 │   └── src/                     app/ (pages, api/ route handlers), components/ (ui = shadcn-fintech), lib/ (API client)
+├── data/                        local only, not in the repository (.gitignore): download the filings from idx.co.id
 ├── data/IDX_XBRL/<TICKER>/      source data per company: xlsx/ (IDX XBRL filings), pdf/, price/
 ├── data/IDX_OWNERSHIP/<TICKER>/ monthly registration reports of securities holders (registrasi_<ticker>_<bulan>.pdf)
 ├── data/ICMD/                   Indonesian Capital Market Directory PDFs, 2010 .. 2019 (reference, not ingested)
@@ -820,6 +821,10 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 (cd backend && ./mvnw test)                      # 734 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
+
+Many tests read the IDX workbooks and PDFs in `data/`, which is kept locally and not pushed
+(`.gitignore`). In a clone without it those tests are skipped (JUnit assumption), not failed; put the
+files back in `data/` to run them.
 
 `FilingMapperHrtaTest` maps the six HRTA filings and compares every field with the validated seed
 data; `FilingMapperLegacyTemplateTest` maps the pre-2023 INDF FY2022 filing and compares it with the

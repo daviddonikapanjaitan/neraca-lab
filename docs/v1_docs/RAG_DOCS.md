@@ -73,7 +73,8 @@ News request (company, from, to) -> RAG_NEWS job
 The right-hand card of **PDF Documents (RAG)** (**Macro document upload**) stores a macro PDF of a
 country for the AI macro analysis (`MACRO_ANALYSIS_DOCS.md`, section 3a). Which documents to collect,
 and why: `instruction/pdf_rag_macro.md`.
-The files uploaded so far are kept in `data/macro/<country>/` (`data/macro/indonesia/`: Bank
+The files uploaded so far are kept locally (not in the repository: `data/` is in `.gitignore`) in
+`data/macro/<country>/` (`data/macro/indonesia/`: Bank
 Indonesia's Monetary Policy Review / Report, the International Investment Position report, the
 Ministry of Finance's APBN KiTa bulletin and the Indonesia Stock Exchange's monthly market
 statistics, `ms_equity` / `ms_bond` / `ms_sw` `_2609.pdf`).

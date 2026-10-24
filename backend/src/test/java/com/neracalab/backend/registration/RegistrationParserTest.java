@@ -2,6 +2,7 @@ package com.neracalab.backend.registration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -31,7 +32,9 @@ class RegistrationParserTest {
     static final long LISTED = 4_605_262_400L;
 
     static byte[] read(String month) throws IOException {
-        return Files.readAllBytes(DIR.resolve("registrasi_hrta_" + month + ".pdf"));
+        Path file = DIR.resolve("registrasi_hrta_" + month + ".pdf");
+        assumeTrue(Files.exists(file), "HRTA source data not available: " + file);
+        return Files.readAllBytes(file);
     }
 
     /** The four directors and commissioners of HRTA: the same holdings from May to August 2026. */
@@ -119,8 +122,9 @@ class RegistrationParserTest {
 
     @Test
     void aFinancialStatementIsNotARegistrationReport() throws IOException {
-        byte[] statement = Files.readAllBytes(Path.of("..", "data", "IDX_XBRL", "HRTA", "pdf",
-                "FinancialStatement-2025-Tahunan-HRTA.pdf"));
+        Path file = Path.of("..", "data", "IDX_XBRL", "HRTA", "pdf", "FinancialStatement-2025-Tahunan-HRTA.pdf");
+        assumeTrue(Files.exists(file), "HRTA source data not available: " + file);
+        byte[] statement = Files.readAllBytes(file);
         assertThatThrownBy(() -> RegistrationParser.parse(statement))
                 .isInstanceOf(RegistrationFormatException.class)
                 .hasMessageContaining("Not a monthly registration report");

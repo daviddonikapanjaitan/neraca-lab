@@ -2023,15 +2023,23 @@ public final class FilingMapper {
             checks.add(equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
                     beginning.add(change).add(other).add(deconsolidated), ending));
         }
+        // the filed totals proven by the filing's own figures: they give the net change, which rolls forward to the
+        // ending cash
+        boolean totalsConfirmed = operating != null && investing != null && financing != null && change != null
+                && beginning != null && ending != null
+                && operating.add(investing).add(financing).compareTo(change) == 0
+                && checks.stream().noneMatch(ch -> ch.rule().equals("cash_rollforward") && ch.isError());
         // lines a section shows twice (dropped once from its sum): not counted in the fields either
         Set<String> repeated = new java.util.HashSet<>();
         if (investing != null) {
             checks.addAll(section(c, ctx, "Cash flows from investing activities",
-                    "Total net cash flows received from (used in) investing activities", investing, "investing", repeated));
+                    "Total net cash flows received from (used in) investing activities", investing, "investing", repeated,
+                    totalsConfirmed));
         }
         if (financing != null) {
             checks.addAll(section(c, ctx, "Cash flows from financing activities",
-                    "Total net cash flows received from (used in) financing activities", financing, "financing", repeated));
+                    "Total net cash flows received from (used in) financing activities", financing, "financing", repeated,
+                    totalsConfirmed));
         }
         if (!repeated.isEmpty()) {
             c = c.without(repeated, ctx);
@@ -2247,9 +2255,12 @@ public final class FilingMapper {
     /**
      * Signs every line of a cash flow section and checks it against the reported section total. Lines the section
      * shows twice and that are not counted are added to {@code repeated}.
+     *
+     * @param totalsConfirmed the filed operating + investing + financing totals give the net change in cash, whose
+     *                        roll-forward to the ending cash holds
      */
     private List<Check> section(StatementTable c, int ctx, String headerLabel, String totalLabel, BigDecimal total, String name,
-                                Set<String> repeated) {
+                                Set<String> repeated, boolean totalsConfirmed) {
         int from = c.indexOf(headerLabel);
         int to = c.indexOf(totalLabel);
         if (from < 0 || to < 0) {
@@ -2328,8 +2339,47 @@ public final class FilingMapper {
                         + name + " total " + total.stripTrailingZeros().toPlainString() + " (the total is the sum of the "
                         + "other lines); not counted, in the fields either"));
             }
+            // an outflow and an inflow that a restated comparative moved to another section but still lists here:
+            // BEER's FY2024 comparative in its FY2025 filing keeps "Cash advances and loans made to other parties"
+            // 98,006,019 and their repayment 77,432,853 under investing, while its investing total -3,273,103,330 is
+            // the sum of the other lines and operating takes the net -20,573,166 (-21,381,709,173 in the FY2024
+            // filing, -21,402,282,339 restated). Only when the filed totals give the net change in cash, whose
+            // roll-forward holds, and exactly one such pair explains the difference.
+            if (totalsConfirmed) {
+                List<String> pair = leftOutPair(signedLines, sum.subtract(total));
+                if (pair != null) {
+                    return List.of(Check.warning(name + "_section", pair.stream().map(l -> "'" + l + "' "
+                            + signedLines.get(l).stripTrailingZeros().toPlainString()).toList() + " are not part of the "
+                            + "filing's " + name + " total " + total.stripTrailingZeros().toPlainString() + " in this column "
+                            + "(the total is the sum of the other lines, and the filed totals give the net change in cash); "
+                            + "not counted"));
+                }
+            }
         }
         return List.of(equal(name + "_section", "sum of " + name + " lines (payments negative) = " + name + " total", sum, total));
+    }
+
+    /**
+     * The one pair of lines, an outflow and an inflow, whose signed amounts add up to {@code difference}; {@code null}
+     * when no pair or more than one does.
+     */
+    static List<String> leftOutPair(Map<String, BigDecimal> signedLines, BigDecimal difference) {
+        List<String> labels = new ArrayList<>(signedLines.keySet());
+        List<String> found = null;
+        for (int i = 0; i < labels.size(); i++) {
+            for (int j = i + 1; j < labels.size(); j++) {
+                BigDecimal a = signedLines.get(labels.get(i));
+                BigDecimal b = signedLines.get(labels.get(j));
+                if (a.signum() == b.signum() || a.add(b).compareTo(difference) != 0) {
+                    continue;
+                }
+                if (found != null) {
+                    return null;    // ambiguous
+                }
+                found = List.of(labels.get(i), labels.get(j));
+            }
+        }
+        return found;
     }
 
     /**

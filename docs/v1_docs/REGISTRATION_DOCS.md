@@ -6,7 +6,8 @@ of the previous month and at the end of this month (Pemegang Saham Direksi dan K
 into the database and shows it on **Companies > Registration**, in the manner of openinsider.com: who bought or sold,
 by ticker, by title, month by month.
 
-The reports of April - September 2026 are kept in `data/IDX_OWNERSHIP/<TICKER>/`: HRTA
+The reports of April - September 2026 are kept locally (`data/` is not in the repository, see `.gitignore`)
+in `data/IDX_OWNERSHIP/<TICKER>/`: HRTA
 (`registrasi_hrta_<bulan>.pdf`; June is a correction), INDF, GGRM and TRUK (`<Bulan>.pdf`).
 
 ## 1. Flow

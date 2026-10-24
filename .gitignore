@@ -54,6 +54,9 @@ next-env.d.ts
 ### Serena (local MCP tooling data) ###
 .serena/
 
+### Data files (IDX workbooks, PDFs, macro documents): kept locally, never pushed ###
+/data/
+
 ### Local instruction notes ###
 INSTRUCTION.md
 /instruction/
