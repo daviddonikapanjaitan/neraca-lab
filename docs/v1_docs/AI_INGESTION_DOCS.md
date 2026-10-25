@@ -597,6 +597,15 @@ Rules:
   not reconcile and ignoring one insurance expense line (`FilingMapper.INSURANCE_EXPENSE_LINES`) makes every
   check pass, that line is ignored; a `memo_line` warning and derivation record it. A line the agent
   classified is never second-guessed. Before, the FY2024 column was blocked and the job INCOMPLETE.
+- **One line outside a restated comparative's profit before tax.** The H1 2025 columns of the H1 2026 filings of
+  PTRO ("Selling expenses" 3,514 thousand USD, profit before tax 7,846) and BNBR ("Other expenses" 2,784 million,
+  profit before tax 72,088), PTRO's FY2024 column of its FY2025 filing ("Other gains (losses)" 3,804, the 4,361 of
+  the FY2024 filing net of the associates' -557, which the column lists again; profit before tax 7,868) and MOLI's
+  H1 2025 column ("Other income" -1,985,667 thousand) each have one line the filed profit before tax leaves out.
+  In a comparative column only, when no other rule reconciles it and ignoring exactly one classified line makes
+  every check pass, that line is ignored (warning `left_out_line`); not when the agent has classified lines of the
+  column, and never in the period's own column. Tried last; errors 1019 - 1021 (and MOLI's 355, 369 - 371, which
+  the full-text extraction stored before). A sweep of the 864 readable workbooks: only these four columns.
 - Unsupported by the standard extraction (stored by the full-text extraction, section 6; rejected with 422 only when that is switched off): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`) in the General and Infrastructure taxonomies; the current /
   non-current balance sheet (`4210000`) and profit or loss by function (`4311000` / `4321000`) in the
@@ -659,6 +668,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
 | `FilingMapperWifiTpiaTest` (unit) | WIFI FY2025: the financing total that leaves out the dividends is counted at the sum of its lines (10,904,384,108,332), the FY2024 comparative unchanged; WIFI H1 2025 (in the H1 2026 filing): three amounts entered twice counted once, debt issued 784,086,901,997 and repaid -15,495,302,170, which line of a pair is dropped; WIFI FY2022: a 3 rupiah slip is a warning; TPIA's self-contradicting H1 2025 income statement and FY2024 breakdown are still refused |
 | `FilingMapperBeerIndoTest` (unit) | BEER's FY2024 comparative (in the FY2025 filing): the advances to other parties made and repaid, outside the restated investing total, are not counted (investing -3,273,103,330, operating -21,402,282,339), every statement of the filing storable; BEER's own FY2024 filing still counts them; INDO FY2022's roll-forward (20,000,000 off as filed) stays an error; a pair is taken only when it is the only one |
+| `FilingMapperPtroBnbrTest` (unit) | One line outside a comparative's profit before tax: PTRO FY2024 (in the FY2025 filing, the associates' -557), PTRO H1 2025 (selling expenses 3,514) and BNBR H1 2025 (other expenses 2,784) in their H1 2026 filings are ignored (`left_out_line`), every statement of the three filings storable; PTRO's own FY2024 column is not touched |
 | `FilingMapperRiseSmbrTest` (unit) | RISE H1 2025 (in the H1 2026 filing): an FX effect of 398,002 the filed roll-forward leaves out is not counted, ending cash 224,776,635,800, every check passes; FY2025's FX effect still counted; SMBR's FY2024 comparative (investing flows counted twice) still refused, its own filing reconciles |
 | `IngestionVerifierSegmentsTest` (unit) | TPIA FY2025: a refused comparative breakdown of a period whose stored breakdown adds up to its revenue is a note, not an open item; without a stored breakdown, or with one that does not add up, it stays open |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
