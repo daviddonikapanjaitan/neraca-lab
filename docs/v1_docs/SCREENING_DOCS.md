@@ -28,7 +28,8 @@ is saved in the database, shown on the Screening page and downloadable as PDF.
 ## 1. Using it
 
 Frontend: **Screening > Fundamental (All)** in the sidebar (below Companies; the Screening entry is a
-dropdown with Fundamental (All), Fundamental (Selected) and Analysis), permission `SCREENING` (the built-in Administrator role
+dropdown with Fundamental (All), Fundamental (Selected), Technicals (All), Technicals (Selected) and Analysis; the
+technical screening: [TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md)), permission `SCREENING` (the built-in Administrator role
 has it; give it to other roles in Role Management). The in-depth analysis of one stock (Screening >
 Analysis) reuses the investor agents, Reflection and Reflexion of this page: [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md).
 

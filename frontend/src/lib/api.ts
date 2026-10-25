@@ -11,6 +11,12 @@ import type { MacroOutlook } from "@/lib/macro"
 import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } from "@/lib/macro-analysis"
 import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
 import type {
+  TechnicalScreeningOptions,
+  TechnicalScreeningReport,
+  TechnicalScreeningRun,
+  TechnicalSelectableCompanies,
+} from "@/lib/technical-screening"
+import type {
   AnalysisOptions,
   AnalysisPage,
   AnalysisReport,
@@ -20,6 +26,7 @@ import type {
   FundamentalsStatus,
   IngestionJobList,
   IngestionJobType,
+  ListingPricesStatus,
   PermissionInfo,
   MacroRagDocumentPage,
   MacroStatus,
@@ -185,6 +192,11 @@ export const getFundamentalsStatus = cache((exchange: string) =>
   get<FundamentalsStatus>(`/api/v1/fundamentals/status?exchange=${encodeURIComponent(exchange)}`)
 )
 
+/** GET /api/v1/listing-prices/status?exchange= (daily bars of the screening universe, active run) */
+export const getListingPricesStatus = cache((exchange: string) =>
+  get<ListingPricesStatus>(`/api/v1/listing-prices/status?exchange=${encodeURIComponent(exchange)}`)
+)
+
 /** GET /api/v1/rag/status (embedding model, news limits, stored counts) */
 export const getRagStatus = cache(() => get<RagStatus>("/api/v1/rag/status"))
 
@@ -217,6 +229,26 @@ export const getScreenings = cache((limit: number, scope: ScreeningScope) =>
 /** GET /api/v1/screenings/companies?exchange= (the companies that can be selected) */
 export const getSelectableCompanies = cache((exchange: string) =>
   get<SelectableCompanies>(`/api/v1/screenings/companies?exchange=${encodeURIComponent(exchange)}`)
+)
+
+/** GET /api/v1/technical-screenings/options */
+export const getTechnicalScreeningOptions = cache(() =>
+  get<TechnicalScreeningOptions>("/api/v1/technical-screenings/options")
+)
+
+/** GET /api/v1/technical-screenings?limit=&scope= (most recent first; a tier's or selected stocks' runs) */
+export const getTechnicalScreenings = cache((limit: number, scope: ScreeningScope) =>
+  get<TechnicalScreeningRun[]>(`/api/v1/technical-screenings?limit=${limit}&scope=${scope}`)
+)
+
+/** GET /api/v1/technical-screenings/companies?exchange= (the companies that can be selected, with their prices) */
+export const getTechnicalSelectableCompanies = cache((exchange: string) =>
+  get<TechnicalSelectableCompanies>(`/api/v1/technical-screenings/companies?exchange=${encodeURIComponent(exchange)}`)
+)
+
+/** GET /api/v1/technical-screenings/{id}: the report */
+export const getTechnicalScreening = cache((id: string) =>
+  get<TechnicalScreeningReport>(`/api/v1/technical-screenings/${encodeURIComponent(id)}`)
 )
 
 /** GET /api/v1/analyses/options: the companies with their stored data, agents, budget, models */

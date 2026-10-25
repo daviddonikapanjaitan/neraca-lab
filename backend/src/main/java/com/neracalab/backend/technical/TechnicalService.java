@@ -857,28 +857,10 @@ public class TechnicalService {
         Map<Long, MarketContext.Member> members = new LinkedHashMap<>();
         for (Listing l : universe) {
             List<Candle> b = bars.get(l.companyId());
-            if (b == null) {
-                continue;
+            MarketContext.Member member = b == null ? null : MarketContext.Member.of(l.companyId(), l.ticker(), l.sector(), b, asOf);
+            if (member != null) {
+                members.put(l.companyId(), member);
             }
-            LocalDate cutoff = asOf;
-            List<Candle> upTo = b.stream().filter(c -> !c.date().isAfter(cutoff)).toList();
-            if (upTo.isEmpty()) {
-                continue;
-            }
-            int n = upTo.size();
-            double close = upTo.getLast().close();
-            double r6 = n > 126 ? Stats.pctChange(close, upTo.get(n - 1 - 126).close()) : Double.NaN;
-            double r12 = n > 252 ? Stats.pctChange(close, upTo.get(n - 1 - 252).close()) : Double.NaN;
-            Boolean above = null;
-            if (n >= 200 && !upTo.getLast().date().isBefore(asOf.minusDays(10))) {
-                double sum = 0;
-                for (int i = n - 200; i < n; i++) {
-                    sum += upTo.get(i).close();
-                }
-                above = close > sum / 200;
-            }
-            members.put(l.companyId(), new MarketContext.Member(l.companyId(), l.ticker(), l.sector(), upTo.getLast().date(),
-                    r6, r12, above));
         }
         return new MarketContext(exchange.code(), asOf, properties.index().code(), index, members);
     }

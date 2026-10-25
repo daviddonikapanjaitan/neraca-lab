@@ -244,9 +244,10 @@ a new company appears in the ticker list, the latest price date is current and n
 
 ### 3.3a Screening - `/screening`, `/screening/{id}`, `/screening/selected`, `/screening/selected/{id}` (`SCREENING`)
 
-Below Companies in the sidebar, a dropdown like Ingestion and the Admin Center with three pages
+Below Companies in the sidebar, a dropdown like Ingestion and the Admin Center with five pages
 (`lib/screening-sections.ts`): **Fundamental (All)** (`/screening`, this section), **Fundamental (Selected)**
-(`/screening/selected`, below) and **Analysis** (`/screening/analysis`, section 3.3b). The sidebar
+(`/screening/selected`, below), **Technicals (All)** (`/screening/technicals`) and **Technicals (Selected)**
+(`/screening/technicals/selected`, section 3.3c) and **Analysis** (`/screening/analysis`, section 3.3b). The sidebar
 highlights the sub-page with the longest matching URL, so `/screening/analysis/{id}` is Analysis, not
 Fundamental (All); the breadcrumb reads "Screening / Fundamental (All)", "Screening / Fundamental (Selected)" or
 "Screening / Analysis" (and "/ Report" on a report).
@@ -298,6 +299,26 @@ notes and Reflexion lessons, token usage (`components/screening/usage-table.tsx`
 **Download PDF** (`download-pdf-button.tsx`, shared).
 
 The Ingestion jobs table lists analyses under the tab "Analyses"; their job detail links to the report.
+
+### 3.3c Technicals - `/screening/technicals`, `/screening/technicals/selected` and their reports (`SCREENING`)
+
+The AI technical screening ([TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md)): charts only, the four
+technical agents Keith Gill, John Murphy, Paul Tudor Jones and Stanley Druckenmiller, and a trade plan per stock.
+**Technicals (All)** (`components/technical-screening/tier-form.tsx`) chooses the exchange, the market cap (large,
+mid, small), the top N and the agents; **Technicals (Selected)** (`selection-form.tsx`) lists the companies of the
+companies table with their stored daily bars (`GET /api/v1/technical-screenings/companies`; a stock with fewer than
+`minBars` is marked and left out of the run), the top N and the agents. Each page lists only its own runs
+(`technical-screenings?scope=TIER` / `SELECTION`). The report (`report-view.tsx`, `/screening/technicals/{id}` or
+`/screening/technicals/selected/{id}`; a run opened under the other URL is redirected) polls while the run is active
+and shows the market (IHSG against its SMA 200, breadth), the executive summary and market notes, the final ranking
+(action, buy / sell / stop loss - a buy-stop marked ↑ - reward / risk, overall and per-agent scores with their stance,
+conviction), the rest of the shortlist, the Stage 1 funnel, notes and Reflexion lessons and the token usage. A row
+opens the stock (`candidate-sheet.tsx`): the trade plan as the price tiles of Companies › Technicals, thesis, red
+flags, key technicals, a link to its chart on Companies › Technicals (companies of the companies table) and to Yahoo
+Finance, and every agent (`agent-card.tsx`): stance, rules / AI / final score, its trade plan and who set it, thesis,
+supports and risks, the reflection, and its preset's rules summary with the evidence. Ingestion › Screening Data IDX
+has the card **Price history for technical analysis** (`listing-prices-card.tsx`) that loads the daily bars of every
+listing (`POST /api/listing-prices/ingestions`).
 
 ### 3.4 Login - `/login`
 
@@ -356,6 +377,8 @@ frontend/
     │   │   ├── ingestion/xbrl, prices, screening-data, rag-pdf, rag-news/page.tsx   page 3 (+ loading.tsx; ingestion/page.tsx redirects)
     │   │   ├── screening/page.tsx, screening/[id]/page.tsx   Fundamental (All) and its reports
     │   │   ├── screening/selected/page.tsx, screening/selected/[id]/page.tsx   Fundamental (Selected) and its reports
+    │   │   ├── screening/technicals/page.tsx, screening/technicals/[id]/page.tsx   Technicals (All) and its reports
+    │   │   ├── screening/technicals/selected/page.tsx, screening/technicals/selected/[id]/page.tsx   Technicals (Selected) and its reports
     │   │   ├── screening/analysis/page.tsx, screening/analysis/[id]/page.tsx   Analysis and its reports
     │   │   ├── admin/users/page.tsx, admin/roles/page.tsx   Admin Center (admin/page.tsx redirects)
     │   │   └── profile/page.tsx           own profile

@@ -20,5 +20,9 @@ public enum IngestionJobType {
     /** one macro series (BI rate, US 10Y, Fed assets, ...) from its source into macro_series (technical analysis) */
     MACRO,
     /** AI macro analysis of a country's stock market: research agent, the four macro agents, synthesis, report */
-    MACRO_ANALYSIS
+    MACRO_ANALYSIS,
+    /** daily bars of every listing of the screening universe (Yahoo Finance): the price movements of the technical screening */
+    LISTING_PRICES,
+    /** AI technical screening run: rules pre-screen, the four technical agents, synthesis, trade plans */
+    TECHNICAL_SCREENING
 }

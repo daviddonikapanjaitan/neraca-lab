@@ -132,6 +132,7 @@ the same `OPENAI_API_KEY` (OpenRouter):
 | `SCREENING_BUDGET_USD`           | `0.45`  | cost cap of one screening run                                        |
 | `SCREENING_ETL_SCHEDULE_ENABLED` | `true`  | daily screening data ETL (Yahoo Finance) at 18:00 WIB, Monday-Friday |
 | `ANALYSIS_BUDGET_USD`            | `0.20`  | cost cap of one stock analysis (Screening > Analysis, [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md)) |
+| `TECHNICAL_SCREENING_BUDGET_USD` | `0.50`  | cost cap of one technical screening (Screening > Technicals, [TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md)) |
 
 The RAG vector store ([RAG_DOCS.md](RAG_DOCS.md)) embeds with the same `OPENAI_API_KEY`; its news
 ingestion reads the news sites only (no Tavily). `RAG_EMBEDDING_MODEL` (default

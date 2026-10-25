@@ -2,16 +2,17 @@ import type { Metadata } from "next"
 
 import { IngestionPage } from "@/components/ingestion/ingestion-page"
 import type { IngestionSectionData } from "@/components/ingestion/ingestion-page-client"
-import { getFundamentalsStatus } from "@/lib/api"
+import { getFundamentalsStatus, getListingPricesStatus } from "@/lib/api"
 import { ingestionSection } from "@/lib/ingestion-sections"
 
 export const metadata: Metadata = {
   title: ingestionSection("screening-data").heading,
 }
 
-/** Screening data stored for IDX and the active ETL run. */
+/** Screening data stored for IDX (market data and fundamentals, the price history) and the active runs. */
 async function section(): Promise<IngestionSectionData> {
-  return { section: "screening-data", fundamentals: await getFundamentalsStatus("IDX") }
+  const [fundamentals, listingPrices] = await Promise.all([getFundamentalsStatus("IDX"), getListingPricesStatus("IDX")])
+  return { section: "screening-data", fundamentals, listingPrices }
 }
 
 export default function Page() {

@@ -68,6 +68,8 @@ export const TYPE_LABEL: Record<IngestionJobType, string> = {
   ANALYSIS: "AI analysis",
   MACRO: "Macro series",
   MACRO_ANALYSIS: "AI macro analysis",
+  LISTING_PRICES: "Price history (screening)",
+  TECHNICAL_SCREENING: "AI technical screening",
 }
 
 /** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */
