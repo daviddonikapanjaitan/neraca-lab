@@ -135,13 +135,16 @@ Unknown company: not-found page. Invalid ticker or unsupported exchange: the bac
 role=DIRECTOR&from=2026-05&to=2026-08`, `lib/registration.ts`), loads the companies with reports and the first page on
 the server, and renders `components/registration/registration-page-client.tsx`: summary tiles, the filters (tickers,
 transaction, title, from / to month; Apply pushes the URL, the client is re-mounted with the new filters), with one
-ticker the **holdings by month** (insider x month: shares and change), and the table (month, ticker, insider with the
+ticker the **shareholders of 5 % or more** (the latest report's shares by type of holder, then holder x month:
+shares, percentage, change; `/api/registrations/holders` and `/api/registrations/reports`) and the **holdings by
+month** (insider x month: shares and change), and the table (month, ticker, insider with the
 controller / affiliate badges, title, Buy / Sell / No change / New, shares before and after, change, % owned, the
 report's letter and Correction badge; 50 rows per page through `/api/registrations`). The months are chosen with
 a month range calendar (`components/registration/month-range-picker.tsx` on `components/ui/popover.tsx`, Base UI
 Popover): first click the first month, second click the last, presets Last 3 / 6 / 12 months, Clear; months after
 the current one (Jakarta, computed by the page on the server) are not offered. Route handlers:
-`app/api/registrations` and `app/api/registrations/companies`. Details: [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md).
+`app/api/registrations`, `app/api/registrations/companies`, `app/api/registrations/holders` and
+`app/api/registrations/reports`. Details: [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md).
 
 ### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
 

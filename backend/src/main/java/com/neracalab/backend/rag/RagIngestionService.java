@@ -58,13 +58,14 @@ public class RagIngestionService {
      * @param filedAt     filing time as printed (Jakarta time, "2026-08-10T15:14"); null when not printed
      * @param insiders    directors and commissioners in the report
      * @param changes     of them, those whose shares changed during the month
+     * @param holders     shareholders of 5% or more in the report
      * @param outcome     STORED, REPLACED (the report of the month stored before), or KEPT_LATER_FILING (the report of
      *                    the month stored before was filed later, e.g. its correction: it stays)
      * @param keptFiledAt the filing time of the report kept (KEPT_LATER_FILING, Jakarta time)
      * @param warnings    what did not add up (a percentage that does not match its share count)
      */
     public record RegistrationResult(String period, String letterNumber, boolean correction, String filedAt,
-                                     int insiders, int changes, RegistrationRepository.Outcome outcome,
+                                     int insiders, int changes, int holders, RegistrationRepository.Outcome outcome,
                                      String keptFiledAt, List<String> warnings) {
     }
 
@@ -131,13 +132,13 @@ public class RagIngestionService {
                 embeddings.model(), jobId), chunks, vectors);
         RegistrationResult registration = null;
         if (report != null) {
-            progress.accept("Storing the shares of " + report.insiders().size() + " directors and commissioners ("
-                    + report.period() + ")");
+            progress.accept("Storing the shares of " + report.insiders().size() + " directors and commissioners and "
+                    + report.holders().size() + " shareholders of 5% or more (" + report.period() + ")");
             RegistrationRepository.Stored stored = registrations.store(company.companyId(), report, id, fileId, fileName, jobId);
             registration = new RegistrationResult(report.period().toString(), report.letterNumber(), report.correction(),
                     report.filedAt() == null ? null : report.filedAt().toString(), report.insiders().size(),
                     (int) report.insiders().stream().filter(i -> i.change() != null && i.change() != 0).count(),
-                    stored.outcome(), stored.keptFiledAt() == null ? null
+                    report.holders().size(), stored.outcome(), stored.keptFiledAt() == null ? null
                     : LocalDateTime.ofInstant(stored.keptFiledAt(), JAKARTA).toString(), report.warnings());
         } else {
             registrations.deleteOfDocument(id);

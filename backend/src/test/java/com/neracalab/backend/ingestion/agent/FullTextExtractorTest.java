@@ -249,9 +249,11 @@ public class FullTextExtractorTest {
 
     /**
      * MNCN H1 2026 (by nature, error 806): the model named 'Program and broadcasting expenses' as cost of revenue and only
-     * 'Other expenses' as operating expenses, while its operating income deducts both. The cost of revenue is cleared,
-     * and the expense row it named was in no field: operating expenses 864,240 million beside revenue 3,517,600 and an
-     * operating income of 519,964. Counted in operating expenses, as its operating income counts it.
+     * 'Other expenses' as operating expenses, while its operating income deducts both. The expense row the model named
+     * is an operating expense, as its operating income counts it (before, it was in no field: operating expenses 864,240
+     * million beside revenue 3,517,600 and an operating income of 519,964). The filing's own cost of sales note states
+     * the cost of sales, 2,133,396 (the program and broadcasting expenses): cost of revenue and gross profit from it, the
+     * operating expenses without it.
      */
     @Test
     void anExpenseByNatureNamedAsCostOfRevenueIsAnOperatingExpense() throws Exception {
@@ -276,12 +278,53 @@ public class FullTextExtractorTest {
         extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
 
         MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
-        assertThat(income.values().get("cost_of_revenue")).isNull();
-        assertThat(income.values().get("gross_profit")).isNull();
-        // 2,133,396 + 864,240 (million): revenue 3,517,600 - operating expenses = operating income 519,964
-        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("2997636000000");
+        // 3,517,600 - 2,133,396 = 1,384,204; 1,384,204 - 864,240 = operating income 519,964 (million)
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("2133396000000");
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("1384204000000");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("864240000000");
         assertThat(income.values().get("operating_income")).isEqualByComparingTo("519964000000");
-        assertThat(income.derivations().get("operating_expenses")).contains("'Program and broadcasting expenses'", "'Other expenses'");
+        assertThat(income.rejected()).doesNotContain("cost_of_revenue", "gross_profit");
+        assertThat(income.derivations().get("operating_expenses")).contains("'Program and broadcasting expenses'", "'Other expenses'",
+                "less the cost of revenue of the cost of sales note");
+        assertThat(income.derivations().get("cost_of_revenue")).contains("cost of sales note (1670000");
+    }
+
+    /**
+     * BIPI FY2025 (by nature: revenue, depreciation and amortisation, other expenses; no gross profit on the face): its
+     * cost of sales note (1670000) states 200,443,257 of revenue 235,089,682, so the gross profit is 34,646,425 and the
+     * operating expenses by nature, 212,368,437, are 11,925,180 without it; operating income 22,721,245 as filed.
+     */
+    @Test
+    void byNatureTheCostOfSalesNoteGivesTheGrossProfit() throws Exception {
+        IngestionSession session = session("BIPI", "2025-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        assertThat(session.mapper().costOfSales(StatementColumn.CURRENT_PERIOD)).isEqualByComparingTo("200443257");
+        assertThat(session.mapper().costOfSales(StatementColumn.PRIOR_PERIOD)).isEqualByComparingTo("451661475");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1312000";
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
+                Map.entry("operating_expenses", terms(text, sheet, "+Depreciation and amortisation expenses",
+                        "+Other expenses")),
+                Map.entry("operating_income", terms(text, sheet, "+Sales and revenue",
+                        "-Depreciation and amortisation expenses", "-Other expenses")),
+                Map.entry("interest_income", terms(text, sheet, "+Finance income")),
+                Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity"))));
+        answers("{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isEqualByComparingTo("235089682");
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("200443257");
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("34646425");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("11925180");
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("22721245");
+        assertThat(income.checks()).anyMatch(c -> c.rule().equals("gross_profit") && c.message().contains("cost of sales note"));
     }
 
     /**

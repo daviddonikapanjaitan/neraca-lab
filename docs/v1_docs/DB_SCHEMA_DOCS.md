@@ -30,6 +30,7 @@ foreign key.
 | `V1.0.28__schema_rag_macro.sql`           | macro documents of a country in the RAG vector store ([RAG_DOCS.md](RAG_DOCS.md) section 2a): `rag_document` / `rag_chunk` gain `country` (`company_id` NULL for them; one of the two, check), `rag_document` gains `issuer` and `document_type`; unique per country, type and file (section 4.12) |
 | `V1.0.29__schema_registration.sql`        | the type of a company PDF in `rag_document.document_type` (`FINANCIAL_STATEMENT`, set for every company PDF stored before, or `REGISTRATION`; `ck_rag_document_company_type`), `registration_report` and `registration_insider`: the monthly registration reports of securities holders and the directors' and commissioners' shares in them ([REGISTRATION_DOCS.md](REGISTRATION_DOCS.md); section 4.12a) |
 | `V1.0.30__schema_technical_screening.sql` | AI technical screening ([TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md) section 6): `listing_price_daily` (daily bars of every `stock_listing`, PK listing + trading date), `technical_screening_run` (a tier or tickers, check), `technical_screening_candidate`, `technical_screening_agent_score` (agents GILL, MURPHY, TUDOR_JONES, DRUCKENMILLER), `technical_screening_lesson`, `llm_usage.technical_screening_id`; `ingestion_job.job_type` gains `LISTING_PRICES` and `TECHNICAL_SCREENING` (in V1.0.10 and V1.0.14, which re-create the check) |
+| `V1.0.32__schema_registration_holders.sql` | `registration_holder`: the shareholders of 5 % or more of a registration report; `registration_report.holders` and the shares by type of holder (`controller_shares`, `controller_affiliate_shares`, `insider_shares`, `treasury_shares`); NULL / no rows for a report stored before |
 | `V1.0.4__data_HRTA_financials.sql`        | HRTA statements and segments from the six IDX filings in `data/IDX_XBRL/HRTA/xlsx`        |
 | `V1.0.5__data_HRTA_market.sql`            | HRTA share counts (filings) and daily prices (`data/IDX_XBRL/HRTA/price`)                 |
 | `V1.0.12__data_SMDR_shares.sql`           | SMDR share counts from public sources (not derivable from its USD filings) and its 2023 1:5 stock split; no-op until SMDR is uploaded; also run after every upload |
@@ -37,6 +38,7 @@ foreign key.
 | `V1.0.21__data_RAJA_shares.sql`           | RAJA share counts from public sources (not derivable from its USD filings), its 1:5 stock split of 2026-07-16 (after its latest filing, so the published counts did not fit the filed EPS) and the EPS of the earlier periods on the basis after it; no-op until RAJA is uploaded |
 | `V1.0.22__data_TUGU_shares.sql`           | TUGU's 1:2 stock split of 2023-05-24 from public sources (the FY2023 filing does not restate its FY2022 comparative, so the split is never detected from the filings), split-adjusted share counts 3,555,575,600 where empty and the per-share figures of the dates before it on the basis after it; no-op until TUGU is uploaded |
 | `V1.0.24__data_BACH_shares.sql`           | BACH's share count after its IPO of 2026-07-08 (615,000,000 new shares at Rp 442, after its only filing, H1 2026): 4,084,430,000 from the listing date and the IPO in `corporate_action`; no-op until BACH is uploaded; also run after every upload |
+| `V1.0.31__data_BNBR_shares.sql`           | BNBR share counts its filings cannot give (five par-value series) and Yahoo Finance gives wrong: 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31; the placement and the rights issue in `corporate_action`. Runs before V1.0.6 and after every upload |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 | `V1.0.26__data_markets_macro.sql`         | the catalogs: 35 instruments (USDIDR, USDJPY, USDCNY, USDMYR, USDPHP, USDINR, USDKRW, EURUSD, AUDJPY; BRENT, WTI, NATURAL_GAS, LNG, COAL, GOLD, SILVER, COPPER, ALUMINIUM, IRON_ORE, STEEL_HRC, NICKEL, TIN, COBALT, PALM_OIL, PALM_OIL_MYR, SOYBEAN_OIL, SOYBEAN_MEAL, CORN, WHEAT, SUGAR, RUBBER, PULP, UREA, DAP, POTASH) and 25 macro series (FRED, Bank Indonesia, CNBC, CFTC, Yahoo, manual), each brought back to its definition on every start |
 
@@ -738,6 +740,32 @@ Unique `(company_id, period)`; indexes `ix_registration_report_document`, `ix_re
 | `controller`, `controller_affiliate` | BOOLEAN | marked Pengendali / Afiliasi Pengendali |
 
 Indexes `ix_registration_insider_company` (`company_id, period DESC`), `ix_registration_insider_period`.
+
+`V1.0.32__schema_registration_holders.sql` adds to `registration_report`:
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `holders` | INTEGER | rows in `registration_holder`; NULL = stored before V1.0.32 (upload the report again) |
+| `controller_shares` | BIGINT | summary by type of holder: Pengendali; NULL when not printed |
+| `controller_affiliate_shares` | BIGINT | Afiliasi dari pengendali |
+| `insider_shares` | BIGINT | Direksi dan Dewan Komisaris, as the summary prints it |
+| `treasury_shares` | BIGINT | Saham Tresuri |
+
+`registration_holder`: a shareholder of 5 % or more in a report (Pemegang saham 5% atau lebih).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `holder_id` | BIGSERIAL PK | |
+| `report_id` | BIGINT NOT NULL | -> `registration_report`, `ON DELETE CASCADE` |
+| `company_id`, `period` | BIGINT, DATE | repeated from the report for filtering |
+| `row_index` | INTEGER NOT NULL | 1-based row of the table; unique with `report_id` |
+| `holder_name` | VARCHAR(300) | as filed (addresses are not stored) |
+| `shares_previous`, `percent_previous` | BIGINT, NUMERIC(9,4) | end of the previous month; the percentage as printed (of the shares issued or listed) |
+| `shares_current`, `percent_current` | BIGINT, NUMERIC(9,4) | end of the month |
+| `change_shares` | BIGINT, generated | `shares_current - shares_previous` |
+| `controller`, `controller_affiliate` | BOOLEAN | marked Pengendali / Afiliasi Pengendali |
+
+Index `ix_registration_holder_company` (`company_id, period DESC`).
 
 ### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)
 

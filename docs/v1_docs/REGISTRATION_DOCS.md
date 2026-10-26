@@ -51,6 +51,32 @@ are mixed, so the table is read from the PDF by the position of its text (sectio
     points, or at text across the table's edge; at the bottom of a page it goes on at the top of the next (its header
     printed again or not).
   - only the first table is read: the English half of the report repeats it.
+  - a report without the directors' table (DMAS from June 2026 prints only its label) is still read when it has the
+    shareholders' table or the summary below, with a warning ("no table of the directors' and commissioners'
+    shares"); without any of the three it is refused.
+- **The shareholders of 5 % or more** (Pemegang saham 5% (lima persen) atau lebih), read the same way: the header is
+  the line with "Nama" and "Alamat" and no "Jabatan", **8 columns** (name, address, shares and percentage of the
+  previous month and of this one, controller, affiliate of the controller). The named holders end at the first
+  aggregate row: "Pemegang Saham < 5%", "Masyarakat" (the public, HRTA; the cell may break inside the word
+  "MASYARAKA" / "T"), "Saham Treasuri", "Total". Their percentages may be of the shares issued, not of those listed
+  (BBCA: 54.942 % of 123,275,050,000 issued, 55.50 % of the 122,042,299,500 listed): a percentage up to 1.2 times
+  below the share of the listed shares is no warning. A table that cannot be read is a warning and no holders, never
+  a refused report.
+- **The shares by type of holder** (Jumlah Saham Scrip dan Scripless berdasarkan Tipe dan Klasifikasi Investor; until
+  April 2026 "Jumlah Saham Non Warkat berdasarkan Tipe Investor"): the number on the baseline of each label
+  "Pengendali", "Afiliasi dari pengendali" (also "... dan pemilik manfaat"), "Direksi dan Dewan Komisaris", "Saham
+  Tresuri" (English: Controller, Affiliation from Controller & Beneficial Owner, BOD / BOC, Treasury), up to the KSEI
+  classification below it. The values are as filed: CMRY reports 5,957,468,200 under the directors and commissioners
+  and 0 under the controller from June 2026, DMAS its commissioner's 44,004,900 under the controller's affiliates.
+- **Columns**: a word belongs to the column its centre falls in, except a word starting left of the first number
+  column's header, which belongs to the column before it: numbers are right-aligned and never reach further left than
+  their header, while an address may reach past the middle between the two (NCKL "Lantai 5" beside
+  "50.344.432.00" / "0" would read "50.344.432.0050").
+- **Runs** (`PdfWords`): PDFBox gives a line of text as runs separated by gaps; some PDFs write a whole header line as
+  one string, the columns placed apart with blanks (NCKL May 2026: "Nama Alamat Jabatan Saham Bulan Saham Bulan
+  Pengendali"). A run also ends where the text resumes more than 0.5 points past the end of a blank: after a blank
+  between two words the next one starts where the blank ends ("Saham" / "Bulan"), across a column it jumps (1.0 point
+  between the two "Saham Bulan", 35 between "Nama" and "Alamat").
 - **Values**: shares "2.157.500" (or "2,157,500"), "-" = 0, empty = unknown; percentages "0,05%" / "0.05%"; "X" in
   the controller columns. The role is read from the position: Komisaris / Commissioner -> COMMISSIONER, Direksi /
   Direktur / Director -> DIRECTOR, else OTHER.
@@ -66,6 +92,9 @@ are mixed, so the table is read from the PDF by the position of its text (sectio
   corrects stays whichever is uploaded last (outcome `KEPT_LATER_FILING`); the same file again replaces it.
 - `registration_insider`: one row per director or commissioner, with `change_shares = shares_current -
   shares_previous` (generated; NULL when either is missing). Buy = change > 0, sell = change < 0.
+- `registration_holder` (`V1.0.32`): one row per shareholder of 5 % or more, the same columns without the position;
+  `registration_report` gains `holders` (rows read; NULL = stored before V1.0.32: upload the report again) and the
+  shares by type of holder `controller_shares`, `controller_affiliate_shares`, `insider_shares`, `treasury_shares`.
 - Addresses are not stored.
 - The same PDF uploaded again as a Financial Statement loses its report; deleting the company or the document
   removes the reports (`ON DELETE CASCADE`).
@@ -76,7 +105,8 @@ are mixed, so the table is read from the PDF by the position of its text (sectio
 |--------|------|--------|
 | `GET` | `/api/v1/registrations[?exchange=IDX&tickers=HRTA,BBRI&transaction=ALL\|BUY\|SELL\|CHANGED&role=DIRECTOR\|COMMISSIONER\|OTHER&from=2026-05&to=2026-08&limit=100&offset=0]` | one page of holdings, latest month first, then ticker and the report's order: `{ total, limit, offset, rows }`; a row has the month, company, name, position, role, shares and percentages before and after, `change`, controller / affiliate marks, correction, filing time, letter and file. 400: unknown transaction or title, a month that is not `yyyy-mm`, first month after the last, bad ticker, more than 50 tickers |
 | `GET` | `/api/v1/registrations/companies` | the companies with reports (number, first and last month) and the filter options |
-| `GET` | `/api/v1/registrations/reports?exchange=IDX&ticker=HRTA` | the company's reports, latest first (letter, correction, filing time, registrar, shares listed, insiders, warnings, file) |
+| `GET` | `/api/v1/registrations/reports?exchange=IDX&ticker=HRTA` | the company's reports, latest first (letter, correction, filing time, registrar, shares listed, insiders, `holders`, `ownership` { controller, controllerAffiliates, directorsAndCommissioners, treasury }, warnings, file) |
+| `GET` | `/api/v1/registrations/holders?exchange=IDX&ticker=NCKL` | the company's shareholders of 5 % or more, latest month first, then the report's order (name, shares and percentages before and after, `change`, controller / affiliate marks) |
 
 Upload: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` (RAG_DOCS.md, section 4).
 
@@ -94,12 +124,15 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/registrations?tickers=HRTA&transac
   the last (in either order; the same month twice is that month alone), previous / next year, months after the
   current one (Jakarta) not offered, presets Last 3 / 6 / 12 months (ending at the latest month with reports),
   Clear for every month; the months with stored reports are named below the calendar.
-- With one ticker: **holdings by month**, each director and commissioner a row, each month a column (the shares at
-  the end of the month and the change during it).
+- With one ticker: **shareholders of 5 % or more** (the latest report's shares by type of holder: controller,
+  affiliates of the controller, directors and commissioners, treasury, each with its share of the listed shares;
+  then each holder a row, each month a column: shares, percentage as printed, change; a note names the months stored
+  before the holders were read) and **holdings by month**, each director and commissioner a row, each month a column
+  (the shares at the end of the month and the change during it).
 - The table: month, ticker (to the company page), insider (controller / affiliate badges), title (role and position
   as filed), Buy / Sell / No change / New, shares before and after, change, % owned before -> after, the report's
   letter (Correction badge); 50 rows per page (25 / 100 / 200).
-- Not shown yet: the shareholders of 5 % or more and the holders of more than 1 % with their broker (to be planned).
+- Not shown yet: the holders of more than 1 % with their broker (to be planned).
 
 ## 5a. In the AI stock analysis (Screening > Analysis)
 
@@ -107,7 +140,9 @@ The analysis of a company reads its registration data in two ways ([ANALYSIS_DOC
 
 - **The table** (no model): `insiderOwnership` in the dossier of every investor agent and in the synthesis
   input: the latest 12 months, each director's and commissioner's shares and ownership, their buys and sells,
-  the totals and a one-line reading. The report page and the PDF show it as "Insider ownership".
+  the totals and a one-line reading; with the latest report's shareholders of 5 % or more (`majorHolders`, also in
+  the synthesis input) and its shares by type of holder (`sharesByHolderType`). The report page and the PDF show it
+  as "Insider ownership".
 - **The RAG chunks** of the REGISTRATION PDFs: the research agent's `searchRegistrations` tool (refs R1, ...) reads
   what the table does not hold: the controller and the holders of 5 % or more, free float, investor types,
   beneficial owner; the brief's `ownership` field sums it up. `searchFilings` reads only the financial statements.
@@ -132,14 +167,23 @@ No director or commissioner of the four bought or sold in April - September 2026
 The first four HRTA reports (2026-10-24): each job 2 - 4 s, 11 - 13 chunks, no warnings. The four directors and
 commissioners held the same shares from May to August 2026 (Cuncun Muliawan 2,157,500, Fendy Wijaya 17,567,800,
 affiliate of the controller, Sandra Sunanto 3,176,900, Ong Deny 2,200,000): every change 0. The controller's purchase
-of June (PT Terang Anugrah, 3,269,608,000 -> 3,272,048,000) is in the table of the shareholders of 5 % or more, which
-is not read yet.
+of June (PT Terang Anugrah, 3,269,608,000 -> 3,272,048,000) is in the table of the shareholders of 5 % or more, read
+since 2026-10-26.
+
+On 2026-10-26 the 90 reports in `data/IDX_OWNERSHIP` (16 companies, April - September 2026) were read again with the
+shareholders' table and the summary: every one read, none with a warning from them (the directors' counts as
+before). NCKL: none of its 8 directors and commissioners holds a share ("Direksi dan Dewan Komisaris 0"); PT Harita
+Jayaraya, the controller, holds 50,344,432,000 (79.79 %), Citibank Hong Kong S/A 3,958,795,700 (6.27 % in August,
+-4,405,400), the controller's affiliates 551,010,000, treasury 110,733,300. Its May report, refused before (its header
+written as one string), and DMAS June - September (no directors' table) are read now.
 
 ## 7. Database
 
 `V1.0.29__schema_registration.sql`: `rag_document.document_type` of a company PDF (`FINANCIAL_STATEMENT`, the type
 of every company PDF stored before, or `REGISTRATION`; `ck_rag_document_company_type`; `V1.0.28` lists the two types
-too, as it runs first on every start), `registration_report`, `registration_insider`. Column-level reference:
+too, as it runs first on every start), `registration_report`, `registration_insider`.
+`V1.0.32__schema_registration_holders.sql`: `registration_holder` and the shares by type of holder on
+`registration_report`. Column-level reference:
 `DB_SCHEMA_DOCS.md`.
 
 ## 8. Code and tests
@@ -152,7 +196,7 @@ Backend `registration/`: `PdfWords`, `RegistrationParser`, `InsiderRole`, `Regis
 
 | Test | Covers |
 |------|--------|
-| `RegistrationParserTest` | the four HRTA reports as filed (cover, correction, the month over two lines, filing time, the four insiders, the affiliate mark), the English half alone, a financial statement refused; tables built word by word: a table going on over a page with a wrapped name and a wrapped number, a percentage that does not match (warning), missing columns and a bad number refused |
-| `RegistrationRepositoryTest` | months, buys, sells, titles, months filter, pages, companies and reports; the later filing of a month stays; an empty cell has no change (real database, rolled back) |
+| `RegistrationParserTest` | the four HRTA reports as filed (cover, correction, the month over two lines, filing time, the four insiders, the affiliate mark), the English half alone, a financial statement refused; tables built word by word: a table going on over a page with a wrapped name and a wrapped number, a percentage that does not match (warning), missing columns and a bad number refused; the shareholders of 5 % or more and the shares by type of holder, a header written as one string, a report without the directors' table, a holder's percentage of the shares issued (no warning) |
+| `RegistrationRepositoryTest` | months, buys, sells, titles, months filter, pages, companies and reports; the later filing of a month stays; an empty cell has no change; the holders of 5 % or more and the shares by type of holder (real database, rolled back) |
 | `RegistrationControllerTest` | a report through the upload and the worker into the vector store and Companies > Registration; the filters; the same file again as a financial statement; a mismatch -> `INCOMPLETE`; another company's report, a non-report and an unknown type refused; bad filters (company ZZRG of its own, stub embeddings, removed afterwards) |
 | `RagRepositoryTest` | a company PDF's type, the same file again with another type, macro types refused for a company PDF |

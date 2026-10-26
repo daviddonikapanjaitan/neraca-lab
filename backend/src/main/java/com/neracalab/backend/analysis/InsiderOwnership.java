@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
+import com.neracalab.backend.registration.RegistrationParser.Ownership;
+import com.neracalab.backend.registration.RegistrationRepository.HolderRow;
 import com.neracalab.backend.registration.RegistrationRepository.InsiderRow;
 import com.neracalab.backend.registration.RegistrationRepository.ReportRow;
 
@@ -20,7 +22,8 @@ import com.neracalab.backend.registration.RegistrationRepository.ReportRow;
  * The shares of the company's directors and commissioners from its monthly registration reports of securities
  * holders (Companies > Registration), for the analysis dossier: computed in Java, no model. The latest
  * {@link #MONTHS} months stored: who holds how many shares at the end of the latest month and what share of the
- * listed shares that is, what each one bought (+) or sold (-) month by month, and a one-line reading.
+ * listed shares that is, what each one bought (+) or sold (-) month by month, and a one-line reading; with the
+ * shareholders of 5% or more and the shares by type of holder (controller, its affiliates, treasury) of the latest month.
  */
 final class InsiderOwnership {
 
@@ -39,6 +42,13 @@ final class InsiderOwnership {
      * @param rows    the holdings of those months, latest month first, in the order of each report
      */
     static Map<String, Object> of(List<ReportRow> reports, List<InsiderRow> rows) {
+        return of(reports, rows, List.of());
+    }
+
+    /**
+     * @param holders the shareholders of 5% or more, latest month first (only the latest report's are read)
+     */
+    static Map<String, Object> of(List<ReportRow> reports, List<InsiderRow> rows, List<HolderRow> holders) {
         if (reports.isEmpty()) {
             return null;
         }
@@ -88,6 +98,36 @@ final class InsiderOwnership {
             }
         }
         out.put("insiders", insiders);
+        List<Map<String, Object>> major = new ArrayList<>();
+        for (HolderRow h : holders) {
+            if (!h.period().equals(latest.period())) {
+                continue;
+            }
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", h.holderName());
+            m.put("shares", h.sharesCurrent());
+            m.put("percentAsPrinted", h.percentCurrent());
+            m.put("changeLatestMonth", h.change());
+            if (h.controller()) {
+                m.put("controller", true);
+            }
+            if (h.controllerAffiliate()) {
+                m.put("controllerAffiliate", true);
+            }
+            major.add(m);
+        }
+        if (!major.isEmpty()) {
+            out.put("majorHolders", major);
+        }
+        Ownership byType = latest.ownership();
+        if (byType != null && !byType.blank()) {
+            Map<String, Object> t = new LinkedHashMap<>();
+            t.put("controller", byType.controller());
+            t.put("controllerAffiliates", byType.controllerAffiliates());
+            t.put("directorsAndCommissioners", byType.directorsAndCommissioners());
+            t.put("treasury", byType.treasury());
+            out.put("sharesByHolderType", t);
+        }
         Set<String> now = new LinkedHashSet<>();
         current.forEach(r -> now.add(key(r.holderName())));
         Set<String> gone = new LinkedHashSet<>();

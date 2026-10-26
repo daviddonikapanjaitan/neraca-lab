@@ -41,7 +41,7 @@ public class IdxWorkbookReader {
             IdxSheets.EQUITY, IdxSheets.EQUITY_PRIOR_YEAR,
             IdxSheets.CASH_FLOW_DIRECT, IdxSheets.CASH_FLOW_INDIRECT,
             IdxSheets.PPE, IdxSheets.PPE_PRIOR_YEAR, IdxSheets.RIGHT_OF_USE, IdxSheets.RIGHT_OF_USE_PRIOR_YEAR,
-            IdxSheets.REVENUE_BY_TYPE, IdxSheets.REVENUE_BY_SOURCE);
+            IdxSheets.REVENUE_BY_TYPE, IdxSheets.REVENUE_BY_SOURCE, IdxSheets.COST_OF_SALES);
 
     static {
         // Pre-2023 IDX workbooks compress xl/styles.xml ~140:1, past POI's default 100:1 zip-bomb

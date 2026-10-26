@@ -2495,6 +2495,23 @@ public final class FilingMapper {
 
     // ------------------------------------------------------------------ D&A
 
+    /** The total of the cost of sales note (1670000; cost of goods manufactured and the change in inventories). */
+    public static final String COST_OF_SALES_TOTAL = "Cost of sales and revenue";
+
+    /**
+     * The cost of sales of a column from the filing's own cost of sales note (sheet 1670000, "Cost of sales and
+     * revenue"), in full units; null when the filing has no such note or no value for the column, and for a bank. A
+     * profit or loss presented by nature shows no cost of sales on its face, but many such filers state it in this note
+     * (BIPI FY2025: 200,443,257 beside revenue 235,089,682), so their gross profit is the filing's own figure.
+     */
+    public BigDecimal costOfSales(StatementColumn column) {
+        int ctx = durationIndex(column);
+        if (financial || ctx < 0) {
+            return null;
+        }
+        return table(IdxSheets.COST_OF_SALES).map(t -> amount(t.value(COST_OF_SALES_TOTAL, ctx))).orElse(null);
+    }
+
     /** PP&E + right-of-use depreciation of the column's period, {@code null} when not disclosed. */
     public BigDecimal depreciation(StatementColumn column) {
         String ppeSheet;
@@ -3595,6 +3612,11 @@ public final class FilingMapper {
     /** The statement sheet when it has data for the current period. */
     private Optional<StatementTable> data(String sheet) {
         return table(sheet).filter(t -> t.hasData(0));
+    }
+
+    /** Sheet code as filed in this taxonomy, for messages ("1670000" -> "3670000" for the Infrastructure Industry). */
+    public String sheetCode(String generalCode) {
+        return code(generalCode);
     }
 
     /** Sheet code as filed in this taxonomy, for messages ("1220000" -> "4220000"). */

@@ -1,5 +1,5 @@
-// Companies > Registration: the shares of the directors and commissioners, month by month, from the monthly
-// registration reports of securities holders (backend /api/v1/registrations).
+// Companies > Registration: the shares of the directors and commissioners and of the shareholders of 5% or more,
+// month by month, from the monthly registration reports of securities holders (backend /api/v1/registrations).
 
 export type RegistrationTransaction = "ALL" | "BUY" | "SELL" | "CHANGED"
 export type InsiderRole = "DIRECTOR" | "COMMISSIONER" | "OTHER"
@@ -38,6 +38,57 @@ export interface InsiderPage {
   limit: number
   offset: number
   rows: InsiderRow[]
+}
+
+/** The shares by type of holder at the end of a month (the report's summary); null = not printed. */
+export interface Ownership {
+  controller: number | null
+  controllerAffiliates: number | null
+  /** the directors and commissioners together, as the summary prints them */
+  directorsAndCommissioners: number | null
+  treasury: number | null
+}
+
+/** A stored report (GET /api/v1/registrations/reports?ticker=). */
+export interface ReportRow {
+  reportId: number
+  exchange: string
+  ticker: string
+  period: string
+  letterNumber: string | null
+  subject: string | null
+  correction: boolean
+  filedAt: string | null
+  registrar: string | null
+  listedSharesPrevious: number | null
+  listedSharesCurrent: number | null
+  insiders: number
+  /** shareholders of 5% or more read; null: stored before they were read (upload the report again) */
+  holders: number | null
+  ownership: Ownership
+  warnings: string[]
+  documentId: number | null
+  fileName: string | null
+  updatedAt: string | null
+}
+
+/** A shareholder of 5% or more at the end of a month (GET /api/v1/registrations/holders?ticker=). */
+export interface HolderRow {
+  holderId: number
+  reportId: number
+  exchange: string
+  ticker: string
+  period: string
+  row: number
+  holderName: string
+  sharesPrevious: number | null
+  /** as printed: of the shares issued or of those listed, as the company reports it */
+  percentPrevious: number | null
+  sharesCurrent: number | null
+  percentCurrent: number | null
+  change: number | null
+  controller: boolean
+  controllerAffiliate: boolean
 }
 
 /** A company with registration reports. */

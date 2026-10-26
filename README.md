@@ -122,6 +122,7 @@ neraca_lab/
 │               ├── V1.0.27__schema_macro_analysis.sql (AI macro analysis: runs, agent scores, lessons, llm_usage)
 │               ├── V1.0.28__schema_rag_macro.sql  (macro documents of a country in the RAG vector store)
 │               ├── V1.0.29__schema_registration.sql (company PDF types; registration_report, registration_insider)
+│               ├── V1.0.32__schema_registration_holders.sql (registration_holder; shares by type of holder)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -129,6 +130,7 @@ neraca_lab/
 │               ├── V1.0.21__data_RAJA_shares.sql  (RAJA share counts and its 1:5 stock split of 2026-07-16)
 │               ├── V1.0.22__data_TUGU_shares.sql  (TUGU's 1:2 stock split of 2023-05-24, no filing restates it)
 │               ├── V1.0.24__data_BACH_shares.sql  (BACH share count after its IPO of 2026-07-08)
+│               ├── V1.0.31__data_BNBR_shares.sql  (BNBR share counts: five par-value series, the 2024 placement, the 2026 rights issue)
 │               ├── V1.0.6__data_metrics_valuation.sql
 │               └── V1.0.26__data_markets_macro.sql (catalog: 35 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
@@ -191,7 +193,7 @@ neraca_lab/
 │                                2026-II), ARTO (sharia bank; 2022, 2025 annual, 2026-II - its 2024 file and TRUK's
 │                                2024 xlsx were broken downloads and are not committed)
 │                                BRPT, ENRG, ESSA, HRUM, INCO, INKP (USD), BSDE, CTRA (Property and Real Estate
-│                                Industry taxonomy), BUVA (P&L by nature, no gross profit), DEWA, EMTK, HEAL and EXCL
+│                                Industry taxonomy), BUVA (P&L by nature, gross profit from its cost of sales note), DEWA, EMTK, HEAL and EXCL
 │                                (Infrastructure Industry taxonomy, P&L by nature; FY2023 tags its revenue only in
 │                                the breakdown) (2022 .. 2025 annual, 2026-II), COIN, EMAS (USD) (2025 annual, 2026-II)
 │                                BUMI, ITMG (FY2023 full amounts under 'In Thousand'), MDKA, MEDC, PGAS (2026-I),
@@ -201,7 +203,7 @@ neraca_lab/
 │                                lock files (165 bytes), not workbooks, and are not committed
 │                                ABMM (USD; also pdf/), BJBR (bank), BWPT, IRSX, KETR (Infrastructure Industry
 │                                taxonomy), LPPF (FY2023 leaves rows off the face of its balance sheet), MNCN (P&L by
-│                                nature, no gross profit), RMKE (2022 .. 2025 annual, 2026-II - RMKE's 2024 xlsx is an
+│                                nature, gross profit from its cost of sales note from FY2025), RMKE (2022 .. 2025 annual, 2026-II - RMKE's 2024 xlsx is an
 │                                Excel lock file and is not committed), CYBR (2023 .. 2025 annual, 2026-II), RANS
 │                                (2026-II); GGRM's pdf/ (2022 .. 2025 annual, 2026-II)
 │                                xlsx: load them with the upload (Ingestion page)
@@ -326,7 +328,8 @@ overrules a value there: the code reads the amounts of the rows the model names 
 add up is saved, reported (INCOMPLETE) and logged, never dropped. A field for which the model names a row
 that cannot be used (a row of a notes sheet, a row that does not exist) is left empty instead of being stored
 as the sum of its other rows, and the model is asked again; a profit or loss presented by nature (e.g. NSSS:
-no cost of sales and no gross profit row) gets no `cost_of_revenue` and no `gross_profit`; revenue must be the
+no cost of sales and no gross profit row) gets its `cost_of_revenue` and `gross_profit` only from the filing's own cost
+of sales note (1670000, 'Cost of sales and revenue': BIPI, BUVA, BUKA, NSSS, MSIN ...), never from expense rows by nature; revenue must be the
 profit or loss's own 'Sales and revenue' row (EXCL, BUVA, TLKM: the model had added 'Other income'), and a row left
 empty on the face is shown to the model with the total of the filing's revenue breakdown (EXCL FY2023). Operating income
 is checked against the filing: rows below operating profit counted in it (ISAT's 'Other gains (losses)') and, by nature,
@@ -586,7 +589,9 @@ Registrasi Pemegang Efek) from idx.co.id. A registration report is stored in the
 shares of its directors and commissioners at the end of the previous month and of the report's month are read from
 its table into `registration_report` / `registration_insider`, shown on **Companies › Registration** (filters:
 tickers, buy, sell, title director or commissioner, a month range calendar; with one ticker, the holdings month by
-month). The AI stock analysis (Screening › Analysis) reads them too: the directors' and commissioners' holdings and
+month). The shareholders of 5 % or more (the controller and the other large holders, `registration_holder`) and the
+shares by type of holder (controller, its affiliates, directors and commissioners, treasury) are read from every
+report too and shown for one ticker: NCKL's directors hold no share, its controller PT Harita Jayaraya 79.79 %. The AI stock analysis (Screening › Analysis) reads them too: the directors' and commissioners' holdings and
 dealings are in every agent's dossier, and its research agent searches the reports' RAG chunks (controller, holders
 of 5 % or more, free float). The
 reports of April - September 2026 of HRTA, INDF, GGRM and TRUK are in `data/IDX_OWNERSHIP/<TICKER>/`.
@@ -977,6 +982,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.27__schema_macro_analysis.sql`  | AI macro analysis of a country: `macro_analysis_run`, `macro_analysis_agent_score`, `macro_analysis_lesson`, `llm_usage.macro_analysis_id`; job type `MACRO_ANALYSIS` |
 | `V1.0.28__schema_rag_macro.sql`       | macro documents of a country in the RAG vector store: `country`, `issuer`, `document_type` on `rag_document` / `rag_chunk` |
 | `V1.0.29__schema_registration.sql`    | the type of a company PDF (`FINANCIAL_STATEMENT`, the default, or `REGISTRATION`); `registration_report` and `registration_insider`: the directors' and commissioners' shares month by month (Companies › Registration) |
+| `V1.0.32__schema_registration_holders.sql` | `registration_holder`: the shareholders of 5 % or more of each registration report; the shares by type of holder (controller, its affiliates, directors and commissioners, treasury) on `registration_report` |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |
@@ -984,6 +990,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.21__data_RAJA_shares.sql`       | RAJA share counts (21,135,412,500 split-adjusted, from 2021-12-31), its 1:5 stock split of 2026-07-16 and the EPS of the periods before it (/ 5) |
 | `V1.0.22__data_TUGU_shares.sql`       | TUGU's 1:2 stock split of 2023-05-24 (par Rp 100 -> Rp 50), which no filing restates: counts 3,555,575,600 split-adjusted from 2021-12-31, the per-share figures before it (/ 2) |
 | `V1.0.24__data_BACH_shares.sql`       | BACH's IPO of 2026-07-08 (615,000,000 new shares at Rp 442), after its only filing: 4,084,430,000 shares from the listing (the filing gives 3,469,430,000 before it) |
+| `V1.0.31__data_BNBR_shares.sql`       | BNBR share counts, which its filings cannot give (five par-value series) and Yahoo Finance gives wrong (201.4 billion): 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31 (company announcement and prospectus, KSEI) |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |
 
