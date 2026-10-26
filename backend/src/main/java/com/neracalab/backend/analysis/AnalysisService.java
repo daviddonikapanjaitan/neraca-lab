@@ -486,13 +486,13 @@ public class AnalysisService {
         List<RegistrationRepository.InsiderRow> rows = registrations.insiders(new RegistrationRepository.Filter(
                 exchange.code(), List.of(ticker), RegistrationRepository.Transaction.ALL, null, from, null),
                 INSIDER_ROWS, 0).rows();
-        return InsiderOwnership.of(reports, rows);
+        return InsiderOwnership.of(reports, rows, registrations.holders(exchange.code(), ticker));
     }
 
     /** What the synthesis gets of the insider section: the reading, the totals and the transactions. */
     static Map<String, Object> insiderSummary(Map<String, Object> insiders) {
         Map<String, Object> out = new LinkedHashMap<>();
-        for (String key : List.of("months", "reading", "totals", "transactions")) {
+        for (String key : List.of("months", "reading", "totals", "transactions", "majorHolders")) {
             if (insiders.get(key) != null) {
                 out.put(key, insiders.get(key));
             }

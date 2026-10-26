@@ -64,6 +64,9 @@ public final class PdfWords {
     /** Collects the runs and words of one page while PDFBox writes its text. */
     private static final class Collector extends PDFTextStripper {
 
+        /** Text resuming further than this (points) past the end of a blank is in another cell. */
+        private static final double AFTER_BLANK = 0.5;
+
         private final List<Word> runs = new ArrayList<>();
         private final List<Word> words = new ArrayList<>();
 
@@ -74,12 +77,18 @@ public final class PdfWords {
             add(positions, words, true);
         }
 
-        /** The positions as one run, or split at every blank into words. */
+        /**
+         * The positions as runs, or split at every blank into words. A run also ends where the text resumes past the
+         * end of a blank: some PDFs write a whole line of a table's header as one string, each column placed apart,
+         * while the next word after a blank starts where the blank ends (NCKL May 2026: "Saham Bulan" followed 1.0
+         * point past its blank by the next column's "Saham Bulan", "Nama" by "Alamat" 35 points past it).
+         */
         private static void add(List<TextPosition> positions, List<Word> out, boolean split) {
             StringBuilder text = new StringBuilder();
             double x0 = 0;
             double x1 = 0;
             double y = 0;
+            double blankEnd = Double.NaN;
             for (TextPosition t : positions) {
                 String unicode = t.getUnicode();
                 boolean blank = unicode == null || unicode.isBlank();
@@ -88,6 +97,11 @@ public final class PdfWords {
                     text.setLength(0);
                     continue;
                 }
+                if (!blank && !text.isEmpty() && !Double.isNaN(blankEnd) && t.getXDirAdj() - blankEnd > AFTER_BLANK) {
+                    flush(text, x0, x1, y, out);
+                    text.setLength(0);
+                }
+                blankEnd = blank ? t.getXDirAdj() + t.getWidthDirAdj() : Double.NaN;
                 if (text.isEmpty()) {
                     if (blank) {
                         continue;    // no leading blank

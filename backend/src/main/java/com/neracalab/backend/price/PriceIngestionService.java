@@ -305,8 +305,9 @@ public class PriceIngestionService {
      * Dropped: dates outside {@code from..lastCompletedDay} (unfinished bar of today included),
      * no close (holiday placeholder), zero volume with open = high = low = close (holiday row carrying
      * the previous close), and rows the price_daily checks reject (close &lt;= 0, high &lt; low, volume &lt; 0).
+     * Also the bars of the screening universe ({@code ListingPriceService}).
      */
-    static List<DailyBar> clean(List<DailyBar> bars, LocalDate from, LocalDate lastCompletedDay) {
+    public static List<DailyBar> clean(List<DailyBar> bars, LocalDate from, LocalDate lastCompletedDay) {
         Map<LocalDate, DailyBar> byDate = new LinkedHashMap<>();
         for (DailyBar bar : bars) {
             if (bar.date() == null || bar.date().isBefore(from) || bar.date().isAfter(lastCompletedDay)) {

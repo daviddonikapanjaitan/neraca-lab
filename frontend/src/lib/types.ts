@@ -291,6 +291,8 @@ export type IngestionJobType =
   | "ANALYSIS"
   | "MACRO"
   | "MACRO_ANALYSIS"
+  | "LISTING_PRICES"
+  | "TECHNICAL_SCREENING"
 
 export type RagSourceType = "PDF" | "NEWS"
 
@@ -1203,5 +1205,19 @@ export interface FundamentalsStatus {
   withFundamentals: number
   oldestFundamentalsAt: string | null
   lastSyncAt: string | null
+  activeJobId: string | null
+}
+
+/** GET /api/v1/listing-prices/status?exchange= (daily bars of the screening universe, the technical screening) */
+export interface ListingPricesStatus {
+  exchange: string
+  /** active listings of the screening universe */
+  listings: number
+  /** of them with stored daily bars */
+  withBars: number
+  latestDate: string | null
+  rows: number
+  /** how far back the first load of a listing reaches */
+  historyYears: number
   activeJobId: string | null
 }

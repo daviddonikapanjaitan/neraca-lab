@@ -203,7 +203,13 @@ class RegistrationControllerTest {
                 .andExpect(jsonPath("$[0].letterNumber").value("001/ZZRG/X/2026"))
                 .andExpect(jsonPath("$[0].insiders").value(2))
                 .andExpect(jsonPath("$[0].listedSharesCurrent").value(1_000_000_000))
-                .andExpect(jsonPath("$[0].fileName").value("registrasi_zzrg_september.pdf"));
+                .andExpect(jsonPath("$[0].fileName").value("registrasi_zzrg_september.pdf"))
+                .andExpect(jsonPath("$[0].holders").value(0))
+                .andExpect(jsonPath("$[0].ownership.controller").doesNotExist());
+        // the report has no table of the shareholders of 5% or more
+        mvc.perform(get("/api/v1/registrations/holders").param("ticker", "zzrg"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
 
         // the same file again as a financial statement (the default type): no longer a registration report
         IngestionJob again = upload(report, "registrasi_zzrg_september.pdf", "ZZRG", null);
@@ -223,7 +229,7 @@ class RegistrationControllerTest {
                 .bytes();
         IngestionJob job = upload(october, "registrasi_zzrg_oktober.pdf", "ZZRG", "REGISTRATION");
         assertThat(job.status()).isEqualTo(IngestionJobStatus.INCOMPLETE);
-        assertThat(job.stage()).contains("registration 2026-10: 1 director or commissioner, 0 changes");
+        assertThat(job.stage()).contains("registration 2026-10: 1 director or commissioner, 0 changes, 0 shareholders of 5% or more");
         assertThat(job.message()).contains("12,500,000 shares are 1.2500 %", "prints 12.5 %");
         mvc.perform(get("/api/v1/registrations/reports").param("ticker", "ZZRG"))
                 .andExpect(jsonPath("$[0].warnings[0]").value(Matchers.containsString("prints 12.5 %")));
@@ -264,6 +270,7 @@ class RegistrationControllerTest {
         mvc.perform(get("/api/v1/registrations").param("tickers", "HR TA%")).andExpect(status().isBadRequest());
         mvc.perform(get("/api/v1/registrations").param("exchange", "NYSE")).andExpect(status().isBadRequest());
         mvc.perform(get("/api/v1/registrations/reports").param("ticker", "")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/registrations/holders").param("ticker", "")).andExpect(status().isBadRequest());
     }
 
     /** A one-page text PDF. */

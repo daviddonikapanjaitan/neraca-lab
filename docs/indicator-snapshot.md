@@ -1,7 +1,7 @@
 # IndicatorSnapshot JSON (schemaVersion 3)
 
-The latest technical snapshot of a listing: every indicator the future technical agents (Murphy, Keith Gill, Paul
-Tudor Jones, Stanley Druckenmiller, and the risk overlay) will read, as one versioned JSON document. It is data, not a
+The latest technical snapshot of a listing: every indicator the technical agents (Murphy, Keith Gill, Paul
+Tudor Jones, Stanley Druckenmiller; Screening › Technicals, v1_docs/TECHNICAL_SCREENING_DOCS.md) read, as one versioned JSON document. It is data, not a
 signal: no score, no buy / sell verdict, no model call (the preset summaries, `GET .../summary`, derive a stance and
 prices from it by fixed rules: [v1_docs/TECHNICAL_DOCS.md](v1_docs/TECHNICAL_DOCS.md) section 8). Computed in Java (`technical.engine.SnapshotCalculator`) from
 stored daily prices, the IHSG bars and corporate events. It is technical only: no macro data (that is the Macro page,
@@ -50,7 +50,7 @@ Coal (monthly) has no snapshot (422).
 | Percentages | In percent (12.5 = 12.5 %), named `...Pct`. Ratios (0.618) are plain numbers. |
 | Numbers | Rounded to 4 decimals (6 significant digits below 0.01). |
 | Missing | `null` when not computable: too little history (an indicator is never an average of fewer bars than its name says), no source, no data. `notes` says why for whole groups. |
-| `usedBy` | Which future agents read the group (documentation only). |
+| `usedBy` | Which agents read the group (documentation only; dropped from the technical screening's dossier). |
 
 ## Top level
 

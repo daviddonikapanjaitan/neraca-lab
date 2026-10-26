@@ -20,7 +20,7 @@ class InsiderOwnershipTest {
 
     private static ReportRow report(String period) {
         return new ReportRow(1, "IDX", "ZZRG", period, "001/" + period, "Laporan Bulanan Registrasi Pemegang Efek",
-                false, null, "PT. Biro Uji", LISTED, LISTED, 2, List.of(), null, null, null);
+                false, null, "PT. Biro Uji", LISTED, LISTED, 2, null, null, List.of(), null, null, null);
     }
 
     private static InsiderRow row(String period, String name, InsiderRole role, Long previous, long current,

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { FundamentalsCard } from "@/components/ingestion/fundamentals-card"
 import { IndexPriceCard } from "@/components/ingestion/index-price-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
+import { ListingPricesCard } from "@/components/ingestion/listing-prices-card"
 import { MacroCard } from "@/components/ingestion/macro-card"
 import { PriceCard } from "@/components/ingestion/price-card"
 import { PriceUpdateCard } from "@/components/ingestion/price-update-card"
@@ -22,6 +23,8 @@ import type {
   FundamentalsStatus,
   IngestionJob,
   IngestionJobList,
+  IngestionJobType,
+  ListingPricesStatus,
   MacroRagDocumentPage,
   MacroStatus,
   MarketStatus,
@@ -44,7 +47,7 @@ export type IngestionSectionData =
       provider: string
     }
   | { section: "macro"; macro: MacroStatus }
-  | { section: "screening-data"; fundamentals: FundamentalsStatus }
+  | { section: "screening-data"; fundamentals: FundamentalsStatus; listingPrices: ListingPricesStatus }
   | {
       section: "rag-pdf"
       exchanges: Exchange[]
@@ -76,10 +79,10 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
   const router = useRouter()
   const info = ingestionSection(data.section)
   /** the job submitted last; the table reloads at once and watches it */
-  const [watch, setWatch] = useState<{ id: string; seq: number } | null>(null)
+  const [watch, setWatch] = useState<{ id: string; seq: number; type: IngestionJobType } | null>(null)
 
   const submitted = useCallback((job: IngestionJob) => {
-    setWatch((previous) => ({ id: job.id, seq: (previous?.seq ?? 0) + 1 }))
+    setWatch((previous) => ({ id: job.id, seq: (previous?.seq ?? 0) + 1, type: job.type }))
   }, [])
 
   // a finished job can add a company, prices or RAG documents: re-render the server data (ticker list, latest
@@ -139,7 +142,12 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
       {data.section !== "prices" && data.section !== "macro" && data.section !== "rag-pdf" && (
         <div className="w-full max-w-3xl">
           {data.section === "xbrl" && <UploadCard onSubmitted={submitted} />}
-          {data.section === "screening-data" && <FundamentalsCard status={data.fundamentals} onSubmitted={submitted} />}
+          {data.section === "screening-data" && (
+            <div className="flex flex-col gap-4">
+              <FundamentalsCard status={data.fundamentals} onSubmitted={submitted} />
+              <ListingPricesCard status={data.listingPrices} onSubmitted={submitted} />
+            </div>
+          )}
           {data.section === "rag-news" && (
             <RagNewsCard
               exchanges={data.exchanges}

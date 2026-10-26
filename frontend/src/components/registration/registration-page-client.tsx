@@ -29,6 +29,7 @@ import { EMPTY, formatNumber } from "@/lib/format"
 import { companyHref } from "@/lib/links"
 import {
   DEFAULT_REGISTRATION_PAGE_SIZE,
+  type HolderRow,
   type InsiderPage,
   type InsiderRole,
   type InsiderRow,
@@ -40,6 +41,7 @@ import {
   type RegistrationFilters,
   type RegistrationOptions,
   type RegistrationTransaction,
+  type ReportRow,
   ROLE_LABEL,
 } from "@/lib/registration"
 import { cn } from "@/lib/utils"
@@ -326,7 +328,10 @@ export function RegistrationPageClient({
       </Card>
 
       {filters.tickers.length === 1 && known.has(filters.tickers[0]) && (
-        <HoldingsByMonth ticker={filters.tickers[0]} filters={filters} />
+        <>
+          <MajorShareholders ticker={filters.tickers[0]} filters={filters} />
+          <HoldingsByMonth ticker={filters.tickers[0]} filters={filters} />
+        </>
       )}
 
       <Card>
@@ -403,8 +408,8 @@ export function RegistrationPageClient({
       </Card>
 
       <p className="text-xs text-muted-foreground">
-        Shareholders of 5% or more and holders of more than 1% with their broker are not shown yet: they need further
-        planning.
+        Choose one ticker for its shareholders of 5% or more and its shares by type of holder. Holders of more than 1%
+        with their broker are not shown yet: they need further planning.
       </p>
     </>
   )
@@ -562,6 +567,195 @@ function HoldingsByMonth({ ticker, filters }: { ticker: string; filters: Registr
               </TableBody>
             </Table>
           </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** "50,344,432,000 (79.78%)": shares and their share of the shares listed. */
+function ofListed(value: number | null, listed: number | null): string {
+  if (value === null) return EMPTY
+  return listed ? `${shares(value)} (${formatNumber((value / listed) * 100, 2)}%)` : shares(value)
+}
+
+/**
+ * The shareholders of 5% or more of one company month by month (the controller and the other large holders), and the
+ * latest report's shares by type of holder: who owns the company when its directors and commissioners hold little or
+ * nothing (NCKL). The month filters of the page apply.
+ */
+function MajorShareholders({ ticker, filters }: { ticker: string; filters: RegistrationFilters }) {
+  const [data, setData] = useState<{ holders: HolderRow[]; reports: ReportRow[] } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const query = new URLSearchParams({ ticker }).toString()
+    Promise.all([
+      requestJson<HolderRow[]>(`/api/registrations/holders?${query}`),
+      requestJson<ReportRow[]>(`/api/registrations/reports?${query}`),
+    ])
+      .then(([holders, reports]) => {
+        if (!cancelled) setData({ holders: holders.body, reports: reports.body })
+      })
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      cancelled = true
+    }
+  }, [ticker])
+
+  const table = useMemo(() => {
+    if (!data) return null
+    const inRange = (period: string) => (!filters.from || period >= filters.from) && (!filters.to || period <= filters.to)
+    const reports = data.reports.filter((r) => inRange(r.period))
+    const holders = data.holders.filter((h) => inRange(h.period))
+    const months = [...new Set(holders.map((h) => h.period))].sort()
+    const byName = new Map<
+      string,
+      { name: string; controller: boolean; affiliate: boolean; byMonth: Map<string, HolderRow> }
+    >()
+    // the latest report's order first (rows come latest month first)
+    for (const h of holders) {
+      const key = h.holderName.toUpperCase()
+      if (!byName.has(key)) byName.set(key, { name: h.holderName, controller: false, affiliate: false, byMonth: new Map() })
+      const entry = byName.get(key)!
+      entry.byMonth.set(h.period, h)
+      entry.controller ||= h.controller
+      entry.affiliate ||= h.controllerAffiliate
+    }
+    return {
+      months,
+      holders: [...byName.values()],
+      latest: reports[0] ?? null,
+      // reports stored before the holders were read: upload them again
+      unread: reports
+        .filter((r) => r.holders === null)
+        .map((r) => r.period)
+        .sort(),
+    }
+  }, [data, filters.from, filters.to])
+
+  const latest = table?.latest ?? null
+  const listed = latest?.listedSharesCurrent ?? null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{ticker}: shareholders of 5% or more</CardTitle>
+        <CardDescription>
+          The controller and the other large holders at the end of each month, as the report lists them (its
+          percentages may be of the shares issued), and the latest report&apos;s shares by type of holder.
+        </CardDescription>
+        {table && table.holders.length > 0 && (
+          <CardAction className="hidden sm:block">
+            <Badge variant="outline">
+              {table.holders.length} holders · {table.months.length} months
+            </Badge>
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 px-0">
+        {error && (
+          <p role="alert" className="flex items-start gap-2 px-4 text-xs text-destructive">
+            <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+            <span>{error}</span>
+          </p>
+        )}
+        {!table ? (
+          !error && (
+            <p className="flex items-center gap-2 px-4 text-sm text-muted-foreground">
+              <LoaderIcon className="size-3.5 animate-spin" /> Loading the shareholders
+            </p>
+          )
+        ) : (
+          <>
+            {latest && (
+              <div className="grid gap-3 px-4 sm:grid-cols-2 lg:grid-cols-4">
+                <StatTile
+                  label={`Controller, ${monthLabel(latest.period)}`}
+                  value={ofListed(latest.ownership.controller, listed)}
+                  icon={UsersIcon}
+                />
+                <StatTile
+                  label="Affiliates of the controller"
+                  value={ofListed(latest.ownership.controllerAffiliates, listed)}
+                  icon={UsersIcon}
+                  tone="muted"
+                />
+                <StatTile
+                  label="Directors and commissioners"
+                  value={ofListed(latest.ownership.directorsAndCommissioners, listed)}
+                  icon={UsersIcon}
+                  tone="muted"
+                />
+                <StatTile
+                  label="Treasury shares"
+                  value={ofListed(latest.ownership.treasury, listed)}
+                  icon={FileTextIcon}
+                  tone="muted"
+                  hint={listed ? `of ${shares(listed)} shares listed` : undefined}
+                />
+              </div>
+            )}
+            {table.unread.length > 0 && (
+              <p role="status" className="flex items-start gap-2 px-4 text-xs text-amber-600 dark:text-amber-400">
+                <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+                <span>
+                  The reports of {table.unread.map(monthLabel).join(", ")} were stored before the shareholders of 5% or
+                  more were read: upload them again on Ingestion &gt; PDF Documents (RAG).
+                </span>
+              </p>
+            )}
+            {table.holders.length === 0 ? (
+              <p className="px-4 text-sm text-muted-foreground">No shareholders of 5% or more for these months.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-4">Shareholder</TableHead>
+                      {table.months.map((m) => (
+                        <TableHead key={m} className="text-right whitespace-nowrap last:pr-4">
+                          {monthLabel(m)}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {table.holders.map((h) => (
+                      <TableRow key={h.name}>
+                        <TableCell className="pl-4">
+                          <div className="font-medium">{h.name}</div>
+                          <div className="flex flex-wrap gap-1">
+                            {h.controller && <Badge variant="secondary">Controller</Badge>}
+                            {h.affiliate && <Badge variant="secondary">Affiliate of the controller</Badge>}
+                          </div>
+                        </TableCell>
+                        {table.months.map((m) => {
+                          const r = h.byMonth.get(m)
+                          return (
+                            <TableCell key={m} className="text-right tabular-nums last:pr-4">
+                              {r ? (
+                                <>
+                                  <div>{shares(r.sharesCurrent)}</div>
+                                  <div className="text-xs text-muted-foreground">{percent(r.percentCurrent)}</div>
+                                  <div className="text-xs">
+                                    <Change value={r.change} />
+                                  </div>
+                                </>
+                              ) : (
+                                <span className="text-muted-foreground">{EMPTY}</span>
+                              )}
+                            </TableCell>
+                          )
+                        })}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </>
         )}
       </CardContent>
     </Card>

@@ -857,7 +857,64 @@ public final class FilingMapper {
                         retry.values(), how, checks, retry.unclassified()));
             }
         }
+        if (column == StatementColumn.PRIOR_PERIOD) {
+            Optional<MappedStatement> leftOut = withoutLeftOutLine(column, overrides, shares);
+            if (leftOut.isPresent()) {
+                return leftOut;
+            }
+        }
         return filed;
+    }
+
+    /**
+     * The comparative of a restated period with one line its own profit before tax leaves out: the H1 2025 columns of
+     * the H1 2026 filings of PTRO ("Selling expenses" 3,514, profit before tax 7,846 the other lines) and BNBR ("Other
+     * expenses" 2,784, profit before tax 72,088), and PTRO's FY2024 column of its FY2025 filing ("Other gains (losses)"
+     * 3,804, the 4,361 of the FY2024 filing net of the associates' -557, which the column lists again). The line is
+     * ignored, with a warning - only in a comparative column (the period's own filing is never second-guessed), when
+     * the statement then passes every check and exactly one line does so. Not once the agent has classified lines of
+     * the column: the agent's reading of it is never second-guessed.
+     */
+    private Optional<MappedStatement> withoutLeftOutLine(StatementColumn column, Map<String, IncomeLineCategory> overrides,
+                                                         ShareCapital shares) {
+        if (financial || !overrides.isEmpty()) {
+            return Optional.empty();
+        }
+        int ctx = durationIndex(column);
+        int profitIndex = income.indexOf(PROFIT);
+        java.util.Set<String> labels = new java.util.LinkedHashSet<>();
+        for (int i = 0; i < income.lines().size() && (profitIndex < 0 || i < profitIndex); i++) {
+            StatementTable.Line line = income.lines().get(i);
+            BigDecimal raw = line.value(ctx);
+            IncomeLineCategory category = IncomeLineCategory.KNOWN.get(line.label());
+            if (raw != null && raw.signum() != 0 && category != null && category != IncomeLineCategory.IGNORE
+                    && !STRUCTURAL_INCOME_LINES.contains(line.label())) {
+                labels.add(line.label());
+            }
+        }
+        String found = null;
+        MappedStatement statement = null;
+        for (String label : labels) {
+            MappedStatement retry = incomeStatementAsFiled(column, Map.of(label, IncomeLineCategory.IGNORE), shares).orElseThrow();
+            if (retry.checks().stream().noneMatch(Check::isError) && reconciled(retry, "profit_before_tax")) {
+                if (found != null) {
+                    return Optional.empty();    // ambiguous
+                }
+                found = label;
+                statement = retry;
+            }
+        }
+        if (found == null) {
+            return Optional.empty();
+        }
+        String amount = amount(income.value(found, ctx)).stripTrailingZeros().toPlainString();
+        List<Check> checks = new ArrayList<>(statement.checks());
+        checks.add(Check.warning("left_out_line", "'" + found + "' " + amount + " is not part of the filing's profit "
+                + "before tax in this comparative column (profit before tax is exactly the other lines); ignored"));
+        Map<String, String> how = new LinkedHashMap<>(statement.derivations());
+        how.put("left_out_line", "'" + found + "' ignored: the comparative's profit before tax only reconciles without it");
+        return Optional.of(new MappedStatement(statement.table(), statement.column(), statement.period(),
+                statement.sourceSheet(), statement.values(), how, checks, statement.unclassified()));
     }
 
     /** A line whose amount ({@code raw}, as filed) one column counts again within a residual line of its direction. */
@@ -2438,6 +2495,23 @@ public final class FilingMapper {
 
     // ------------------------------------------------------------------ D&A
 
+    /** The total of the cost of sales note (1670000; cost of goods manufactured and the change in inventories). */
+    public static final String COST_OF_SALES_TOTAL = "Cost of sales and revenue";
+
+    /**
+     * The cost of sales of a column from the filing's own cost of sales note (sheet 1670000, "Cost of sales and
+     * revenue"), in full units; null when the filing has no such note or no value for the column, and for a bank. A
+     * profit or loss presented by nature shows no cost of sales on its face, but many such filers state it in this note
+     * (BIPI FY2025: 200,443,257 beside revenue 235,089,682), so their gross profit is the filing's own figure.
+     */
+    public BigDecimal costOfSales(StatementColumn column) {
+        int ctx = durationIndex(column);
+        if (financial || ctx < 0) {
+            return null;
+        }
+        return table(IdxSheets.COST_OF_SALES).map(t -> amount(t.value(COST_OF_SALES_TOTAL, ctx))).orElse(null);
+    }
+
     /** PP&E + right-of-use depreciation of the column's period, {@code null} when not disclosed. */
     public BigDecimal depreciation(StatementColumn column) {
         String ppeSheet;
@@ -3538,6 +3612,11 @@ public final class FilingMapper {
     /** The statement sheet when it has data for the current period. */
     private Optional<StatementTable> data(String sheet) {
         return table(sheet).filter(t -> t.hasData(0));
+    }
+
+    /** Sheet code as filed in this taxonomy, for messages ("1670000" -> "3670000" for the Infrastructure Industry). */
+    public String sheetCode(String generalCode) {
+        return code(generalCode);
     }
 
     /** Sheet code as filed in this taxonomy, for messages ("1220000" -> "4220000"). */

@@ -15,9 +15,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.neracalab.backend.registration.RegistrationParser.Holder;
 import com.neracalab.backend.registration.RegistrationParser.Insider;
+import com.neracalab.backend.registration.RegistrationParser.Ownership;
 import com.neracalab.backend.registration.RegistrationParser.Report;
 import com.neracalab.backend.registration.RegistrationRepository.Filter;
+import com.neracalab.backend.registration.RegistrationRepository.HolderRow;
 import com.neracalab.backend.registration.RegistrationRepository.InsiderRow;
 import com.neracalab.backend.registration.RegistrationRepository.Outcome;
 import com.neracalab.backend.registration.RegistrationRepository.Stored;
@@ -155,5 +158,45 @@ class RegistrationRepositoryTest {
             assertThat(r.position()).isEqualTo("Komisaris Independen");
         });
         assertThat(rows(Transaction.CHANGED, null, null, null)).isEmpty();
+    }
+
+    /** The shareholders of 5% or more and the shares by type of holder, as NCKL files them (August 2026). */
+    @Test
+    void storesTheHoldersOfFivePercentOrMoreAndTheSharesByTypeOfHolder() {
+        YearMonth august = YearMonth.of(2026, 8);
+        List<Holder> holders = List.of(
+                new Holder(1, "PT Harita Jayaraya", 50_344_432_000L, new BigDecimal("79.79"), 50_344_432_000L,
+                        new BigDecimal("79.79"), true, false),
+                new Holder(2, "Citibank Hong Kong S/A", 3_963_201_100L, new BigDecimal("6.28"), 3_958_795_700L,
+                        new BigDecimal("6.27"), false, false));
+        Ownership ownership = new Ownership(50_344_432_000L, 551_010_000L, 0L, 110_733_300L);
+        repository.store(companyId, new Report("ZZRG", "PT Uji Registrasi Tbk", "001/ZZRG/" + august,
+                "Laporan Bulanan Registrasi Pemegang Efek", false, august, LocalDateTime.of(2026, 9, 9, 16, 0),
+                "PT. Biro Uji", 63_099_927_765L, 63_099_927_765L, List.of(insider(1, "BUDI", "Direksi", 0, 0, false)),
+                holders, ownership, List.of()), null, null, "agustus.pdf", null);
+
+        assertThat(repository.holders("IDX", "ZZRG")).extracting(HolderRow::holderName)
+                .containsExactly("PT Harita Jayaraya", "Citibank Hong Kong S/A");
+        assertThat(repository.holders("IDX", "ZZRG").get(1)).satisfies(h -> {
+            assertThat(h.period()).isEqualTo("2026-08");
+            assertThat(h.row()).isEqualTo(2);
+            assertThat(h.change()).isEqualTo(-4_405_400L);
+            assertThat(h.percentCurrent()).isEqualByComparingTo("6.27");
+            assertThat(h.controller()).isFalse();
+        });
+        assertThat(repository.holders("IDX", "ZZRG").getFirst().controller()).isTrue();
+        assertThat(repository.reports("IDX", "ZZRG")).singleElement().satisfies(r -> {
+            assertThat(r.holders()).isEqualTo(2);
+            assertThat(r.ownership()).isEqualTo(ownership);
+        });
+
+        // a report without them (stored by the reader before): no holders, nothing printed
+        repository.store(companyId, report(august, LocalDateTime.of(2026, 9, 10, 9, 0), true,
+                List.of(insider(1, "BUDI", "Direksi", 0, 0, false))), null, null, "agustus-koreksi.pdf", null);
+        assertThat(repository.holders("IDX", "ZZRG")).isEmpty();
+        assertThat(repository.reports("IDX", "ZZRG")).singleElement().satisfies(r -> {
+            assertThat(r.holders()).isZero();
+            assertThat(r.ownership().blank()).isTrue();
+        });
     }
 }

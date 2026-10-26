@@ -130,8 +130,10 @@ ownership (a fraction of the shares listed), the change in the latest month and 
 months; who left; the totals (shares, ownership, shares bought and sold, buys, sells, net); the
 transactions (each month with a purchase or a sale, latest first, at most 20); months without a report;
 and a one-line reading ("No director or commissioner bought or sold shares in May 2026 - Aug 2026; 4 hold
-25,102,200 shares (0.55% of the listed shares)."). It is `insiderOwnership` in the dossier of every agent
-(or "not available" and a note when no report is stored), the reading, totals and transactions go to the
+25,102,200 shares (0.55% of the listed shares)."); with the latest report's shareholders of 5 % or more
+(`majorHolders`: name, shares, percentage as printed, change, controller / affiliate marks) and its shares by type
+of holder (`sharesByHolderType`: controller, its affiliates, directors and commissioners, treasury). It is `insiderOwnership` in the dossier of every agent
+(or "not available" and a note when no report is stored), the reading, totals, transactions and major holders go to the
 synthesis, and the report page and the PDF show it. The prompts tell the agents that insider buying or
 selling is a signal on management's alignment, to be weighed against its size, and no change is neutral.
 

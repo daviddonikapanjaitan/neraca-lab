@@ -27,6 +27,7 @@ import com.neracalab.backend.registration.InsiderRole;
 import com.neracalab.backend.registration.RegistrationRepository;
 import com.neracalab.backend.registration.RegistrationRepository.CompanyReports;
 import com.neracalab.backend.registration.RegistrationRepository.Filter;
+import com.neracalab.backend.registration.RegistrationRepository.HolderRow;
 import com.neracalab.backend.registration.RegistrationRepository.InsiderPage;
 import com.neracalab.backend.registration.RegistrationRepository.ReportRow;
 import com.neracalab.backend.registration.RegistrationRepository.Transaction;
@@ -41,7 +42,11 @@ import com.neracalab.backend.registration.RegistrationRepository.Transaction;
  *       latest month first: {@code { total, limit, offset, rows }}; a row's {@code change} is the shares bought (+) or
  *       sold (-) during the month</li>
  *   <li>{@code GET /api/v1/registrations/companies} - the companies with reports (number, first and last month)</li>
- *   <li>{@code GET /api/v1/registrations/reports?exchange=IDX&ticker=HRTA} - the company's reports, latest first</li>
+ *   <li>{@code GET /api/v1/registrations/reports?exchange=IDX&ticker=HRTA} - the company's reports, latest first, with
+ *       the shares by type of holder ({@code ownership}: controller, its affiliates, directors and commissioners,
+ *       treasury)</li>
+ *   <li>{@code GET /api/v1/registrations/holders?exchange=IDX&ticker=NCKL} - the company's shareholders of 5% or
+ *       more, latest month first</li>
  * </ul>
  */
 @RestController
@@ -107,6 +112,12 @@ public class RegistrationController {
     public List<ReportRow> reports(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange,
                                    @RequestParam("ticker") String ticker) {
         return repository.reports(Exchange.of(exchange).code(), Tickers.normalize(ticker));
+    }
+
+    @GetMapping("/holders")
+    public List<HolderRow> holders(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange,
+                                   @RequestParam("ticker") String ticker) {
+        return repository.holders(Exchange.of(exchange).code(), Tickers.normalize(ticker));
     }
 
     /** "HRTA, bbri HRTA" -> [HRTA, BBRI]; null / blank -> every company. */

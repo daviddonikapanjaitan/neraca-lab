@@ -225,7 +225,8 @@ public class RagQueue implements SmartLifecycle {
                     + ") is kept";
             case STORED, REPLACED -> r.insiders() + (r.insiders() == 1 ? " director or commissioner, "
                     : " directors and commissioners, ") + r.changes()
-                    + (r.changes() == 1 ? " change" : " changes")
+                    + (r.changes() == 1 ? " change" : " changes") + ", " + r.holders()
+                    + (r.holders() == 1 ? " shareholder" : " shareholders") + " of 5% or more"
                     + (r.outcome() == RegistrationRepository.Outcome.REPLACED ? " (replaced the report stored)" : "");
         };
         if (r.warnings().isEmpty()) {

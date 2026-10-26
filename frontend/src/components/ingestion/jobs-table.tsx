@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react"
 import {
+  ActivityIcon,
+  ChartCandlestickIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -69,6 +71,8 @@ const TYPE_ICON: Record<IngestionJobType, typeof FileSpreadsheetIcon> = {
   ANALYSIS: MicroscopeIcon,
   MACRO: LandmarkIcon,
   MACRO_ANALYSIS: GlobeIcon,
+  LISTING_PRICES: ChartCandlestickIcon,
+  TECHNICAL_SCREENING: ActivityIcon,
 }
 
 /** Refresh interval while a job is active, and otherwise. */
@@ -89,6 +93,8 @@ const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: "ANALYSIS", label: "Analyses" },
   { value: "MACRO", label: "Macro" },
   { value: "MACRO_ANALYSIS", label: "Macro analyses" },
+  { value: "LISTING_PRICES", label: "Price history" },
+  { value: "TECHNICAL_SCREENING", label: "Technical screenings" },
 ]
 
 const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: string }[] = [
@@ -119,7 +125,8 @@ function duration(job: IngestionJob, now: number | null): string {
  * The ingestion jobs (most recent first), page by page ({@code DEFAULT_TABLE_PAGE_SIZE} rows, or 5 / 20 / 50),
  * opening on the page's own job type ({@code defaultType}; the tabs show the other types or all). Refreshed every
  * 2 seconds while a job is in progress and every 10 seconds otherwise. {@code watch} is the job just submitted on
- * this page (the table goes back to its first page, where the job is); when it, or any job seen in progress
+ * this page (the table goes back to its first page, where the job is, on the job's own type unless all are shown);
+ * when it, or any job seen in progress
  * here, finishes, {@code onJobFinished} lets the page reload its data (new company, latest price date).
  */
 export function JobsTable({
@@ -131,7 +138,8 @@ export function JobsTable({
   /** first page of the {@code defaultType} jobs, {@code DEFAULT_TABLE_PAGE_SIZE} rows */
   initial: IngestionJobList
   defaultType: IngestionJobType
-  watch: { id: string; seq: number } | null
+  /** {@code type}: the submitted job's type; a table on another type's tab switches to it */
+  watch: { id: string; seq: number; type?: IngestionJobType } | null
   onJobFinished: () => void
 }) {
   const [list, setList] = useState(initial)
@@ -149,6 +157,7 @@ export function JobsTable({
   if (watch !== shownWatch) {
     setShownWatch(watch)
     setPage(1)
+    if (watch?.type && type !== "ALL" && type !== watch.type) setType(watch.type)
   }
   /** jobs seen in progress (or submitted) on this page, to notice when they finish */
   const watched = useRef(new Set(initial.jobs.filter((j) => isActive(j.status)).map((j) => j.id)))

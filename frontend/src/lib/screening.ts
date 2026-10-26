@@ -106,6 +106,7 @@ export const STAGE_LABEL: Record<string, string> = {
   RESEARCH: "Research agent (ReAct + tools)",
   RETRIEVAL: "Document search (embeddings)",
   AGENT: "Investor agents",
+  TECHNICAL_AGENT: "Technical agents",
   REFLECTION: "Reflection critic",
   SYNTHESIS: "Synthesis",
   // financial statement upload: the standard extraction, then the full-text extraction when it took over

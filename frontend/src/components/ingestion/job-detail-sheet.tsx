@@ -568,6 +568,14 @@ export function JobDetailSheet({
                   Open the screening report <ChevronRightIcon />
                 </Link>
               )}
+              {shown.type === "TECHNICAL_SCREENING" && (
+                <Link
+                  href={`/screening/technicals/${shown.id}`}
+                  className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
+                >
+                  Open the technical screening report <ChevronRightIcon />
+                </Link>
+              )}
               {shown.type === "ANALYSIS" && (
                 <Link
                   href={`/screening/analysis/${shown.id}`}

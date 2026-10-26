@@ -25,6 +25,7 @@ import com.neracalab.backend.ingestion.mapping.IncomeLineCategory;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
+import com.neracalab.backend.ingestion.xlsx.IdxSheets;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -1077,7 +1078,9 @@ public class FullTextExtractor {
             checks.add(Check.warning("eps_columns", epsContradiction + "; the EPS of this column is not stored"));
         }
         Set<String> cleared = new java.util.LinkedHashSet<>(rejected);
-        if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
+        if (target.kind() == Kind.INCOME && mapper.incomeByNature() && costOfSalesFromTheNote(mapper, target, values, how, checks)) {
+            // the filing's own cost of sales note gives the cost of revenue and the gross profit
+        } else if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
             for (String field : BY_FUNCTION_ONLY) {
                 // not a gap to fill: the filing has no such figure, so one stored by an earlier upload goes. Rows
                 // the model named all the same (MSIN: 'Program and broadcasting expenses' as cost of revenue, and
@@ -1089,6 +1092,38 @@ public class FullTextExtractor {
         }
         return new MappedStatement(table, target.column(), mapper.period(target.column()),
                 sheet == null ? target.kind().table() : sheet, values, how, checks, List.of(), cleared);
+    }
+
+    /**
+     * The cost of revenue and gross profit of a profit or loss by nature from the filing's own cost of sales note
+     * ({@link FilingMapper#costOfSales}): the face shows no cost of sales, but the note states it (BIPI FY2025: 200,443,257
+     * of revenue 235,089,682, gross profit 34,646,425). The cost is one of the expenses by nature the operating income
+     * deducts, so it moves out of the operating expenses (212,368,437 -> 11,925,180) and the operating income stays as
+     * filed. Only when the note has a positive cost for the column, the revenue is known and the operating expenses hold
+     * at least the cost; otherwise the two fields stay empty, as before. A gross profit the model builds from expense rows
+     * by nature is still never stored.
+     *
+     * @return whether the fields were set
+     */
+    private static boolean costOfSalesFromTheNote(FilingMapper mapper, Target target, Map<String, BigDecimal> values,
+                                                  Map<String, String> how, List<Check> checks) {
+        BigDecimal cost = mapper.costOfSales(target.column());
+        BigDecimal revenue = values.get("revenue");
+        BigDecimal expenses = values.get("operating_expenses");
+        if (cost == null || cost.signum() <= 0 || revenue == null || expenses == null || cost.compareTo(expenses) > 0) {
+            return false;
+        }
+        values.put("cost_of_revenue", cost);
+        values.put("gross_profit", plainScale(revenue.subtract(cost)));
+        values.put("operating_expenses", plainScale(expenses.subtract(cost)));
+        how.put("cost_of_revenue", "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
+                + FilingMapper.COST_OF_SALES_TOTAL + "'): the profit or loss by nature shows no cost of sales on its face");
+        how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");
+        how.put("operating_expenses", how.getOrDefault("operating_expenses", "") + "; less the cost of revenue of the "
+                + "cost of sales note (" + cost.toPlainString() + ")");
+        checks.add(Check.ok("gross_profit", "Profit or loss by nature: cost of revenue " + cost.toPlainString()
+                + " from the filing's cost of sales note, gross profit = revenue - cost, the operating expenses without it"));
+        return true;
     }
 
     /**

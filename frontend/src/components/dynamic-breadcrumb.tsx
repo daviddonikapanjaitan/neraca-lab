@@ -15,7 +15,12 @@ import {
 import { REGISTRATION_HREF, TECHNICALS_HREF } from "@/lib/companies-sections"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { MACRO_ANALYSIS_HREF, MACRO_HREF } from "@/lib/macro"
-import { ANALYSIS_HREF, SELECTED_STOCKS_HREF } from "@/lib/screening-sections"
+import {
+  ANALYSIS_HREF,
+  SELECTED_STOCKS_HREF,
+  TECHNICALS_ALL_HREF,
+  TECHNICALS_SELECTED_HREF,
+} from "@/lib/screening-sections"
 
 interface Crumb {
   label: string
@@ -36,6 +41,8 @@ const ADMIN_PAGES: Record<string, string> = {
  * /screening                -> Screening / Fundamental (All)
  * /screening/<id>           -> Screening / Fundamental (All) / Report
  * /screening/selected/<id>  -> Screening / Fundamental (Selected) / Report
+ * /screening/technicals/<id>          -> Screening / Technicals (All) / Report
+ * /screening/technicals/selected/<id> -> Screening / Technicals (Selected) / Report
  * /screening/analysis/<id>  -> Screening / Analysis / Report
  * /macro                    -> Macro / Outlook
  * /macro/analysis/<id>      -> Macro / AI Analysis / Report
@@ -56,13 +63,20 @@ function crumbs(pathname: string): Crumb[] {
       : [{ label: "Ingestion", href: INGESTION_HOME }]
   }
   if (segments[0] === "screening") {
+    const technicalsSelected = segments[1] === "technicals" && segments[2] === "selected"
     const section =
       segments[1] === "analysis"
         ? { label: "Analysis", href: ANALYSIS_HREF }
         : segments[1] === "selected"
           ? { label: "Fundamental (Selected)", href: SELECTED_STOCKS_HREF }
-          : { label: "Fundamental (All)", href: "/screening" }
-    const report = segments[1] === "analysis" || segments[1] === "selected" ? segments.length > 2 : segments.length > 1
+          : technicalsSelected
+            ? { label: "Technicals (Selected)", href: TECHNICALS_SELECTED_HREF }
+            : segments[1] === "technicals"
+              ? { label: "Technicals (All)", href: TECHNICALS_ALL_HREF }
+              : { label: "Fundamental (All)", href: "/screening" }
+    // the segments of the page itself: /screening, /screening/selected, /screening/technicals/selected, ...
+    const depth = technicalsSelected ? 3 : segments[1] === "analysis" || segments[1] === "selected" || segments[1] === "technicals" ? 2 : 1
+    const report = segments.length > depth
     return [
       { label: "Screening", href: "/screening" },
       section,

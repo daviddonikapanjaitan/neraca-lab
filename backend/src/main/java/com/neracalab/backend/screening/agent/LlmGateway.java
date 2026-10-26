@@ -99,13 +99,18 @@ public class LlmGateway {
 
     /** The synthesis call (Opus): low reasoning effort, no sampling parameters. */
     public Reply synthesis(UsageMeter meter, Purpose purpose, List<Message> messages) {
+        return synthesis(meter, purpose, messages, properties.synthesisMaxTokens());
+    }
+
+    /** The synthesis call with its own output limit (thinking included; the technical screening's is larger). */
+    public Reply synthesis(UsageMeter meter, Purpose purpose, List<Message> messages, int maxTokens) {
         String model = properties.synthesisModel();
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("reasoning", Map.of("effort", properties.synthesisEffort()));
         extra.put("usage", Map.of("include", true));
         OpenAiChatOptions options = OpenAiChatOptions.builder()
                 .model(model)
-                .maxTokens(properties.synthesisMaxTokens())
+                .maxTokens(maxTokens)
                 .extraBody(extra)
                 .build();
         return call(meter, purpose, model, messages, options);

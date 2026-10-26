@@ -21,12 +21,15 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.neracalab.backend.registration.RegistrationParser.Holder;
 import com.neracalab.backend.registration.RegistrationParser.Insider;
+import com.neracalab.backend.registration.RegistrationParser.Ownership;
 import com.neracalab.backend.registration.RegistrationParser.Report;
 
 /**
- * The monthly registration reports ({@code registration_report}, one per company and month) and the shares of the
- * directors and commissioners in them ({@code registration_insider}).
+ * The monthly registration reports ({@code registration_report}, one per company and month, with the shares by type of
+ * holder), the shares of the directors and commissioners in them ({@code registration_insider}) and of the
+ * shareholders of 5% or more ({@code registration_holder}).
  */
 @Repository
 public class RegistrationRepository {
@@ -106,11 +109,28 @@ public class RegistrationRepository {
                                  String lastPeriod) {
     }
 
-    /** A stored report. */
+    /**
+     * A stored report.
+     *
+     * @param holders   shareholders of 5% or more read; null: stored before they were read (upload it again)
+     * @param ownership the shares by type of holder at the end of the month (null fields: not printed, or stored before)
+     */
     public record ReportRow(long reportId, String exchange, String ticker, String period, String letterNumber,
                             String subject, boolean correction, Instant filedAt, String registrar,
-                            Long listedSharesPrevious, Long listedSharesCurrent, int insiders, List<String> warnings,
-                            Long documentId, String fileName, Instant updatedAt) {
+                            Long listedSharesPrevious, Long listedSharesCurrent, int insiders, Integer holders,
+                            Ownership ownership, List<String> warnings, Long documentId, String fileName,
+                            Instant updatedAt) {
+    }
+
+    /**
+     * A shareholder of 5% or more at the end of a month.
+     *
+     * @param period "2026-06": the month of the report
+     * @param change shares bought (+) or sold (-) during the month; null when a share count is missing
+     */
+    public record HolderRow(long holderId, long reportId, String exchange, String ticker, String period, int row,
+                            String holderName, Long sharesPrevious, BigDecimal percentPrevious, Long sharesCurrent,
+                            BigDecimal percentCurrent, Long change, boolean controller, boolean controllerAffiliate) {
     }
 
     private final JdbcClient jdbc;
@@ -122,7 +142,8 @@ public class RegistrationRepository {
     }
 
     /**
-     * Stores the report of the company for its month with its directors and commissioners, in one transaction. A
+     * Stores the report of the company for its month with its directors and commissioners, its shareholders of 5% or
+     * more and its shares by type of holder, in one transaction. A
      * report of the month already stored is replaced, unless it was filed later than this one (a correction filed
      * after the report it corrects stays, whichever is uploaded last).
      */
@@ -148,9 +169,11 @@ public class RegistrationRepository {
                         INSERT INTO registration_report (company_id, period, document_id, file_id, file_name,
                                                          letter_number, subject, correction, filed_at, registrar,
                                                          listed_shares_previous, listed_shares_current, insiders,
-                                                         warnings, job_id)
+                                                         holders, controller_shares, controller_affiliate_shares,
+                                                         insider_shares, treasury_shares, warnings, job_id)
                         VALUES (:company, :period, :document, :file, :fileName, :letter, :subject, :correction, :filed,
-                                :registrar, :listedPrevious, :listedCurrent, :insiders, :warnings, :job)
+                                :registrar, :listedPrevious, :listedCurrent, :insiders, :holders, :controllerShares,
+                                :affiliateShares, :insiderShares, :treasuryShares, :warnings, :job)
                         RETURNING report_id""")
                 .param("company", companyId)
                 .param("period", period)
@@ -165,6 +188,11 @@ public class RegistrationRepository {
                 .param("listedPrevious", report.listedSharesPrevious(), Types.BIGINT)
                 .param("listedCurrent", report.listedSharesCurrent(), Types.BIGINT)
                 .param("insiders", report.insiders().size())
+                .param("holders", report.holders().size())
+                .param("controllerShares", report.ownership().controller(), Types.BIGINT)
+                .param("affiliateShares", report.ownership().controllerAffiliates(), Types.BIGINT)
+                .param("insiderShares", report.ownership().directorsAndCommissioners(), Types.BIGINT)
+                .param("treasuryShares", report.ownership().treasury(), Types.BIGINT)
                 .param("warnings", report.warnings().isEmpty() ? null : String.join("\n", report.warnings()), Types.VARCHAR)
                 .param("job", jobId)
                 .query(Long.class).single();
@@ -182,6 +210,18 @@ public class RegistrationRepository {
                 new int[] {Types.BIGINT, Types.BIGINT, Types.DATE, Types.INTEGER, Types.VARCHAR, Types.VARCHAR,
                         Types.VARCHAR, Types.BIGINT, Types.NUMERIC, Types.BIGINT, Types.NUMERIC, Types.BOOLEAN,
                         Types.BOOLEAN});
+        List<Object[]> holders = new ArrayList<>(report.holders().size());
+        for (Holder h : report.holders()) {
+            holders.add(new Object[] {reportId, companyId, period, h.row(), truncate(h.name(), 300), h.sharesPrevious(),
+                    h.percentPrevious(), h.sharesCurrent(), h.percentCurrent(), h.controller(), h.controllerAffiliate()});
+        }
+        template.batchUpdate("""
+                INSERT INTO registration_holder (report_id, company_id, period, row_index, holder_name, shares_previous,
+                                                 percent_previous, shares_current, percent_current, controller,
+                                                 controller_affiliate)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", holders,
+                new int[] {Types.BIGINT, Types.BIGINT, Types.DATE, Types.INTEGER, Types.VARCHAR, Types.BIGINT,
+                        Types.NUMERIC, Types.BIGINT, Types.NUMERIC, Types.BOOLEAN, Types.BOOLEAN});
         return new Stored(existing.isPresent() ? Outcome.REPLACED : Outcome.STORED, reportId, null);
     }
 
@@ -287,7 +327,8 @@ public class RegistrationRepository {
         return jdbc.sql("""
                         SELECT r.report_id, c.exchange, c.ticker, r.period, r.letter_number, r.subject, r.correction,
                                r.filed_at, r.registrar, r.listed_shares_previous, r.listed_shares_current, r.insiders,
-                               r.warnings, r.document_id, r.file_name, r.updated_at
+                               r.warnings, r.document_id, r.file_name, r.updated_at, r.holders, r.controller_shares,
+                               r.controller_affiliate_shares, r.insider_shares, r.treasury_shares
                         FROM registration_report r JOIN company c ON c.company_id = r.company_id
                         WHERE c.exchange = :e AND c.ticker = :t
                         ORDER BY r.period DESC""")
@@ -295,9 +336,28 @@ public class RegistrationRepository {
                 .query((rs, i) -> new ReportRow(rs.getLong(1), rs.getString(2), rs.getString(3),
                         period(rs.getDate(4).toLocalDate()), rs.getString(5), rs.getString(6), rs.getBoolean(7),
                         instant(rs.getTimestamp(8)), rs.getString(9), rs.getObject(10, Long.class),
-                        rs.getObject(11, Long.class), rs.getInt(12),
+                        rs.getObject(11, Long.class), rs.getInt(12), rs.getObject(17, Integer.class),
+                        new Ownership(rs.getObject(18, Long.class), rs.getObject(19, Long.class),
+                                rs.getObject(20, Long.class), rs.getObject(21, Long.class)),
                         rs.getString(13) == null ? List.of() : List.of(rs.getString(13).split("\n")),
                         rs.getObject(14, Long.class), rs.getString(15), instant(rs.getTimestamp(16))))
+                .list();
+    }
+
+    /** The shareholders of 5% or more of the company, latest month first, then in the order of the report. */
+    public List<HolderRow> holders(String exchange, String ticker) {
+        return jdbc.sql("""
+                        SELECT h.holder_id, h.report_id, c.exchange, c.ticker, h.period, h.row_index, h.holder_name,
+                               h.shares_previous, h.percent_previous, h.shares_current, h.percent_current,
+                               h.change_shares, h.controller, h.controller_affiliate
+                        FROM registration_holder h JOIN company c ON c.company_id = h.company_id
+                        WHERE c.exchange = :e AND c.ticker = :t
+                        ORDER BY h.period DESC, h.row_index""")
+                .param("e", exchange).param("t", ticker)
+                .query((rs, i) -> new HolderRow(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(4),
+                        period(rs.getDate(5).toLocalDate()), rs.getInt(6), rs.getString(7), rs.getObject(8, Long.class),
+                        rs.getBigDecimal(9), rs.getObject(10, Long.class), rs.getBigDecimal(11),
+                        rs.getObject(12, Long.class), rs.getBoolean(13), rs.getBoolean(14)))
                 .list();
     }
 

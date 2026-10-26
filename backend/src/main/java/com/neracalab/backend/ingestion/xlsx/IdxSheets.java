@@ -19,6 +19,7 @@ public final class IdxSheets {
     public static final String RIGHT_OF_USE_PRIOR_YEAR = "1612000PY";
     public static final String REVENUE_BY_TYPE = "1617000";
     public static final String REVENUE_BY_SOURCE = "1618000";
+    public static final String COST_OF_SALES = "1670000";        // cost of sales note (cost of goods manufactured)
 
     private IdxSheets() {
     }

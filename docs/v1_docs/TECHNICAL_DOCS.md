@@ -8,9 +8,10 @@ a stop and the thesis from the indicators and price patterns (section 8). Determ
 summaries apply fixed rules to the snapshot, so the same data always gives the same summary. The sidebar's Companies
 entry is a dropdown: **Fundamentals** (the company list and company pages, as before) and **Technicals**.
 
-Future technical agents (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller, a risk overlay) are meant to be
-consumers of the snapshot ([../indicator-snapshot.md](../indicator-snapshot.md)) and of the `/levels` and `/market`
-APIs, without changes to the data or indicator layers; the rules-based summaries are their deterministic baseline.
+The AI technical agents (Keith Gill, Murphy, Paul Tudor Jones, Druckenmiller) of Screening › Technicals
+([TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md)) read the snapshot
+([../indicator-snapshot.md](../indicator-snapshot.md)) without changes to the data or indicator layers; the
+rules-based summaries are their prior and their fallback trade plan.
 
 ## 1. Data
 

@@ -24,6 +24,33 @@ public record MarketContext(String exchange, LocalDate asOfDate, String indexCod
      */
     public record Member(long companyId, String ticker, String sector, LocalDate lastDate, double return6m,
                          double return12m, Boolean above200) {
+
+        /**
+         * A listing's entry at its latest bar on or before {@code asOf}; null without a bar by then. Its verdict on the
+         * SMA 200 needs 200 bars and a bar in the 10 days before {@code asOf}.
+         *
+         * @param id   the listing's key in the universe (a company id, or a stock_listing id for the whole exchange)
+         * @param bars daily bars, oldest first
+         */
+        public static Member of(long id, String ticker, String sector, List<Candle> bars, LocalDate asOf) {
+            List<Candle> upTo = bars.stream().filter(c -> !c.date().isAfter(asOf)).toList();
+            if (upTo.isEmpty()) {
+                return null;
+            }
+            int n = upTo.size();
+            double close = upTo.getLast().close();
+            double r6 = n > 126 ? Stats.pctChange(close, upTo.get(n - 1 - 126).close()) : Double.NaN;
+            double r12 = n > 252 ? Stats.pctChange(close, upTo.get(n - 1 - 252).close()) : Double.NaN;
+            Boolean above = null;
+            if (n >= 200 && !upTo.getLast().date().isBefore(asOf.minusDays(10))) {
+                double sum = 0;
+                for (int i = n - 200; i < n; i++) {
+                    sum += upTo.get(i).close();
+                }
+                above = close > sum / 200;
+            }
+            return new Member(id, ticker, sector, upTo.getLast().date(), r6, r12, above);
+        }
     }
 
     /**

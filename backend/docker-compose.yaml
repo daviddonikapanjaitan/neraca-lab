@@ -92,6 +92,8 @@ services:
       SCREENING_ETL_SCHEDULE_ENABLED: ${SCREENING_ETL_SCHEDULE_ENABLED:-true}
       # AI analysis of one stock (Screening > Analysis): cost cap per analysis
       ANALYSIS_BUDGET_USD: ${ANALYSIS_BUDGET_USD:-0.20}
+      # AI technical screening (Screening > Technicals): cost cap per run
+      TECHNICAL_SCREENING_BUDGET_USD: ${TECHNICAL_SCREENING_BUDGET_USD:-0.50}
       # RAG vector store: embedding model (OpenRouter, same OPENAI_API_KEY; must have 1536 dimensions)
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-openai/text-embedding-3-small}
       # login: session length, initial password of the root user "admin" (first start only)

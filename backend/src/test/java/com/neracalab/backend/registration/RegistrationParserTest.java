@@ -17,12 +17,15 @@ import org.junit.jupiter.api.Test;
 
 import com.neracalab.backend.registration.PdfWords.Page;
 import com.neracalab.backend.registration.PdfWords.Word;
+import com.neracalab.backend.registration.RegistrationParser.Holder;
 import com.neracalab.backend.registration.RegistrationParser.Insider;
+import com.neracalab.backend.registration.RegistrationParser.Ownership;
 import com.neracalab.backend.registration.RegistrationParser.Report;
 import com.neracalab.backend.registration.RegistrationParser.RegistrationFormatException;
 
 /**
- * The monthly registration reports of HRTA in data/IDX_OWNERSHIP/HRTA (May - August 2026, the June one a correction),
+ * The monthly registration reports of HRTA in data/IDX_OWNERSHIP/HRTA (May - August 2026, the June one a correction)
+ * and of NCKL, DMAS and BBCA (their large holders),
  * read as filed, and tables built word by word for what those four do not show (a table going on over a page, a
  * percentage that does not match).
  */
@@ -103,6 +106,77 @@ class RegistrationParserTest {
         assertThat(august.filedAt()).isEqualTo(LocalDateTime.of(2026, 9, 9, 15, 1));
         assertThat(august.warnings()).isEmpty();
         hasTheFourInsiders(august.insiders());
+        // the controller; the public's row (MASYARAKAT, < 5% each) after it is no holder
+        assertThat(august.holders()).singleElement().satisfies(h -> {
+            assertThat(h.name()).isEqualTo("PT TERANG ANUGRAH");
+            assertThat(h.sharesCurrent()).isEqualTo(3_272_048_000L);
+            assertThat(h.percentCurrent()).isEqualByComparingTo("71.05");
+            assertThat(h.controller()).isTrue();
+        });
+        assertThat(august.ownership()).isEqualTo(new Ownership(3_272_048_000L, 0L, 25_102_200L, 0L));
+    }
+
+    // ------------------------------------------------------------------ other companies' reports
+
+    static byte[] read(String ticker, String file) throws IOException {
+        Path path = Path.of("..", "data", "IDX_OWNERSHIP", ticker, file);
+        assumeTrue(Files.exists(path), ticker + " source data not available: " + path);
+        return Files.readAllBytes(path);
+    }
+
+    /**
+     * NCKL: none of its eight directors and commissioners holds a share; its owners are in the table of the
+     * shareholders of 5% or more (the controller PT Harita Jayaraya, Citibank Hong Kong) and the summary by type of
+     * holder. A share count wraps in its cell ("50.344.432.00" / "0") beside an address reaching past the middle
+     * between the two columns ("Lantai 5").
+     */
+    @Test
+    void readsTheShareholdersOfFivePercentOrMoreAndTheSharesByTypeOfHolder() throws IOException {
+        Report r = RegistrationParser.parse(read("NCKL", "Agustus.pdf"));
+        assertThat(r.period()).isEqualTo(YearMonth.of(2026, 8));
+        assertThat(r.insiders()).hasSize(8).extracting(Insider::sharesCurrent).containsOnly(0L);
+        assertThat(r.holders()).extracting(Holder::name).containsExactly("PT Harita Jayaraya", "Citibank Hong Kong S/A");
+        assertThat(r.holders()).extracting(Holder::sharesPrevious).containsExactly(50_344_432_000L, 3_963_201_100L);
+        assertThat(r.holders()).extracting(Holder::sharesCurrent).containsExactly(50_344_432_000L, 3_958_795_700L);
+        assertThat(r.holders()).extracting(Holder::percentCurrent)
+                .containsExactly(new BigDecimal("79.79"), new BigDecimal("6.27"));
+        assertThat(r.holders()).extracting(Holder::change).containsExactly(0L, -4_405_400L);
+        assertThat(r.holders()).extracting(Holder::controller).containsExactly(true, false);
+        assertThat(r.ownership()).isEqualTo(new Ownership(50_344_432_000L, 551_010_000L, 0L, 110_733_300L));
+        assertThat(r.warnings()).isEmpty();
+    }
+
+    /** NCKL May 2026 writes each line of its headers as one string, the columns placed apart: read as in August. */
+    @Test
+    void aHeaderWrittenAsOneStringIsSplitIntoItsColumns() throws IOException {
+        Report r = RegistrationParser.parse(read("NCKL", "Mei.pdf"));
+        assertThat(r.period()).isEqualTo(YearMonth.of(2026, 5));
+        assertThat(r.insiders()).hasSize(8);
+        assertThat(r.holders()).extracting(Holder::name).containsExactly("PT Harita Jayaraya", "Citibank Hong Kong S/A");
+        assertThat(r.ownership().controller()).isEqualTo(50_344_432_000L);
+        assertThat(r.warnings()).isEmpty();
+    }
+
+    /** DMAS August 2026: the directors' table is left out (only its label is printed); the report is still read. */
+    @Test
+    void aReportWithoutTheDirectorsTableKeepsItsHolders() throws IOException {
+        Report r = RegistrationParser.parse(read("DMAS", "Agustus.pdf"));
+        assertThat(r.insiders()).isEmpty();
+        assertThat(r.holders()).extracting(Holder::name).containsExactly("PT Sumber Arusmulia", "Sojitz Corporation");
+        assertThat(r.holders()).extracting(Holder::controller).containsOnly(true);
+        assertThat(r.ownership().controller()).isEqualTo(39_658_300_000L);
+        assertThat(r.warnings()).singleElement().asString().contains("no table of the directors'");
+    }
+
+    /** BBCA prints its large holders' percentages of the shares issued (123,275,050,000), more than those listed. */
+    @Test
+    void aHoldersPercentageOfTheSharesIssuedIsNoWarning() throws IOException {
+        Report r = RegistrationParser.parse(read("BBCA", "Agustus.pdf"));
+        assertThat(r.holders()).singleElement().satisfies(h -> {
+            assertThat(h.name()).isEqualTo("PT Dwimuria Investama");
+            assertThat(h.percentCurrent()).isEqualByComparingTo("54.942");
+        });
+        assertThat(r.warnings()).noneMatch(w -> w.contains("5% or more"));
     }
 
     @Test
@@ -205,7 +279,9 @@ class RegistrationParserTest {
         assertThat(r.ticker()).isEqualTo("ZZRG");
         assertThat(r.period()).isEqualTo(YearMonth.of(2026, 9));
         assertThat(r.filedAt()).isEqualTo(LocalDateTime.of(2026, 10, 6, 9, 30));
-        assertThat(r.warnings()).isEmpty();
+        // the stub of the shareholders' table has 3 of its 8 columns: not read, a warning only
+        assertThat(r.warnings()).singleElement().asString().startsWith("The shareholders of 5% or more were not read");
+        assertThat(r.holders()).isEmpty();
         assertThat(r.insiders()).extracting(Insider::name).containsExactly("BUDI SANTOSO", "SITI AMINAH LESTARI", "DEWI");
         assertThat(r.insiders()).extracting(Insider::role)
                 .containsExactly(InsiderRole.DIRECTOR, InsiderRole.COMMISSIONER, InsiderRole.COMMISSIONER);

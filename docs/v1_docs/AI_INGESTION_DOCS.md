@@ -597,6 +597,15 @@ Rules:
   not reconcile and ignoring one insurance expense line (`FilingMapper.INSURANCE_EXPENSE_LINES`) makes every
   check pass, that line is ignored; a `memo_line` warning and derivation record it. A line the agent
   classified is never second-guessed. Before, the FY2024 column was blocked and the job INCOMPLETE.
+- **One line outside a restated comparative's profit before tax.** The H1 2025 columns of the H1 2026 filings of
+  PTRO ("Selling expenses" 3,514 thousand USD, profit before tax 7,846) and BNBR ("Other expenses" 2,784 million,
+  profit before tax 72,088), PTRO's FY2024 column of its FY2025 filing ("Other gains (losses)" 3,804, the 4,361 of
+  the FY2024 filing net of the associates' -557, which the column lists again; profit before tax 7,868) and MOLI's
+  H1 2025 column ("Other income" -1,985,667 thousand) each have one line the filed profit before tax leaves out.
+  In a comparative column only, when no other rule reconciles it and ignoring exactly one classified line makes
+  every check pass, that line is ignored (warning `left_out_line`); not when the agent has classified lines of the
+  column, and never in the period's own column. Tried last; errors 1019 - 1021 (and MOLI's 355, 369 - 371, which
+  the full-text extraction stored before). A sweep of the 864 readable workbooks: only these four columns.
 - Unsupported by the standard extraction (stored by the full-text extraction, section 6; rejected with 422 only when that is switched off): balance sheet by order of liquidity (`1220000`), profit or loss
   by nature (`1312000` / `1322000`) in the General and Infrastructure taxonomies; the current /
   non-current balance sheet (`4210000`) and profit or loss by function (`4311000` / `4321000`) in the
@@ -659,6 +668,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `ProviderIgnoreTest` (unit) | the excluded providers are sent with every request (`provider.ignore`); without exclusions nothing is sent |
 | `FilingMapperWifiTpiaTest` (unit) | WIFI FY2025: the financing total that leaves out the dividends is counted at the sum of its lines (10,904,384,108,332), the FY2024 comparative unchanged; WIFI H1 2025 (in the H1 2026 filing): three amounts entered twice counted once, debt issued 784,086,901,997 and repaid -15,495,302,170, which line of a pair is dropped; WIFI FY2022: a 3 rupiah slip is a warning; TPIA's self-contradicting H1 2025 income statement and FY2024 breakdown are still refused |
 | `FilingMapperBeerIndoTest` (unit) | BEER's FY2024 comparative (in the FY2025 filing): the advances to other parties made and repaid, outside the restated investing total, are not counted (investing -3,273,103,330, operating -21,402,282,339), every statement of the filing storable; BEER's own FY2024 filing still counts them; INDO FY2022's roll-forward (20,000,000 off as filed) stays an error; a pair is taken only when it is the only one |
+| `FilingMapperPtroBnbrTest` (unit) | One line outside a comparative's profit before tax: PTRO FY2024 (in the FY2025 filing, the associates' -557), PTRO H1 2025 (selling expenses 3,514) and BNBR H1 2025 (other expenses 2,784) in their H1 2026 filings are ignored (`left_out_line`), every statement of the three filings storable; PTRO's own FY2024 column is not touched |
 | `FilingMapperRiseSmbrTest` (unit) | RISE H1 2025 (in the H1 2026 filing): an FX effect of 398,002 the filed roll-forward leaves out is not counted, ending cash 224,776,635,800, every check passes; FY2025's FX effect still counted; SMBR's FY2024 comparative (investing flows counted twice) still refused, its own filing reconciles |
 | `IngestionVerifierSegmentsTest` (unit) | TPIA FY2025: a refused comparative breakdown of a period whose stored breakdown adds up to its revenue is a note, not an open item; without a stored breakdown, or with one that does not add up, it stays open |
 | `FilingMapperBbriTest` (unit) | BBRI: the comparative cash flows of FY2025 and H1 2026 are storable (a line outside the filed section total), the current year's check is unchanged; the two unclassified insurance lines of H1 2025 are ignored because the filing's totals reconcile exactly without them, and every statement of the H1 2026 filing is storable; BBCA's insurance line, which its totals include, is not ignored |
@@ -862,8 +872,13 @@ by nature, which the rule-based extraction does not map: such a workbook goes st
 extraction, and when that stores and verifies it nothing went wrong - it is no longer written to the error
 log (`FilingMapper.decidedByModel`: a filing by nature, the Financing or Insurance Industry taxonomy, or a General
 Industry balance sheet by order of liquidity (CNMA, 1220000), with nothing else wrong). An upload of it that ends `INCOMPLETE` or `FAILED` is still logged. `cost_of_revenue` and
-`gross_profit` are never stored for it, whatever the model answers (MSIN: 'Program and broadcasting
-expenses' named as cost of revenue, no gross profit beside it) - they are cleared before the checks.
+`gross_profit` are never taken from the model's answer (MSIN: 'Program and broadcasting
+expenses' named as cost of revenue, no gross profit beside it) - they are cleared before the checks. They come only
+from the filing's own cost of sales note (1670000, 'Cost of sales and revenue'; `FilingMapper.costOfSales`), when it
+states a positive cost for the column and the operating expenses by nature hold at least that cost: cost of revenue =
+the note, gross profit = revenue - cost, the operating expenses without it, the operating income as filed (BIPI
+FY2025: 200,443,257 of revenue 235,089,682, gross profit 34,646,425, operating expenses 212,368,437 -> 11,925,180;
+MNCN H1 2026: the note's 2,133,396 million are the program and broadcasting expenses). Without the note both stay empty.
 MSIN, five filings uploaded together, Claude Haiku 5.5: one call each, 21-40 s, USD 0.002-0.003, all
 `SUCCEEDED`; share counts 60,676,178,205 from Yahoo Finance accepted for 2023-12-31 .. 2025-12-31 (397,637
 million / count = 6.5534, the FY2024 EPS 6.55).
@@ -1040,9 +1055,10 @@ and the ending cash is the balance sheet's 189,225,543, but beginning cash 125,7
 6,950,000 short. No line of the workbook accounts for it (the bonds moved by -5,300,000, as the balance sheet
 shows), so the rule-based extraction rightly refuses the column. The full-text extraction stores it as filed.
 
-BUVA has no gross profit in any period, and that is right. A profit or loss by nature (1312000) has no cost of
-sales and no gross profit row, only revenue and expenses by type ('Hotel operation expenses', 'Other expenses'),
-and neither field is built from expense rows by nature (MSIN). BUVA's other valuation fields are all filled. H1
+BUVA had no gross profit in any period: a profit or loss by nature (1312000) has no cost of sales and no gross
+profit row, only revenue and expenses by type ('Hotel operation expenses', 'Other expenses'), and neither field is
+built from expense rows by nature (MSIN). Since 2026-10-26 the two come from the filing's own cost of sales note
+where it has one (BUVA FY2025: 112,555,493,460 of revenue 375,584,185,441), see above. BUVA's other valuation fields are all filled. H1
 2025 has no P/B and no EV ratios because an interim filing has no balance sheet at its comparative date.
 
 Data: the KRAS and TPIA counts of 19,751,460 and 86,863,000 were cleared first (an upload never replaces a stored
@@ -1140,6 +1156,19 @@ shares from the listing date (4,084,430,000), and a company without TTM is value
 (market cap Rp 1,356.0 billion, P/B 2.21 at Rp 332; no P/E until a full year is stored).
 
 Tests: `FilingMapperWifiTpiaTest`, `IngestionVerifierSegmentsTest`, `UploadJobTimeoutTest`, `DerivedDataRefreshTest`.
+
+On 2026-10-26, outside the error log:
+
+- **BNBR had no market cap and no valuation.** Its filings give no share count: the common stock is five series of
+  different par values (Seri A Rp 5,687, B Rp 796, C Rp 227, D Rp 99, E Rp 12), and the Yahoo Finance count, about
+  201.4 billion, fits none of its EPS (FY2025: 493,852 million / 2.85 = 173.3 billion). `V1.0.31__data_BNBR_shares.sql`
+  records the company's own counts: 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11
+  (13,359,375,000 Seri E shares at Rp 64, a debt conversion), 263,336,671,587 from the PMHMETD V of 2026-07-31
+  (89,919,839,078 Seri E shares at Rp 53). Market cap Rp 22.0 trillion at 2025-12-31, Rp 14.75 trillion at
+  Rp 56 (2026-10-22). Test `BnbrSharesTest`.
+- **BIPI had no gross profit** (by nature). Its every filing states the cost of sales in its note 1670000: the
+  full-text extraction now takes cost of revenue and gross profit from it (above). The stored periods get them when
+  the filings are uploaded again. Test `FullTextExtractorTest.byNatureTheCostOfSalesNoteGivesTheGrossProfit`.
 
 ### The uploads of 2026-10-14 (errors 346 - 355): an insurer, an EPS in three units, a balance sheet by liquidity
 

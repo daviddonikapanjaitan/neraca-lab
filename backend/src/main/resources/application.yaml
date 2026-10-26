@@ -66,6 +66,8 @@ spring:
         - classpath:db/V1.0.27__schema_macro_analysis.sql      # AI macro analysis of a country (Macro > AI Analysis)
         - classpath:db/V1.0.28__schema_rag_macro.sql           # macro documents of a country in the RAG vector store
         - classpath:db/V1.0.29__schema_registration.sql        # company PDF types; monthly registration reports (Companies > Registration)
+        - classpath:db/V1.0.30__schema_technical_screening.sql # bars of the screening universe; AI technical screening (Screening > Technicals)
+        - classpath:db/V1.0.32__schema_registration_holders.sql # registration reports: shareholders of 5% or more, shares by type of holder
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -74,6 +76,7 @@ spring:
         - classpath:db/V1.0.21__data_RAJA_shares.sql      # share counts and the 1:5 split of 2026-07-16
         - classpath:db/V1.0.22__data_TUGU_shares.sql      # the 1:2 split of 2023-05-24 no filing restates
         - classpath:db/V1.0.24__data_BACH_shares.sql      # share count after the IPO of 2026-07-08
+        - classpath:db/V1.0.31__data_BNBR_shares.sql      # share counts of five par-value series (2023 - 2026 rights issue)
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
@@ -354,3 +357,23 @@ neracalab:
         cron: "0 0 18 * * MON-FRI"
         zone: Asia/Jakarta
         exchange: IDX
+
+  # AI technical screening (POST /api/v1/technical-screenings: Screening > Technicals (All) / (Selected));
+  # docs/v1_docs/TECHNICAL_SCREENING_DOCS.md. Models and prices: neracalab.screening.llm (DeepSeek for the four technical
+  # agents and the reflection, Opus for the synthesis); market-cap tiers, price and liquidity minimums:
+  # neracalab.screening. Price movements: listing_price_daily (Ingestion > Screening Data IDX) for a tier, price_daily
+  # (the companies table) for selected stocks.
+  technical-screening:
+    budget-usd: ${TECHNICAL_SCREENING_BUDGET_USD:0.50}   # hard cost cap of one run (all model calls)
+    synthesis-reserve-usd: 0.20                    # kept free for the synthesis (Opus) while the agents run
+    shortlist-multiplier: 3                        # Stage 1 shortlist = top N x 3 (75 for a top 25)
+    max-shortlist: 100
+    max-top-n: 50
+    llm-weight: 0.4                                # agent score = 0.6 x its rules summary + 0.4 x its AI judgement
+    min-bars: 120                                  # Stage 1: fewer stored daily bars = too little history
+    max-bar-age: 7d                                # Stage 1: a last bar older than this before the as-of day = stale
+    agent-max-tokens: 700                          # output limit of one agent answer (score, stance, trade plan, reasons)
+    synthesis-max-tokens: 16000                    # output limit of the synthesis (thinking included)
+    price-history:
+      years: 5                                     # a listing's first load reaches this far back (SMA 200, 52 weeks, 12-1 momentum)
+      refresh-before-run: true                     # a tier screening first loads the bars of its listings that are behind
