@@ -959,7 +959,7 @@ public class FullTextExtractor {
             shareCounts(session, target, values, how);
         }
         if (target.kind() == Kind.INCOME && !bank) {
-            derive(values, how);
+            derive(values, how, statedDa(mapper, target.column()));
         }
         Set<String> rejected = new java.util.LinkedHashSet<>();
         String epsContradiction = target.kind() == Kind.INCOME ? mapper.epsContradiction() : null;
@@ -1199,8 +1199,21 @@ public class FullTextExtractor {
         return "c" + (target.valueColumn() + 1);
     }
 
-    /** ebit and ebitda as the standard extraction derives them. */
-    private static void derive(Map<String, BigDecimal> values, Map<String, String> how) {
+    /** The D&A the profit or loss states for the column ({@link FilingMapper#statedDepreciationAndAmortization}). */
+    private static BigDecimal statedDa(FilingMapper mapper, StatementColumn column) {
+        try {
+            return mapper.statedDepreciationAndAmortization(column);
+        } catch (RuntimeException e) {
+            log.debug("full-text extraction: stated D&A not readable: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * ebit and ebitda as the standard extraction derives them: with the D&A the profit or loss states when it states
+     * it (the same in every column, as the standard extraction), else depreciation + amortization.
+     */
+    static void derive(Map<String, BigDecimal> values, Map<String, String> how, BigDecimal statedDa) {
         BigDecimal pretax = values.get("pretax_income");
         if (pretax == null) {
             return;
@@ -1208,7 +1221,11 @@ public class FullTextExtractor {
         BigDecimal ebit = pretax.add(orZero(values.get("interest_expense"))).subtract(orZero(values.get("interest_income")));
         values.put("ebit", ebit);
         how.put("ebit", "profit before tax + finance costs - finance income");
-        if (values.get("depreciation") != null) {
+        if (statedDa != null) {
+            values.put("ebitda", ebit.add(statedDa));
+            how.put("ebitda", "ebit + '" + FilingMapper.STATED_DEPRECIATION_AND_AMORTISATION
+                    + "' as the profit or loss states it");
+        } else if (values.get("depreciation") != null) {
             values.put("ebitda", ebit.add(values.get("depreciation")).add(orZero(values.get("amortization"))));
             how.put("ebitda", "ebit + depreciation + amortization");
         } else {

@@ -140,6 +140,8 @@ neraca_lab/
 │               ├── V1.0.24__data_BACH_shares.sql  (BACH share count after its IPO of 2026-07-08)
 │               ├── V1.0.31__data_BNBR_shares.sql  (BNBR share counts: five par-value series, the 2024 placement, the 2026 rights issue)
 │               ├── V1.0.35__data_ENRG_shares.sql  (ENRG share counts: its USD filings give none, the June 2026 placement)
+│               ├── V1.0.36__schema_valuation_ebitda_basis.sql  (valuation_snapshot.ebitda_basis)
+│               ├── V1.0.37__data_RANS_shares.sql  (RANS share counts before and after its IPO of 2026-07-10)
 │               ├── V1.0.6__data_metrics_valuation.sql
 │               └── V1.0.26__data_markets_macro.sql (catalog: 35 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
@@ -944,7 +946,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 806 tests
+(cd backend && ./mvnw test)                      # 817 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -1071,6 +1073,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.22__data_TUGU_shares.sql`       | TUGU's 1:2 stock split of 2023-05-24 (par Rp 100 -> Rp 50), which no filing restates: counts 3,555,575,600 split-adjusted from 2021-12-31, the per-share figures before it (/ 2) |
 | `V1.0.24__data_BACH_shares.sql`       | BACH's IPO of 2026-07-08 (615,000,000 new shares at Rp 442), after its only filing: 4,084,430,000 shares from the listing (the filing gives 3,469,430,000 before it) |
 | `V1.0.31__data_BNBR_shares.sql`       | BNBR share counts, which its filings cannot give (five par-value series) and Yahoo Finance gives wrong (201.4 billion): 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31 (company announcement and prospectus, KSEI) |
+| `V1.0.36__schema_valuation_ebitda_basis.sql` | `valuation_snapshot.ebitda_basis`: EV / EBITDA of an interim period whose trailing EBITDA is not derivable (its comparative has no depreciation until the company's own H1 filing is uploaded) takes the full year inside the window, marked "(FY 2025)" |
+| `V1.0.37__data_RANS_shares.sql`       | RANS share counts (listed 2026-07-10): 10,084,250,000 before the IPO, 12,609,250,000 after it (2,525,000,000 offered); market cap, EV and P/B, no P/E until its first full year |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |
@@ -1092,7 +1096,7 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `price_daily`         | daily OHLCV prices                                                         |
 | `share_snapshot`      | share counts at a date (outstanding, weighted, treasury, float)            |
 | `market_snapshot`     | daily market cap and enterprise value (derived)                            |
-| `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA, EV/OP .. |
+| `valuation_snapshot`  | price vs trailing-twelve-month fundamentals: P/E, P/B, EV/EBITDA (TTM, else the full year: `ebitda_basis`), EV/OP .. |
 | `financial_metric`    | every calculated metric in long format (margins, returns, leverage, EV/OP) |
 | `ingestion_file`      | uploaded `.xlsx` workbooks and RAG `.pdf` files (`BYTEA`), one row per SHA-256 checksum |
 | `ingestion_job`       | progress of every background job: uploads, prices, screening ETL, screenings, RAG PDF / news, analyses (status, stage, result JSONB, started by which user) |

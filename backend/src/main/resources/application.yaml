@@ -70,6 +70,7 @@ spring:
         - classpath:db/V1.0.32__schema_registration_holders.sql # registration reports: shareholders of 5% or more, shares by type of holder
         - classpath:db/V1.0.33__schema_ownership.sql            # KSEI daily lists of the shareholders of more than 5% (Companies > Ownership)
         - classpath:db/V1.0.34__schema_ownership_one_percent.sql # KSEI monthly lists of the shareholders of more than 1% (Companies > Ownership (>=1%))
+        - classpath:db/V1.0.36__schema_valuation_ebitda_basis.sql # the EBITDA of EV / EBITDA: TTM, else the full year
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -80,6 +81,7 @@ spring:
         - classpath:db/V1.0.24__data_BACH_shares.sql      # share count after the IPO of 2026-07-08
         - classpath:db/V1.0.31__data_BNBR_shares.sql      # share counts of five par-value series (2023 - 2026 rights issue)
         - classpath:db/V1.0.35__data_ENRG_shares.sql      # share counts (USD filings without them), the June 2026 placement
+        - classpath:db/V1.0.37__data_RANS_shares.sql      # share counts before and after the IPO of 2026-07-10
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false

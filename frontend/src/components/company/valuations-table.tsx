@@ -30,7 +30,15 @@ const COLUMNS: Column[] = [
   { label: "P/E", title: "Price / EPS TTM", render: (v) => formatMultiple(v.peRatio) },
   { label: "P/B", title: "Market cap / equity attributable to the parent", render: (v) => formatMultiple(v.pbRatio) },
   { label: "P/S", title: "Market cap / revenue TTM", render: (v) => formatMultiple(v.psRatio) },
-  { label: "EV/EBITDA", title: "EV / EBITDA TTM", render: (v) => formatMultiple(v.evEbitda) },
+  {
+    label: "EV/EBITDA",
+    title:
+      "EV / EBITDA TTM; marked FY when the trailing twelve months are not derivable (the comparative interim period has no depreciation): EV / that full year's EBITDA",
+    render: (v) =>
+      v.evEbitda !== null && v.ebitdaBasis && v.ebitdaBasis !== "TTM"
+        ? `${formatMultiple(v.evEbitda)} (${v.ebitdaBasis})`
+        : formatMultiple(v.evEbitda),
+  },
   { label: "EV/Sales", title: "EV / revenue TTM", render: (v) => formatMultiple(v.evSales) },
   { label: "EV/OP", title: "EV / operating profit TTM", render: (v) => formatMultiple(v.evOp) },
   { label: "FCF yield", title: "FCF TTM / market cap", render: (v) => formatPercent(v.fcfYield), numeric: (v) => v.fcfYield },

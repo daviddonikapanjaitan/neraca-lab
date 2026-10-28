@@ -251,6 +251,8 @@ export interface Valuation {
   psRatio: Amount
   pbRatio: Amount
   evEbitda: Amount
+  /** the EBITDA of evEbitda: "TTM", or "FY 2025" (the full year, when the trailing twelve months are not derivable) */
+  ebitdaBasis: string | null
   evSales: Amount
   evOp: Amount
   fcfYield: Amount

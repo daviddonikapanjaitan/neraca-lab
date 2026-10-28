@@ -339,7 +339,7 @@ public class CompanyQueryRepository {
                                vs.share_price, vs.market_cap, vs.enterprise_value, vs.eps_ttm, vs.revenue_ttm,
                                vs.ebitda_ttm, vs.operating_income_ttm, vs.fcf_ttm, vs.book_value, vs.pe_ratio,
                                vs.ps_ratio, vs.pb_ratio, vs.ev_ebitda, vs.ev_sales, vs.ev_op, vs.fcf_yield,
-                               vs.earnings_yield, fx.rate
+                               vs.earnings_yield, vs.ebitda_basis, fx.rate
                         FROM valuation_snapshot vs
                         LEFT JOIN reporting_period rp ON rp.period_id = vs.period_id
                         LEFT JOIN LATERAL (
@@ -361,7 +361,8 @@ public class CompanyQueryRepository {
                             rs.getBigDecimal("book_value"), rs.getBigDecimal("pe_ratio"), rs.getBigDecimal("ps_ratio"),
                             rs.getBigDecimal("pb_ratio"), rs.getBigDecimal("ev_ebitda"), rs.getBigDecimal("ev_sales"),
                             rs.getBigDecimal("ev_op"), rs.getBigDecimal("fcf_yield"), rs.getBigDecimal("earnings_yield"),
-                            rate == null ? null : listing, quoted(rs.getBigDecimal("share_price"), rate));
+                            rate == null ? null : listing, quoted(rs.getBigDecimal("share_price"), rate),
+                            rs.getString("ebitda_basis"));
                 })
                 .list();
     }

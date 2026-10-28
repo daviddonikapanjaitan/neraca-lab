@@ -1254,8 +1254,10 @@ public final class FilingMapper {
         BigDecimal ebit = pretax == null ? null : pretax.add(financeCost).subtract(financeIncome);
         BigDecimal depreciation = depreciation(column);
         BigDecimal amortization = amortization(column);
-        BigDecimal ebitda = ebit == null || depreciation == null || amortization == null ? null
-                : ebit.add(depreciation).add(amortization);
+        // the D&A the profit or loss states wins: the same in every column (see statedDepreciationAndAmortization)
+        BigDecimal statedDa = statedDepreciationAndAmortization(column);
+        BigDecimal ebitda = ebit == null ? null : statedDa != null ? ebit.add(statedDa)
+                : depreciation == null || amortization == null ? null : ebit.add(depreciation).add(amortization);
 
         BigDecimal basicEps = signOfProfit(epsWithDiscontinued(income, EPS_BASIC, EPS_BASIC_DISC, ctx, checks), parent, checks, "Basic");
         BigDecimal dilutedEps = signOfProfit(epsWithDiscontinued(income, EPS_DILUTED, EPS_DILUTED_DISC, ctx, checks), parent, checks, "Diluted");
@@ -1301,6 +1303,9 @@ public final class FilingMapper {
                 IncomeLineCategory.OTHER_OPERATING_EXPENSE));
         how.put("operating_income", "gross profit - selling - G&A + other operating income - other operating expenses");
         how.put("ebit", "profit before tax + finance costs - finance income");
+        how.put("ebitda", ebitda == null ? "not derivable: depreciation or amortization not disclosed for this column"
+                : statedDa != null ? "ebit + '" + STATED_DEPRECIATION_AND_AMORTISATION + "' as the profit or loss states it"
+                : "ebit + depreciation + amortization (roll-forward notes)");
         how.put("depreciation", depreciation == null ? "not disclosed for this column"
                 : "PP&E + right-of-use additions to accumulated depreciation (roll-forward notes)");
         how.put("amortization", amortization == null ? "not derivable for this column"
@@ -2510,6 +2515,28 @@ public final class FilingMapper {
             return null;
         }
         return table(IdxSheets.COST_OF_SALES).map(t -> amount(t.value(COST_OF_SALES_TOTAL, ctx))).orElse(null);
+    }
+
+    /** The line of a profit or loss by nature that states the period's depreciation and amortisation. */
+    public static final String STATED_DEPRECIATION_AND_AMORTISATION = "Depreciation and amortisation expenses";
+
+    /**
+     * The depreciation and amortisation a profit or loss by nature states for the column (1312000 / 1322000, 3312000 of
+     * the Infrastructure Industry: "Depreciation and amortisation expenses"), in full units; {@code null} when it does
+     * not state it. It is the company's own expense of the period, in every column alike, so the EBITDA of a period is
+     * EBIT plus it: the roll-forward additions to accumulated depreciation (current period only, and capitalised
+     * depreciation included) differ from it (TLKM H1 2026: 14,370 billion beside the 17,203 stated; NSSS 32,899 million
+     * beside 80,672), and a trailing twelve months of H1 2026 + FY2025 - H1 2025 must take all three periods' D&A
+     * alike. The interim comparative (H1 2025) has no roll-forward at all, only this line.
+     */
+    public BigDecimal statedDepreciationAndAmortization(StatementColumn column) {
+        int ctx = durationIndex(column);
+        StatementTable profitOrLoss = profitOrLossAsFiled();
+        if (financial || ctx < 0 || profitOrLoss == null) {
+            return null;
+        }
+        BigDecimal value = profitOrLoss.value(STATED_DEPRECIATION_AND_AMORTISATION, ctx);
+        return value == null ? null : amount(value).abs();
     }
 
     /** PP&E + right-of-use depreciation of the column's period, {@code null} when not disclosed. */

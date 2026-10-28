@@ -39,6 +39,8 @@ foreign key.
 | `V1.0.22__data_TUGU_shares.sql`           | TUGU's 1:2 stock split of 2023-05-24 from public sources (the FY2023 filing does not restate its FY2022 comparative, so the split is never detected from the filings), split-adjusted share counts 3,555,575,600 where empty and the per-share figures of the dates before it on the basis after it; no-op until TUGU is uploaded |
 | `V1.0.24__data_BACH_shares.sql`           | BACH's share count after its IPO of 2026-07-08 (615,000,000 new shares at Rp 442, after its only filing, H1 2026): 4,084,430,000 from the listing date and the IPO in `corporate_action`; no-op until BACH is uploaded; also run after every upload |
 | `V1.0.31__data_BNBR_shares.sql`           | BNBR share counts its filings cannot give (five par-value series) and Yahoo Finance gives wrong: 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31; the placement and the rights issue in `corporate_action`. Runs before V1.0.6 and after every upload |
+| `V1.0.37__data_RANS_shares.sql`           | RANS share counts its only filing does not give and Yahoo Finance gives wrong: 10,084,250,000 founders' shares at 2025-12-31, 12,609,250,000 from the IPO of 2026-07-10 (2,525,000,000 shares offered) and that corporate action |
+| `V1.0.36__schema_valuation_ebitda_basis.sql` | `valuation_snapshot.ebitda_basis`: the EBITDA of EV / EBITDA (TTM, else the full year inside the trailing window) |
 | `V1.0.35__data_ENRG_shares.sql`           | ENRG share counts its USD filings do not give and Yahoo Finance gives wrong: 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 2026-06-12 (and that corporate action); the rights issue of October 2026 not yet (its result not announced) |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 | `V1.0.26__data_markets_macro.sql`         | the catalogs: 35 instruments (USDIDR, USDJPY, USDCNY, USDMYR, USDPHP, USDINR, USDKRW, EURUSD, AUDJPY; BRENT, WTI, NATURAL_GAS, LNG, COAL, GOLD, SILVER, COPPER, ALUMINIUM, IRON_ORE, STEEL_HRC, NICKEL, TIN, COBALT, PALM_OIL, PALM_OIL_MYR, SOYBEAN_OIL, SOYBEAN_MEAL, CORN, WHEAT, SUGAR, RUBBER, PULP, UREA, DAP, POTASH) and 25 macro series (FRED, Bank Indonesia, CNBC, CFTC, Yahoo, manual), each brought back to its definition on every start |
@@ -282,7 +284,7 @@ At most one row per period. All amounts `NUMERIC(24,4)` unless stated.
 | `amortization`         |                   | Amortization of intangibles                                          |
 | `operating_income`     |                   | Operating profit (the "OP" of EV/OP)                                 |
 | `ebit`                 |                   |                                                                      |
-| `ebitda`               |                   |                                                                      |
+| `ebitda`               |                   | `ebit` + the "Depreciation and amortisation expenses" a profit or loss by nature states (every column alike), else `ebit + depreciation + amortization` (roll-forward notes: current column only) |
 | `interest_income`      |                   |                                                                      |
 | `interest_expense`     |                   | Positive                                                             |
 | `pretax_income`        |                   |                                                                      |
@@ -520,7 +522,8 @@ are corrected.
 | `pe_ratio`             | `NUMERIC(20,8)` | `share_price / eps_ttm`                                                     |
 | `ps_ratio`             | `NUMERIC(20,8)` | `market_cap / revenue_ttm`                                                  |
 | `pb_ratio`             | `NUMERIC(20,8)` | `market_cap / book_value`                                                   |
-| `ev_ebitda`            | `NUMERIC(20,8)` | `enterprise_value / ebitda_ttm`                                             |
+| `ev_ebitda`            | `NUMERIC(20,8)` | `enterprise_value / ebitda_ttm`; for an interim period without TTM EBITDA, `enterprise_value /` the EBITDA of the full year inside its trailing window (`ebitda_basis`) |
+| `ebitda_basis`         | `VARCHAR(20)`   | the EBITDA of `ev_ebitda`: `TTM`, `FY 2025` (the full year: the comparative interim period has no depreciation), NULL (none; V1.0.36) |
 | `ev_sales`             | `NUMERIC(20,8)` | `enterprise_value / revenue_ttm`                                            |
 | `ev_op`                | `NUMERIC(20,8)` | **EV / operating profit** = `enterprise_value / operating_income_ttm`       |
 | `fcf_yield`            | `NUMERIC(20,8)` | `fcf_ttm / market_cap`                                                      |

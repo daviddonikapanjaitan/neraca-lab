@@ -145,7 +145,8 @@ public record CompanyDetailResponse(
                             BigDecimal revenueTtm, BigDecimal ebitdaTtm, BigDecimal operatingIncomeTtm,
                             BigDecimal fcfTtm, BigDecimal bookValue, BigDecimal peRatio, BigDecimal psRatio,
                             BigDecimal pbRatio, BigDecimal evEbitda, BigDecimal evSales, BigDecimal evOp,
-                            BigDecimal fcfYield, BigDecimal earningsYield, String quoteCurrency, BigDecimal quotePrice) {
+                            BigDecimal fcfYield, BigDecimal earningsYield, String quoteCurrency, BigDecimal quotePrice,
+                            String ebitdaBasis) {
     }
 
     public record CorporateAction(LocalDate actionDate, String actionType, BigDecimal ratioFrom, BigDecimal ratioTo,

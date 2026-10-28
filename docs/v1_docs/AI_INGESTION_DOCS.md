@@ -843,7 +843,10 @@ including `depreciation` and `amortization` where the statements show them as ro
 come from the roll-forward notes, as usual). Not rows of the statements, and therefore not the model's:
 `rd_expense`, and the share counts, which come from the share capital of the equity statement or - when
 that gives none - from Yahoo Finance checked against the filing's EPS, as for every upload. `ebit` /
-`ebitda` are derived from the model's values. An EPS gets the sign of the profit attributable to the parent.
+`ebitda` are derived from the model's values: `ebitda` is `ebit` plus the "Depreciation and amortisation expenses"
+the profit or loss states when it is by nature (`FilingMapper.statedDepreciationAndAmortization`, every column alike,
+the interim comparative too), else `ebit + depreciation + amortization`. An EPS gets the sign of the profit
+attributable to the parent.
 
 For a workbook of a taxonomy the rules do not map, nothing of the rule-based extraction is shown to the
 model and nothing can be adopted.
@@ -958,6 +961,22 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### Valuation gaps of 2026-10-29: EBITDA of the interim comparative, POLY, RANS
+
+Companies › Fundamentals had no EV / EBITDA in the latest valuation of 191 of 198 companies (20 financials, none by
+design): the trailing twelve months of H1 2026 (H1 2026 + FY2025 - H1 2025) need H1 2025's depreciation, and an H1
+2026 filing gives it only when its profit or loss by nature states it (the roll-forward notes cover the current period
+only); only HRTA and INDF had their own H1 2025 filing uploaded.
+
+| Cause | Fix |
+|---|---|
+| **The comparative's depreciation.** 180 of the 194 H1 2026 workbooks give H1 2025 no depreciation anywhere; 11 companies' profits or losses by nature state "Depreciation and amortisation expenses" in both columns (BACH, BIPI, BREN, BUKA, EXCL, GMFI, ISAT, MNCN, MSIN, NSSS, TLKM), while the current column took the roll-forward's additions to accumulated depreciation, which differ (TLKM H1 2026 14,370 billion beside the 17,203 stated; NSSS 32,899 million beside 80,672), so a trailing sum mixed the two. | `FilingMapper.statedDepreciationAndAmortization`: EBITDA is EBIT plus the stated figure in every column (rule-based and full-text extraction alike). Their filings must be uploaded again to store it. The 3670000 cost of sales note's depreciation (BIRD, JSMR, TOWR) is only the part in cost of sales: not used. |
+| **No trailing EBITDA at all.** | `valuation_snapshot.ebitda_basis` (V1.0.36): an interim period's EV / EBITDA takes the full year inside its trailing window (FY 2025 for H1 2026) when its TTM EBITDA is not derivable, marked "(FY 2025)" on the company page; the exact TTM replaces it once the H1 2025 filing is uploaded. 163 of 198 latest valuations have EV / EBITDA now (7 TTM, 156 FY 2025); 19 financials have none by design; 15 companies' FY2025 has depreciation without amortization or the reverse (intangibles grew more than their purchases, or were sold), so no EBITDA is derivable; BACH has no full year yet. |
+| **A filing under another company's name.** `data/IDX_XBRL/SGER/xlsx/FinancialStatement-2023-Tahunan-SGER.xlsx` was Asia Pacific Fibers' (POLY) Q3 2023 filing; the upload rightly stored it under POLY (the entity code), which created a company with 2022 - 9M 2023 figures and no share count. | POLY deleted; the file moved to `data/IDX_XBRL/POLY/xlsx/FinancialStatement-2023-III-POLY.xlsx`. SGER is complete without it (FY2023 from the FY2024 filing's comparative). |
+| **A new listing without a share count.** RANS listed on 2026-07-10; its H1 2026 filing gives none and Yahoo Finance's fits none of its EPS. | `V1.0.37__data_RANS_shares.sql`: 10,084,250,000 founders' shares, 12,609,250,000 after the offering (IDX's listing announcement; KSEI's lists bound it to 12,608.2 - 12,610.3 million). Market cap, EV and P/B; no P/E until its first full year, as BACH. |
+
+Tests: `FilingMapperStatedDaTest`, `FullTextExtractorDeriveTest`, `ValuationEbitdaBasisTest`, `RansSharesTest`.
 
 ### The review of 2026-10-29 (errors 1067, 1068): MGLV and JARR
 
