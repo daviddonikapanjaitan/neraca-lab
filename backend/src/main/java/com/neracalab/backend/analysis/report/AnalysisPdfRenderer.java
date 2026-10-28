@@ -84,6 +84,7 @@ public class AnalysisPdfRenderer {
         agents(doc, report);
         research(doc, report.research());
         insiders(doc, report.context());
+        majorShareholders(doc, report.context());
         figures(doc, report.context());
         notes(doc, report.notes());
         usage(doc, report.usage());
@@ -280,6 +281,68 @@ public class AnalysisPdfRenderer {
                 doc.add(new Paragraph(t.path("month").asString("") + "  " + t.path("name").asString("") + "  "
                         + (change > 0 ? "bought " : "sold ") + String.format(Locale.ROOT, "%,d", Math.abs(change))
                         + " shares (" + String.format(Locale.ROOT, "%,d", t.path("sharesAfter").asLong()) + " after)",
+                        SMALL));
+            }
+        }
+    }
+
+    /** The holders of more than 5% from KSEI's daily lists (when stored). */
+    private void majorShareholders(Document doc, JsonNode context) {
+        JsonNode major = context == null ? null : context.path("majorShareholders");
+        if (major == null || !major.isObject()) {
+            return;
+        }
+        heading(doc, "Shareholders of more than 5% (KSEI daily lists, " + major.path("days").asInt() + " days to "
+                + nvl(text(major.path("latestDate"))) + ")");
+        if (text(major.path("reading")) != null) {
+            doc.add(new Paragraph(text(major.path("reading")), BODY));
+        }
+        JsonNode holders = major.path("holders");
+        if (holders.isArray() && !holders.isEmpty()) {
+            PdfPTable table = new PdfPTable(new float[] {40, 12, 18, 12, 18});
+            table.setWidthPercentage(100);
+            table.setSpacingBefore(4);
+            table.setHeaderRows(1);
+            for (String h : List.of("Investor", "Type", "Shares", "Ownership", "Net change")) {
+                table.addCell(headerCell(h));
+            }
+            for (JsonNode h : holders) {
+                table.addCell(cell(h.path("name").asString(""), SMALL, Element.ALIGN_LEFT));
+                String status = h.path("status").asString("");
+                table.addCell(cell("FOREIGN".equals(status) ? "Foreign" : "LOCAL".equals(status) ? "Local" : "-", SMALL,
+                        Element.ALIGN_LEFT));
+                table.addCell(cell(h.path("shares").isNumber()
+                        ? String.format(Locale.ROOT, "%,d", h.path("shares").asLong()) : "-", SMALL, Element.ALIGN_RIGHT));
+                table.addCell(cell(h.path("ownership").isNumber()
+                        ? String.format(Locale.ROOT, "%.2f%%", h.path("ownership").asDouble() * 100) : "-", SMALL,
+                        Element.ALIGN_RIGHT));
+                table.addCell(cell(h.path("netChange").isNumber()
+                        ? String.format(Locale.ROOT, "%+,d", h.path("netChange").asLong()) : "-", SMALL,
+                        Element.ALIGN_RIGHT));
+            }
+            doc.add(table);
+        }
+        JsonNode transactions = major.path("transactions");
+        if (transactions.isArray() && !transactions.isEmpty()) {
+            Paragraph h = new Paragraph("Movements", H2);
+            h.setSpacingBefore(4);
+            doc.add(h);
+            int shown = 0;
+            for (JsonNode t : transactions) {
+                if (shown++ == 15) {
+                    break;
+                }
+                String movement = t.path("movement").asString("");
+                String what = switch (movement) {
+                    case "ENTERED" -> "crossed 5% with " + String.format(Locale.ROOT, "%,d", t.path("sharesAfter").asLong())
+                            + " shares";
+                    case "EXITED" -> "fell below 5% (held " + String.format(Locale.ROOT, "%,d",
+                            t.path("sharesBefore").asLong()) + " shares)";
+                    default -> (t.path("change").asLong() > 0 ? "bought " : "sold ")
+                            + String.format(Locale.ROOT, "%,d", Math.abs(t.path("change").asLong())) + " shares ("
+                            + String.format(Locale.ROOT, "%,d", t.path("sharesAfter").asLong()) + " after)";
+                };
+                doc.add(new Paragraph(t.path("date").asString("") + "  " + t.path("name").asString("") + "  " + what,
                         SMALL));
             }
         }

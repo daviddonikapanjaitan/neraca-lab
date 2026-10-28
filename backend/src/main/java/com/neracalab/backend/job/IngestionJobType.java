@@ -24,5 +24,10 @@ public enum IngestionJobType {
     /** daily bars of every listing of the screening universe (Yahoo Finance): the price movements of the technical screening */
     LISTING_PRICES,
     /** AI technical screening run: rules pre-screen, the four technical agents, synthesis, trade plans */
-    TECHNICAL_SCREENING
+    TECHNICAL_SCREENING,
+    /**
+     * Excel document into the database and the RAG vector store: KSEI's daily list of the shareholders of more than
+     * 5% (Companies > Ownership (>=5%))
+     */
+    RAG_XLSX
 }

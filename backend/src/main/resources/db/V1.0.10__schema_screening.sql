@@ -37,7 +37,7 @@ ALTER TABLE ingestion_job
     ADD  CONSTRAINT ck_ingestion_job_type
         CHECK (job_type IN ('FINANCIAL_STATEMENT', 'PRICE', 'FUNDAMENTALS', 'SCREENING', 'RAG_PDF', 'RAG_NEWS',
                              'ANALYSIS', 'MACRO', 'MACRO_ANALYSIS', 'LISTING_PRICES',
-                             'TECHNICAL_SCREENING'));
+                             'TECHNICAL_SCREENING', 'RAG_XLSX'));
 
 COMMENT ON COLUMN ingestion_job.job_type IS
     'FINANCIAL_STATEMENT = IDX .xlsx upload stored by the AI agent, PRICE = daily price ingestion, FUNDAMENTALS = screening data ETL (Yahoo Finance), SCREENING = AI stock screening run.';

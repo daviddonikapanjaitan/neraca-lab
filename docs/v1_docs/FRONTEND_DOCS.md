@@ -146,6 +146,22 @@ the current one (Jakarta, computed by the page on the server) are not offered. R
 `app/api/registrations`, `app/api/registrations/companies`, `app/api/registrations/holders` and
 `app/api/registrations/reports`. Details: [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md).
 
+### 3.2c Ownership (>=5%) - `/companies/ownership` (`COMPANIES`)
+
+`app/(dashboard)/companies/ownership/page.tsx` reads the filters from the URL (`?tickers=ADRO&holder=lo kheng hong&
+transaction=BUY&status=A&from=2026-10-19&to=2026-10-27&aliases=true`, `lib/ownership.ts`), loads the options (the
+latest list and its highlights, the dates, every company) and the first page on the server, and renders
+`components/ownership/ownership-page-client.tsx`: summary tiles, the highlights of a day (the latest at first; another
+stored day from its dropdown or the previous / next buttons, `/api/ownership/highlights`: largest buys and sells,
+crossed above / fell below 5%), the filters (tickers with suggestions, investor, transaction, order, investor type,
+From / To with presets, aliases; the Change and % owned headers order the table by them, `sort` in the URL; Apply,
+Reset and the other filtering clicks navigate with `{ scroll: false }`, so the page keeps its position), with one ticker `company-ownership.tsx` (reading, tiles, composition bar, each investor day by
+day, its accounts on a click; `/api/ownership/holders`), with an investor's name `entity-holdings.tsx`
+(`/api/ownership/entities`), and the table (50 rows per page through `/api/ownership`); badges in
+`ownership-badges.tsx`. Ingestion › Excel Documents (RAG) (`/ingestion/rag-excel`): `rag-excel-card.tsx` (exchange,
+document type, files; `/api/rag/xlsx`), `ownership-lists-card.tsx` (`/api/rag/xlsx/reports`), `RagDocumentsCard` with
+source `XLSX`. Details: [OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md).
+
 ### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
 
 The Companies entry of the sidebar is a dropdown: **Fundamentals** (`/companies` and the company pages),

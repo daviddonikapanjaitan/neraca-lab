@@ -55,6 +55,7 @@ start), then change its password in Admin Center > User Management.
 | [`AUTH_DOCS.md`](docs/v1_docs/AUTH_DOCS.md)                 | login, users, roles, permissions, profile: rules, APIs, root user, sessions |
 | [`RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md)                   | RAG vector store (pgvector): PDF and news ingestion of the companies, macro PDFs of a country, chunking, embeddings, search API |
 | [`REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md) | Companies › Registration: monthly registration reports (LBRE) uploaded as Registration PDFs, the directors' and commissioners' shares month by month, buy / sell, API, tests |
+| [`OWNERSHIP_DOCS.md`](docs/v1_docs/OWNERSHIP_DOCS.md)       | Companies › Ownership (>=5%): KSEI's daily lists of the shareholders of more than 5% uploaded on Ingestion › Excel Documents (RAG), buys / sells / crossings of 5% day by day, accounts, aliases, the vector store and the AI analysis, API, tests |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
@@ -97,6 +98,8 @@ neraca_lab/
 │       │                        pgvector repository, queue, controller
 │       ├── java/.../registration/ monthly registration reports: PDF words by position, parser, repository,
 │       │                        controller (Companies › Registration)
+│       ├── java/.../ownership/  KSEI daily lists of the shareholders of more than 5%: parser, repository, digest,
+│       │                        ingestion service and queue, controller (Companies › Ownership (>=5%))
 │       ├── java/.../analysis/   AI analysis of one stock: fact sheet, insider ownership, research agent and its
 │       │                        tools (RAG search, statements), synthesis, report/ (PDF), queue, service, controller
 │       └── resources/
@@ -123,6 +126,7 @@ neraca_lab/
 │               ├── V1.0.28__schema_rag_macro.sql  (macro documents of a country in the RAG vector store)
 │               ├── V1.0.29__schema_registration.sql (company PDF types; registration_report, registration_insider)
 │               ├── V1.0.32__schema_registration_holders.sql (registration_holder; shares by type of holder)
+│               ├── V1.0.33__schema_ownership.sql  (ownership_report, ownership_holder, ownership_account, v_ownership_movement)
 │               ├── V1.0.4__data_HRTA_financials.sql
 │               ├── V1.0.5__data_HRTA_market.sql
 │               ├── V1.0.12__data_SMDR_shares.sql  (SMDR share counts from public sources, 2023 stock split)
@@ -281,6 +285,7 @@ and upload them on the Ingestion page (or with the APIs below):
 | [Laporan Keuangan dan Tahunan](https://www.idx.co.id/id/perusahaan-tercatat/laporan-keuangan-dan-tahunan)               | financial statements of a listed company: the XBRL workbook (`FinancialStatement-<period>-<TICKER>.xlsx`) and the PDF | `data/IDX_XBRL/<TICKER>/xlsx/`, `pdf/`     | xlsx: `POST /api/v1/financial-statements/upload`; PDF: `POST /api/v1/rag/pdf`    |
 | [Keterbukaan Informasi](https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi)                             | information disclosures of listed companies (company announcements and reports filed with IDX)           | `data/IDX_OWNERSHIP/<TICKER>/` (registration reports) | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
 | [Data Kepemilikan Saham](https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/)                           | share ownership data of listed companies                                                                 | `data/IDX_OWNERSHIP/<TICKER>/`             | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
+| [Pengumuman](https://www.idx.co.id/id/berita/pengumuman/) (KSEI: Kepemilikan Efek Diatas 5%)                              | KSEI's daily list of the shareholders of more than 5% of every listed company, by investor (`peng-<date>-<no>-lima-persen.xlsx`) | `data/IDX_OWNERSHIP_FIVE_PERCENTAGE/` | `POST /api/v1/rag/xlsx` with `documentType=OWNERSHIP_5_PERCENT` |
 
 The monthly registration reports of securities holders (registrasi / LBRE PDFs) are what the
 Companies › Registration page reads ([`REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md)).
@@ -604,6 +609,37 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/registrations?tickers=HRTA&transac
 
 Details: [`docs/v1_docs/REGISTRATION_DOCS.md`](docs/v1_docs/REGISTRATION_DOCS.md).
 
+### Ownership (>=5%): KSEI's daily lists
+
+**Ingestion › Excel Documents (RAG)** takes Excel documents of an exchange: choose **IDX - Indonesia Stock Exchange**,
+then the document type **Ownership (>=5%)** (Ownership (>1%) is a later feature), then one or more of KSEI's daily
+lists of the shareholders of more than 5% (`peng-2026-10-27-00104-lima-persen.xlsx`, from idx.co.id). Each list is a
+`RAG_XLSX` job: every investor (by SID), its combined shares and percentage on the day and the trading day before,
+and each of its securities accounts (broker or custodian) go into `ownership_report` / `ownership_holder` /
+`ownership_account`; for every stored company of the list, one document of its holders and their movements over every
+stored day is written in the vector store. Cells that the workbook turned into numbers (441.4 = 441,400; 200 = 200 or
+200,000) are decided by the investor's total; the same investor listed under several names (same accounts) is counted
+once. An investor that fell below 5% is not in KSEI's list: it is the one of the day before missing from the day's
+list, so upload consecutive days.
+
+**Companies › Ownership (>=5%)** shows it day by day, in the manner of Companies › Registration: the highlights of a
+day (the latest at first, any stored day from its dropdown or the previous / next buttons: largest buys and sells, the
+investors that crossed 5% or fell below it), filters (tickers, investor name, buy, sell, crossed / fell below 5%,
+local / foreign, days) and the order (latest day first, or by the change in shares or in percentage points, either
+way; also by clicking the Change or % owned header); Apply and Reset keep the page where it is; with one ticker its holders day by day (a bar of their shares of the
+listed shares, their accounts on a click), with an investor's name every company it holds. **Screening › Analysis**
+gives the holders and their movements to every agent (`majorShareholders`) and its research agent searches the
+ownership document (`searchOwnership`, refs O1, ...). The lists of 1 - 27 October 2026 are in
+`data/IDX_OWNERSHIP_FIVE_PERCENTAGE/`.
+
+```bash
+curl -H "$AUTH" -F file=@data/IDX_OWNERSHIP_FIVE_PERCENTAGE/peng-2026-10-27-00104-lima-persen.xlsx -F exchange=IDX \
+     -F documentType=OWNERSHIP_5_PERCENT http://localhost:8080/api/v1/rag/xlsx
+curl -H "$AUTH" "http://localhost:8080/api/v1/ownership?tickers=TRUK&transaction=CROSSED"
+```
+
+Details: [`docs/v1_docs/OWNERSHIP_DOCS.md`](docs/v1_docs/OWNERSHIP_DOCS.md).
+
 ## AI stock screening
 
 **Screening** in the sidebar (permission `SCREENING`): choose the exchange (IDX), the market cap
@@ -826,7 +862,7 @@ npm run dev                   # http://localhost:3000
 
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals, Registration); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
+| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals, Registration, Ownership (>=5%)); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
 | `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
@@ -846,6 +882,8 @@ npm run dev                   # http://localhost:3000
 | `/ingestion/screening-data`      | Screening Data IDX: update the screening data (Yahoo Finance ETL) |
 | `/companies/registration`        | Registration: the directors' and commissioners' shares month by month from the monthly registration reports, in the manner of openinsider.com: tickers, transaction (all, buy, sell, buy or sell), title, months; holdings by month of one ticker |
 | `/ingestion/rag-pdf`             | PDF Documents (RAG): upload a `.pdf` of a company (left; exchange, company and document type: Financial Statement or Registration) or a macro `.pdf` of a country (right) into the pgvector store; stored documents of the companies and macro documents of a country (10 per page: 5 / 10 / 20 / 50), each with a search test |
+| `/companies/ownership`           | Ownership (>=5%): the shareholders of more than 5% of every IDX company day by day from KSEI's daily lists: highlights of a day, the latest or any stored day (largest buys / sells, crossed / fell below 5%), tickers, investor, transaction, local / foreign, days, order by change (shares or percentage points, ascending or descending); one ticker's holders day by day with their accounts; an investor's companies |
+| `/ingestion/rag-excel`           | Excel Documents (RAG): exchange (IDX - Indonesia Stock Exchange), document type (Ownership (>=5%); Ownership (>1%) later), one or more `.xlsx` lists; stored lists (buys, sells, crossed / fell below 5%), the companies' ownership documents with a search test |
 | `/ingestion/rag-news`            | News (RAG): store the news of an IDX company for a date range (presets or custom); stored articles (10 per page: 5 / 10 / 20 / 50) and a search test |
 |                                  | Every Ingestion page ends with the jobs table: it opens on the page's own job type (tabs for the others and "All"), 10 jobs per page (5 / 10 / 20 / 50) |
 | `/login`                         | username / password login (every other page needs it)                                                                                                             |
@@ -983,6 +1021,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.28__schema_rag_macro.sql`       | macro documents of a country in the RAG vector store: `country`, `issuer`, `document_type` on `rag_document` / `rag_chunk` |
 | `V1.0.29__schema_registration.sql`    | the type of a company PDF (`FINANCIAL_STATEMENT`, the default, or `REGISTRATION`); `registration_report` and `registration_insider`: the directors' and commissioners' shares month by month (Companies › Registration) |
 | `V1.0.32__schema_registration_holders.sql` | `registration_holder`: the shareholders of 5 % or more of each registration report; the shares by type of holder (controller, its affiliates, directors and commissioners, treasury) on `registration_report` |
+| `V1.0.33__schema_ownership.sql`       | KSEI's daily lists of the shareholders of more than 5%: `ownership_report`, `ownership_holder`, `ownership_account`, the view `v_ownership_movement` (with the investors that left a list); `rag_document.source_type` `XLSX`; job type `RAG_XLSX` (Companies › Ownership (>=5%)) |
 | `V1.0.4__data_HRTA_financials.sql`    | HRTA statements Q1 2024 .. H1 2026 from the six IDX filings in `data/IDX_XBRL/HRTA` |
 | `V1.0.5__data_HRTA_market.sql`        | HRTA share counts and daily prices 2024-01-02 .. 2026-09-30                |
 | `V1.0.12__data_SMDR_shares.sql`       | SMDR share counts (16,375,600,000 split-adjusted, from 2020-12-31) and its 2023 1:5 stock split |

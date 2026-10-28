@@ -82,11 +82,14 @@ public final class AnalysisViews {
      * @param registrationReports       monthly registration reports stored (Companies > Registration)
      * @param firstRegistrationPeriod   the first month of them ("2026-05"); null when none
      * @param latestRegistrationPeriod  the latest month of them; null when none
+     * @param ownershipDays             KSEI daily lists of the shareholders of more than 5% naming the company
+     *                                  (Companies > Ownership (>=5%))
+     * @param latestOwnershipDate       the latest of them; null when none
      */
     public record CompanyOption(String exchange, String ticker, String companyName, String sector, int periods,
                                 String latestPeriod, long pdfDocuments, long newsDocuments, String marketDataDate,
                                 String latestPriceDate, int registrationReports, String firstRegistrationPeriod,
-                                String latestRegistrationPeriod) {
+                                String latestRegistrationPeriod, int ownershipDays, String latestOwnershipDate) {
     }
 
     /** {@code GET /api/v1/analyses/options}. */

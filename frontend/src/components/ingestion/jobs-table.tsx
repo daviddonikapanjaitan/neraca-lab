@@ -19,6 +19,7 @@ import {
   MicroscopeIcon,
   NewspaperIcon,
   ScanSearchIcon,
+  SheetIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 
@@ -73,6 +74,7 @@ const TYPE_ICON: Record<IngestionJobType, typeof FileSpreadsheetIcon> = {
   MACRO_ANALYSIS: GlobeIcon,
   LISTING_PRICES: ChartCandlestickIcon,
   TECHNICAL_SCREENING: ActivityIcon,
+  RAG_XLSX: SheetIcon,
 }
 
 /** Refresh interval while a job is active, and otherwise. */
@@ -89,6 +91,7 @@ const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: "FUNDAMENTALS", label: "Screening data" },
   { value: "SCREENING", label: "Screenings" },
   { value: "RAG_PDF", label: "PDF (RAG)" },
+  { value: "RAG_XLSX", label: "Excel (RAG)" },
   { value: "RAG_NEWS", label: "News (RAG)" },
   { value: "ANALYSIS", label: "Analyses" },
   { value: "MACRO", label: "Macro" },

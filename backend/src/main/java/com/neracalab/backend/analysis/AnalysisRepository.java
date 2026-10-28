@@ -301,6 +301,10 @@ public class AnalysisRepository {
                                  WHERE r.company_id = c.company_id) AS first_registration,
                                (SELECT to_char(max(r.period), 'YYYY-MM') FROM registration_report r
                                  WHERE r.company_id = c.company_id) AS last_registration,
+                               (SELECT count(DISTINCT h.report_date) FROM ownership_holder h
+                                 WHERE h.exchange = c.exchange AND h.ticker = c.ticker) AS ownership_days,
+                               (SELECT max(h.report_date) FROM ownership_holder h
+                                 WHERE h.exchange = c.exchange AND h.ticker = c.ticker) AS ownership_date,
                                (SELECT max(s.snapshot_date) FROM fundamental_snapshot s
                                  JOIN stock_listing l ON l.listing_id = s.listing_id
                                  WHERE l.exchange = c.exchange AND l.ticker = c.ticker) AS market_date,
@@ -312,7 +316,8 @@ public class AnalysisRepository {
                         rs.getString("company_name"), rs.getString("sector"), rs.getInt("periods"),
                         rs.getString("latest_period"), rs.getLong("pdfs"), rs.getLong("news"),
                         dateText(rs, "market_date"), dateText(rs, "price_date"), rs.getInt("registrations"),
-                        rs.getString("first_registration"), rs.getString("last_registration")))
+                        rs.getString("first_registration"), rs.getString("last_registration"),
+                        rs.getInt("ownership_days"), dateText(rs, "ownership_date")))
                 .list();
     }
 
@@ -336,11 +341,13 @@ public class AnalysisRepository {
     }
 
     /**
-     * Documents of a company in the vector store: financial statement PDFs ({@code filings}), news, and monthly
-     * registration reports (REGISTRATION PDFs).
+     * Documents of a company in the vector store: financial statement PDFs ({@code filings}), news, monthly
+     * registration reports (REGISTRATION PDFs) and its ownership document (XLSX: KSEI's daily lists of the
+     * shareholders of more than 5%, {@code ownershipTitle} its title).
      */
     public record StoredDocuments(long filings, long news, List<String> filingTitles, List<String> newsTitles,
-                                  long registrations, List<String> registrationTitles) {
+                                  long registrations, List<String> registrationTitles, long ownership,
+                                  String ownershipTitle) {
     }
 
     /** Counts and the latest titles of a company's stored documents (told to the research agent). */
@@ -356,7 +363,14 @@ public class AnalysisRepository {
                         WHERE company_id = :c AND source_type = 'NEWS' AND chunks > 0
                         ORDER BY published_at DESC NULLS LAST, document_id DESC LIMIT :n""")
                 .param("c", companyId).param("n", titles).query(String.class).list();
-        return new StoredDocuments(filings, news, filingTitles, newsTitles, registrations, registrationTitles);
+        long ownership = documentCount(companyId, "XLSX");
+        String ownershipTitle = jdbc.sql("""
+                        SELECT title FROM rag_document
+                        WHERE company_id = :c AND source_type = 'XLSX' AND chunks > 0
+                        ORDER BY updated_at DESC LIMIT 1""")
+                .param("c", companyId).query(String.class).optional().orElse(null);
+        return new StoredDocuments(filings, news, filingTitles, newsTitles, registrations, registrationTitles,
+                ownership, ownershipTitle);
     }
 
     private long pdfCount(long companyId, String documentType) {

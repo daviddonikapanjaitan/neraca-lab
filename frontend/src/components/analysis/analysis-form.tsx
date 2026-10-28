@@ -10,6 +10,7 @@ import {
   LoaderIcon,
   MicroscopeIcon,
   NewspaperIcon,
+  PieChartIcon,
   PlayIcon,
   TriangleAlertIcon,
   UsersIcon,
@@ -140,6 +141,15 @@ export function AnalysisForm({ options }: { options: AnalysisOptions }) {
                       company.registrationReports === 1 ? "report" : "reports"
                     } (${rangeLabel(company.firstRegistrationPeriod, company.latestRegistrationPeriod)}): insider dealings`
                   : "No registration reports (Ingestion > PDF Documents (RAG), Registration type)"
+              }
+            />
+            <DataLine
+              icon={PieChartIcon}
+              ok={(company.ownershipDays ?? 0) > 0}
+              text={
+                (company.ownershipDays ?? 0) > 0
+                  ? `${company.ownershipDays} daily ${company.ownershipDays === 1 ? "list" : "lists"} of the shareholders of more than 5% (latest ${formatDate(company.latestOwnershipDate ?? null)})`
+                  : "No KSEI lists of the shareholders of more than 5% (Ingestion > Excel Documents (RAG))"
               }
             />
             <DataLine

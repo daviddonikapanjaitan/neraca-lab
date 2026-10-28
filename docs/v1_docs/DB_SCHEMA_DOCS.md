@@ -767,6 +767,59 @@ Indexes `ix_registration_insider_company` (`company_id, period DESC`), `ix_regis
 
 Index `ix_registration_holder_company` (`company_id, period DESC`).
 
+### 4.12b KSEI daily lists of the shareholders of more than 5% (`V1.0.33__schema_ownership.sql`)
+
+`ownership_report`: one list per exchange, document type and day (OWNERSHIP_DOCS.md); the list of a day uploaded
+again replaces it.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `report_id` | BIGSERIAL PK | |
+| `exchange`, `document_type` | VARCHAR(10), VARCHAR(30) | IDX, `OWNERSHIP_5_PERCENT` (`ck_ownership_report_type`) |
+| `report_date`, `previous_date` | DATE NOT NULL | the list's date and the trading day it is compared with (`previous_date < report_date`) |
+| `title`, `announcement_number` | VARCHAR(500), VARCHAR(30) | the title above the table; the number in the file name (`peng-2026-10-27-00104-...` -> 00104) |
+| `file_id` / `file_name` | BIGINT / VARCHAR(255) | -> `ingestion_file` |
+| `issuers`, `holders`, `accounts`, `aliases` | INTEGER NOT NULL | companies, investors (aliases included), accounts, investors listed again under another name |
+| `warnings`, `notes` | TEXT | accounts that do not add up / rows not read; numbers read as written although they may be thousands; one per line, NULL when none |
+| `job_id`, `created_at`, `updated_at` | | |
+
+Unique `(exchange, document_type, report_date)`; index `ix_ownership_report_date`.
+
+`ownership_holder`: an investor (SID) of a list.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `holder_id` | BIGSERIAL PK | |
+| `report_id` | BIGINT NOT NULL | -> `ownership_report`, `ON DELETE CASCADE` |
+| `exchange`, `report_date`, `previous_date` | | repeated from the report for filtering |
+| `ticker`, `issuer_name` | VARCHAR(20), VARCHAR(300) | Kode Efek, Nama Emiten (no foreign key: most listed companies are not stored) |
+| `list_number` | INTEGER NOT NULL | No; unique with `report_id` |
+| `holder_name`, `holder_key` | VARCHAR(300) | Nama Pemegang Saham; the name normalized (upper case, letters and digits, without PT / Tbk) |
+| `alias_of` | INTEGER | `list_number` of the investor listed before with the same company, totals and accounts; NULL for the first |
+| `nationality`, `domicile`, `investor_status` | VARCHAR(100), VARCHAR(100), CHAR(1) | Kebangsaan, Domisili, L (local) / A (foreign) |
+| `shares_previous`, `percent_previous` | BIGINT, NUMERIC(9,4) | combined shares and percentage of the shares listed on `previous_date`; NULL = not in the list then |
+| `shares_current`, `percent_current` | BIGINT, NUMERIC(9,4) | on `report_date` |
+| `change_shares` | BIGINT, generated | `shares_current - shares_previous` |
+| `movement` | VARCHAR(10), generated | `BUY`, `SELL`, `UNCHANGED`, `ENTERED` (previous NULL), `EXITED` (current NULL) |
+| `accounts`, `account_moves` | INTEGER NOT NULL | accounts; accounts whose shares changed |
+
+Indexes `ix_ownership_holder_ticker` (`exchange, ticker, report_date DESC`), `ix_ownership_holder_key`,
+`ix_ownership_holder_report` (`report_id, ticker, holder_key`), `ix_ownership_holder_date` (`report_date DESC,
+movement`).
+
+`ownership_account`: a securities account of an investor: `holder_id` (-> `ownership_holder`, `ON DELETE CASCADE`),
+`account_index` (unique with `holder_id`), `participant` (VARCHAR(200): the broker or custodian, Nama Pemegang Rekening
+Efek), `account_name` (VARCHAR(300)), `nationality`, `domicile`, `investor_status`, `shares_previous`,
+`shares_current` (NULL: no holding that day, the account opened / closed), `change_shares` (generated).
+
+`v_ownership_movement`: every row of `ownership_holder` with its `document_type` (`left_list` false), and for every list
+whose day before is stored each investor of the day before that is not in the day's list (`left_list` true,
+`movement` EXITED, its shares of the day before as `shares_previous`, `holder_id` / `holder_report_id` its row of the
+day before). KSEI does not list an investor that fell below 5%: this is how it is found.
+
+`rag_document.source_type` may be `XLSX` (`ck_rag_document_source_type`, V1.0.33): a company's ownership document
+(`source_key` `OWNERSHIP_5_PERCENT`, no document type).
+
 ### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)
 
 One analysis of one company (Screening > Analysis). Full description: [ANALYSIS_DOCS.md](ANALYSIS_DOCS.md).

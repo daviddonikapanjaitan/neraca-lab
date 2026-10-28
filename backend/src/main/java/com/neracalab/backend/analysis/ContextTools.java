@@ -24,10 +24,11 @@ import com.neracalab.backend.screening.agent.UsageMeter;
 /**
  * Tools of the analysis research agent for one company (Tool Calling Pattern), all reading the database:
  * semantic search in the company's stored financial statement PDFs, its monthly registration reports of securities
- * holders and its news (pgvector, {@link RagRepository#search}) and the full statements of one stored period
- * ({@link FactSheet#statement}). Searches are limited to the company itself, so the model cannot read other
- * companies' documents. Every retrieved excerpt gets a stable reference (F1 = filing, R1 = registration report, N1
- * = news) that the brief cites; the embedding of each query is metered.
+ * holders, its ownership document (KSEI's daily lists of the shareholders of more than 5%) and its news (pgvector,
+ * {@link RagRepository#search}) and the full statements of one stored period ({@link FactSheet#statement}). Searches
+ * are limited to the company itself, so the model cannot read other companies' documents. Every retrieved excerpt
+ * gets a stable reference (F1 = filing, R1 = registration report, O1 = ownership list, N1 = news) that the brief
+ * cites; the embedding of each query is metered.
  */
 public class ContextTools {
 
@@ -41,7 +42,8 @@ public class ContextTools {
     /**
      * An excerpt the agent retrieved (for the report).
      *
-     * @param source PDF (a financial statement), REGISTRATION (a monthly registration report) or NEWS
+     * @param source PDF (a financial statement), REGISTRATION (a monthly registration report), OWNERSHIP (the
+     *               KSEI ownership document) or NEWS
      */
     public record Retrieved(String ref, String source, String title, String where, String url, double distance,
                             String query) {
@@ -51,6 +53,7 @@ public class ContextTools {
     private enum Kind {
         FILING(SourceType.PDF, CompanyDocumentType.FINANCIAL_STATEMENT, "F", "PDF", "financial statement PDFs"),
         REGISTRATION(SourceType.PDF, CompanyDocumentType.REGISTRATION, "R", "REGISTRATION", "monthly registration reports"),
+        OWNERSHIP(SourceType.XLSX, null, "O", "OWNERSHIP", "KSEI lists of the shareholders of more than 5%"),
         NEWS(SourceType.NEWS, null, "N", "NEWS", "news articles");
 
         final SourceType source;
@@ -78,6 +81,7 @@ public class ContextTools {
     private final boolean hasFilings;
     private final boolean hasNews;
     private final boolean hasRegistrations;
+    private final boolean hasOwnership;
     private final AtomicInteger searches = new AtomicInteger();
     private final AtomicInteger lookups = new AtomicInteger();
     private final Map<Long, String> refs = new HashMap<>();
@@ -90,14 +94,22 @@ public class ContextTools {
         this(companyId, ticker, facts, embeddings, rag, meter, properties, hasFilings, hasNews, false);
     }
 
+    public ContextTools(long companyId, String ticker, FactSheet facts, EmbeddingClient embeddings, RagRepository rag,
+                        UsageMeter meter, AnalysisProperties properties, boolean hasFilings, boolean hasNews,
+                        boolean hasRegistrations) {
+        this(companyId, ticker, facts, embeddings, rag, meter, properties, hasFilings, hasNews, hasRegistrations, false);
+    }
+
     /**
      * @param hasFilings       financial statement PDFs are stored
      * @param hasNews          news articles are stored
      * @param hasRegistrations monthly registration reports (REGISTRATION PDFs) are stored
+     * @param hasOwnership     the company's ownership document (KSEI's daily lists of the shareholders of more than 5%)
+     *                         is stored
      */
     public ContextTools(long companyId, String ticker, FactSheet facts, EmbeddingClient embeddings, RagRepository rag,
                         UsageMeter meter, AnalysisProperties properties, boolean hasFilings, boolean hasNews,
-                        boolean hasRegistrations) {
+                        boolean hasRegistrations, boolean hasOwnership) {
         this.companyId = companyId;
         this.ticker = ticker;
         this.facts = facts;
@@ -108,6 +120,7 @@ public class ContextTools {
         this.hasFilings = hasFilings;
         this.hasNews = hasNews;
         this.hasRegistrations = hasRegistrations;
+        this.hasOwnership = hasOwnership;
     }
 
     @Tool(description = """
@@ -126,6 +139,16 @@ public class ContextTools {
     public List<Excerpt> searchRegistrations(@ToolParam(description = "what to look for, e.g. 'pemegang saham 5% pengendali' or 'free float'")
                                              String query) {
         return search(query, Kind.REGISTRATION);
+    }
+
+    @Tool(description = """
+            Semantic search in the company's ownership document built from KSEI's daily lists of the shareholders of \
+            more than 5% (by investor SID): each holder's shares, percentage, local or foreign status, the brokers and \
+            custodians of its accounts, every day's buys and sells, investors crossing 5% or falling below it. Returns \
+            excerpts with a ref (O1, O2, ...) and the date of the latest list.""")
+    public List<Excerpt> searchOwnership(@ToolParam(description = "what to look for, e.g. 'largest shareholder foreign' or 'sold shares fell below 5%'")
+                                         String query) {
+        return search(query, Kind.OWNERSHIP);
     }
 
     @Tool(description = """
@@ -156,6 +179,7 @@ public class ContextTools {
         boolean stored = switch (kind) {
             case FILING -> hasFilings;
             case REGISTRATION -> hasRegistrations;
+            case OWNERSHIP -> hasOwnership;
             case NEWS -> hasNews;
         };
         if (!stored) {
@@ -205,7 +229,10 @@ public class ContextTools {
         }
     }
 
-    /** The same chunk keeps its ref across searches: F1, F2 ... (filings), R1 ... (registration reports), N1 ... (news). */
+    /**
+     * The same chunk keeps its ref across searches: F1, F2 ... (filings), R1 ... (registration reports), O1 ...
+     * (ownership), N1 ... (news).
+     */
     private synchronized String ref(Hit hit, Kind kind) {
         return refs.computeIfAbsent(hit.chunkId(), id -> kind.prefix + counters.merge(kind, 1, Integer::sum));
     }
@@ -232,6 +259,10 @@ public class ContextTools {
 
     boolean hasRegistrations() {
         return hasRegistrations;
+    }
+
+    boolean hasOwnership() {
+        return hasOwnership;
     }
 
     int searches() {

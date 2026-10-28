@@ -66,14 +66,23 @@ public class AnalysisResearchAgent {
      * What the agent is told about the company and its stored documents.
      *
      * @param registrationTitles the latest monthly registration reports stored (REGISTRATION PDFs)
+     * @param ownershipTitle     the company's ownership document (KSEI's daily lists of the shareholders of more than
+     *                           5%); null when none is stored
      */
     public record Subject(String ticker, String companyName, String sector, List<String> periods,
                           List<String> filingTitles, long filings, List<String> newsTitles, long news,
-                          List<String> registrationTitles, long registrations) {
+                          List<String> registrationTitles, long registrations, String ownershipTitle) {
 
         public Subject(String ticker, String companyName, String sector, List<String> periods,
                        List<String> filingTitles, long filings, List<String> newsTitles, long news) {
-            this(ticker, companyName, sector, periods, filingTitles, filings, newsTitles, news, List.of(), 0);
+            this(ticker, companyName, sector, periods, filingTitles, filings, newsTitles, news, List.of(), 0, null);
+        }
+
+        public Subject(String ticker, String companyName, String sector, List<String> periods,
+                       List<String> filingTitles, long filings, List<String> newsTitles, long news,
+                       List<String> registrationTitles, long registrations) {
+            this(ticker, companyName, sector, periods, filingTitles, filings, newsTitles, news, registrationTitles,
+                    registrations, null);
         }
     }
 
@@ -92,7 +101,7 @@ public class AnalysisResearchAgent {
 
     /** @param allowModel the budget allows the research calls */
     public Result research(UsageMeter meter, Subject subject, ContextTools tools, boolean allowModel) {
-        if (!tools.hasFilings() && !tools.hasNews() && !tools.hasRegistrations()) {
+        if (!tools.hasFilings() && !tools.hasNews() && !tools.hasRegistrations() && !tools.hasOwnership()) {
             return new Result(ResearchBrief.without("No PDF documents or news are stored for " + subject.ticker()
                     + "; the agents work from the financial statements alone."), List.of(), List.of(), false, 0,
                     "No stored documents");
@@ -159,6 +168,9 @@ public class AnalysisResearchAgent {
         if (tools.hasRegistrations() && searchesLeft) {
             offered.add(catalog.get("searchRegistrations"));
         }
+        if (tools.hasOwnership() && searchesLeft) {
+            offered.add(catalog.get("searchOwnership"));
+        }
         if (tools.hasNews() && searchesLeft) {
             offered.add(catalog.get("searchNews"));
         }
@@ -212,6 +224,10 @@ public class AnalysisResearchAgent {
             if (!s.registrationTitles().isEmpty()) {
                 b.append(" (").append(String.join("; ", s.registrationTitles())).append(')');
             }
+        }
+        if (s.ownershipTitle() != null) {
+            b.append("\nStored ownership document (KSEI daily lists of the shareholders of more than 5%): ")
+                    .append(s.ownershipTitle());
         }
         b.append("\nStored news articles: ").append(s.news());
         if (!s.newsTitles().isEmpty()) {

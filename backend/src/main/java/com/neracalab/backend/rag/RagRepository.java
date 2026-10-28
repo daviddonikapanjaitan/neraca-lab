@@ -26,14 +26,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class RagRepository {
 
-    public enum SourceType { PDF, NEWS }
+    /** PDF: an uploaded PDF; NEWS: a news article; XLSX: a document built from uploaded Excel lists (ownership). */
+    public enum SourceType { PDF, NEWS, XLSX }
 
     public record Company(long companyId, String exchange, String ticker, String companyName) {
     }
 
     /**
      * A document to store; {@code fileId} / {@code fileName} and {@code documentType} for a PDF (null for news),
-     * {@code sourceUrl} / {@code publishedAt} for news.
+     * {@code sourceUrl} / {@code publishedAt} for news; an Excel document has the latest workbook as its file, no
+     * type and the date of its latest list as {@code publishedAt}.
      */
     public record NewDocument(long companyId, SourceType sourceType, CompanyDocumentType documentType, String sourceKey,
                               String title, String sourceName, String sourceUrl, Long fileId, String fileName,
@@ -57,11 +59,12 @@ public class RagRepository {
     }
 
     /**
-     * Documents and chunks stored: PDFs and news of the companies, macro PDFs of the countries.
+     * Documents and chunks stored: PDFs, news and Excel documents of the companies, macro PDFs of the countries.
      *
-     * @param chunks every chunk (companies and countries)
+     * @param xlsxDocuments the companies' documents built from Excel lists (their holders of 5% or more)
+     * @param chunks        every chunk (companies and countries)
      */
-    public record Counts(long pdfDocuments, long newsDocuments, long macroDocuments, long chunks) {
+    public record Counts(long pdfDocuments, long newsDocuments, long macroDocuments, long chunks, long xlsxDocuments) {
     }
 
     public record Hit(long chunkId, long documentId, String ticker, SourceType sourceType, String title, String sourceUrl,
@@ -318,8 +321,9 @@ public class RagRepository {
                         SELECT (SELECT count(*) FROM rag_document WHERE source_type = 'PDF' AND company_id IS NOT NULL),
                                (SELECT count(*) FROM rag_document WHERE source_type = 'NEWS'),
                                (SELECT count(*) FROM rag_document WHERE country IS NOT NULL),
-                               (SELECT count(*) FROM rag_chunk)""")
-                .query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4)))
+                               (SELECT count(*) FROM rag_chunk),
+                               (SELECT count(*) FROM rag_document WHERE source_type = 'XLSX')""")
+                .query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getLong(5)))
                 .single();
     }
 

@@ -12,7 +12,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
-import { REGISTRATION_HREF, TECHNICALS_HREF } from "@/lib/companies-sections"
+import { OWNERSHIP_HREF, REGISTRATION_HREF, TECHNICALS_HREF } from "@/lib/companies-sections"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { MACRO_ANALYSIS_HREF, MACRO_HREF } from "@/lib/macro"
 import {
@@ -35,6 +35,7 @@ const ADMIN_PAGES: Record<string, string> = {
 /**
  * /companies                -> Companies
  * /companies/technicals     -> Companies / Technicals
+ * /companies/ownership      -> Companies / Ownership (>=5%)
  * /companies/IDX/HRTA       -> Companies / IDX / HRTA
  * /admin/users              -> Admin Center / User Management
  * /ingestion/prices         -> Ingestion / Price Ingestion
@@ -103,6 +104,9 @@ function crumbs(pathname: string): Crumb[] {
   }
   if (segments[1] === "registration") {
     return [...result, { label: "Registration", href: REGISTRATION_HREF }]
+  }
+  if (segments[1] === "ownership") {
+    return [...result, { label: "Ownership (>=5%)", href: OWNERSHIP_HREF }]
   }
   const [, exchange, ticker] = segments
   if (exchange) {

@@ -40,7 +40,7 @@ function query(source: RagSourceType, prefix: string, page: number, pageSize: nu
 }
 
 /**
- * What the vector store holds for one source type (PDF or NEWS), newest first and page by page (10 rows, or
+ * What the vector store holds for one source type (PDF, NEWS or XLSX: the companies' ownership documents), newest first and page by page (10 rows, or
  * 5 / 20 / 50, as the jobs table), and a retrieval test: the chunks closest to a question, as the RAG answers will
  * receive them. The ticker box narrows the table to the tickers starting with it.
  */
@@ -72,8 +72,13 @@ export function RagDocumentsCard({
 
   const tickerFilter = filter.trim().toUpperCase()
   const filterValid = tickerFilter === "" || TICKER_PREFIX.test(tickerFilter)
-  const storedTotal = source === "PDF" ? status.stored.pdfDocuments : status.stored.newsDocuments
-  const label = source === "PDF" ? "PDF documents" : "news articles"
+  const storedTotal =
+    source === "PDF"
+      ? status.stored.pdfDocuments
+      : source === "XLSX"
+        ? (status.stored.xlsxDocuments ?? list.total)
+        : status.stored.newsDocuments
+  const label = source === "PDF" ? "PDF documents" : source === "XLSX" ? "ownership documents" : "news articles"
   const current = query(source, prefix, page, pageSize)
   const loading = loadedQuery !== current
 
@@ -176,7 +181,11 @@ export function RagDocumentsCard({
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder={
-                source === "PDF" ? "Test a question, e.g. total revenue 2025" : "Test a question, e.g. dividend plans"
+                source === "PDF"
+                  ? "Test a question, e.g. total revenue 2025"
+                  : source === "XLSX"
+                    ? "Test a question, e.g. foreign shareholder sold"
+                    : "Test a question, e.g. dividend plans"
               }
               aria-label="Search the vector store"
               maxLength={2000}
@@ -251,7 +260,9 @@ export function RagDocumentsCard({
               description={
                 source === "PDF"
                   ? "Upload a PDF above. Its chunks will show here once the job is done."
-                  : "Ingest the news of a company above. The stored articles will show here."
+                  : source === "XLSX"
+                    ? "Upload an ownership list above. Each stored company of the list gets its document here."
+                    : "Ingest the news of a company above. The stored articles will show here."
               }
             />
           ) : (
@@ -260,8 +271,10 @@ export function RagDocumentsCard({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-4">Company</TableHead>
-                    <TableHead>{source === "PDF" ? "Document" : "Article"}</TableHead>
-                    <TableHead className="hidden md:table-cell">{source === "PDF" ? "Pages" : "Published"}</TableHead>
+                    <TableHead>{source === "NEWS" ? "Article" : "Document"}</TableHead>
+                    <TableHead className="hidden md:table-cell">
+                      {source === "PDF" ? "Pages" : source === "XLSX" ? "Latest list" : "Published"}
+                    </TableHead>
                     <TableHead className="text-right">Chunks</TableHead>
                     <TableHead className="hidden pr-4 text-right lg:table-cell">Stored</TableHead>
                   </TableRow>
@@ -288,7 +301,9 @@ export function RagDocumentsCard({
                               </a>
                             ) : (
                               <div className="flex min-w-0 items-center gap-2">
-                                <span className="truncate font-medium">{doc.fileName ?? doc.title}</span>
+                                <span className="truncate font-medium">
+                                  {source === "XLSX" ? doc.title : (doc.fileName ?? doc.title)}
+                                </span>
                                 {doc.documentType && (
                                   <Badge
                                     variant={doc.documentType === "REGISTRATION" ? "secondary" : "outline"}
