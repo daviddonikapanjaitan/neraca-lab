@@ -2,7 +2,7 @@
 
 import type { IngestionJobType } from "@/lib/types"
 
-export type IngestionSection = "xbrl" | "prices" | "screening-data" | "rag-pdf" | "rag-news" | "macro"
+export type IngestionSection = "xbrl" | "prices" | "screening-data" | "rag-pdf" | "rag-excel" | "rag-news" | "macro"
 
 export interface IngestionSectionInfo {
   section: IngestionSection
@@ -52,6 +52,15 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
       "Upload PDF documents of a company (financial statements, annual reports) or macro documents of a country (central bank, finance ministry, IMF reports) for Macro › AI Analysis; their text is chunked, embedded and stored in the pgvector store for RAG.",
     href: "/ingestion/rag-pdf",
     jobType: "RAG_PDF",
+  },
+  {
+    section: "rag-excel",
+    title: "Excel Documents (RAG)",
+    heading: "Excel Documents (RAG)",
+    description:
+      "Upload Excel documents of an exchange: for IDX, KSEI's daily list of the shareholders of more than 5% (Ownership (>=5%)) and its monthly list of the shareholders of more than 1% (Ownership (>=1%)). Every investor and its buys and sells are stored for Companies › Ownership (>=5%) and Ownership (>=1%), and each stored company's ownership is chunked, embedded and stored in the pgvector store for the AI analysis.",
+    href: "/ingestion/rag-excel",
+    jobType: "RAG_XLSX",
   },
   {
     section: "rag-news",

@@ -8,15 +8,20 @@ import { IndexPriceCard } from "@/components/ingestion/index-price-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
 import { ListingPricesCard } from "@/components/ingestion/listing-prices-card"
 import { MacroCard } from "@/components/ingestion/macro-card"
+import { OnePercentListsCard } from "@/components/ingestion/one-percent-lists-card"
+import { OwnershipListsCard } from "@/components/ingestion/ownership-lists-card"
 import { PriceCard } from "@/components/ingestion/price-card"
 import { PriceUpdateCard } from "@/components/ingestion/price-update-card"
 import { RagDocumentsCard } from "@/components/ingestion/rag-documents-card"
+import { RagExcelCard } from "@/components/ingestion/rag-excel-card"
 import { RagMacroDocumentsCard } from "@/components/ingestion/rag-macro-documents-card"
 import { RagMacroPdfCard } from "@/components/ingestion/rag-macro-pdf-card"
 import { RagNewsCard } from "@/components/ingestion/rag-news-card"
 import { RagPdfCard } from "@/components/ingestion/rag-pdf-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
 import { ingestionSection } from "@/lib/ingestion-sections"
+import type { ExcelStatus, OwnershipReportPage } from "@/lib/ownership"
+import type { OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type {
   CompanySummary,
   Exchange,
@@ -61,6 +66,18 @@ export type IngestionSectionData =
       today: string
     }
   | {
+      section: "rag-excel"
+      /** the exchanges and their Excel document types, the lists stored */
+      excel: ExcelStatus
+      /** first page of the stored ownership lists (>=5%) */
+      reports: OwnershipReportPage
+      /** first page of the stored monthly ownership lists (>=1%) */
+      onePercentReports: OnePercentReportPage
+      rag: RagStatus
+      /** first page of the companies' ownership documents in the vector store */
+      documents: RagDocumentPage
+    }
+  | {
       section: "rag-news"
       exchanges: Exchange[]
       companiesByExchange: Record<string, CompanySummary[]>
@@ -71,7 +88,8 @@ export type IngestionSectionData =
     }
 
 /**
- * One Ingestion page (IDX XBRL, Price Ingestion, Screening Data IDX, PDF Documents (RAG), News (RAG) or Macro): its card,
+ * One Ingestion page (IDX XBRL, Price Ingestion, Screening Data IDX, PDF Documents (RAG), Excel Documents (RAG), News
+ * (RAG) or Macro): its card,
  * the stored documents on the RAG pages, then the jobs table, which opens on the page's own job type (tabs for
  * the other types and all jobs, a status filter, page by page).
  */
@@ -139,7 +157,20 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
         </div>
       )}
 
-      {data.section !== "prices" && data.section !== "macro" && data.section !== "rag-pdf" && (
+      {data.section === "rag-excel" && (
+        <div className="w-full max-w-3xl">
+          <RagExcelCard status={data.excel} onSubmitted={submitted} />
+        </div>
+      )}
+
+      {data.section === "rag-excel" && <OwnershipListsCard initial={data.reports} status={data.excel} />}
+
+      {data.section === "rag-excel" && (
+        <OnePercentListsCard initial={data.onePercentReports} status={data.excel} />
+      )}
+
+      {data.section !== "prices" && data.section !== "macro" && data.section !== "rag-pdf" &&
+        data.section !== "rag-excel" && (
         <div className="w-full max-w-3xl">
           {data.section === "xbrl" && <UploadCard onSubmitted={submitted} />}
           {data.section === "screening-data" && (
@@ -160,9 +191,9 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
         </div>
       )}
 
-      {(data.section === "rag-pdf" || data.section === "rag-news") && (
+      {(data.section === "rag-pdf" || data.section === "rag-excel" || data.section === "rag-news") && (
         <RagDocumentsCard
-          source={data.section === "rag-pdf" ? "PDF" : "NEWS"}
+          source={data.section === "rag-pdf" ? "PDF" : data.section === "rag-excel" ? "XLSX" : "NEWS"}
           initial={data.documents}
           status={data.rag}
         />

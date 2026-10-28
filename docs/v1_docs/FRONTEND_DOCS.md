@@ -113,7 +113,7 @@ in the URL (`?tab=income`, ...) without a server round trip, so every tab can be
 | Cash flow        | line items x periods                                                                                                                                                                                                                                                                                      |
 | Segments         | revenue by segment for a selected period with share of total and a check against reported revenue; all segments                                                                                                                                                                                           |
 | Metrics          | fundamental metrics grouped by category x periods (ratios in %, multiples in x, days)                                                                                                                                                                                                                     |
-| Valuation        | every valuation snapshot: price, market cap, EV, TTM revenue / EPS, P/E, P/B, P/S, EV/EBITDA, EV/Sales, EV/OP, FCF and earnings yield                                                                                                                                                                     |
+| Valuation        | every valuation snapshot: price, market cap, EV, TTM revenue / EPS, P/E, P/B, P/S, EV/EBITDA (marked "(FY 2025)" when it is on the full year's EBITDA: `ebitdaBasis`), EV/Sales, EV/OP, FCF and earnings yield                                                                                                                                                                     |
 | Market & shares  | latest OHLCV price, market value, share counts per date, corporate actions                                                                                                                                                                                                                                |
 | Filings          | every reporting period: dates, audit status, which statements exist, segment and metric counts, source filing                                                                                                                                                                                             |
 
@@ -145,6 +145,41 @@ Popover): first click the first month, second click the last, presets Last 3 / 6
 the current one (Jakarta, computed by the page on the server) are not offered. Route handlers:
 `app/api/registrations`, `app/api/registrations/companies`, `app/api/registrations/holders` and
 `app/api/registrations/reports`. Details: [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md).
+
+### 3.2c Ownership (>=5%) - `/companies/ownership` (`COMPANIES`)
+
+`app/(dashboard)/companies/ownership/page.tsx` reads the filters from the URL (`?tickers=ADRO&holder=lo kheng hong&
+transaction=BUY&status=A&from=2026-10-19&to=2026-10-27&aliases=true`, `lib/ownership.ts`), loads the options (the
+latest list and its highlights, the dates, every company) and the first page on the server, and renders
+`components/ownership/ownership-page-client.tsx`: summary tiles, the highlights of a day (the latest at first; another
+stored day from its dropdown or the previous / next buttons, `/api/ownership/highlights`: largest buys and sells,
+crossed above / fell below 5%), the filters (tickers with suggestions, investor, transaction, order, investor type,
+From / To with presets, aliases; the Change and % owned headers order the table by them, `sort` in the URL; Apply,
+Reset and the other filtering clicks navigate with `{ scroll: false }`, so the page keeps its position), with one ticker `company-ownership.tsx` (reading, tiles, composition bar, each investor day by
+day, at most 7 days at a time with its own day range and older / newer arrows, its accounts on a click; `/api/ownership/holders`), with an investor's name `entity-holdings.tsx`
+(`/api/ownership/entities`), and the table (50 rows per page through `/api/ownership`); badges in
+`ownership-badges.tsx`. Ingestion › Excel Documents (RAG) (`/ingestion/rag-excel`): `rag-excel-card.tsx` (exchange,
+document type, files; `/api/rag/xlsx`), `ownership-lists-card.tsx` (`/api/rag/xlsx/reports`), `RagDocumentsCard` with
+source `XLSX`. Details: [OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md).
+
+### 3.2d Ownership (>=1%) - `/companies/ownership-one-percent` (`COMPANIES`)
+
+`app/(dashboard)/companies/ownership-one-percent/page.tsx` reads the filters from the URL (`?tickers=AADI&holder=&
+transaction=BUY&status=A&group=FUND&from=&to=&sort=CHANGE_DESC`, `lib/ownership-one-percent.ts`), loads the options (the
+latest list with its highlights, the dates, the companies) and the first page of rows, and renders
+`components/ownership-one-percent/one-percent-page-client.tsx`: summary tiles, the highlights of a month (the latest at
+first, another stored month from its dropdown or the previous / next buttons, `/api/ownership/one-percent/highlights`:
+largest buys and sells, new above 1%, no longer above 1%, renamed / blocks moved, the investors in the most
+companies), the filters (tickers, investor, transaction, order, local / foreign, investor type, months; Apply and Reset
+navigate with `{ scroll: false }`), with one ticker `company-one-percent.tsx` (reading, tiles, a bar by investor and one
+by type, each investor followed through its matches, at most 7 months at a time with its own range and older / newer
+arrows, its months on a click; `/api/ownership/one-percent/holders`), with an investor's name
+`entity-one-percent.tsx` (`/api/ownership/one-percent/entities`), and the table (50 rows per page through
+`/api/ownership/one-percent`); badges in `one-percent-badges.tsx` (movement, renamed / block moved, investor type).
+Ingestion › Excel Documents (RAG): `rag-excel-card.tsx` takes the type Ownership (>=1%) (its own notes, files sorted by
+the month in their names), `one-percent-lists-card.tsx` lists the stored monthly lists
+(`/api/rag/xlsx/reports?documentType=OWNERSHIP_1_PERCENT`); the job sheet shows the result of a monthly list. Details:
+[OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md).
 
 ### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
 

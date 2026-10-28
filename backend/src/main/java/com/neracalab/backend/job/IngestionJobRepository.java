@@ -393,6 +393,19 @@ public class IngestionJobRepository {
                 .optional();
     }
 
+    /** The oldest active job of a type for a stored file (of any exchange and company), if any. */
+    public Optional<UUID> activeFileJobOf(IngestionJobType type, long fileId) {
+        return jdbc.sql("""
+                        SELECT job_id FROM ingestion_job
+                        WHERE job_type = :type AND file_id = :fileId
+                          AND status IN ('QUEUED', 'RUNNING', 'WAITING_RATE_LIMIT')
+                        ORDER BY requested_at LIMIT 1""")
+                .param("type", type.name())
+                .param("fileId", fileId)
+                .query((rs, i) -> rs.getObject("job_id", UUID.class))
+                .optional();
+    }
+
     /** The oldest active job of a type for a stored file and company, if any. */
     public Optional<UUID> activeFileJobOf(IngestionJobType type, long fileId, String exchange, String ticker) {
         return jdbc.sql("""

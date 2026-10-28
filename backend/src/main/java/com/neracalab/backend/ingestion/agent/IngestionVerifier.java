@@ -9,6 +9,7 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.ingestion.mapping.Check;
+import com.neracalab.backend.ingestion.mapping.FilingMapper;
 import com.neracalab.backend.ingestion.mapping.MappedStatement;
 import com.neracalab.backend.ingestion.mapping.PeriodRef;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
@@ -139,10 +140,13 @@ public class IngestionVerifier {
             if (column == StatementColumn.CURRENT_PERIOD && p.balanceSheetCash() != null && p.endingCash() != null
                     && p.balanceSheetCash().compareTo(p.endingCash()) != 0) {
                 String rounding = roundingExplanation(session, p);
-                String overdrafts = rounding != null ? null : overdraftExplanation(session, column, p,
+                String immaterial = rounding != null ? null : immaterialExplanation(p);
+                String overdrafts = rounding != null || immaterial != null ? null : overdraftExplanation(session, column, p,
                         storedField(companyId, period, "balance_sheet", "short_term_debt"));
                 if (rounding != null) {
                     notes.add(period.key() + ": " + rounding);
+                } else if (immaterial != null) {
+                    notes.add(period.key() + ": " + immaterial);
                 } else if (overdrafts != null) {
                     notes.add(period.key() + ": " + overdrafts);
                 } else {
@@ -189,6 +193,25 @@ public class IngestionVerifier {
         return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
                 + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
                 + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
+    }
+
+    /**
+     * A filing whose cash flow and balance sheet disagree by a few units of a large cash balance (MGLV FY2024, full
+     * rupiah: the cash flow rolls forward 6,824,569,377 + 959,414,303 = 7,783,983,680, every section adding up, beside a
+     * balance-sheet cash of 7,783,983,677; its FY2025 filing files the same pair as comparatives; error 1067). The gap
+     * is the filing's own, not a misread figure: under a billionth of the cash ({@link FilingMapper#FULL_AMOUNT_SLIP},
+     * the slip the mapper accepts in a cash roll-forward, WIFI FY2022), a note; stored as filed. {@code null} when it is
+     * larger (INDO FY2022's 20,000,000 of 305,326,998,864, error 959, stays a problem).
+     */
+    static String immaterialExplanation(StoredPeriod p) {
+        BigDecimal difference = p.endingCash().subtract(p.balanceSheetCash()).abs();
+        BigDecimal limit = p.balanceSheetCash().abs().max(p.endingCash().abs()).multiply(FilingMapper.FULL_AMOUNT_SLIP);
+        if (difference.signum() == 0 || difference.compareTo(limit) >= 0) {
+            return null;
+        }
+        return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
+                + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
+                + ", under a billionth of the cash: a slip in the filing, stored as filed";
     }
 
     /**

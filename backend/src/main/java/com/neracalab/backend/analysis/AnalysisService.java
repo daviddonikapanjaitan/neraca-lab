@@ -36,8 +36,13 @@ import com.neracalab.backend.company.CompanyService;
 import com.neracalab.backend.company.Exchange;
 import com.neracalab.backend.job.IngestionJobRepository;
 import com.neracalab.backend.job.IngestionJobStatus;
+import com.neracalab.backend.ownership.OwnershipDigest;
+import com.neracalab.backend.ownership.OwnershipRepository;
+import com.neracalab.backend.ownership.onepercent.OnePercentDigest;
+import com.neracalab.backend.ownership.onepercent.OnePercentRepository;
 import com.neracalab.backend.price.provider.PriceProviderException;
 import com.neracalab.backend.rag.EmbeddingClient;
+import com.neracalab.backend.rag.ExcelDocumentType;
 import com.neracalab.backend.rag.RagRepository;
 import com.neracalab.backend.registration.RegistrationRepository;
 import com.neracalab.backend.screening.InvestorAgent;
@@ -64,10 +69,14 @@ import tools.jackson.databind.json.JsonMapper;
  * <ol>
  *   <li><b>Company data</b> (no model): the fact sheet from the stored statements, metrics, prices and valuations
  *       ({@link FactSheet}); the directors' and commissioners' shares month by month from the monthly registration
- *       reports ({@link InsiderOwnership}); the Yahoo Finance market data (its fundamentals refreshed when stale) and
+ *       reports ({@link InsiderOwnership}); the holders of more than 5% and their daily movements from KSEI's lists
+ *       ({@link OwnershipDigest}, Companies > Ownership (>=5%)); the holders of more than 1% and their monthly
+ *       movements from KSEI's monthly lists ({@link OnePercentDigest}, Companies > Ownership (>=1%)); the Yahoo Finance market data (its fundamentals
+ *       refreshed when stale) and
  *       the quantitative scorecard of every agent ({@link QuantScorer}, as in the screening).</li>
  *   <li><b>Research agent</b> (ReAct + tool calling over the company's stored financial statement PDFs, monthly
- *       registration reports and news, {@link AnalysisResearchAgent}): a brief with references.</li>
+ *       registration reports, ownership document and news, {@link AnalysisResearchAgent}): a brief with
+ *       references.</li>
  *   <li><b>Investor agents</b>: one independent call each, sharing the system prompt and the dossier (cacheable
  *       prefix); <b>Reflection</b>: the validator checks every answer, a critic reviews the flagged ones;
  *       <b>Reflexion</b>: lessons of earlier runs are in the prompts, the issues of this one become lessons.</li>
@@ -99,6 +108,8 @@ public class AnalysisService {
     private final EmbeddingClient embeddings;
     private final RagRepository rag;
     private final RegistrationRepository registrations;
+    private final OwnershipRepository ownership;
+    private final OnePercentRepository onePercent;
     private final ScreeningProperties screening;
     private final AnalysisProperties properties;
     private final JsonReplies json;
@@ -107,6 +118,7 @@ public class AnalysisService {
                            AnalysisResearchAgent research, InvestorPanel panel, AnalysisSynthesisAgent synthesis,
                            ReflexionMemory memory, AnalysisRepository repository, IngestionJobRepository jobs,
                            EmbeddingClient embeddings, RagRepository rag, RegistrationRepository registrations,
+                           OwnershipRepository ownership, OnePercentRepository onePercent,
                            ScreeningProperties screening, AnalysisProperties properties, JsonMapper mapper) {
         this.companies = companies;
         this.etl = etl;
@@ -120,6 +132,8 @@ public class AnalysisService {
         this.embeddings = embeddings;
         this.rag = rag;
         this.registrations = registrations;
+        this.ownership = ownership;
+        this.onePercent = onePercent;
         this.screening = screening;
         this.properties = properties;
         this.json = new JsonReplies(mapper);
@@ -180,7 +194,9 @@ public class AnalysisService {
         StoredDocuments documents = repository.storedDocuments(p.companyId(), DOCUMENT_TITLES);
         Map<String, Object> marketData = marketData(market, exchange.currency());
         Map<String, Object> insiders = insiderOwnership(exchange, ticker, notes);
-        repository.saveContext(id, context(facts, marketData, documents, market, insiders),
+        OwnershipDigest.Digest major = majorShareholders(exchange, ticker, notes);
+        OnePercentDigest.Digest wider = shareholdersAbove1Percent(exchange, ticker, notes);
+        repository.saveContext(id, context(facts, marketData, documents, market, insiders, major, wider),
                 market == null ? null : market.snapshot().snapshotDate());
         checkInterrupted();
 
@@ -189,17 +205,21 @@ public class AnalysisService {
         ModelPrice agentPrice = screening.llm().price(screening.llm().agentModel());
 
         // ---- research agent (ReAct + tools over the stored filings and news)
-        progress(id, meter, "Research agent: reading " + ticker + "'s filings, registration reports and news");
+        progress(id, meter, "Research agent: reading " + ticker + "'s filings, registration reports, ownership lists "
+                + "and news");
         ContextTools tools = new ContextTools(p.companyId(), ticker, facts, embeddings, rag, meter, properties,
-                documents.filings() > 0, documents.news() > 0, documents.registrations() > 0);
+                documents.filings() > 0, documents.news() > 0, documents.registrations() > 0, documents.ownership() > 0,
+                documents.onePercent() > 0);
         AnalysisResearchAgent.Subject subject = new AnalysisResearchAgent.Subject(ticker,
                 detail.company().companyName(), detail.company().sector(), facts.periodNames(), documents.filingTitles(),
                 documents.filings(), documents.newsTitles(), documents.news(), documents.registrationTitles(),
-                documents.registrations());
+                documents.registrations(), documents.ownership() > 0 ? documents.ownershipTitle() : null,
+                documents.onePercent() > 0 ? documents.onePercentTitle() : null);
         boolean allowResearch = meter.allows(researchPrice.cost(30_000, 3_000), reserve);
         AnalysisResearchAgent.Result r = research.research(meter, subject, tools, allowResearch);
         boolean researchDegraded = false;
-        if (documents.filings() == 0 && documents.news() == 0 && documents.registrations() == 0) {
+        if (documents.filings() == 0 && documents.news() == 0 && documents.registrations() == 0
+                && documents.ownership() == 0 && documents.onePercent() == 0) {
             notes.add("No PDF documents or news are stored for " + ticker + "; upload them (Ingestion > PDF Documents "
                     + "(RAG), News (RAG)) so the research agent can read them.");
         } else if (r.note() != null) {
@@ -218,6 +238,10 @@ public class AnalysisService {
         dossier.put("marketData", marketData == null ? "not available (the stock is not in the screening data)" : marketData);
         dossier.put("insiderOwnership", insiders == null
                 ? "not available (no monthly registration reports of the company are stored)" : insiders);
+        dossier.put("majorShareholders", major == null
+                ? "not available (no KSEI daily list of the shareholders of more than 5% names the company)" : major);
+        dossier.put("shareholdersAbove1Percent", wider == null
+                ? "not available (no KSEI monthly list of the shareholders of more than 1% names the company)" : wider);
         dossier.put("research", r.brief());
         String dossierText = "COMPANY DOSSIER\n" + json.write(dossier);
         Set<String> metricKeys = new LinkedHashSet<>(StockProfile.METRIC_KEYS);
@@ -324,6 +348,12 @@ public class AnalysisService {
         input.put("keyFigures", keyFigures(facts.overview()));
         if (insiders != null) {
             input.put("insiderOwnership", insiderSummary(insiders));
+        }
+        if (major != null) {
+            input.put("majorShareholders", majorSummary(major));
+        }
+        if (wider != null) {
+            input.put("shareholdersAbove1Percent", widerSummary(wider));
         }
         input.put("research", r.brief());
         input.put("dataNotes", List.copyOf(notes.messages));
@@ -489,6 +519,78 @@ public class AnalysisService {
         return InsiderOwnership.of(reports, rows, registrations.holders(exchange.code(), ticker));
     }
 
+    /**
+     * The holders of more than 5% of the company and their movements over every stored KSEI daily list (Companies >
+     * Ownership (>=5%)); null, with a note, when no list names the company.
+     */
+    private OwnershipDigest.Digest majorShareholders(Exchange exchange, String ticker, Notes notes) {
+        OwnershipDigest.Digest digest = OwnershipDigest.of(ticker, ownership.holders(exchange.code(),
+                ExcelDocumentType.OWNERSHIP_5_PERCENT, ticker, null, null));
+        if (digest == null) {
+            notes.add("No KSEI daily list of the shareholders of more than 5% names " + ticker + ": the agents did not "
+                    + "see the large holders' daily movements (upload the lists on Ingestion > Excel Documents (RAG), "
+                    + "Ownership (>=5%)).");
+        }
+        return digest;
+    }
+
+    /**
+     * The holders of more than 1% of the company and their monthly movements over every stored KSEI monthly list
+     * (Companies > Ownership (>=1%)); null, with a note, when no list names the company.
+     */
+    private OnePercentDigest.Digest shareholdersAbove1Percent(Exchange exchange, String ticker, Notes notes) {
+        OnePercentDigest.Digest digest = OnePercentDigest.of(ticker, onePercent.holders(exchange.code(), ticker, null,
+                null));
+        if (digest == null) {
+            notes.add("No KSEI monthly list of the shareholders of more than 1% names " + ticker + ": the agents did "
+                    + "not see the wider shareholder base (upload the lists on Ingestion > Excel Documents (RAG), "
+                    + "Ownership (>=1%)).");
+        }
+        return digest;
+    }
+
+    /** What the synthesis gets of the holders of more than 1%: the reading, the totals, the types, the holders. */
+    static Map<String, Object> widerSummary(OnePercentDigest.Digest digest) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("latestDate", digest.latestDate());
+        out.put("months", digest.months());
+        out.put("reading", digest.reading());
+        out.put("totals", digest.totals());
+        out.put("byType", digest.byType());
+        out.put("holders", digest.holders().stream().limit(15).map(h -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", h.name());
+            m.put("type", h.investorType());
+            m.put("status", h.status());
+            m.put("ownership", h.ownership());
+            m.put("netChange", h.netChange());
+            m.put("since", h.since());
+            return m;
+        }).toList());
+        out.put("transactions", digest.transactions().subList(0, Math.min(15, digest.transactions().size())));
+        return out;
+    }
+
+    /** What the synthesis gets of the holders of more than 5%: the reading, the totals, the holders, the latest movements. */
+    static Map<String, Object> majorSummary(OwnershipDigest.Digest digest) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("latestDate", digest.latestDate());
+        out.put("days", digest.days());
+        out.put("reading", digest.reading());
+        out.put("totals", digest.totals());
+        out.put("holders", digest.holders().stream().map(h -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", h.name());
+            m.put("status", h.status());
+            m.put("ownership", h.ownership());
+            m.put("netChange", h.netChange());
+            m.put("since", h.since());
+            return m;
+        }).toList());
+        out.put("transactions", digest.transactions().subList(0, Math.min(15, digest.transactions().size())));
+        return out;
+    }
+
     /** What the synthesis gets of the insider section: the reading, the totals and the transactions. */
     static Map<String, Object> insiderSummary(Map<String, Object> insiders) {
         Map<String, Object> out = new LinkedHashMap<>();
@@ -501,11 +603,14 @@ public class AnalysisService {
     }
 
     private static Map<String, Object> context(FactSheet facts, Map<String, Object> marketData, StoredDocuments documents,
-                                               Market market, Map<String, Object> insiders) {
+                                               Market market, Map<String, Object> insiders,
+                                               OwnershipDigest.Digest major, OnePercentDigest.Digest wider) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("factSheet", facts.overview());
         c.put("marketData", marketData);
         c.put("insiderOwnership", insiders);
+        c.put("majorShareholders", major);
+        c.put("shareholdersAbove1Percent", wider);
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("pdfDocuments", documents.filings());
         d.put("newsArticles", documents.news());
@@ -513,6 +618,8 @@ public class AnalysisService {
         d.put("latestNews", documents.newsTitles());
         d.put("registrationReports", documents.registrations());
         d.put("registrationTitles", documents.registrationTitles());
+        d.put("ownershipDocument", documents.ownership() > 0 ? documents.ownershipTitle() : null);
+        d.put("onePercentDocument", documents.onePercent() > 0 ? documents.onePercentTitle() : null);
         c.put("documents", d);
         c.put("periods", facts.periodNames());
         c.put("quantitativeScorecards", market != null && !market.scores().isEmpty());

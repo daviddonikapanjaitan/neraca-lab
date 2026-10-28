@@ -1,3 +1,6 @@
+import type { OwnershipDigest } from "@/lib/ownership"
+import type { OnePercentDigest } from "@/lib/ownership-one-percent"
+
 // Response types of the Neraca Lab backend (docs/v1_docs/COMPANY_API_DOCS.md).
 // Amounts are full units of the company currency; null = not reported.
 
@@ -248,6 +251,8 @@ export interface Valuation {
   psRatio: Amount
   pbRatio: Amount
   evEbitda: Amount
+  /** the EBITDA of evEbitda: "TTM", or "FY 2025" (the full year, when the trailing twelve months are not derivable) */
+  ebitdaBasis: string | null
   evSales: Amount
   evOp: Amount
   fcfYield: Amount
@@ -293,8 +298,10 @@ export type IngestionJobType =
   | "MACRO_ANALYSIS"
   | "LISTING_PRICES"
   | "TECHNICAL_SCREENING"
+  | "RAG_XLSX"
 
-export type RagSourceType = "PDF" | "NEWS"
+/** PDF: an uploaded PDF; NEWS: a news article; XLSX: a company's document built from Excel lists (its ownership) */
+export type RagSourceType = "PDF" | "NEWS" | "XLSX"
 
 /**
  * What a PDF of a company is (Ingestion > PDF Documents (RAG)): a financial statement (the default) or a monthly
@@ -320,8 +327,11 @@ export interface RagStatus {
   maxRangeDays: number
   /** RAG jobs waiting in the queue */
   pending: number
-  /** pdfDocuments: of the companies; macroDocuments: of the countries; chunks: all */
-  stored: { pdfDocuments: number; newsDocuments: number; macroDocuments: number; chunks: number }
+  /**
+   * pdfDocuments: of the companies; macroDocuments: of the countries; xlsxDocuments: the companies' ownership
+   * documents (KSEI lists of the shareholders of more than 5%); chunks: all
+   */
+  stored: { pdfDocuments: number; newsDocuments: number; macroDocuments: number; chunks: number; xlsxDocuments?: number }
   /** the countries of the macro documents (only the available ones take uploads) */
   macroCountries: MacroDocumentCountry[]
   macroDocumentTypes: MacroDocumentTypeOption[]
@@ -1014,6 +1024,12 @@ export interface AnalysisCompanyOption {
   registrationReports: number
   firstRegistrationPeriod: string | null
   latestRegistrationPeriod: string | null
+  /** KSEI daily lists of the shareholders of more than 5% naming the company (Companies > Ownership (>=5%)) */
+  ownershipDays?: number
+  latestOwnershipDate?: string | null
+  /** KSEI monthly lists of the shareholders of more than 1% naming the company (Companies > Ownership (>=1%)) */
+  onePercentMonths?: number
+  latestOnePercentDate?: string | null
 }
 
 /** GET /api/v1/analyses/options */
@@ -1080,8 +1096,11 @@ export interface ResearchBriefView {
 /** An excerpt the research agent retrieved from the vector store. */
 export interface RetrievedExcerpt {
   ref: string
-  /** PDF (a financial statement), REGISTRATION (a monthly registration report) or NEWS */
-  source: RagSourceType | "REGISTRATION"
+  /**
+   * PDF (a financial statement), REGISTRATION (a monthly registration report), OWNERSHIP (KSEI's 5% lists),
+   * OWNERSHIP_1_PERCENT (KSEI's monthly 1% lists) or NEWS
+   */
+  source: RagSourceType | "REGISTRATION" | "OWNERSHIP" | "OWNERSHIP_1_PERCENT"
   title: string | null
   /** pages of a PDF, date of a news article */
   where: string | null
@@ -1128,9 +1147,17 @@ export interface AnalysisContext {
     latestNews: string[]
     registrationReports?: number
     registrationTitles?: string[]
+    /** the title of the company's ownership document (KSEI lists); null when none is stored */
+    ownershipDocument?: string | null
+    /** the title of the company's 1% ownership document (KSEI monthly lists); null when none is stored */
+    onePercentDocument?: string | null
   } | null
   /** the directors' and commissioners' shares from the monthly registration reports; null when none is stored */
   insiderOwnership?: InsiderOwnershipView | null
+  /** the holders of more than 5% from KSEI's daily lists; null when no list names the company */
+  majorShareholders?: OwnershipDigest | null
+  /** the holders of more than 1% from KSEI's monthly lists; null when no list names the company */
+  shareholdersAbove1Percent?: OnePercentDigest | null
   periods: string[]
   quantitativeScorecards: boolean
 }

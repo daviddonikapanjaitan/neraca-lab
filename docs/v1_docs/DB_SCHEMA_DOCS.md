@@ -39,6 +39,9 @@ foreign key.
 | `V1.0.22__data_TUGU_shares.sql`           | TUGU's 1:2 stock split of 2023-05-24 from public sources (the FY2023 filing does not restate its FY2022 comparative, so the split is never detected from the filings), split-adjusted share counts 3,555,575,600 where empty and the per-share figures of the dates before it on the basis after it; no-op until TUGU is uploaded |
 | `V1.0.24__data_BACH_shares.sql`           | BACH's share count after its IPO of 2026-07-08 (615,000,000 new shares at Rp 442, after its only filing, H1 2026): 4,084,430,000 from the listing date and the IPO in `corporate_action`; no-op until BACH is uploaded; also run after every upload |
 | `V1.0.31__data_BNBR_shares.sql`           | BNBR share counts its filings cannot give (five par-value series) and Yahoo Finance gives wrong: 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31; the placement and the rights issue in `corporate_action`. Runs before V1.0.6 and after every upload |
+| `V1.0.37__data_RANS_shares.sql`           | RANS share counts its only filing does not give and Yahoo Finance gives wrong: 10,084,250,000 founders' shares at 2025-12-31, 12,609,250,000 from the IPO of 2026-07-10 (2,525,000,000 shares offered) and that corporate action |
+| `V1.0.36__schema_valuation_ebitda_basis.sql` | `valuation_snapshot.ebitda_basis`: the EBITDA of EV / EBITDA (TTM, else the full year inside the trailing window) |
+| `V1.0.35__data_ENRG_shares.sql`           | ENRG share counts its USD filings do not give and Yahoo Finance gives wrong: 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 2026-06-12 (and that corporate action); the rights issue of October 2026 not yet (its result not announced) |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 | `V1.0.26__data_markets_macro.sql`         | the catalogs: 35 instruments (USDIDR, USDJPY, USDCNY, USDMYR, USDPHP, USDINR, USDKRW, EURUSD, AUDJPY; BRENT, WTI, NATURAL_GAS, LNG, COAL, GOLD, SILVER, COPPER, ALUMINIUM, IRON_ORE, STEEL_HRC, NICKEL, TIN, COBALT, PALM_OIL, PALM_OIL_MYR, SOYBEAN_OIL, SOYBEAN_MEAL, CORN, WHEAT, SUGAR, RUBBER, PULP, UREA, DAP, POTASH) and 25 macro series (FRED, Bank Indonesia, CNBC, CFTC, Yahoo, manual), each brought back to its definition on every start |
 
@@ -281,7 +284,7 @@ At most one row per period. All amounts `NUMERIC(24,4)` unless stated.
 | `amortization`         |                   | Amortization of intangibles                                          |
 | `operating_income`     |                   | Operating profit (the "OP" of EV/OP)                                 |
 | `ebit`                 |                   |                                                                      |
-| `ebitda`               |                   |                                                                      |
+| `ebitda`               |                   | `ebit` + the "Depreciation and amortisation expenses" a profit or loss by nature states (every column alike), else `ebit + depreciation + amortization` (roll-forward notes: current column only) |
 | `interest_income`      |                   |                                                                      |
 | `interest_expense`     |                   | Positive                                                             |
 | `pretax_income`        |                   |                                                                      |
@@ -519,7 +522,8 @@ are corrected.
 | `pe_ratio`             | `NUMERIC(20,8)` | `share_price / eps_ttm`                                                     |
 | `ps_ratio`             | `NUMERIC(20,8)` | `market_cap / revenue_ttm`                                                  |
 | `pb_ratio`             | `NUMERIC(20,8)` | `market_cap / book_value`                                                   |
-| `ev_ebitda`            | `NUMERIC(20,8)` | `enterprise_value / ebitda_ttm`                                             |
+| `ev_ebitda`            | `NUMERIC(20,8)` | `enterprise_value / ebitda_ttm`; for an interim period without TTM EBITDA, `enterprise_value /` the EBITDA of the full year inside its trailing window (`ebitda_basis`) |
+| `ebitda_basis`         | `VARCHAR(20)`   | the EBITDA of `ev_ebitda`: `TTM`, `FY 2025` (the full year: the comparative interim period has no depreciation), NULL (none; V1.0.36) |
 | `ev_sales`             | `NUMERIC(20,8)` | `enterprise_value / revenue_ttm`                                            |
 | `ev_op`                | `NUMERIC(20,8)` | **EV / operating profit** = `enterprise_value / operating_income_ttm`       |
 | `fcf_yield`            | `NUMERIC(20,8)` | `fcf_ttm / market_cap`                                                      |
@@ -766,6 +770,91 @@ Indexes `ix_registration_insider_company` (`company_id, period DESC`), `ix_regis
 | `controller`, `controller_affiliate` | BOOLEAN | marked Pengendali / Afiliasi Pengendali |
 
 Index `ix_registration_holder_company` (`company_id, period DESC`).
+
+### 4.12b KSEI daily lists of the shareholders of more than 5% (`V1.0.33__schema_ownership.sql`)
+
+`ownership_report`: one list per exchange, document type and day (OWNERSHIP_DOCS.md); the list of a day uploaded
+again replaces it.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `report_id` | BIGSERIAL PK | |
+| `exchange`, `document_type` | VARCHAR(10), VARCHAR(30) | IDX, `OWNERSHIP_5_PERCENT` (`ck_ownership_report_type`) |
+| `report_date`, `previous_date` | DATE NOT NULL | the list's date and the trading day it is compared with (`previous_date < report_date`) |
+| `title`, `announcement_number` | VARCHAR(500), VARCHAR(30) | the title above the table; the number in the file name (`peng-2026-10-27-00104-...` -> 00104) |
+| `file_id` / `file_name` | BIGINT / VARCHAR(255) | -> `ingestion_file` |
+| `issuers`, `holders`, `accounts`, `aliases` | INTEGER NOT NULL | companies, investors (aliases included), accounts, investors listed again under another name |
+| `warnings`, `notes` | TEXT | accounts that do not add up / rows not read; numbers read as written although they may be thousands; one per line, NULL when none |
+| `job_id`, `created_at`, `updated_at` | | |
+
+Unique `(exchange, document_type, report_date)`; index `ix_ownership_report_date`.
+
+`ownership_holder`: an investor (SID) of a list.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `holder_id` | BIGSERIAL PK | |
+| `report_id` | BIGINT NOT NULL | -> `ownership_report`, `ON DELETE CASCADE` |
+| `exchange`, `report_date`, `previous_date` | | repeated from the report for filtering |
+| `ticker`, `issuer_name` | VARCHAR(20), VARCHAR(300) | Kode Efek, Nama Emiten (no foreign key: most listed companies are not stored) |
+| `list_number` | INTEGER NOT NULL | No; unique with `report_id` |
+| `holder_name`, `holder_key` | VARCHAR(300) | Nama Pemegang Saham; the name normalized (upper case, letters and digits, without PT / Tbk) |
+| `alias_of` | INTEGER | `list_number` of the investor listed before with the same company, totals and accounts; NULL for the first |
+| `nationality`, `domicile`, `investor_status` | VARCHAR(100), VARCHAR(100), CHAR(1) | Kebangsaan, Domisili, L (local) / A (foreign) |
+| `shares_previous`, `percent_previous` | BIGINT, NUMERIC(9,4) | combined shares and percentage of the shares listed on `previous_date`; NULL = not in the list then |
+| `shares_current`, `percent_current` | BIGINT, NUMERIC(9,4) | on `report_date` |
+| `change_shares` | BIGINT, generated | `shares_current - shares_previous` |
+| `movement` | VARCHAR(10), generated | `BUY`, `SELL`, `UNCHANGED`, `ENTERED` (previous NULL), `EXITED` (current NULL) |
+| `accounts`, `account_moves` | INTEGER NOT NULL | accounts; accounts whose shares changed |
+
+Indexes `ix_ownership_holder_ticker` (`exchange, ticker, report_date DESC`), `ix_ownership_holder_key`,
+`ix_ownership_holder_report` (`report_id, ticker, holder_key`), `ix_ownership_holder_date` (`report_date DESC,
+movement`).
+
+`ownership_account`: a securities account of an investor: `holder_id` (-> `ownership_holder`, `ON DELETE CASCADE`),
+`account_index` (unique with `holder_id`), `participant` (VARCHAR(200): the broker or custodian, Nama Pemegang Rekening
+Efek), `account_name` (VARCHAR(300)), `nationality`, `domicile`, `investor_status`, `shares_previous`,
+`shares_current` (NULL: no holding that day, the account opened / closed), `change_shares` (generated).
+
+`v_ownership_movement`: every row of `ownership_holder` with its `document_type` (`left_list` false), and for every list
+whose day before is stored each investor of the day before that is not in the day's list (`left_list` true,
+`movement` EXITED, its shares of the day before as `shares_previous`, `holder_id` / `holder_report_id` its row of the
+day before). KSEI does not list an investor that fell below 5%: this is how it is found.
+
+`rag_document.source_type` may be `XLSX` (`ck_rag_document_source_type`, V1.0.33): a company's ownership document
+(`source_key` `OWNERSHIP_5_PERCENT`, no document type).
+
+### 4.12c KSEI monthly lists of the shareholders of more than 1% (`V1.0.34__schema_ownership_one_percent.sql`)
+
+`ownership_one_report`: one list per exchange, document type (`OWNERSHIP_1_PERCENT`) and date (unique; the list of a
+date uploaded again replaces it): `report_date` (its DATE column, the month's last trading day), `previous_date` (the
+stored list it is compared with, the latest before it; NULL when none), `announcement_number`, `file_id` /
+`file_name`, `issuers`, `holders` (investors), `source_rows` (rows of the sheet, `>= holders`), `warnings`, `notes`,
+`job_id`. Index `ix_ownership_one_report_date`.
+
+`ownership_one_holder`: an investor of a company in a list.
+
+| Column | Type | Content |
+|---|---|---|
+| `report_id` | BIGINT NOT NULL | -> `ownership_one_report`, `ON DELETE CASCADE` |
+| `exchange`, `report_date` | | repeated from the report |
+| `ticker`, `issuer_name`, `list_number` | | the company; its order in the list (unique per report) |
+| `holder_name`, `holder_key`, `other_names`, `source_rows` | | as listed (its largest row); normalized (without PT / Tbk / Persero / Pte Ltd / Limited / Inc / titles); the other names of its rows; rows counted together |
+| `investor_type`, `type_group` | VARCHAR(100), VARCHAR(20) | the label; INDIVIDUAL, CORPORATE, FUND, FINANCIAL, GOVERNMENT or OTHER (`ck_ownership_one_holder_group`) |
+| `investor_status`, `nationality`, `domicile` | CHAR(1), ... | L / A (`ck_ownership_one_holder_status`) |
+| `shares_scripless`, `shares_scrip`, `shares`, `percent` | BIGINT, NUMERIC(9,4) | the month end's holding |
+| `previous_date`, `previous_holder_id`, `previous_name`, `match_kind`, `shares_previous`, `percent_previous` | | the comparison: the list before, the row there (-> `ownership_one_holder`, `ON DELETE SET NULL`), its name, SAME / RENAMED / MOVED (`ck_ownership_one_holder_match`), its shares and percentage; match and shares set together (`ck_ownership_one_holder_previous`) |
+| `change_shares`, `movement` | generated | shares - shares_previous; BUY, SELL, UNCHANGED, ENTERED, NULL (no list before) |
+| `continued` | BOOLEAN | an investor of the next stored list is matched with it (added by `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` too) |
+
+Indexes `ix_ownership_one_holder_ticker`, `_key`, `_report`, `_date`, `_previous`. The comparison columns and
+`continued` are written by the application (`OnePercentRepository.relink`) when a list is stored, replaced or removed,
+for it and for the stored list after it.
+
+`v_ownership_one_movement`: every row of `ownership_one_holder` (`left_list` false), and for every list with a stored
+list before it each investor of that list that is not `continued` (`left_list` true, `movement` EXITED, its shares then
+as `shares_previous`, `holder_id` its row there). `rag_document.source_key` `OWNERSHIP_1_PERCENT`: a company's 1%
+ownership document. Details: [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md).
 
 ### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)
 

@@ -70,6 +70,7 @@ export const TYPE_LABEL: Record<IngestionJobType, string> = {
   MACRO_ANALYSIS: "AI macro analysis",
   LISTING_PRICES: "Price history (screening)",
   TECHNICAL_SCREENING: "AI technical screening",
+  RAG_XLSX: "Excel document (RAG)",
 }
 
 /** "Rina Wijaya (rina)", "rina (deleted user)", "Scheduled run" */

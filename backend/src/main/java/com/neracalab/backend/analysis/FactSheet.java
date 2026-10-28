@@ -311,6 +311,8 @@ public final class FactSheet {
         put(m, "pb", plain(v.pbRatio(), 2));
         put(m, "ps", plain(v.psRatio(), 2));
         put(m, "evEbitda", plain(v.evEbitda(), 2));
+        // "TTM", or "FY 2025": the full year's EBITDA when the trailing twelve months are not derivable
+        put(m, "evEbitdaBasis", v.evEbitda() == null ? null : v.ebitdaBasis());
         put(m, "evSales", plain(v.evSales(), 2));
         put(m, "fcfYield", plain(v.fcfYield(), 4));
         put(m, "earningsYield", plain(v.earningsYield(), 4));

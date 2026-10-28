@@ -9,6 +9,8 @@ import { redirect } from "next/navigation"
 import { SESSION_COOKIE } from "@/lib/session-cookie"
 import type { MacroOutlook } from "@/lib/macro"
 import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } from "@/lib/macro-analysis"
+import type { ExcelStatus, MovementPage, OwnershipOptions, OwnershipReportPage } from "@/lib/ownership"
+import type { OnePercentOptions, OnePercentPage, OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
 import type {
   TechnicalScreeningOptions,
@@ -208,6 +210,35 @@ export const getRagDocuments = cache((source: RagSourceType, limit: number) =>
 /** GET /api/v1/rag/macro/documents?country=&limit= (macro documents of a country, latest publication first) */
 export const getRagMacroDocuments = cache((country: string, limit: number) =>
   get<MacroRagDocumentPage>(`/api/v1/rag/macro/documents?country=${encodeURIComponent(country)}&limit=${limit}`)
+)
+
+/** GET /api/v1/rag/xlsx/status (the exchanges and their Excel document types, the lists stored) */
+export const getExcelStatus = cache(() => get<ExcelStatus>("/api/v1/rag/xlsx/status"))
+
+/** GET /api/v1/rag/xlsx/reports?limit= (the stored ownership lists, latest day first; permission INGESTION) */
+export const getExcelReports = cache((limit: number) =>
+  get<OwnershipReportPage>(`/api/v1/rag/xlsx/reports?limit=${limit}`)
+)
+
+/** GET /api/v1/rag/xlsx/reports?documentType=OWNERSHIP_1_PERCENT&limit= (the stored monthly 1% lists) */
+export const getOnePercentReports = cache((limit: number) =>
+  get<OnePercentReportPage>(`/api/v1/rag/xlsx/reports?documentType=OWNERSHIP_1_PERCENT&limit=${limit}`)
+)
+
+/** GET /api/v1/ownership/one-percent/options (the latest monthly list and its highlights, the dates, the companies) */
+export const getOnePercentOptions = cache(() => get<OnePercentOptions>("/api/v1/ownership/one-percent/options"))
+
+/** GET /api/v1/ownership/one-percent?tickers&holder&transaction&status&group&from&to&sort&limit&offset */
+export const getOnePercentMovements = cache((query: string) =>
+  get<OnePercentPage>(`/api/v1/ownership/one-percent${query ? `?${query}` : ""}`)
+)
+
+/** GET /api/v1/ownership/options (the latest list and its largest movements, the dates, the companies) */
+export const getOwnershipOptions = cache(() => get<OwnershipOptions>("/api/v1/ownership/options"))
+
+/** GET /api/v1/ownership?tickers&holder&transaction&status&from&to&aliases&limit&offset */
+export const getOwnershipMovements = cache((query: string) =>
+  get<MovementPage>(`/api/v1/ownership${query ? `?${query}` : ""}`)
 )
 
 /** GET /api/v1/registrations/companies (the companies with registration reports, the filter options) */

@@ -680,7 +680,7 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not; BBCA FY2022: the count accepted at 2022-12-31 is carried to 2021-12-31 and 2020-12-31 (share capital unchanged, no treasury stock, the FY2021 EPS confirms it), never to a date the website publishes itself, never with treasury stock (BFIN), never where the EPS contradicts it |
 | `FilingMapperWebSplitsTest` (unit) | the share counts of the error log of 2026-10-16: BKSL FY2025 uses no par value (par 50 fits only FY2024's EPS) and gets Yahoo's 167,708,902,705; CUAN FY2024 accepts Yahoo's split-adjusted count only with the 1:10 split of 2025-07-15 (11,241,890,000 before it), CUAN H1 2026 has dates on both sides of it; DSSA FY2023 predates both splits and its end count fits between the start and end counts (buyback), FY2024 needs only the 2026 split, H1 2026's EPS fits no count; BUKA FY2025's end count 92,970,828,660 with 10,177,877,407 treasury shares (buyback), H1 2026's EPS outside the counts refused; BKSL FY2023's rights issue gives no range |
 | `FilingMapperAdroTest` (unit) | ADRO FY2023 tags only gross profit: revenue from the revenue breakdown (6,517,556 thousand USD), cost = revenue - gross profit; without a breakdown both stay empty |
-| `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error |
+| `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error; MGLV FY2024: ending cash 3 rupiah above the balance sheet's 7,783,983,677, under a billionth of it - a note; INDO FY2022's 20,000,000 stays an error |
 | `FilingMapperAdmrArtoBrmsTest` (unit) | the error log of 2026-10-18: ADMR lines filed with decimals outside the investing total (-322,409,000); ARTO's syirkah funds from their lines (526,059 / 110,361 million); BRMS's EPS filed per 1,000 shares (0.00035 per share with Yahoo's 141,784,040,338 shares; counts that fit neither way change nothing) |
 | `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
@@ -843,7 +843,10 @@ including `depreciation` and `amortization` where the statements show them as ro
 come from the roll-forward notes, as usual). Not rows of the statements, and therefore not the model's:
 `rd_expense`, and the share counts, which come from the share capital of the equity statement or - when
 that gives none - from Yahoo Finance checked against the filing's EPS, as for every upload. `ebit` /
-`ebitda` are derived from the model's values. An EPS gets the sign of the profit attributable to the parent.
+`ebitda` are derived from the model's values: `ebitda` is `ebit` plus the "Depreciation and amortisation expenses"
+the profit or loss states when it is by nature (`FilingMapper.statedDepreciationAndAmortization`, every column alike,
+the interim comparative too), else `ebit + depreciation + amortization`. An EPS gets the sign of the profit
+attributable to the parent.
 
 For a workbook of a taxonomy the rules do not map, nothing of the rule-based extraction is shown to the
 model and nothing can be adopted.
@@ -958,6 +961,31 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### Valuation gaps of 2026-10-29: EBITDA of the interim comparative, POLY, RANS
+
+Companies › Fundamentals had no EV / EBITDA in the latest valuation of 191 of 198 companies (20 financials, none by
+design): the trailing twelve months of H1 2026 (H1 2026 + FY2025 - H1 2025) need H1 2025's depreciation, and an H1
+2026 filing gives it only when its profit or loss by nature states it (the roll-forward notes cover the current period
+only); only HRTA and INDF had their own H1 2025 filing uploaded.
+
+| Cause | Fix |
+|---|---|
+| **The comparative's depreciation.** 180 of the 194 H1 2026 workbooks give H1 2025 no depreciation anywhere; 11 companies' profits or losses by nature state "Depreciation and amortisation expenses" in both columns (BACH, BIPI, BREN, BUKA, EXCL, GMFI, ISAT, MNCN, MSIN, NSSS, TLKM), while the current column took the roll-forward's additions to accumulated depreciation, which differ (TLKM H1 2026 14,370 billion beside the 17,203 stated; NSSS 32,899 million beside 80,672), so a trailing sum mixed the two. | `FilingMapper.statedDepreciationAndAmortization`: EBITDA is EBIT plus the stated figure in every column (rule-based and full-text extraction alike). Their filings must be uploaded again to store it. The 3670000 cost of sales note's depreciation (BIRD, JSMR, TOWR) is only the part in cost of sales: not used. |
+| **No trailing EBITDA at all.** | `valuation_snapshot.ebitda_basis` (V1.0.36): an interim period's EV / EBITDA takes the full year inside its trailing window (FY 2025 for H1 2026) when its TTM EBITDA is not derivable, marked "(FY 2025)" on the company page; the exact TTM replaces it once the H1 2025 filing is uploaded. 163 of 198 latest valuations have EV / EBITDA now (7 TTM, 156 FY 2025); 19 financials have none by design; 15 companies' FY2025 has depreciation without amortization or the reverse (intangibles grew more than their purchases, or were sold), so no EBITDA is derivable; BACH has no full year yet. |
+| **A filing under another company's name.** `data/IDX_XBRL/SGER/xlsx/FinancialStatement-2023-Tahunan-SGER.xlsx` was Asia Pacific Fibers' (POLY) Q3 2023 filing; the upload rightly stored it under POLY (the entity code), which created a company with 2022 - 9M 2023 figures and no share count. | POLY deleted; the file moved to `data/IDX_XBRL/POLY/xlsx/FinancialStatement-2023-III-POLY.xlsx`. SGER is complete without it (FY2023 from the FY2024 filing's comparative). |
+| **A new listing without a share count.** RANS listed on 2026-07-10; its H1 2026 filing gives none and Yahoo Finance's fits none of its EPS. | `V1.0.37__data_RANS_shares.sql`: 10,084,250,000 founders' shares, 12,609,250,000 after the offering (IDX's listing announcement; KSEI's lists bound it to 12,608.2 - 12,610.3 million). Market cap, EV and P/B; no P/E until its first full year, as BACH. |
+
+Tests: `FilingMapperStatedDaTest`, `FullTextExtractorDeriveTest`, `ValuationEbitdaBasisTest`, `RansSharesTest`.
+
+### The review of 2026-10-29 (errors 1067, 1068): MGLV and JARR
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A 3 rupiah slip between the cash flow and the balance sheet.** MGLV's FY2024 filing (full rupiah) rolls its cash forward 6,824,569,377 + 959,414,303 = 7,783,983,680, every section adding up, beside a balance-sheet cash of 7,783,983,677; its FY2025 filing repeats the same pair as comparatives. The rules stored the filing's figures; the database verification compared exactly and ended the upload `INCOMPLETE`, and the full-text extraction took over. | 1067 | `IngestionVerifier.immaterialExplanation`: a gap under a billionth of the cash (`FilingMapper.FULL_AMOUNT_SLIP`, the slip the mapper already accepts in a roll-forward, WIFI FY2022) is a note, stored as filed. INDO FY2022's 20,000,000 (959) stays a problem. |
+| **A workbook without statements.** JARR's FY2023 file (25,655 bytes) has only its general information (1000000): no balance sheet, profit or loss or cash flow. | 1068 | None: rightly reported. FY2023 is stored complete from the FY2024 filing's comparative. |
+
+Test: `IngestionVerifierRoundingTest.anImmaterialCashGapOfTheFilingIsANote`.
 
 ### The review of 2026-10-23 (errors 877 - 880): WINE
 

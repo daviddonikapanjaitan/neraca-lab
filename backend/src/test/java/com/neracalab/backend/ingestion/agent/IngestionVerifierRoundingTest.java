@@ -32,6 +32,27 @@ class IngestionVerifierRoundingTest {
     }
 
     /**
+     * MGLV FY2024 (full rupiah, error 1067): the cash flow rolls forward to 7,783,983,680, the balance sheet shows
+     * 7,783,983,677 (its FY2025 filing repeats both as comparatives). Three rupiah of 7.8 billion, under a billionth of
+     * the cash: a note. A larger gap stays a problem: INDO FY2022's 20,000,000 of 305,326,998,864 (error 959), MGLV
+     * FY2025's 707,000 of 3,156,869,509, or 8 rupiah of 7.8 billion.
+     */
+    @Test
+    void anImmaterialCashGapOfTheFilingIsANote() {
+        assertThat(IngestionVerifier.immaterialExplanation(stored(new BigDecimal("7783983677"),
+                new BigDecimal("7783983680"))))
+                .contains("differ by 3").contains("under a billionth of the cash");
+        assertThat(IngestionVerifier.immaterialExplanation(stored(new BigDecimal("305306998864"),
+                new BigDecimal("305326998864")))).isNull();
+        assertThat(IngestionVerifier.immaterialExplanation(stored(new BigDecimal("3156869509"),
+                new BigDecimal("3156162509")))).isNull();
+        assertThat(IngestionVerifier.immaterialExplanation(stored(new BigDecimal("7783983677"),
+                new BigDecimal("7783983677")))).isNull();
+        assertThat(IngestionVerifier.immaterialExplanation(stored(new BigDecimal("7783983677"),
+                new BigDecimal("7783983685")))).isNull();
+    }
+
+    /**
      * EXCL FY2022 (millions) files its revenue breakdown with decimals: 29,141,993.900667 beside revenue 29,141,994.
      * Less than one unit apart: a note. The FY2023 filing (amounts in full, 'In Million' declared) judges it alike.
      */

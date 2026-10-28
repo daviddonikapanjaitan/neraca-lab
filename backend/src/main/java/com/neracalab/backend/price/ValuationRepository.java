@@ -16,6 +16,8 @@ import org.springframework.stereotype.Repository;
  *   <li>VALUATION metrics no longer produced by a valuation_snapshot (value became NULL, period
  *       changed) are deleted, so financial_metric never keeps a stale valuation</li>
  * </ul>
+ * EV / EBITDA of an interim period whose TTM EBITDA is not derivable takes the full year inside the trailing window
+ * (FY2025 for H1 2026; {@code ebitda_basis} 'FY 2025', else 'TTM'), as V1.0.6.
  */
 @Repository
 public class ValuationRepository {
@@ -29,7 +31,7 @@ public class ValuationRepository {
                 ('pe_ratio',         vs.pe_ratio,         'x',         'share_price / eps_ttm'),
                 ('ps_ratio',         vs.ps_ratio,         'x',         'market_cap / revenue_ttm'),
                 ('pb_ratio',         vs.pb_ratio,         'x',         'market_cap / book_value'),
-                ('ev_ebitda',        vs.ev_ebitda,        'x',         'enterprise_value / ebitda_ttm'),
+                ('ev_ebitda',        vs.ev_ebitda,        'x',         'enterprise_value / ebitda_ttm (else the full year''s ebitda: ebitda_basis)'),
                 ('ev_sales',         vs.ev_sales,         'x',         'enterprise_value / revenue_ttm'),
                 ('ev_op',            vs.ev_op,            'x',         'enterprise_value / operating_income_ttm (EV / operating profit)'),
                 ('fcf_yield',        vs.fcf_yield,        'ratio',     'fcf_ttm / market_cap'),
@@ -124,7 +126,8 @@ public class ValuationRepository {
                             company_id, period_id, valuation_date,
                             share_price, market_cap, enterprise_value,
                             eps_ttm, revenue_ttm, ebitda_ttm, operating_income_ttm, fcf_ttm, book_value,
-                            pe_ratio, ps_ratio, pb_ratio, ev_ebitda, ev_sales, ev_op, fcf_yield, earnings_yield)
+                            pe_ratio, ps_ratio, pb_ratio, ev_ebitda, ev_sales, ev_op, fcf_yield, earnings_yield,
+                            ebitda_basis)
                         WITH valuation_dates AS (
                             SELECT t.company_id, t.period_end AS valuation_date
                             FROM v_ttm_financials t
@@ -153,6 +156,9 @@ public class ValuationRepository {
                                 f.net_income_to_parent_ttm / NULLIF(f.shares, 0) AS eps_ttm,
                                 f.revenue_ttm,
                                 f.ebitda_ttm,
+                                COALESCE(f.ebitda_ttm, lfy.ebitda)               AS ebitda_used,
+                                CASE WHEN f.ebitda_ttm IS NOT NULL THEN 'TTM'
+                                     WHEN lfy.ebitda IS NOT NULL THEN 'FY ' || lfy.fiscal_year END AS ebitda_basis,
                                 f.operating_income_ttm,
                                 f.free_cash_flow_ttm                             AS fcf_ttm,
                                 f.shareholders_equity                            AS book_value
@@ -160,8 +166,8 @@ public class ValuationRepository {
                             -- fundamentals: latest period on or before the date with TTM revenue and a balance
                             -- sheet; without any (newly listed company) the latest balance sheet: no TTM figures
                             JOIN LATERAL (
-                                SELECT t.period_id, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
-                                       t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
+                                SELECT t.period_id, t.fiscal_year, t.period_type, t.revenue_ttm, t.ebitda_ttm,
+                                       t.operating_income_ttm, t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
                                        km.net_debt, km.non_controlling_interest, km.shares, km.shareholders_equity
                                 FROM v_ttm_financials t
                                 JOIN v_key_metrics km ON km.period_id = t.period_id
@@ -171,6 +177,18 @@ public class ValuationRepository {
                                 ORDER BY t.revenue_ttm IS NULL, t.period_end DESC
                                 LIMIT 1
                             ) f ON TRUE
+                            -- an interim period without TTM EBITDA: the full year inside its trailing window
+                            LEFT JOIN LATERAL (
+                                SELECT i.ebitda, rp.fiscal_year
+                                FROM reporting_period rp
+                                JOIN income_statement i ON i.period_id = rp.period_id
+                                WHERE rp.company_id = d.company_id
+                                  AND rp.period_type = 'FY'
+                                  AND rp.fiscal_year = f.fiscal_year - 1
+                                  AND i.ebitda IS NOT NULL
+                                ORDER BY rp.period_end DESC
+                                LIMIT 1
+                            ) lfy ON f.ebitda_ttm IS NULL AND f.period_type <> 'FY'
                             -- price: last close on or before the date
                             JOIN LATERAL (
                                 SELECT pd.close_price
@@ -202,11 +220,12 @@ public class ValuationRepository {
                             ROUND(share_price / NULLIF(eps_ttm, 0), 8)                  AS pe_ratio,
                             ROUND(market_cap / NULLIF(revenue_ttm, 0), 8)               AS ps_ratio,
                             ROUND(market_cap / NULLIF(book_value, 0), 8)                AS pb_ratio,
-                            ROUND(enterprise_value / NULLIF(ebitda_ttm, 0), 8)          AS ev_ebitda,
+                            ROUND(enterprise_value / NULLIF(ebitda_used, 0), 8)         AS ev_ebitda,
                             ROUND(enterprise_value / NULLIF(revenue_ttm, 0), 8)         AS ev_sales,
                             ROUND(enterprise_value / NULLIF(operating_income_ttm, 0), 8) AS ev_op,
                             ROUND(fcf_ttm / NULLIF(market_cap, 0), 8)                   AS fcf_yield,
-                            ROUND(eps_ttm / NULLIF(share_price, 0), 8)                  AS earnings_yield
+                            ROUND(eps_ttm / NULLIF(share_price, 0), 8)                  AS earnings_yield,
+                            ebitda_basis
                         FROM valued
                         ON CONFLICT ON CONSTRAINT uq_valuation_snapshot DO UPDATE SET
                             period_id            = EXCLUDED.period_id,
@@ -226,7 +245,8 @@ public class ValuationRepository {
                             ev_sales             = EXCLUDED.ev_sales,
                             ev_op                = EXCLUDED.ev_op,
                             fcf_yield            = EXCLUDED.fcf_yield,
-                            earnings_yield       = EXCLUDED.earnings_yield
+                            earnings_yield       = EXCLUDED.earnings_yield,
+                            ebitda_basis         = EXCLUDED.ebitda_basis
                         WHERE (valuation_snapshot.period_id, valuation_snapshot.share_price,
                                valuation_snapshot.market_cap, valuation_snapshot.enterprise_value,
                                valuation_snapshot.eps_ttm, valuation_snapshot.revenue_ttm,
@@ -235,7 +255,8 @@ public class ValuationRepository {
                                valuation_snapshot.pe_ratio, valuation_snapshot.ps_ratio,
                                valuation_snapshot.pb_ratio, valuation_snapshot.ev_ebitda,
                                valuation_snapshot.ev_sales, valuation_snapshot.ev_op,
-                               valuation_snapshot.fcf_yield, valuation_snapshot.earnings_yield)
+                               valuation_snapshot.fcf_yield, valuation_snapshot.earnings_yield,
+                               valuation_snapshot.ebitda_basis)
                               IS DISTINCT FROM
                               (EXCLUDED.period_id, EXCLUDED.share_price,
                                EXCLUDED.market_cap, EXCLUDED.enterprise_value,
@@ -245,7 +266,8 @@ public class ValuationRepository {
                                EXCLUDED.pe_ratio, EXCLUDED.ps_ratio,
                                EXCLUDED.pb_ratio, EXCLUDED.ev_ebitda,
                                EXCLUDED.ev_sales, EXCLUDED.ev_op,
-                               EXCLUDED.fcf_yield, EXCLUDED.earnings_yield)""")
+                               EXCLUDED.fcf_yield, EXCLUDED.earnings_yield,
+                               EXCLUDED.ebitda_basis)""")
                 .param("c", companyId)
                 .update();
     }
