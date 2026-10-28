@@ -305,6 +305,10 @@ public class AnalysisRepository {
                                  WHERE h.exchange = c.exchange AND h.ticker = c.ticker) AS ownership_days,
                                (SELECT max(h.report_date) FROM ownership_holder h
                                  WHERE h.exchange = c.exchange AND h.ticker = c.ticker) AS ownership_date,
+                               (SELECT count(DISTINCT h.report_date) FROM ownership_one_holder h
+                                 WHERE h.exchange = c.exchange AND h.ticker = c.ticker) AS one_percent_months,
+                               (SELECT max(h.report_date) FROM ownership_one_holder h
+                                 WHERE h.exchange = c.exchange AND h.ticker = c.ticker) AS one_percent_date,
                                (SELECT max(s.snapshot_date) FROM fundamental_snapshot s
                                  JOIN stock_listing l ON l.listing_id = s.listing_id
                                  WHERE l.exchange = c.exchange AND l.ticker = c.ticker) AS market_date,
@@ -317,7 +321,8 @@ public class AnalysisRepository {
                         rs.getString("latest_period"), rs.getLong("pdfs"), rs.getLong("news"),
                         dateText(rs, "market_date"), dateText(rs, "price_date"), rs.getInt("registrations"),
                         rs.getString("first_registration"), rs.getString("last_registration"),
-                        rs.getInt("ownership_days"), dateText(rs, "ownership_date")))
+                        rs.getInt("ownership_days"), dateText(rs, "ownership_date"),
+                        rs.getInt("one_percent_months"), dateText(rs, "one_percent_date")))
                 .list();
     }
 
@@ -342,12 +347,13 @@ public class AnalysisRepository {
 
     /**
      * Documents of a company in the vector store: financial statement PDFs ({@code filings}), news, monthly
-     * registration reports (REGISTRATION PDFs) and its ownership document (XLSX: KSEI's daily lists of the
-     * shareholders of more than 5%, {@code ownershipTitle} its title).
+     * registration reports (REGISTRATION PDFs), its ownership document (XLSX OWNERSHIP_5_PERCENT: KSEI's daily lists
+     * of the shareholders of more than 5%, {@code ownershipTitle} its title) and its 1% ownership document (XLSX
+     * OWNERSHIP_1_PERCENT: KSEI's monthly lists of the shareholders of more than 1%).
      */
     public record StoredDocuments(long filings, long news, List<String> filingTitles, List<String> newsTitles,
                                   long registrations, List<String> registrationTitles, long ownership,
-                                  String ownershipTitle) {
+                                  String ownershipTitle, long onePercent, String onePercentTitle) {
     }
 
     /** Counts and the latest titles of a company's stored documents (told to the research agent). */
@@ -363,14 +369,19 @@ public class AnalysisRepository {
                         WHERE company_id = :c AND source_type = 'NEWS' AND chunks > 0
                         ORDER BY published_at DESC NULLS LAST, document_id DESC LIMIT :n""")
                 .param("c", companyId).param("n", titles).query(String.class).list();
-        long ownership = documentCount(companyId, "XLSX");
-        String ownershipTitle = jdbc.sql("""
-                        SELECT title FROM rag_document
-                        WHERE company_id = :c AND source_type = 'XLSX' AND chunks > 0
-                        ORDER BY updated_at DESC LIMIT 1""")
-                .param("c", companyId).query(String.class).optional().orElse(null);
+        String ownershipTitle = xlsxTitle(companyId, "OWNERSHIP_5_PERCENT");
+        String onePercentTitle = xlsxTitle(companyId, "OWNERSHIP_1_PERCENT");
         return new StoredDocuments(filings, news, filingTitles, newsTitles, registrations, registrationTitles,
-                ownership, ownershipTitle);
+                ownershipTitle == null ? 0 : 1, ownershipTitle, onePercentTitle == null ? 0 : 1, onePercentTitle);
+    }
+
+    /** The title of the company's Excel document of a type (one per company and type); null when none. */
+    private String xlsxTitle(long companyId, String sourceKey) {
+        return jdbc.sql("""
+                        SELECT title FROM rag_document
+                        WHERE company_id = :c AND source_type = 'XLSX' AND source_key = :k AND chunks > 0
+                        ORDER BY updated_at DESC LIMIT 1""")
+                .param("c", companyId).param("k", sourceKey).query(String.class).optional().orElse(null);
     }
 
     private long pdfCount(long companyId, String documentType) {

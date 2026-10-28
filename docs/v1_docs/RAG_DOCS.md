@@ -11,7 +11,7 @@ Two pages under **Ingestion** fill it (permission `INGESTION`):
 | Page                | Path                    | Job type   | Source                                                  |
 |---------------------|-------------------------|------------|---------------------------------------------------------|
 | PDF Documents (RAG) | `/ingestion/rag-pdf`    | `RAG_PDF`  | left: an uploaded `.pdf` of a stored company; right: a macro `.pdf` of a country (section 2a) |
-| Excel Documents (RAG) | `/ingestion/rag-excel` | `RAG_XLSX` | an uploaded `.xlsx` of an exchange: KSEI's daily list of the shareholders of more than 5% (IDX); per stored company one ownership document ([OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md)) |
+| Excel Documents (RAG) | `/ingestion/rag-excel` | `RAG_XLSX` | an uploaded `.xlsx` of an exchange: KSEI's daily list of the shareholders of more than 5%, or its monthly list of the shareholders of more than 1% (IDX); per stored company one ownership document of each ([OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md), [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)) |
 | News (RAG)          | `/ingestion/rag-news`   | `RAG_NEWS` | the news of a stored IDX company within a date range    |
 
 Both run as background jobs in `ingestion_job` (shown in the jobs table of every Ingestion page);
@@ -204,6 +204,12 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=pendapata
 no document type, `published_at` = its latest list, `file_id` = the workbook it was last written from); the upload
 `POST /api/v1/rag/xlsx` and the lists are in [OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md). The status has
 `stored.xlsxDocuments`.
+
+`V1.0.34__schema_ownership_one_percent.sql`: the same source type `XLSX` with `source_key` `OWNERSHIP_1_PERCENT` (a
+company's 1% ownership document, from KSEI's monthly lists; [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)):
+a company has one document of each key (`uq_rag_document_source`). `RagRepository.search` takes a source key, so the
+analysis' research agent searches the 5% and the 1% documents apart (refs O1 and M1);
+`RagRepository.documentCount(XLSX, key)` counts each (`GET /api/v1/rag/xlsx/status`, `stored[]`).
 
 `V1.0.29__schema_registration.sql`: a company PDF's `document_type` (`FINANCIAL_STATEMENT` or `REGISTRATION`,
 `ck_rag_document_company_type`; existing company PDFs set to `FINANCIAL_STATEMENT`; news has none), and the

@@ -292,7 +292,9 @@ class OwnershipControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.exchanges[0].label").value("IDX - Indonesia Stock Exchange"))
                 .andExpect(jsonPath("$.exchanges[0].documentTypes[0].code").value("OWNERSHIP_5_PERCENT"))
-                .andExpect(jsonPath("$.exchanges[0].documentTypes[1].available").value(false));
+                .andExpect(jsonPath("$.exchanges[0].documentTypes[1].code").value("OWNERSHIP_1_PERCENT"))
+                .andExpect(jsonPath("$.exchanges[0].documentTypes[1].available").value(true))
+                .andExpect(jsonPath("$.stored[0].reports").value(Matchers.greaterThanOrEqualTo(2)));
     }
 
     @Test
@@ -308,8 +310,8 @@ class OwnershipControllerTest {
                 .andExpect(jsonPath("$.detail").value(Matchers.containsString("no ZIP header")));
         mvc.perform(multipart("/api/v1/rag/xlsx").file(new MockMultipartFile("file", "list.xlsx", null, list))
                         .param("documentType", "OWNERSHIP_1_PERCENT"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value(Matchers.containsString("not available yet")));
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.detail").value(Matchers.containsString("shareholders of more than 1%")));
         mvc.perform(multipart("/api/v1/rag/xlsx").file(new MockMultipartFile("file", "list.xlsx", null, list)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Choose the type of the document"));

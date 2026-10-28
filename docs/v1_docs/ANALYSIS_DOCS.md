@@ -148,6 +148,18 @@ available" and a note when no list names the company); the reading, totals, hold
 the synthesis; the report page and the PDF show it. The prompts tell the agents that a few days of lists show flows,
 not a trend, and that a holder crossing 5% may be an account transfer.
 
+**Shareholders of more than 1%** (`OnePercentDigest`, no model): from KSEI's monthly lists stored for the company
+(`ownership_one_holder`, `v_ownership_one_movement`; [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)),
+every stored month: the investors of more than 1% at the latest month end (name, other names, type and group, local /
+foreign, domicile, shares, scrip shares, ownership as a fraction, the latest movement and change, its name the month
+before when it changed, the net change since its first stored month, followed through its matches), the totals
+(together, local, foreign, the three largest, buys, sells, new above 1%, no longer above 1%, renamed, moved), the
+ownership by type group, at most 40 dated movements, the former holders and a reading. It is
+`shareholdersAbove1Percent` in the dossier of every agent (or "not available" and a note); the reading, totals, types,
+the 15 largest holders and 15 latest movements go to the synthesis; the report page and the PDF show it. The prompts
+tell the agents that a block listed under another name (MOVED) is a renaming or a transfer, not a trade. The company
+picker shows `onePercentMonths` / `latestOnePercentDate`.
+
 Market data: the stock's Yahoo Finance fundamentals are refreshed when older than the screening's
 `etl.fundamentals-max-age` (two requests, nothing when the stock is not listed in the screening
 data), then the latest snapshot gives the metrics (`StockProfile`) and each agent's quantitative
@@ -162,9 +174,9 @@ screening's (`screening/agent`: `InvestorPanel`, `ReflectionValidator`, `Reflexi
 
 | Pattern | Where |
 |---------|-------|
-| Tool calling | `ContextTools`: `searchFilings(query)` (the financial statement PDFs), `searchRegistrations(query)` (the monthly registration reports: holders of 5% or more, the controller, free float, investor types, beneficial owner), `searchOwnership(query)` (the company's ownership document from KSEI's daily lists: holders, local / foreign, brokers and custodians, daily buys and sells, crossings of 5%) and `searchNews(query)` embed the query and search the company's own chunks in pgvector (cosine, filtered by document type, `search-results` per search, excerpts of `excerpt-chars`); `getStatement(period)` returns every stored line and metric of one period. A search never leaves the company. Refs: F1 ... (filings), R1 ... (registration reports), O1 ... (ownership), N1 ... (news). The brief has an `ownership` field (controller, holders of 5% or more, free float) from the registration reports. |
+| Tool calling | `ContextTools`: `searchFilings(query)` (the financial statement PDFs), `searchRegistrations(query)` (the monthly registration reports: holders of 5% or more, the controller, free float, investor types, beneficial owner), `searchOwnership(query)` (the company's ownership document from KSEI's daily lists: holders, local / foreign, brokers and custodians, daily buys and sells, crossings of 5%), `searchShareholdersAbove1Percent(query)` (its 1% document from KSEI's monthly lists: holders by type, monthly buys and sells, new / no longer above 1%, names changed; searched by `source_key`) and `searchNews(query)` embed the query and search the company's own chunks in pgvector (cosine, filtered by document type, `search-results` per search, excerpts of `excerpt-chars`); `getStatement(period)` returns every stored line and metric of one period. A search never leaves the company. Refs: F1 ... (filings), R1 ... (registration reports), O1 ... (5% ownership), M1 ... (1% ownership), N1 ... (news). The brief has an `ownership` field (controller, holders of 5% or more, free float) from the registration reports. |
 | ReAct | `AnalysisResearchAgent`: "Thought:" -> tool calls (several per turn) -> observations, at most `research-iterations` (4) turns, then a forced final answer |
-| Conditional tool calling | a search tool is offered only when documents of its kind are stored (financial statements, registration reports, the ownership document, news), and every tool only until its limit (`max-searches` 6 together, `max-statement-lookups` 3); a repeated query is refused |
+| Conditional tool calling | a search tool is offered only when documents of its kind are stored (financial statements, registration reports, the 5% and the 1% ownership documents, news), and every tool only until its limit (`max-searches` 6 together, `max-statement-lookups` 3); a repeated query is refused |
 | Grounding check | evidence citing a ref that was never retrieved is dropped (`droppedRefs`) |
 | Independent agents | one call per agent; the system prompt and the dossier are identical for all six (cacheable prefix), only the persona block differs |
 | Reflection | `ReflectionValidator` (divergence from the scorecard, verdict outside its band, philosophy rules, metrics not in the dossier, empty thesis; the checks needing market data are skipped without it) + the critic on flagged answers only |

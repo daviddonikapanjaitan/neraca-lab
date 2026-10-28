@@ -85,6 +85,7 @@ public class AnalysisPdfRenderer {
         research(doc, report.research());
         insiders(doc, report.context());
         majorShareholders(doc, report.context());
+        widerShareholders(doc, report.context());
         figures(doc, report.context());
         notes(doc, report.notes());
         usage(doc, report.usage());
@@ -338,6 +339,82 @@ public class AnalysisPdfRenderer {
                             + " shares";
                     case "EXITED" -> "fell below 5% (held " + String.format(Locale.ROOT, "%,d",
                             t.path("sharesBefore").asLong()) + " shares)";
+                    default -> (t.path("change").asLong() > 0 ? "bought " : "sold ")
+                            + String.format(Locale.ROOT, "%,d", Math.abs(t.path("change").asLong())) + " shares ("
+                            + String.format(Locale.ROOT, "%,d", t.path("sharesAfter").asLong()) + " after)";
+                };
+                doc.add(new Paragraph(t.path("date").asString("") + "  " + t.path("name").asString("") + "  " + what,
+                        SMALL));
+            }
+        }
+    }
+
+    /** The holders of more than 1% from KSEI's monthly lists (when stored). */
+    private void widerShareholders(Document doc, JsonNode context) {
+        JsonNode wider = context == null ? null : context.path("shareholdersAbove1Percent");
+        if (wider == null || !wider.isObject()) {
+            return;
+        }
+        int months = wider.path("months").asInt();
+        heading(doc, "Shareholders of more than 1% (KSEI monthly lists, " + months + (months == 1 ? " month" : " months")
+                + " to " + nvl(text(wider.path("latestDate"))) + ")");
+        if (text(wider.path("reading")) != null) {
+            doc.add(new Paragraph(text(wider.path("reading")), BODY));
+        }
+        JsonNode types = wider.path("byType");
+        if (types.isArray() && !types.isEmpty()) {
+            List<String> parts = new java.util.ArrayList<>();
+            for (JsonNode t : types) {
+                parts.add(t.path("group").asString("").toLowerCase(Locale.ROOT) + " "
+                        + String.format(Locale.ROOT, "%.2f%%", t.path("ownership").asDouble() * 100) + " ("
+                        + t.path("holders").asInt() + ")");
+            }
+            doc.add(new Paragraph("By type: " + String.join(", ", parts), SMALL));
+        }
+        JsonNode holders = wider.path("holders");
+        if (holders.isArray() && !holders.isEmpty()) {
+            PdfPTable table = new PdfPTable(new float[] {34, 16, 10, 16, 10, 14});
+            table.setWidthPercentage(100);
+            table.setSpacingBefore(4);
+            table.setHeaderRows(1);
+            for (String h : List.of("Investor", "Type", "Status", "Shares", "Ownership", "Net change")) {
+                table.addCell(headerCell(h));
+            }
+            for (JsonNode h : holders) {
+                table.addCell(cell(h.path("name").asString(""), SMALL, Element.ALIGN_LEFT));
+                table.addCell(cell(h.path("investorType").asString("-"), SMALL, Element.ALIGN_LEFT));
+                String status = h.path("status").asString("");
+                table.addCell(cell("FOREIGN".equals(status) ? "Foreign" : "LOCAL".equals(status) ? "Local" : "-", SMALL,
+                        Element.ALIGN_LEFT));
+                table.addCell(cell(h.path("shares").isNumber()
+                        ? String.format(Locale.ROOT, "%,d", h.path("shares").asLong()) : "-", SMALL, Element.ALIGN_RIGHT));
+                table.addCell(cell(h.path("ownership").isNumber()
+                        ? String.format(Locale.ROOT, "%.2f%%", h.path("ownership").asDouble() * 100) : "-", SMALL,
+                        Element.ALIGN_RIGHT));
+                table.addCell(cell(h.path("netChange").isNumber()
+                        ? String.format(Locale.ROOT, "%+,d", h.path("netChange").asLong()) : "-", SMALL,
+                        Element.ALIGN_RIGHT));
+            }
+            doc.add(table);
+        }
+        JsonNode transactions = wider.path("transactions");
+        if (transactions.isArray() && !transactions.isEmpty()) {
+            Paragraph h = new Paragraph("Monthly movements", H2);
+            h.setSpacingBefore(4);
+            doc.add(h);
+            int shown = 0;
+            for (JsonNode t : transactions) {
+                if (shown++ == 15) {
+                    break;
+                }
+                String what = switch (t.path("movement").asString("")) {
+                    case "ENTERED" -> "new above 1% with " + String.format(Locale.ROOT, "%,d",
+                            t.path("sharesAfter").asLong()) + " shares";
+                    case "EXITED" -> "no longer above 1% (held " + String.format(Locale.ROOT, "%,d",
+                            t.path("sharesBefore").asLong()) + " shares)";
+                    case "MOVED", "RENAMED" -> "the same " + String.format(Locale.ROOT, "%,d",
+                            t.path("sharesAfter").asLong()) + " shares listed as " + t.path("previousName").asString("")
+                            + " the month before";
                     default -> (t.path("change").asLong() > 0 ? "bought " : "sold ")
                             + String.format(Locale.ROOT, "%,d", Math.abs(t.path("change").asLong())) + " shares ("
                             + String.format(Locale.ROOT, "%,d", t.path("sharesAfter").asLong()) + " after)";

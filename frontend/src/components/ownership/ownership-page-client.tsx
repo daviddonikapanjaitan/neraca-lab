@@ -53,6 +53,7 @@ import {
   percentLabel,
   sharesLabel,
 } from "@/lib/ownership"
+import { OWNERSHIP_ONE_PERCENT_HREF } from "@/lib/ownership-one-percent"
 import { cn } from "@/lib/utils"
 
 const ALL = "__all__"
@@ -395,6 +396,8 @@ export function OwnershipPageClient({
 
       {single && (
         <CompanyOwnership
+          // a new ticker or new page dates start the table's own range afresh
+          key={`${single.ticker}|${filters.from ?? ""}|${filters.to ?? ""}`}
           ticker={single.ticker}
           from={filters.from}
           to={filters.to}
@@ -507,8 +510,12 @@ export function OwnershipPageClient({
       <p className="text-xs text-muted-foreground">
         Percentages are of the shares listed, as KSEI prints them (two decimals); a percentage can change without a
         trade when the shares listed change. KSEI lists an investor once per name its accounts are registered under:
-        the same accounts under a second name are an alias and counted once. Holders of more than 1% with their broker
-        are a later feature.
+        the same accounts under a second name are an alias and counted once. The holders of more than 1%, month by
+        month and by type of investor, are on{" "}
+        <Link href={OWNERSHIP_ONE_PERCENT_HREF} className="text-primary hover:underline">
+          Ownership (&gt;=1%)
+        </Link>
+        .
       </p>
     </>
   )

@@ -153,6 +153,15 @@ export function AnalysisForm({ options }: { options: AnalysisOptions }) {
               }
             />
             <DataLine
+              icon={PieChartIcon}
+              ok={(company.onePercentMonths ?? 0) > 0}
+              text={
+                (company.onePercentMonths ?? 0) > 0
+                  ? `${company.onePercentMonths} monthly ${company.onePercentMonths === 1 ? "list" : "lists"} of the shareholders of more than 1% (latest ${formatDate(company.latestOnePercentDate ?? null)})`
+                  : "No KSEI monthly lists of the shareholders of more than 1% (Ingestion > Excel Documents (RAG))"
+              }
+            />
+            <DataLine
               icon={NewspaperIcon}
               ok={company.newsDocuments > 0}
               text={

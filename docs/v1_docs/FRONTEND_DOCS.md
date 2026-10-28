@@ -156,11 +156,30 @@ stored day from its dropdown or the previous / next buttons, `/api/ownership/hig
 crossed above / fell below 5%), the filters (tickers with suggestions, investor, transaction, order, investor type,
 From / To with presets, aliases; the Change and % owned headers order the table by them, `sort` in the URL; Apply,
 Reset and the other filtering clicks navigate with `{ scroll: false }`, so the page keeps its position), with one ticker `company-ownership.tsx` (reading, tiles, composition bar, each investor day by
-day, its accounts on a click; `/api/ownership/holders`), with an investor's name `entity-holdings.tsx`
+day, at most 7 days at a time with its own day range and older / newer arrows, its accounts on a click; `/api/ownership/holders`), with an investor's name `entity-holdings.tsx`
 (`/api/ownership/entities`), and the table (50 rows per page through `/api/ownership`); badges in
 `ownership-badges.tsx`. Ingestion › Excel Documents (RAG) (`/ingestion/rag-excel`): `rag-excel-card.tsx` (exchange,
 document type, files; `/api/rag/xlsx`), `ownership-lists-card.tsx` (`/api/rag/xlsx/reports`), `RagDocumentsCard` with
 source `XLSX`. Details: [OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md).
+
+### 3.2d Ownership (>=1%) - `/companies/ownership-one-percent` (`COMPANIES`)
+
+`app/(dashboard)/companies/ownership-one-percent/page.tsx` reads the filters from the URL (`?tickers=AADI&holder=&
+transaction=BUY&status=A&group=FUND&from=&to=&sort=CHANGE_DESC`, `lib/ownership-one-percent.ts`), loads the options (the
+latest list with its highlights, the dates, the companies) and the first page of rows, and renders
+`components/ownership-one-percent/one-percent-page-client.tsx`: summary tiles, the highlights of a month (the latest at
+first, another stored month from its dropdown or the previous / next buttons, `/api/ownership/one-percent/highlights`:
+largest buys and sells, new above 1%, no longer above 1%, renamed / blocks moved, the investors in the most
+companies), the filters (tickers, investor, transaction, order, local / foreign, investor type, months; Apply and Reset
+navigate with `{ scroll: false }`), with one ticker `company-one-percent.tsx` (reading, tiles, a bar by investor and one
+by type, each investor followed through its matches, at most 7 months at a time with its own range and older / newer
+arrows, its months on a click; `/api/ownership/one-percent/holders`), with an investor's name
+`entity-one-percent.tsx` (`/api/ownership/one-percent/entities`), and the table (50 rows per page through
+`/api/ownership/one-percent`); badges in `one-percent-badges.tsx` (movement, renamed / block moved, investor type).
+Ingestion › Excel Documents (RAG): `rag-excel-card.tsx` takes the type Ownership (>=1%) (its own notes, files sorted by
+the month in their names), `one-percent-lists-card.tsx` lists the stored monthly lists
+(`/api/rag/xlsx/reports?documentType=OWNERSHIP_1_PERCENT`); the job sheet shows the result of a monthly list. Details:
+[OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md).
 
 ### 3.2a Technicals - `/companies/technicals` (`COMPANIES`)
 

@@ -242,8 +242,8 @@ class OwnershipRepositoryTest {
     }
 
     /**
-     * Every list of data/IDX_OWNERSHIP_FIVE_PERCENTAGE (October 2026, at least 19 - 27 October), stored and rolled
-     * back.
+     * Every list of data/IDX_OWNERSHIP_FIVE_PERCENTAGE (at least 19 - 27 October 2026; September's too when present),
+     * stored and rolled back.
      */
     @Test
     void storesTheListsOfOctober2026() throws IOException {
@@ -273,8 +273,11 @@ class OwnershipRepositoryTest {
                 Transaction.CROSSED, null, oct27, oct27, false), 500, 0).rows();
         assertThat(truk).extracting(MovementRow::movement).containsExactlyInAnyOrder("ENTERED", "EXITED");
 
+        // the lists of the files (the folder may hold September's too), latest first
+        java.util.Set<LocalDate> fileDates = new java.util.HashSet<>();
+        files.forEach(f -> fileDates.add(LocalDate.parse(f.getFileName().toString().substring(5, 15))));
         List<ReportRow> reports = repository.reports("IDX", TYPE, 500, 0).reports().stream()
-                .filter(r -> r.reportDate().getYear() == 2026 && r.reportDate().getMonthValue() == 10).toList();
+                .filter(r -> fileDates.contains(r.reportDate())).toList();
         assertThat(reports).hasSize(files.size());
         // the day before the first list is not stored: who fell below 5% that day is unknown, not "nobody"
         assertThat(reports.getLast().exited()).isNull();

@@ -8,6 +8,7 @@ import { IndexPriceCard } from "@/components/ingestion/index-price-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
 import { ListingPricesCard } from "@/components/ingestion/listing-prices-card"
 import { MacroCard } from "@/components/ingestion/macro-card"
+import { OnePercentListsCard } from "@/components/ingestion/one-percent-lists-card"
 import { OwnershipListsCard } from "@/components/ingestion/ownership-lists-card"
 import { PriceCard } from "@/components/ingestion/price-card"
 import { PriceUpdateCard } from "@/components/ingestion/price-update-card"
@@ -20,6 +21,7 @@ import { RagPdfCard } from "@/components/ingestion/rag-pdf-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
 import { ingestionSection } from "@/lib/ingestion-sections"
 import type { ExcelStatus, OwnershipReportPage } from "@/lib/ownership"
+import type { OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type {
   CompanySummary,
   Exchange,
@@ -67,8 +69,10 @@ export type IngestionSectionData =
       section: "rag-excel"
       /** the exchanges and their Excel document types, the lists stored */
       excel: ExcelStatus
-      /** first page of the stored ownership lists */
+      /** first page of the stored ownership lists (>=5%) */
       reports: OwnershipReportPage
+      /** first page of the stored monthly ownership lists (>=1%) */
+      onePercentReports: OnePercentReportPage
       rag: RagStatus
       /** first page of the companies' ownership documents in the vector store */
       documents: RagDocumentPage
@@ -160,6 +164,10 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
       )}
 
       {data.section === "rag-excel" && <OwnershipListsCard initial={data.reports} status={data.excel} />}
+
+      {data.section === "rag-excel" && (
+        <OnePercentListsCard initial={data.onePercentReports} status={data.excel} />
+      )}
 
       {data.section !== "prices" && data.section !== "macro" && data.section !== "rag-pdf" &&
         data.section !== "rag-excel" && (

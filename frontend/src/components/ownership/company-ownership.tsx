@@ -4,7 +4,9 @@ import { Fragment, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import {
   ArrowRightLeftIcon,
+  CalendarDaysIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   GlobeIcon,
@@ -16,7 +18,9 @@ import {
 import { MovementBadge, SharesChange, StatusBadge } from "@/components/ownership/ownership-badges"
 import { StatTile } from "@/components/stat-tile"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { requestJson } from "@/lib/client-api"
 import { EMPTY } from "@/lib/format"
@@ -44,11 +48,15 @@ const SEGMENT_COLORS = [
   "bg-orange-500",
 ]
 
+/** The days shown side by side in the investors' table; older days are a click away. */
+const DAYS_SHOWN = 7
+
 /**
  * One company on Companies > Ownership (>=5%): who holds more than 5% of it on the latest day (a bar of their
  * shares of the listed shares, local and foreign), each holder day by day (shares, percentage, change) with its
  * securities accounts (broker or custodian) on a click, the investors that left the list and the digest the AI
- * analysis reads. The date filters of the page apply.
+ * analysis reads. The date filters of the page apply. The table shows at most 7 days, the latest of a range of its
+ * own (every loaded day by default), and pages to older days.
  */
 export function CompanyOwnership({
   ticker,
@@ -68,6 +76,11 @@ export function CompanyOwnership({
   const [data, setData] = useState<OwnershipCompany | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
+  /** the table's own range of days ("" = no bound) */
+  const [rangeFrom, setRangeFrom] = useState("")
+  const [rangeTo, setRangeTo] = useState("")
+  /** how many days the window of DAYS_SHOWN columns is moved back from the newest day of the range */
+  const [back, setBack] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -103,6 +116,27 @@ export function CompanyOwnership({
     }
     return { dates, latest, rows: [...rows.values()] }
   }, [data])
+
+  // the days of the table's range (a reversed range read the other way round), then the window shown
+  const view = useMemo(() => {
+    if (!table) return null
+    const [low, high] = rangeFrom && rangeTo && rangeFrom > rangeTo ? [rangeTo, rangeFrom] : [rangeFrom, rangeTo]
+    const inRange = table.dates.filter((d) => (!low || d >= low) && (!high || d <= high))
+    const offset = Math.min(back, Math.max(0, inRange.length - DAYS_SHOWN))
+    const end = inRange.length - offset
+    const start = Math.max(0, end - DAYS_SHOWN)
+    const dates = inRange.slice(start, end)
+    // only the investors listed on a day of the window
+    const rows = table.rows.filter((r) => dates.some((d) => r.byDate.has(d)))
+    return { inRange, dates, rows, offset, start }
+  }, [table, rangeFrom, rangeTo, back])
+
+  const changeRange = (from: string, to: string) => {
+    setRangeFrom(from)
+    setRangeTo(to)
+    setBack(0)
+    setOpen(null)
+  }
 
   const digest = data?.digest ?? null
   const holders = digest?.holders ?? []
@@ -216,111 +250,181 @@ export function CompanyOwnership({
               </ul>
             </div>
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-4">Investor</TableHead>
-                    {table.dates.map((d) => (
-                      <TableHead key={d} className="text-right whitespace-nowrap last:pr-4">
-                        {shortDay(d)}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {table.rows.map((row) => {
-                    const expanded = open === row.key
-                    const current = row.latest
-                    return (
-                      <Fragment key={row.key}>
-                        <TableRow
-                          className="cursor-pointer"
-                          onClick={() => setOpen(expanded ? null : row.key)}
-                          aria-expanded={expanded}
-                        >
-                          <TableCell className="pl-4">
-                            <div className="flex items-start gap-1.5">
-                              {expanded ? (
-                                <ChevronDownIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                              ) : (
-                                <ChevronRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                              )}
-                              <div className="min-w-0">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    onHolder(row.name)
-                                  }}
-                                  className="text-left font-medium hover:underline"
-                                  title="Every company this investor holds"
-                                >
-                                  {row.name}
-                                </button>
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <StatusBadge status={current?.holder.status ?? null} />
-                                  {current?.holder.domicile && (
-                                    <span className="text-xs text-muted-foreground">{current.holder.domicile}</span>
-                                  )}
-                                  {current && current.holder.reportDate !== table.latest && (
-                                    <Badge variant="outline" className="text-amber-700 dark:text-amber-300">
-                                      Not listed {dayLabel(table.latest)}
-                                    </Badge>
+            <div className="flex flex-wrap items-end gap-3 px-4">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Days from</span>
+                <Input
+                  type="date"
+                  value={rangeFrom}
+                  min={table.dates[0]}
+                  max={table.dates[table.dates.length - 1]}
+                  onChange={(e) => changeRange(e.target.value, rangeTo)}
+                  aria-label="Days from"
+                  className="w-40"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-muted-foreground">To</span>
+                <Input
+                  type="date"
+                  value={rangeTo}
+                  min={table.dates[0]}
+                  max={table.dates[table.dates.length - 1]}
+                  onChange={(e) => changeRange(rangeFrom, e.target.value)}
+                  aria-label="Days to"
+                  className="w-40"
+                />
+              </label>
+              {(rangeFrom || rangeTo) && (
+                <Button type="button" variant="outline" size="sm" className="mb-0.5" onClick={() => changeRange("", "")}>
+                  Every day
+                </Button>
+              )}
+              {view!.dates.length > 0 && (
+                <div className="ml-auto flex items-center gap-1.5">
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <CalendarDaysIcon className="size-3.5" />
+                    {view!.dates.length === 1
+                      ? dayLabel(view!.dates[0])
+                      : `${shortDay(view!.dates[0])} – ${dayLabel(view!.dates[view!.dates.length - 1])}`}
+                    {" · "}
+                    {view!.dates.length} of {view!.inRange.length} {view!.inRange.length === 1 ? "day" : "days"}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="Older days"
+                    title="Older days"
+                    disabled={view!.start === 0}
+                    onClick={() => setBack(view!.offset + DAYS_SHOWN)}
+                  >
+                    <ChevronLeftIcon />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="Newer days"
+                    title="Newer days"
+                    disabled={view!.offset === 0}
+                    onClick={() => setBack(Math.max(0, view!.offset - DAYS_SHOWN))}
+                  >
+                    <ChevronRightIcon />
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {view!.dates.length === 0 ? (
+              <p className="px-4 text-sm text-muted-foreground">No stored list names {ticker} between these days.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-4">Investor</TableHead>
+                      {view!.dates.map((d) => (
+                        <TableHead key={d} className="text-right whitespace-nowrap last:pr-4">
+                          {shortDay(d)}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {view!.rows.map((row) => {
+                      const expanded = open === row.key
+                      const current = row.latest
+                      return (
+                        <Fragment key={row.key}>
+                          <TableRow
+                            className="cursor-pointer"
+                            onClick={() => setOpen(expanded ? null : row.key)}
+                            aria-expanded={expanded}
+                          >
+                            <TableCell className="pl-4">
+                              <div className="flex items-start gap-1.5">
+                                {expanded ? (
+                                  <ChevronDownIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                                ) : (
+                                  <ChevronRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                                )}
+                                <div className="min-w-0">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      onHolder(row.name)
+                                    }}
+                                    className="text-left font-medium hover:underline"
+                                    title="Every company this investor holds"
+                                  >
+                                    {row.name}
+                                  </button>
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <StatusBadge status={current?.holder.status ?? null} />
+                                    {current?.holder.domicile && (
+                                      <span className="text-xs text-muted-foreground">{current.holder.domicile}</span>
+                                    )}
+                                    {current && current.holder.reportDate !== table.latest && (
+                                      <Badge variant="outline" className="text-amber-700 dark:text-amber-300">
+                                        Not listed {dayLabel(table.latest)}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  {(current?.holder.aliases.length ?? 0) > 0 && (
+                                    <div className="max-w-[280px] text-xs text-muted-foreground">
+                                      Also listed as {current!.holder.aliases.join("; ")}
+                                    </div>
                                   )}
                                 </div>
-                                {(current?.holder.aliases.length ?? 0) > 0 && (
-                                  <div className="max-w-[280px] text-xs text-muted-foreground">
-                                    Also listed as {current!.holder.aliases.join("; ")}
-                                  </div>
-                                )}
                               </div>
-                            </div>
-                          </TableCell>
-                          {table.dates.map((d) => {
-                            const day = row.byDate.get(d)
-                            const h = day?.holder
-                            return (
-                              <TableCell key={d} className="text-right align-top tabular-nums last:pr-4">
-                                {!h ? (
-                                  <span className="text-muted-foreground">{EMPTY}</span>
-                                ) : h.leftList ? (
-                                  <MovementBadge movement="EXITED" />
-                                ) : (
-                                  <>
-                                    <div>{sharesLabel(h.sharesCurrent)}</div>
-                                    <div className="text-xs text-muted-foreground">{percentLabel(h.percentCurrent)}</div>
-                                    <div className="text-xs">
-                                      {h.movement === "ENTERED" ? (
-                                        <MovementBadge movement="ENTERED" />
-                                      ) : (
-                                        <SharesChange value={h.change} />
-                                      )}
-                                    </div>
-                                    {h.movement === "UNCHANGED" && h.accountMoves > 0 && (
-                                      <div className="text-[11px] text-muted-foreground" title="Shares moved between its accounts">
-                                        <ArrowRightLeftIcon className="inline size-3" /> accounts
-                                      </div>
-                                    )}
-                                  </>
-                                )}
-                              </TableCell>
-                            )
-                          })}
-                        </TableRow>
-                        {expanded && current && (
-                          <TableRow className="bg-muted/30 hover:bg-muted/30">
-                            <TableCell colSpan={table.dates.length + 1} className="px-4 py-3">
-                              <Accounts day={current} />
                             </TableCell>
+                            {view!.dates.map((d) => {
+                              const day = row.byDate.get(d)
+                              const h = day?.holder
+                              return (
+                                <TableCell key={d} className="text-right align-top tabular-nums last:pr-4">
+                                  {!h ? (
+                                    <span className="text-muted-foreground">{EMPTY}</span>
+                                  ) : h.leftList ? (
+                                    <MovementBadge movement="EXITED" />
+                                  ) : (
+                                    <>
+                                      <div>{sharesLabel(h.sharesCurrent)}</div>
+                                      <div className="text-xs text-muted-foreground">{percentLabel(h.percentCurrent)}</div>
+                                      <div className="text-xs">
+                                        {h.movement === "ENTERED" ? (
+                                          <MovementBadge movement="ENTERED" />
+                                        ) : (
+                                          <SharesChange value={h.change} />
+                                        )}
+                                      </div>
+                                      {h.movement === "UNCHANGED" && h.accountMoves > 0 && (
+                                        <div className="text-[11px] text-muted-foreground" title="Shares moved between its accounts">
+                                          <ArrowRightLeftIcon className="inline size-3" /> accounts
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </TableCell>
+                              )
+                            })}
                           </TableRow>
-                        )}
-                      </Fragment>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                          {expanded && current && (
+                            <TableRow className="bg-muted/30 hover:bg-muted/30">
+                              <TableCell colSpan={view!.dates.length + 1} className="px-4 py-3">
+                                <Accounts day={current} />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
 
             {digest.formerHolders.length > 0 && (
               <p className="px-4 text-xs text-muted-foreground">

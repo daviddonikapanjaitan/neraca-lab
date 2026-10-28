@@ -289,7 +289,7 @@ public final class OwnershipParser {
             String upper = title.toUpperCase(Locale.ROOT);
             if (!upper.contains("5%") && !upper.contains("5 %") && (upper.contains("1%") || upper.contains("1 %"))) {
                 throw new OwnershipFormatException("This is the list of the holders of more than 1% (" + title
-                        + "): choose the document type Ownership (>1%), a later feature");
+                        + "): choose the document type Ownership (>=1%)");
             }
             if (!upper.contains("5%") && !upper.contains("5 %") && !upper.contains("LIMA PERSEN")) {
                 throw new OwnershipFormatException("Not KSEI's list of the shareholders of more than 5%: its title is '"

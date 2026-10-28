@@ -3715,8 +3715,11 @@ public final class FilingMapper {
                 + " vs reported " + reported.toPlainString() + " (difference " + diff.toPlainString() + ")");
     }
 
-    /** Largest relative difference of a full-amount filing's own figures that is taken as a slip, not a missing line. */
-    static final BigDecimal FULL_AMOUNT_SLIP = new BigDecimal("1e-9");
+    /**
+     * Largest relative difference of a full-amount filing's own figures that is taken as a slip, not a missing line
+     * (also the verifier's for ending cash against balance-sheet cash).
+     */
+    public static final BigDecimal FULL_AMOUNT_SLIP = new BigDecimal("1e-9");
 
     private static Check epsCheck(BigDecimal implied, BigDecimal reported) {
         int decimals = Math.max(0, reported.stripTrailingZeros().scale());

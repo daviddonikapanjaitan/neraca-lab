@@ -24,6 +24,7 @@ import {
 } from "@/lib/ingestion"
 import { companyHref, INDEX_TICKERS, MARKET_CODES, technicalsHref } from "@/lib/links"
 import { dayLabel, OWNERSHIP_HREF, type OwnershipResult } from "@/lib/ownership"
+import { monthLabel as listMonth, type OnePercentResult, OWNERSHIP_ONE_PERCENT_HREF } from "@/lib/ownership-one-percent"
 import type { CompanyDocumentType, IngestionJob, MacroResult } from "@/lib/types"
 
 /** Fields of the financial statement upload result (IngestionResponse) shown here. */
@@ -417,6 +418,64 @@ function OwnershipSummary({ result }: { result: OwnershipResult }) {
   )
 }
 
+function OnePercentSummary({ result }: { result: OnePercentResult }) {
+  const month = new URLSearchParams({ from: result.reportDate, to: result.reportDate, transaction: "ACTIVITY" })
+  return (
+    <dl className="flex flex-col gap-2">
+      <Field label="Document">Ownership (&gt;=1%), {result.exchange}</Field>
+      <Field label="List">
+        {listMonth(result.reportDate)} ({dayLabel(result.reportDate)})
+        {result.previousDate ? `, compared with ${listMonth(result.previousDate)}` : ", no earlier list stored"}
+        {result.outcome === "REPLACED" ? " (replaced the list stored for the date)" : ""}
+        {result.announcementNumber ? ` · announcement ${result.announcementNumber}` : ""}
+        {result.nextDate ? ` · ${listMonth(result.nextDate)} compared with it again` : ""}
+      </Field>
+      <Field label="Investors">
+        {count(result.holders)} investors of {count(result.issuers)} companies · {count(result.sourceRows)} rows
+      </Field>
+      <Field label="Movements">
+        {result.previousDate === null ? (
+          "none known (no earlier list stored)"
+        ) : (
+          <>
+            {count(result.buys)} buys · {count(result.sells)} sells · {count(result.entered)} new above 1% ·{" "}
+            {count(result.exited ?? 0)} no longer above 1% · {count(result.renamed)} renamed · {count(result.moved)}{" "}
+            blocks moved
+          </>
+        )}
+      </Field>
+      <Field label="Vector store">
+        {result.ragError ? (
+          <span className="text-destructive">Not written: {result.ragError}</span>
+        ) : (
+          <>
+            {count(result.ragDocuments)} company documents ({count(result.chunks)} chunks) ·{" "}
+            {count(result.companiesNotStored)} companies of the list are not stored (no document)
+          </>
+        )}
+      </Field>
+      {result.warnings.length > 0 && (
+        <Field label="Warnings">
+          <List items={result.warnings} tone="destructive" />
+        </Field>
+      )}
+      {result.notes.length > 0 && (
+        <Field label="Notes">
+          <List items={result.notes} />
+        </Field>
+      )}
+      <Field label="Embedding">
+        <span className="font-mono text-xs">{result.embeddingModel ?? EMPTY}</span>
+      </Field>
+      <Field label="Ownership">
+        <Link href={`${OWNERSHIP_ONE_PERCENT_HREF}?${month}`} className="text-primary hover:underline">
+          Open Companies &gt; Ownership (&gt;=1%) for {listMonth(result.reportDate)}
+        </Link>
+      </Field>
+    </dl>
+  )
+}
+
 function RagNewsSummary({ result }: { result: RagNewsResult }) {
   const failed = (result.articles ?? []).filter((a) => a.outcome?.startsWith("FAILED") || a.outcome === "NO_TEXT")
   return (
@@ -601,7 +660,12 @@ export function JobDetailSheet({
                   {shown.type === "MACRO" && <MacroSummary result={shown.result as MacroResult} />}
                   {shown.type === "RAG_PDF" && <RagPdfSummary result={shown.result as RagPdfResult} ticker={shown.ticker} />}
                   {shown.type === "RAG_NEWS" && <RagNewsSummary result={shown.result as RagNewsResult} />}
-                  {shown.type === "RAG_XLSX" && <OwnershipSummary result={shown.result as OwnershipResult} />}
+                  {shown.type === "RAG_XLSX" &&
+                    ((shown.result as { documentType?: string } | null)?.documentType === "OWNERSHIP_1_PERCENT" ? (
+                      <OnePercentSummary result={shown.result as OnePercentResult} />
+                    ) : (
+                      <OwnershipSummary result={shown.result as OwnershipResult} />
+                    ))}
                   <details className="rounded-lg border">
                     <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
                       {shown.type === "FINANCIAL_STATEMENT"

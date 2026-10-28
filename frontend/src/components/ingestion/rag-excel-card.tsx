@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { requestJson } from "@/lib/client-api"
 import { formatBytes, MAX_UPLOAD_BYTES } from "@/lib/ingestion"
 import { dateInFileName, dayLabel, type ExcelStatus } from "@/lib/ownership"
+import { monthInFileName, monthLabel, ONE_PERCENT_DOCUMENT_TYPE } from "@/lib/ownership-one-percent"
 import type { IngestionJob } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -27,6 +28,8 @@ type Upload = {
   file: File
   /** the list's date read from the file name (peng-2026-10-27-00104-lima-persen.xlsx), if any */
   date: string | null
+  /** the monthly list's month read from the file name (peng-2026-09-00024-satu-persen.xlsx: 2026-09), if any */
+  month: string | null
   state: "waiting" | "uploading" | "queued" | "already" | "error"
   message?: string
 }
@@ -43,11 +46,17 @@ function fileProblem(file: File): string | null {
   return null
 }
 
+/** "2026-09" -> "Sep 2026"; "02" (the older names carry no year) -> "month 02". */
+function monthOfName(month: string): string {
+  return month.length === 7 ? monthLabel(`${month}-01`) : `month ${month}`
+}
+
 /**
  * Upload of Excel documents of an exchange: choose the exchange, then the document type it offers (IDX: Ownership
- * (>=5%), KSEI's daily list of the shareholders of more than 5%; Ownership (>1%) is a later feature), then one or more
- * workbooks. Each workbook is read by the backend at once and becomes a job of its own; the lists are stored one
- * after the other (oldest date first), for Companies > Ownership (>=5%) and the vector store.
+ * (>=5%), KSEI's daily list of the shareholders of more than 5%; Ownership (>=1%), its monthly list of the
+ * shareholders of more than 1%), then one or more workbooks. Each workbook is read by the backend at once and becomes
+ * a job of its own; the lists are stored one after the other (oldest first), for Companies > Ownership (>=5%) or
+ * Ownership (>=1%) and the vector store.
  */
 export function RagExcelCard({
   status,
@@ -68,6 +77,7 @@ export function RagExcelCard({
   const types = chosenExchange?.documentTypes ?? []
   const chosenType = types.find((t) => t.code === documentType) ?? null
   const ready = chosenType?.available === true
+  const monthly = documentType === ONE_PERCENT_DOCUMENT_TYPE
   const exchangeItems = status.exchanges.map((e) => ({ value: e.code, label: e.label }))
   const typeItems = types.map((t) => ({ value: t.code, label: t.available ? t.label : `${t.label} (later feature)` }))
   const waiting = uploads.filter((u) => u.state === "waiting" || u.state === "error")
@@ -81,11 +91,16 @@ export function RagExcelCard({
       if (why) {
         problems.push(why)
       } else if (!next.some((u) => u.file.name === file.name && u.file.size === file.size)) {
-        next.push({ file, date: dateInFileName(file.name), state: "waiting" })
+        next.push({ file, date: dateInFileName(file.name), month: monthInFileName(file.name), state: "waiting" })
       }
     }
-    // the oldest list first: each list is then compared with the day before it, already stored
-    next.sort((a, b) => (a.date ?? a.file.name).localeCompare(b.date ?? b.file.name))
+    // the oldest list first: each list is then compared with the one before it, already stored (a monthly list
+    // stored out of order is fitted in between later, but the oldest first writes the documents once)
+    next.sort((a, b) =>
+      monthly
+        ? (a.month ?? a.file.name).localeCompare(b.month ?? b.file.name)
+        : (a.date ?? a.file.name).localeCompare(b.date ?? b.file.name)
+    )
     if (next.length > MAX_FILES) problems.push(`At most ${MAX_FILES} workbooks at once; the newest were left out.`)
     setUploads(next.slice(0, MAX_FILES))
     setProblem(problems.length > 0 ? problems.join(" ") : null)
@@ -194,26 +209,50 @@ export function RagExcelCard({
           </p>
         )}
 
+        {ready && monthly && (
+          <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+            <li>
+              The monthly list of the <span className="font-medium text-foreground">shareholders of more than 1%</span>{" "}
+              published by KSEI on idx.co.id, e.g.{" "}
+              <span className="font-mono text-foreground">peng-2026-09-00024-satu-persen.xlsx</span>: each
+              investor&apos;s scripless and scrip shares, percentage, type and local or foreign status at the month end.
+            </li>
+            <li>
+              Choose several months at once: they are stored oldest first, one job each. Each month is compared with the
+              stored month before it (KSEI prints no change and no SID, and spells names differently from month to
+              month: investors are matched by name, then by the same block of shares); a month uploaded late is fitted
+              in between and the month after it is compared again.
+            </li>
+            <li>
+              Uploading the list of a month again replaces it. Every investor and its buys and sells are shown on
+              Companies › Ownership (&gt;=1%); each stored company&apos;s holders and their movements over every stored
+              month become one document in the vector store.
+            </li>
+          </ul>
+        )}
+
         {ready && (
           <>
-            <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-              <li>
-                The daily list <span className="font-medium text-foreground">Kepemilikan Efek Diatas 5% Berdasarkan SID
-                (Publik)</span> published by KSEI on idx.co.id, e.g.{" "}
-                <span className="font-mono text-foreground">peng-2026-10-27-00104-lima-persen.xlsx</span>. Each list
-                holds two dates: the day and the trading day before.
-              </li>
-              <li>
-                Choose several lists at once: they are uploaded and stored oldest first, one job each. An investor that
-                fell below 5% is not in KSEI&apos;s list: it is found by comparing a day with the stored day before, so
-                upload consecutive days.
-              </li>
-              <li>
-                Uploading the list of a day again replaces it. Every investor, its securities accounts and its buys and
-                sells are shown on Companies › Ownership (&gt;=5%); each stored company&apos;s holders and their
-                movements over every stored day become one document in the vector store.
-              </li>
-            </ul>
+            {!monthly && (
+              <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                <li>
+                  The daily list <span className="font-medium text-foreground">Kepemilikan Efek Diatas 5% Berdasarkan SID
+                  (Publik)</span> published by KSEI on idx.co.id, e.g.{" "}
+                  <span className="font-mono text-foreground">peng-2026-10-27-00104-lima-persen.xlsx</span>. Each list
+                  holds two dates: the day and the trading day before.
+                </li>
+                <li>
+                  Choose several lists at once: they are uploaded and stored oldest first, one job each. An investor that
+                  fell below 5% is not in KSEI&apos;s list: it is found by comparing a day with the stored day before, so
+                  upload consecutive days.
+                </li>
+                <li>
+                  Uploading the list of a day again replaces it. Every investor, its securities accounts and its buys and
+                  sells are shown on Companies › Ownership (&gt;=5%); each stored company&apos;s holders and their
+                  movements over every stored day become one document in the vector store.
+                </li>
+              </ul>
+            )}
 
             <label
               onDragOver={(e) => {
@@ -255,9 +294,15 @@ export function RagExcelCard({
                 <div className="flex items-center gap-2">
                   <FileSpreadsheetIcon className="size-4 shrink-0 text-emerald-600" />
                   <span className="min-w-0 flex-1 truncate font-medium">{u.file.name}</span>
-                  {u.date && (
-                    <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{dayLabel(u.date)}</span>
-                  )}
+                  {monthly
+                    ? u.month && (
+                        <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+                          {monthOfName(u.month)}
+                        </span>
+                      )
+                    : u.date && (
+                        <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{dayLabel(u.date)}</span>
+                      )}
                   <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatBytes(u.file.size)}</span>
                   {u.state === "uploading" && <LoaderIcon className="size-3.5 shrink-0 animate-spin" />}
                   {(u.state === "queued" || u.state === "already") && (

@@ -290,6 +290,16 @@ public class RagRepository {
      */
     @Transactional
     public List<Hit> search(Long companyId, SourceType type, CompanyDocumentType documentType, float[] query, int limit) {
+        return search(companyId, type, documentType, null, query, limit);
+    }
+
+    /**
+     * As {@link #search(Long, SourceType, CompanyDocumentType, float[], int)}, of the documents with the source key
+     * given (an Excel document type: OWNERSHIP_5_PERCENT, OWNERSHIP_1_PERCENT); {@code null} = any.
+     */
+    @Transactional
+    public List<Hit> search(Long companyId, SourceType type, CompanyDocumentType documentType, String sourceKey,
+                            float[] query, int limit) {
         jdbc.sql("SET LOCAL hnsw.iterative_scan = relaxed_order").update();
         List<Hit> hits = new ArrayList<>(jdbc.sql("""
                         SELECT k.chunk_id, k.document_id, c.ticker, d.source_type, d.title, d.source_url, d.file_name,
@@ -301,12 +311,14 @@ public class RagRepository {
                         WHERE (CAST(:company AS bigint) IS NULL OR k.company_id = :company)
                           AND (CAST(:type AS varchar) IS NULL OR d.source_type = :type)
                           AND (CAST(:documentType AS varchar) IS NULL OR d.document_type = :documentType)
+                          AND (CAST(:sourceKey AS varchar) IS NULL OR d.source_key = :sourceKey)
                         ORDER BY k.embedding <=> CAST(:query AS vector)
                         LIMIT :limit""")
                 .param("query", vector(query))
                 .param("company", companyId, Types.BIGINT)
                 .param("type", type == null ? null : type.name(), Types.VARCHAR)
                 .param("documentType", documentType == null ? null : documentType.name(), Types.VARCHAR)
+                .param("sourceKey", sourceKey, Types.VARCHAR)
                 .param("limit", limit)
                 .query((rs, i) -> new Hit(rs.getLong(1), rs.getLong(2), rs.getString(3), SourceType.valueOf(rs.getString(4)),
                         rs.getString(5), rs.getString(6), rs.getString(7), instant(rs.getTimestamp(8)),
@@ -314,6 +326,14 @@ public class RagRepository {
                 .list());
         hits.sort(Comparator.comparingDouble(Hit::distance));     // relaxed order: re-sort exactly
         return hits;
+    }
+
+    /** The companies' documents of a source type and key (XLSX, OWNERSHIP_1_PERCENT: the 1% ownership documents). */
+    public long documentCount(SourceType type, String sourceKey) {
+        return jdbc.sql("""
+                        SELECT count(*) FROM rag_document
+                        WHERE company_id IS NOT NULL AND source_type = :t AND source_key = :k""")
+                .param("t", type.name()).param("k", sourceKey).query(Long.class).single();
     }
 
     public Counts counts() {

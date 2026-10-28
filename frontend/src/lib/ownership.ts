@@ -264,15 +264,27 @@ export interface ExcelExchangeOption {
   documentTypes: ExcelDocumentTypeOption[]
 }
 
+/** The lists stored of one Excel document type (IDX). */
+export interface ExcelStoredType {
+  documentType: string
+  label: string
+  reports: number
+  latestDate: string | null
+  /** the companies' documents of the type in the vector store */
+  documents: number
+}
+
 /** GET /api/v1/rag/xlsx/status */
 export interface ExcelStatus {
   exchanges: ExcelExchangeOption[]
-  /** lists stored */
+  /** Ownership (>=5%) lists stored */
   reports: number
   latestDate: string | null
-  /** the companies' ownership documents in the vector store */
+  /** the companies' ownership documents in the vector store (both types) */
   documents: number
   pending: number
+  /** the lists stored of each type */
+  stored: ExcelStoredType[]
 }
 
 /** The result of a RAG_XLSX job (OwnershipIngestionService.OwnershipResult). */

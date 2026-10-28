@@ -31,6 +31,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { analysisTitle, figure, figureRows, RESEARCH_SENTIMENT_CLASS } from "@/lib/analysis"
 import { dayLabel, fractionLabel, OWNERSHIP_HREF } from "@/lib/ownership"
+import { GROUP_LABEL, monthLabel as listMonth, OWNERSHIP_ONE_PERCENT_HREF } from "@/lib/ownership-one-percent"
 import { monthLabel, rangeLabel } from "@/lib/registration"
 import { EMPTY, formatDate, formatNumber, formatPercent, formatTimestamp } from "@/lib/format"
 import { requestJson } from "@/lib/client-api"
@@ -233,6 +234,7 @@ export function AnalysisReport({ initial }: { initial: Report }) {
 
       <InsiderOwnership report={report} active={active} />
       <MajorShareholders report={report} active={active} />
+      <WiderShareholders report={report} active={active} />
 
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <Figures report={report} active={active} />
@@ -534,6 +536,8 @@ function Figures({ report, active }: { report: Report; active: boolean }) {
 const SOURCE_LABEL: Record<string, string> = {
   PDF: "Financial statement",
   REGISTRATION: "Registration report",
+  OWNERSHIP: "Ownership list (>=5%)",
+  OWNERSHIP_1_PERCENT: "Ownership list (>=1%)",
   NEWS: "News article",
 }
 
@@ -729,6 +733,106 @@ function MajorShareholders({ report, active }: { report: Report; active: boolean
   )
 }
 
+/** The holders of more than 1% the agents saw (KSEI's monthly lists, Companies > Ownership (>=1%)). */
+function WiderShareholders({ report, active }: { report: Report; active: boolean }) {
+  const wider = report.context?.shareholdersAbove1Percent
+  const ticker = report.run.ticker
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <PieChartIcon className="size-4 text-primary" /> Shareholders of more than 1%
+        </CardTitle>
+        <CardDescription>
+          KSEI&apos;s monthly lists
+          {wider
+            ? ` (${wider.months} ${wider.months === 1 ? "month" : "months"}, ${listMonth(wider.firstDate)} to ${listMonth(wider.latestDate)})`
+            : ""}
+          , given to every agent.{" "}
+          <Link
+            href={`${OWNERSHIP_ONE_PERCENT_HREF}?tickers=${encodeURIComponent(ticker)}`}
+            className="text-primary hover:underline"
+          >
+            Companies &gt; Ownership (&gt;=1%)
+          </Link>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 px-0 text-sm">
+        {!wider ? (
+          <p className="px-4 text-muted-foreground">
+            {active && !report.context
+              ? "Loading..."
+              : "No KSEI monthly list of the shareholders of more than 1% names this company: upload the lists on Ingestion > Excel Documents (RAG)."}
+          </p>
+        ) : (
+          <>
+            <p className="px-4">{wider.reading}</p>
+            {wider.byType.length > 0 && (
+              <p className="px-4 text-xs text-muted-foreground">
+                By type:{" "}
+                {wider.byType
+                  .map((g) => `${GROUP_LABEL[g.group]} ${fractionLabel(g.ownership)} (${g.holders})`)
+                  .join(" · ")}
+              </p>
+            )}
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-4">Investor</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Shares ({listMonth(wider.latestDate)})</TableHead>
+                    <TableHead className="text-right">Ownership</TableHead>
+                    <TableHead className="pr-4 text-right">Net change</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {wider.holders.map((h, i) => (
+                    <TableRow key={`${h.name}-${i}`}>
+                      <TableCell className="pl-4 font-medium">{h.name}</TableCell>
+                      <TableCell className="text-xs">
+                        {h.investorType ?? EMPTY}
+                        <div className="text-muted-foreground">
+                          {h.status === "FOREIGN" ? "Foreign" : h.status === "LOCAL" ? "Local" : EMPTY}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatNumber(h.shares, 0)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{fractionLabel(h.ownership)}</TableCell>
+                      <TableCell className="pr-4 text-right tabular-nums">
+                        <SignedShares value={h.netChange} />
+                        <div className="text-xs text-muted-foreground">since {listMonth(h.since)}</div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {wider.transactions.length > 0 && (
+              <div className="px-4">
+                <p className="text-xs font-medium text-muted-foreground">Monthly movements</p>
+                <ul className="flex flex-col gap-0.5 text-xs">
+                  {wider.transactions.slice(0, 15).map((t, i) => (
+                    <li key={`${t.date}-${t.name}-${i}`}>
+                      <span className="tabular-nums">{listMonth(t.date)}</span> · {t.name}{" "}
+                      {t.movement === "ENTERED"
+                        ? `new above 1% with ${formatNumber(t.sharesAfter, 0)} shares (${fractionLabel(t.ownershipAfter)})`
+                        : t.movement === "EXITED"
+                          ? `no longer above 1% (held ${formatNumber(t.sharesBefore, 0)}, ${fractionLabel(t.ownershipBefore)})`
+                          : t.movement === "MOVED" || t.movement === "RENAMED"
+                            ? `the same ${formatNumber(t.sharesAfter, 0)} shares listed as ${t.previousName ?? "another name"} the month before`
+                            : `${(t.change ?? 0) > 0 ? "bought" : "sold"} ${formatNumber(Math.abs(t.change ?? 0), 0)} shares (${fractionLabel(t.ownershipBefore)} → ${fractionLabel(t.ownershipAfter)})`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function num(value: number | string | undefined): number | null {
   return typeof value === "number" ? value : null
 }
@@ -781,6 +885,13 @@ function DataUsed({ report }: { report: Report }) {
               {context.majorShareholders ? `${context.majorShareholders.days} days` : "none"}
               {documents?.ownershipDocument && (
                 <span className="text-muted-foreground"> ({documents.ownershipDocument})</span>
+              )}
+            </p>
+            <p>
+              <span className="font-medium">Ownership lists (&gt;=1%):</span>{" "}
+              {context.shareholdersAbove1Percent ? `${context.shareholdersAbove1Percent.months} months` : "none"}
+              {documents?.onePercentDocument && (
+                <span className="text-muted-foreground"> ({documents.onePercentDocument})</span>
               )}
             </p>
             <p>

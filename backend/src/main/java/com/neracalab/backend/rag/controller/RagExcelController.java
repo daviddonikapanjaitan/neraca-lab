@@ -2,6 +2,7 @@ package com.neracalab.backend.rag.controller;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -32,20 +33,27 @@ import com.neracalab.backend.ownership.OwnershipQueue;
 import com.neracalab.backend.ownership.OwnershipQueue.Submission;
 import com.neracalab.backend.ownership.OwnershipRepository;
 import com.neracalab.backend.ownership.OwnershipRepository.ReportPage;
+import com.neracalab.backend.ownership.onepercent.OnePercentParser;
+import com.neracalab.backend.ownership.onepercent.OnePercentParser.OnePercentFormatException;
+import com.neracalab.backend.ownership.onepercent.OnePercentRepository;
 import com.neracalab.backend.rag.ExcelDocumentType;
 import com.neracalab.backend.rag.RagRepository;
+import com.neracalab.backend.rag.RagRepository.SourceType;
 
 /**
  * Ingestion > Excel Documents (RAG) (permission INGESTION): Excel workbooks of an exchange, read into the database
  * and the RAG vector store. For IDX the document type Ownership (>=5%) is KSEI's daily list of the shareholders of
- * more than 5% (Companies > Ownership (>=5%)); Ownership (>1%) is a later feature.
+ * more than 5% (Companies > Ownership (>=5%)), Ownership (>=1%) its monthly list of the shareholders of more than 1%
+ * (Companies > Ownership (>=1%)).
  * <ul>
  *   <li>{@code POST /api/v1/rag/xlsx} (multipart {@code file}, {@code exchange} = IDX, {@code documentType} =
- *       OWNERSHIP_5_PERCENT) - the workbook is read at once (422 when it is not the list, nothing stored) and queued:
- *       202 with the new job, 200 with the job already queued / running for the same file</li>
- *   <li>{@code GET /api/v1/rag/xlsx/status} - the exchanges and their document types, the lists stored, the queue</li>
+ *       OWNERSHIP_5_PERCENT or OWNERSHIP_1_PERCENT) - the workbook is read at once (422 when it is not the type's list,
+ *       nothing stored) and queued: 202 with the new job, 200 with the job already queued / running for the same
+ *       file</li>
+ *   <li>{@code GET /api/v1/rag/xlsx/status} - the exchanges and their document types, the lists stored of each type,
+ *       the queue</li>
  *   <li>{@code GET /api/v1/rag/xlsx/reports[?exchange=IDX&documentType=OWNERSHIP_5_PERCENT&limit=100&offset=0]} - the
- *       stored lists, latest day first, with the movements of each</li>
+ *       stored lists of the type, latest first, with the movements of each</li>
  * </ul>
  */
 @RestController
@@ -61,21 +69,35 @@ public class RagExcelController {
     }
 
     /**
+     * The lists stored of one document type (IDX).
+     *
+     * @param latestDate the latest of them; null when none
+     * @param documents  the companies' documents of the type in the vector store
+     */
+    public record StoredType(String documentType, String label, long reports, String latestDate, long documents) {
+    }
+
+    /**
      * @param reports         lists stored (Ownership (>=5%), IDX)
      * @param latestDate      the latest of them; null when none
-     * @param documents       the companies' ownership documents in the vector store
+     * @param documents       the companies' ownership documents in the vector store (both types)
      * @param pending         uploads waiting in the queue (excluding the running one)
+     * @param stored          the lists stored of each type
      */
-    public record Status(List<ExchangeOption> exchanges, long reports, String latestDate, long documents, int pending) {
+    public record Status(List<ExchangeOption> exchanges, long reports, String latestDate, long documents, int pending,
+                         List<StoredType> stored) {
     }
 
     private final OwnershipQueue queue;
     private final OwnershipRepository ownership;
+    private final OnePercentRepository onePercent;
     private final RagRepository rag;
 
-    public RagExcelController(OwnershipQueue queue, OwnershipRepository ownership, RagRepository rag) {
+    public RagExcelController(OwnershipQueue queue, OwnershipRepository ownership, OnePercentRepository onePercent,
+                              RagRepository rag) {
         this.queue = queue;
         this.ownership = ownership;
+        this.onePercent = onePercent;
         this.rag = rag;
     }
 
@@ -86,21 +108,37 @@ public class RagExcelController {
         List<ExchangeOption> exchanges = Arrays.stream(Exchange.values())
                 .map(e -> new ExchangeOption(e.code(), e.displayName(), e.code() + " - " + e.displayName(), types))
                 .toList();
-        List<java.time.LocalDate> dates = ownership.dates(Exchange.IDX.code(), ExcelDocumentType.OWNERSHIP_5_PERCENT);
+        String idx = Exchange.IDX.code();
+        List<LocalDate> dates = ownership.dates(idx, ExcelDocumentType.OWNERSHIP_5_PERCENT);
+        List<StoredType> stored = List.of(stored(ExcelDocumentType.OWNERSHIP_5_PERCENT, dates),
+                stored(ExcelDocumentType.OWNERSHIP_1_PERCENT, onePercent.dates(idx)));
         return new Status(exchanges, dates.size(), dates.isEmpty() ? null : dates.getFirst().toString(),
-                rag.counts().xlsxDocuments(), queue.pendingCount());
+                rag.counts().xlsxDocuments(), queue.pendingCount(), stored);
     }
 
+    private StoredType stored(ExcelDocumentType type, List<LocalDate> dates) {
+        return new StoredType(type.name(), type.label(), dates.size(),
+                dates.isEmpty() ? null : dates.getFirst().toString(), rag.documentCount(SourceType.XLSX, type.name()));
+    }
+
+    /**
+     * The stored lists of a type: a {@link ReportPage} of Ownership (>=5%), a {@link OnePercentRepository.ReportPage}
+     * of Ownership (>=1%).
+     */
     @GetMapping("/reports")
-    public ReportPage reports(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange,
-                              @RequestParam(name = "documentType", defaultValue = "OWNERSHIP_5_PERCENT") String documentType,
-                              @RequestParam(name = "limit", defaultValue = "100") int limit,
-                              @RequestParam(name = "offset", defaultValue = "0") int offset) {
+    public Object reports(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange,
+                          @RequestParam(name = "documentType", defaultValue = "OWNERSHIP_5_PERCENT") String documentType,
+                          @RequestParam(name = "limit", defaultValue = "100") int limit,
+                          @RequestParam(name = "offset", defaultValue = "0") int offset) {
         if (offset < 0) {
             throw new InvalidRequestException("offset must be 0 or more");
         }
-        return ownership.reports(Exchange.of(exchange).code(), availableType(documentType), Math.clamp(limit, 1, 500),
-                offset);
+        String code = Exchange.of(exchange).code();
+        ExcelDocumentType type = availableType(documentType);
+        if (type == ExcelDocumentType.OWNERSHIP_1_PERCENT) {
+            return onePercent.reports(code, Math.clamp(limit, 1, 500), offset);
+        }
+        return ownership.reports(code, type, Math.clamp(limit, 1, 500), offset);
     }
 
     /**
@@ -125,7 +163,12 @@ public class RagExcelController {
         if (!isZip(content)) {
             throw new InvalidRequestException("The file is not an .xlsx workbook (no ZIP header)");
         }
-        OwnershipParser.parse(content);     // refuses what is not the list before anything is stored
+        // refuses what is not the type's list before anything is stored
+        if (type == ExcelDocumentType.OWNERSHIP_1_PERCENT) {
+            OnePercentParser.parse(content);
+        } else {
+            OwnershipParser.parse(content);
+        }
         Submission submission = queue.submit(ex.code(), type, content, fileName, Requester.of(user));
         IngestionJob job = submission.job();
         return ResponseEntity.status(submission.created() ? HttpStatus.ACCEPTED : HttpStatus.OK)
@@ -133,7 +176,7 @@ public class RagExcelController {
                 .body(job);
     }
 
-    /** A type that takes uploads now (Ownership (>=5%)); the later ones and unknown codes are refused. */
+    /** A type that takes uploads now; a later one and unknown codes are refused. */
     private static ExcelDocumentType availableType(String code) {
         if (code == null || code.isBlank()) {
             throw new InvalidRequestException("Choose the type of the document");
@@ -143,8 +186,9 @@ public class RagExcelController {
                         Arrays.stream(ExcelDocumentType.values()).filter(ExcelDocumentType::available)
                                 .map(Enum::name).toList())));
         if (!type.available()) {
-            throw new InvalidRequestException(type.label() + " is not available yet: only "
-                    + ExcelDocumentType.OWNERSHIP_5_PERCENT.label() + " for now");
+            throw new InvalidRequestException(type.label() + " is not available yet: use one of " + String.join(", ",
+                    Arrays.stream(ExcelDocumentType.values()).filter(ExcelDocumentType::available)
+                            .map(ExcelDocumentType::label).toList()));
         }
         return type;
     }
@@ -172,6 +216,13 @@ public class RagExcelController {
 
     @ExceptionHandler(OwnershipFormatException.class)
     ProblemDetail notTheList(OwnershipFormatException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
+        problem.setTitle("Not a readable ownership list");
+        return problem;
+    }
+
+    @ExceptionHandler(OnePercentFormatException.class)
+    ProblemDetail notTheMonthlyList(OnePercentFormatException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
         problem.setTitle("Not a readable ownership list");
         return problem;

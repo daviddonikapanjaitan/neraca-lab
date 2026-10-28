@@ -58,7 +58,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     title: "Excel Documents (RAG)",
     heading: "Excel Documents (RAG)",
     description:
-      "Upload Excel documents of an exchange: for IDX, KSEI's daily list of the shareholders of more than 5% (Ownership (>=5%)). Every investor, its accounts and its buys and sells are stored for Companies › Ownership (>=5%), and each stored company's ownership is chunked, embedded and stored in the pgvector store for the AI analysis.",
+      "Upload Excel documents of an exchange: for IDX, KSEI's daily list of the shareholders of more than 5% (Ownership (>=5%)) and its monthly list of the shareholders of more than 1% (Ownership (>=1%)). Every investor and its buys and sells are stored for Companies › Ownership (>=5%) and Ownership (>=1%), and each stored company's ownership is chunked, embedded and stored in the pgvector store for the AI analysis.",
     href: "/ingestion/rag-excel",
     jobType: "RAG_XLSX",
   },

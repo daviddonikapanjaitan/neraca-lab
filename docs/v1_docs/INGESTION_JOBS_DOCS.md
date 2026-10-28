@@ -14,7 +14,7 @@ Every ingestion runs asynchronously in the background and records its progress i
 | Macro series                    | `POST /api/v1/macro/ingestions`, `/updates`, a CSV upload | `MacroIngestionQueue`: one thread ([MACRO_DOCS.md](MACRO_DOCS.md)); exchange `MACRO`, ticker = the series code |
 | Price history of the screening universe (Yahoo Finance) | `POST /api/v1/listing-prices/ingestions?exchange=` | `ListingPricesQueue` ([TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md) section 4) |
 | AI technical screening          | `POST /api/v1/technical-screenings`            | `TechnicalScreeningQueue`: one thread ([TECHNICAL_SCREENING_DOCS.md](TECHNICAL_SCREENING_DOCS.md)) |
-| Excel document (RAG): KSEI ownership list | `POST /api/v1/rag/xlsx`              | `OwnershipQueue`: one thread, the lists one after the other ([OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md)) |
+| Excel document (RAG): KSEI ownership list | `POST /api/v1/rag/xlsx`              | `OwnershipQueue`: one thread, the lists one after the other, daily 5% lists and monthly 1% lists ([OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md), [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)) |
 | AI macro analysis of a country  | `POST /api/v1/macro/analyses`                  | `MacroAnalysisQueue`: one thread ([MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md)); exchange = the country's exchange (`IDX`), ticker = the index (`IHSG`, `LQ45`) |
 
 All of them write `ingestion_job` (one row per process; `job_type` `FINANCIAL_STATEMENT`, `PRICE`, `FUNDAMENTALS`, `SCREENING`, `RAG_PDF`, `RAG_NEWS`, `ANALYSIS`, `MACRO`, `MACRO_ANALYSIS`, `LISTING_PRICES`, `TECHNICAL_SCREENING`, `RAG_XLSX`). A `RAG_XLSX` job is one

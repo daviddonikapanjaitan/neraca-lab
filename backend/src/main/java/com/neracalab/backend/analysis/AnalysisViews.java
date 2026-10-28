@@ -85,11 +85,15 @@ public final class AnalysisViews {
      * @param ownershipDays             KSEI daily lists of the shareholders of more than 5% naming the company
      *                                  (Companies > Ownership (>=5%))
      * @param latestOwnershipDate       the latest of them; null when none
+     * @param onePercentMonths          KSEI monthly lists of the shareholders of more than 1% naming the company
+     *                                  (Companies > Ownership (>=1%))
+     * @param latestOnePercentDate      the latest of them; null when none
      */
     public record CompanyOption(String exchange, String ticker, String companyName, String sector, int periods,
                                 String latestPeriod, long pdfDocuments, long newsDocuments, String marketDataDate,
                                 String latestPriceDate, int registrationReports, String firstRegistrationPeriod,
-                                String latestRegistrationPeriod, int ownershipDays, String latestOwnershipDate) {
+                                String latestRegistrationPeriod, int ownershipDays, String latestOwnershipDate,
+                                int onePercentMonths, String latestOnePercentDate) {
     }
 
     /** {@code GET /api/v1/analyses/options}. */

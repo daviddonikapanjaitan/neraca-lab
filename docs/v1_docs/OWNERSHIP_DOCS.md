@@ -42,7 +42,7 @@ companies not stored, warnings, notes). The job detail links to Companies > Owne
   months are read (OCT / OKT, MAY / MEI, AUG / AGU / AGT, DEC / DES, ...). Addresses ("Data tidak ditampilkan") and the
   column "Perubahan" are not read.
 - **Title** (above the header): must name 5% ("KEPEMILIKAN EFEK DIATAS 5% ... per tanggal 27 Oct 2026"); a list of 1%
-  is refused ("choose Ownership (>1%), a later feature"); its date must be the second date (else a warning). The first
+  is refused ("choose the document type Ownership (>=1%)", [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)); its date must be the second date (else a warning). The first
   date must be before the second.
 - **Rows**: an investor starts at a row with its number (No); the rows below it with the same ticker and no number
   are its other accounts (the first account is on the investor's row). Merged cells (No, name, totals) are read from
@@ -149,8 +149,8 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/ownership/entities?q=lo%20kheng%20
 **Ingestion > Excel Documents (RAG)** (`/ingestion/rag-excel`, between PDF Documents (RAG) and News (RAG)):
 
 - **Excel document upload**: Exchange (the exchanges of the backend: "IDX - Indonesia Stock Exchange"); once chosen,
-  **Document type**: Ownership (>=5%), and Ownership (>1%) shown as a later feature (disabled); once Ownership (>=5%)
-  is chosen, the drop zone: one or more `.xlsx` (up to 31), sorted by the date in their names and uploaded oldest
+  **Document type**: Ownership (>=5%) and Ownership (>=1%) (the monthly lists:
+  [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)); once Ownership (>=5%) is chosen, the drop zone: one or more `.xlsx` (up to 31), sorted by the date in their names and uploaded oldest
   first, each with its state (waiting, uploading, queued, error).
 - **Stored ownership lists (>=5%)**: every list, latest first (10 per page: 5 / 10 / 20 / 50): date and the day it is
   compared with (link to Companies > Ownership (>=5%) for the day), file, announcement, warnings / notes, investors
@@ -179,7 +179,10 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/ownership/entities?q=lo%20kheng%20
   buys and sells, moves between accounts), a bar of each holder's share of the listed shares with the rest (holders
   below 5% and the public), each investor a row and each day a column (shares, percentage, change or "Crossed 5%" /
   "Below 5%"); a click opens its accounts (broker / custodian, account, shares of both days, change, opened / closed);
-  the former holders.
+  the former holders. The table shows at most **7 days** side by side, by default the latest 7 of the days loaded;
+  its own **Days from / To** calendars narrow the days (a reversed range is read the other way round, **Every day**
+  clears it) and the arrows page to older or newer days (the oldest page is the first 7 days). Only the investors
+  listed on a day shown are rows. A new ticker or new page dates start the table's range afresh.
 - With an **investor's name**: every matching investor with every company it holds (shares, percentage, latest
   movement, "last listed" when it is no longer in the latest list, change since the first list).
 - **The table** (50 rows per page: 25 / 100 / 200): date, ticker, investor (local / foreign, domicile, alias, "moved

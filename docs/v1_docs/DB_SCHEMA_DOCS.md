@@ -39,6 +39,7 @@ foreign key.
 | `V1.0.22__data_TUGU_shares.sql`           | TUGU's 1:2 stock split of 2023-05-24 from public sources (the FY2023 filing does not restate its FY2022 comparative, so the split is never detected from the filings), split-adjusted share counts 3,555,575,600 where empty and the per-share figures of the dates before it on the basis after it; no-op until TUGU is uploaded |
 | `V1.0.24__data_BACH_shares.sql`           | BACH's share count after its IPO of 2026-07-08 (615,000,000 new shares at Rp 442, after its only filing, H1 2026): 4,084,430,000 from the listing date and the IPO in `corporate_action`; no-op until BACH is uploaded; also run after every upload |
 | `V1.0.31__data_BNBR_shares.sql`           | BNBR share counts its filings cannot give (five par-value series) and Yahoo Finance gives wrong: 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31; the placement and the rights issue in `corporate_action`. Runs before V1.0.6 and after every upload |
+| `V1.0.35__data_ENRG_shares.sql`           | ENRG share counts its USD filings do not give and Yahoo Finance gives wrong: 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 2026-06-12 (and that corporate action); the rights issue of October 2026 not yet (its result not announced) |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric |
 | `V1.0.26__data_markets_macro.sql`         | the catalogs: 35 instruments (USDIDR, USDJPY, USDCNY, USDMYR, USDPHP, USDINR, USDKRW, EURUSD, AUDJPY; BRENT, WTI, NATURAL_GAS, LNG, COAL, GOLD, SILVER, COPPER, ALUMINIUM, IRON_ORE, STEEL_HRC, NICKEL, TIN, COBALT, PALM_OIL, PALM_OIL_MYR, SOYBEAN_OIL, SOYBEAN_MEAL, CORN, WHEAT, SUGAR, RUBBER, PULP, UREA, DAP, POTASH) and 25 macro series (FRED, Bank Indonesia, CNBC, CFTC, Yahoo, manual), each brought back to its definition on every start |
 
@@ -819,6 +820,38 @@ day before). KSEI does not list an investor that fell below 5%: this is how it i
 
 `rag_document.source_type` may be `XLSX` (`ck_rag_document_source_type`, V1.0.33): a company's ownership document
 (`source_key` `OWNERSHIP_5_PERCENT`, no document type).
+
+### 4.12c KSEI monthly lists of the shareholders of more than 1% (`V1.0.34__schema_ownership_one_percent.sql`)
+
+`ownership_one_report`: one list per exchange, document type (`OWNERSHIP_1_PERCENT`) and date (unique; the list of a
+date uploaded again replaces it): `report_date` (its DATE column, the month's last trading day), `previous_date` (the
+stored list it is compared with, the latest before it; NULL when none), `announcement_number`, `file_id` /
+`file_name`, `issuers`, `holders` (investors), `source_rows` (rows of the sheet, `>= holders`), `warnings`, `notes`,
+`job_id`. Index `ix_ownership_one_report_date`.
+
+`ownership_one_holder`: an investor of a company in a list.
+
+| Column | Type | Content |
+|---|---|---|
+| `report_id` | BIGINT NOT NULL | -> `ownership_one_report`, `ON DELETE CASCADE` |
+| `exchange`, `report_date` | | repeated from the report |
+| `ticker`, `issuer_name`, `list_number` | | the company; its order in the list (unique per report) |
+| `holder_name`, `holder_key`, `other_names`, `source_rows` | | as listed (its largest row); normalized (without PT / Tbk / Persero / Pte Ltd / Limited / Inc / titles); the other names of its rows; rows counted together |
+| `investor_type`, `type_group` | VARCHAR(100), VARCHAR(20) | the label; INDIVIDUAL, CORPORATE, FUND, FINANCIAL, GOVERNMENT or OTHER (`ck_ownership_one_holder_group`) |
+| `investor_status`, `nationality`, `domicile` | CHAR(1), ... | L / A (`ck_ownership_one_holder_status`) |
+| `shares_scripless`, `shares_scrip`, `shares`, `percent` | BIGINT, NUMERIC(9,4) | the month end's holding |
+| `previous_date`, `previous_holder_id`, `previous_name`, `match_kind`, `shares_previous`, `percent_previous` | | the comparison: the list before, the row there (-> `ownership_one_holder`, `ON DELETE SET NULL`), its name, SAME / RENAMED / MOVED (`ck_ownership_one_holder_match`), its shares and percentage; match and shares set together (`ck_ownership_one_holder_previous`) |
+| `change_shares`, `movement` | generated | shares - shares_previous; BUY, SELL, UNCHANGED, ENTERED, NULL (no list before) |
+| `continued` | BOOLEAN | an investor of the next stored list is matched with it (added by `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` too) |
+
+Indexes `ix_ownership_one_holder_ticker`, `_key`, `_report`, `_date`, `_previous`. The comparison columns and
+`continued` are written by the application (`OnePercentRepository.relink`) when a list is stored, replaced or removed,
+for it and for the stored list after it.
+
+`v_ownership_one_movement`: every row of `ownership_one_holder` (`left_list` false), and for every list with a stored
+list before it each investor of that list that is not `continued` (`left_list` true, `movement` EXITED, its shares then
+as `shares_previous`, `holder_id` its row there). `rag_document.source_key` `OWNERSHIP_1_PERCENT`: a company's 1%
+ownership document. Details: [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md).
 
 ### 4.13 AI analysis of one stock (`V1.0.15__schema_analysis.sql`)
 

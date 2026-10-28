@@ -6,7 +6,7 @@ import java.util.Optional;
 
 /**
  * What an Excel workbook uploaded on Ingestion > Excel Documents (RAG) is (exchange IDX). Only the available types
- * take uploads; the others are listed on the page as later features.
+ * take uploads; a type not available would be listed on the page as a later feature.
  */
 public enum ExcelDocumentType {
 
@@ -18,8 +18,14 @@ public enum ExcelDocumentType {
     OWNERSHIP_5_PERCENT("Ownership (>=5%)", true,
             "KSEI's daily list of the shareholders of more than 5% (Kepemilikan Efek Diatas 5% Berdasarkan SID), e.g. "
                     + "peng-2026-10-27-00104-lima-persen.xlsx"),
-    /** The holders of more than 1% with their broker: a later feature. */
-    OWNERSHIP_1_PERCENT("Ownership (>1%)", false, "The holders of more than 1% with their broker (later feature)");
+    /**
+     * KSEI's monthly list of the holders of more than 1% of a listed company, from idx.co.id
+     * (peng-2026-09-00024-satu-persen.xlsx): each investor's scripless and scrip shares, percentage, type and local or
+     * foreign status at the end of a month; stored for Companies > Ownership (>=1%) and, per stored company, in the
+     * vector store.
+     */
+    OWNERSHIP_1_PERCENT("Ownership (>=1%)", true,
+            "KSEI's monthly list of the shareholders of more than 1%, e.g. peng-2026-09-00024-satu-persen.xlsx");
 
     private final String label;
     private final boolean available;

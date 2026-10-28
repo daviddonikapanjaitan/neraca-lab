@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 
 import { IngestionPage } from "@/components/ingestion/ingestion-page"
 import type { IngestionSectionData } from "@/components/ingestion/ingestion-page-client"
-import { getExcelReports, getExcelStatus, getRagDocuments, getRagStatus } from "@/lib/api"
+import { getExcelReports, getExcelStatus, getOnePercentReports, getRagDocuments, getRagStatus } from "@/lib/api"
 import { DEFAULT_TABLE_PAGE_SIZE } from "@/lib/ingestion"
 import { ingestionSection } from "@/lib/ingestion-sections"
 
@@ -11,17 +11,18 @@ export const metadata: Metadata = {
 }
 
 /**
- * The exchanges and their Excel document types (IDX: Ownership (>=5%)), the first page of the stored ownership lists,
- * the vector store settings and the first page of the companies' ownership documents.
+ * The exchanges and their Excel document types (IDX: Ownership (>=5%), Ownership (>=1%)), the first page of the stored
+ * lists of each type, the vector store settings and the first page of the companies' ownership documents.
  */
 async function section(): Promise<IngestionSectionData> {
-  const [excel, reports, rag, documents] = await Promise.all([
+  const [excel, reports, onePercentReports, rag, documents] = await Promise.all([
     getExcelStatus(),
     getExcelReports(DEFAULT_TABLE_PAGE_SIZE),
+    getOnePercentReports(DEFAULT_TABLE_PAGE_SIZE),
     getRagStatus(),
     getRagDocuments("XLSX", DEFAULT_TABLE_PAGE_SIZE),
   ])
-  return { section: "rag-excel", excel, reports, rag, documents }
+  return { section: "rag-excel", excel, reports, onePercentReports, rag, documents }
 }
 
 export default function Page() {
