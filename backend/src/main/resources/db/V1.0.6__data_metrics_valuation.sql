@@ -220,6 +220,23 @@ ON CONFLICT ON CONSTRAINT uq_valuation_snapshot DO UPDATE SET
     earnings_yield       = EXCLUDED.earnings_yield,
     ebitda_basis         = EXCLUDED.ebitda_basis;
 
+-- A valuation on a period end whose trailing twelve months no longer exist (the periods behind them were removed or
+-- replaced: ANJT's FY2025 in USD, deleted 2026-10-31, left the 2026-06-30 / 2026-09-30 rows with a P/E of 12.0 and an
+-- EV / EBITDA of -491,668) is not a valuation date of the insert above any more, so nothing would refresh it: its
+-- trailing ratios are cleared; market cap, EV, book value and P/B stay.
+WITH ttm AS MATERIALIZED (
+    SELECT company_id, period_end FROM v_ttm_financials
+    WHERE revenue_ttm IS NOT NULL OR net_income_to_parent_ttm IS NOT NULL
+)
+UPDATE valuation_snapshot vs
+SET eps_ttm = NULL, revenue_ttm = NULL, ebitda_ttm = NULL, operating_income_ttm = NULL, fcf_ttm = NULL,
+    pe_ratio = NULL, ps_ratio = NULL, ev_ebitda = NULL, ev_sales = NULL, ev_op = NULL, fcf_yield = NULL,
+    earnings_yield = NULL, ebitda_basis = NULL
+WHERE (vs.eps_ttm IS NOT NULL OR vs.revenue_ttm IS NOT NULL OR vs.ebitda_ttm IS NOT NULL OR vs.pe_ratio IS NOT NULL
+       OR vs.ps_ratio IS NOT NULL OR vs.ev_ebitda IS NOT NULL OR vs.fcf_yield IS NOT NULL)
+  AND EXISTS (SELECT 1 FROM reporting_period rp WHERE rp.company_id = vs.company_id AND rp.period_end = vs.valuation_date)
+  AND NOT EXISTS (SELECT 1 FROM ttm WHERE ttm.company_id = vs.company_id AND ttm.period_end = vs.valuation_date);
+
 -- ---------------------------------------------------------------------
 -- financial_metric : fundamental metrics per reporting period
 -- ---------------------------------------------------------------------

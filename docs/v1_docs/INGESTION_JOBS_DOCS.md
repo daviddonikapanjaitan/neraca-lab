@@ -220,9 +220,12 @@ differ from storing them one by one: a job may end `INCOMPLETE` because it verif
 period's own filing was between two of its steps (revenue already replaced, segments not yet): upload
 that file again.
 
-`neracalab.ingestion.same-company-in-order=true` (env `INGESTION_SAME_COMPANY_IN_ORDER`) stores the
-filings of one company one after the other in upload order instead (other companies still run beside
-them); the waiting ones stay `QUEUED`.
+`neracalab.ingestion.same-company-in-order=true` (env `INGESTION_SAME_COMPANY_IN_ORDER`, the default since
+2026-10-31) stores the filings of one company one after the other in upload order (other companies still run
+beside them); the waiting ones stay `QUEUED`. With `false` they run at the same time: their writes never overlap,
+but each filing passes the currency check (`IngestionService.currencyConflict`, when its job opens the workbook)
+before any of them is stored - ANJT's FY2025 filing in USD, uploaded with its H1 / 9M 2026 filings in IDR, was
+stored beside them, DEWA's FY2022 filing in USD beside FY2023 in IDR.
 
 More workers therefore store more uploads and documents at the same time; they do not send requests
 to Yahoo Finance or a news site faster. Screening runs and analyses are not ingestion jobs: each of
@@ -231,8 +234,10 @@ those queues keeps one worker.
 The queues are in memory. At startup, before the web server accepts requests,
 `IngestionJobRecovery` marks every job still QUEUED / RUNNING / WAITING_RATE_LIMIT as `FAILED`
 (`stage: Interrupted`). Submit it again; an uploaded file is not stored twice. The database is meant
-for one backend instance: a second instance (or a test run) on the same database also fails the jobs
-the first one is still running.
+for one backend instance: a second instance on the same database also fails the jobs the first one is
+still running. The tests switch it off (`neracalab.jobs.recover-on-start=false` in
+`src/test/resources/application.properties`, since 2026-10-31: a suite run had failed 170 uploads Hermes had just
+queued; the running backend still worked through them from memory, so their rows went FAILED -> RUNNING -> done).
 
 ## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`, `V1.0.18__schema_ingestion_error.sql`, `V1.0.19__schema_ingestion_cost.sql`)
 

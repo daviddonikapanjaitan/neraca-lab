@@ -61,6 +61,7 @@ start), then change its password in Admin Center > User Management.
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
 | [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex, indexes and the macro documents (RAG), the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
+| [`DEV_CONTEXT_DOCS.md`](docs/v1_docs/DEV_CONTEXT_DOCS.md)   | development context of Claude Code (`dev_context`, RAG): issues, data gaps of tickers, fixes, decisions and procedures saved and searched by meaning and keywords, API `/api/v1/dev-context` |
 | [`TECHNICAL_SCREENING_DOCS.md`](docs/v1_docs/TECHNICAL_SCREENING_DOCS.md) | AI technical screening (Screening › Technicals (All) / (Selected)): the price history of every listing, Stage 1 rules, the Gill / Murphy / Tudor Jones / Druckenmiller agents, Reflection, trade plans (buy, sell, stop loss), synthesis, cost, API, tables |
 | [`indicator-snapshot.md`](docs/indicator-snapshot.md)       | the versioned IndicatorSnapshot JSON (schemaVersion 3, technical only) the technical screening agents read |
 | [`macro.md`](macro.md)                                      | requirements of the macro data (Druckenmiller, Tudor Jones) and how they were implemented |
@@ -144,6 +145,9 @@ neraca_lab/
 │               ├── V1.0.37__data_RANS_shares.sql  (RANS share counts before and after its IPO of 2026-07-10)
 │               ├── V1.0.38__data_ABDA_expenses.sql  (ABDA FY2021 / FY2022 G&A its FY2022 filing tags as interest)
 │               ├── V1.0.39__data_ACRO_AGAR_AISA_shares.sql  (share counts their filings and Yahoo Finance do not give)
+│               ├── V1.0.41__data_ALKA_AMAN_AREA_ATAP_BATR_shares.sql  (share counts from KSEI and the listing records)
+│               ├── V1.0.42__data_BBHI_shares.sql  (the 2025-06-30 count its annualized H1 EPS halved)
+│               ├── V1.0.40__schema_dev_context.sql  (dev_context: the development context of Claude Code, with embeddings)
 │               ├── V1.0.6__data_metrics_valuation.sql
 │               └── V1.0.26__data_markets_macro.sql (catalog: 35 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
@@ -387,6 +391,13 @@ nature (NSSS, MSIN), a General Industry balance sheet by order of liquidity (CNM
 an error and leaves no row. A row of the error log names the model of the full-text extraction and every model call of the job that
 failed, with what the provider said (`details.failedModelCalls`).
 
+**Development context (`dev_context`).** What Claude Code learns while fixing ingestion errors and data gaps - a
+ticker's missing workbook, a value its filings lack, a fix and its reason, a working rule - is saved one fact per row
+in `dev_context` with an embedding (pgvector, the RAG store's model) and a full-text vector, so a later session
+searches it before investigating again: `POST /api/v1/dev-context`, `PUT` / `GET` / `DELETE /api/v1/dev-context/{id}`,
+`GET /api/v1/dev-context?ticker=&kind=&status=&tag=`, `GET /api/v1/dev-context/search?q=` (by meaning and keywords),
+`POST /api/v1/dev-context/reembed`. Details: [`docs/v1_docs/DEV_CONTEXT_DOCS.md`](docs/v1_docs/DEV_CONTEXT_DOCS.md).
+
 **Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
 review (DeepSeek) and the full-text extraction's answers (Haiku) - is a row of `llm_usage` tied to the job
 (`llm_usage.job_id`), with its stage, model, tokens and the cost OpenRouter reports, as for a screening run.
@@ -405,10 +416,11 @@ Details: [`docs/v1_docs/AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md
 Ingestion jobs run in parallel: each ingestion queue (uploads, prices, RAG PDF / news, screening data) has
 `neracalab.jobs.workers` worker threads (default 5, env `INGESTION_WORKERS`; set `workers: 6` in
 `application.yaml` for six), so five filings uploaded together - also five years of one company - are
-stored at the same time, each by its own agent. The write steps of filings of one company never overlap,
-and the requests to Yahoo Finance and to each news site stay paced one at a time.
-`neracalab.ingestion.same-company-in-order=true` stores the filings of one company one after the other
-instead. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md), section 4.
+stored at the same time, each by its own agent - filings of different companies; the filings of one company
+are stored one after the other in upload order (`neracalab.ingestion.same-company-in-order`, default `true`
+since 2026-10-31: run at the same time, each filing passed the currency check before any of them was stored, and
+ANJT's FY2025 filing in USD was stored beside its rupiah periods). The requests to Yahoo Finance and to each news
+site stay paced one at a time. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md), section 4.
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|
@@ -974,7 +986,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 817 tests
+(cd backend && ./mvnw test)                      # 850 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -1014,6 +1026,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API; a currency pair's `tickSize` in the bars' header);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
+`FilingMapperCashRoundingTest` a cash roll-forward one rupiah off (ALMI, ARTI, ASHA) and a cash flow section whose only line is 0 (AMMS); `FilingMapperAmortizationTest` no amortization from the intangibles roll when the goodwill halved (PTRO, CUAN); `IngestionVerifierInsurerDepositsTest` an insurer's time deposits counted as cash (AMAG); `IngestionVerifierRoundingTest.endingCashOneUnitApartIsANote` one rounding unit between ending cash and balance-sheet cash (BATA, BBLD);
 `FilingMapperWebSharesTest` and `WebShareCountsTest` the Yahoo Finance share counts (only counts that fit the filing's EPS; a count carried to a date the website does not publish when share capital is unchanged, there is no treasury stock and the EPS confirms it - BBCA FY2021); `FilingMapperAdroTest`, `IngestionVerifierRoundingTest` and `FilingMapperAdmrArtoBrmsTest` the filings behind the error log of 2026-10-18 (ADRO: revenue from the breakdown when only gross profit is tagged; UNTR: ending cash with decimals within the filing's unit; ADMR: lines with decimals outside a rounded total; ARTO: syirkah funds from their lines; BRMS: EPS filed per 1,000 shares); `FilingMapperCoinDewaEnrgHealTest`, `FullTextExtractorTest` and `IngestionVerifierRoundingTest` the filings behind the error log of 2026-10-19 (COIN: a final tax deducted twice; DEWA: 'Other income' inside 'Other gains (losses)'; ENRG: one amount on two lines a unit apart; HEAL: a tax expense filed as a benefit; ESSA: a cash roll-forward that contradicts itself, still refused; BUVA: share counts from the par value of a filing by nature when no published count fits; GMFI, KRAS: no rupiah par value for a share capital in dollars; EXCL, BUVA: revenue is the 'Sales and revenue' row, from the breakdown where the row is empty; EXCL FY2022: a breakdown with decimals within the filing's unit); `FilingMapperItmgMdkaMedcHrumTest`, `FullTextExtractorTest` and `IngestionVerifierRoundingTest` the filings behind the error log of 2026-10-21 (ITMG FY2023: full amounts the EPS does not tell apart; ITMG, MDKA H1 2025: 'Other gains (losses)' inside a residual line of its direction; ITMG H1 2025, MDKA H1 2026: one column's EPS a power of ten off, told by the published counts; MEDC, HRUM: a discontinued EPS row that is no such EPS, while UNVR, EMTK, MPMX and KRAS keep theirs; MEDC FY2022: a balance sheet 0.30 USD apart; ISAT, PGEO: operating income and expenses by nature); `FilingMapperKetrLppfTest`, `FullTextExtractorTest` and `IngestionVerifierOverdraftTest` the filings behind the error log of 2026-10-22 (KETR FY2024: 'Finance income' filed again within 'Other income'; LPPF FY2023: rows left off the face of the balance sheet are not stored as 0, and overdrafts within the stored short-term debt; MNCN H1 2026: an expense by nature named as cost of revenue is an operating expense); `FilingMapperPtroBnbrTest` the filings behind the error log of 2026-10-25 (PTRO FY2024 and H1 2025, BNBR H1 2025: one line outside a restated comparative's profit before tax); `TechnicalScreeningRulesTest`, `TechnicalScreeningControllerTest` and `ListingPriceServiceTest` the AI technical screening (trade plans rounded to IDX ticks and checked, the validator's rules, the synthesis' plans and fallback, Stage 1 of a tier on the IDX fixtures, the chart dossier; the API and a whole run of three companies with a scripted chat model (every call metered); the price history: first load, incremental update, re-adjustment, rate limit); `FilingMapperWebSplitsTest` the filings behind the notes of 2026-10-16 (BKSL: a par value only one column's EPS fits; CUAN, DSSA: published counts on the count of before a later split; BUKA, DSSA: a period-end count after a buyback); `IngestionServiceCurrencyTest` that a filing in another currency than the company's stored data is refused (CUAN's IDR FY2023); `CompanyControllerTest` and `TechnicalControllerTest` also the IDX quote of a USD reporter (Rp 540.00, not 539.9999); `PricesAfterUploadTest` and `FinancialStatementQueueWorkersTest` the prices queued for the company of a stored filing; `FilingMapperTuguMoliCnmaTest` the filings behind the error rows of 2026-10-14 (TUGU, an insurer: Insurance Industry taxonomy, share counts, EPS unit; MOLI: EPS in other units per filing, no false split; CNMA: depreciation by order of liquidity); `FilingMapperTotlMidiTest` the filings behind the error rows of 2026-10-13 (TOTL: one segment filed on several lines of one kind; MIDI: a deconsolidation line the filed ending cash excludes); `FilingMapperErrorLogTest` the filings behind the error rows of 2026-10-11 (proforma equity, an amount on two lines, the EPS unit of a filing by nature, every filing of eight new companies without a failed check) and `DerivedDataRefreshTest` the refresh of the derived data (seconds, the same rows, requests that waited are served by one run);
 `SmdrShareSeedTest` and `BngaShareSeedTest` check the SMDR and BNGA share-count scripts (fill once, never replace a stored count); `ShareSplitTest` the share splits (also that a split-adjusted USD EPS keeps its decimals: RAJA 0.0054 / 5 = 0.00108); `SameAsStoredTest` that filing values are compared at the stored column scale
 (INDY's 16-decimal USD EPS); `BackendApplicationTests` starts the application context. `CompanyControllerTest` calls the
@@ -1105,6 +1118,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.37__data_RANS_shares.sql`       | RANS share counts (listed 2026-07-10): 10,084,250,000 before the IPO, 12,609,250,000 after it (2,525,000,000 offered); market cap, EV and P/B, no P/E until its first full year |
 | `V1.0.38__data_ABDA_expenses.sql`     | ABDA FY2021 / FY2022: the general and administrative expenses its FY2022 filing tags as 'Interest and finance costs' (284,745,743 / 328,420,609 thousand; its FY2023 filing files them as G&A) are operating expenses, operating income = profit before tax; only while the rows hold the tag's figures |
 | `V1.0.39__data_ACRO_AGAR_AISA_shares.sql` | Share counts their filings do not state and Yahoo Finance does not fit, from KSEI's 1% lists (a holder's shares / its percentage) and the listing records: ACRO 3,469,138,591 from its IPO of 2024-01-11, AGAR 1,000,000,000, AISA 9,311,800,000; they had prices but no market cap and no valuation |
+| `V1.0.41__data_ALKA_AMAN_AREA_ATAP_BATR_shares.sql` | The same for ALKA 507,665,055, AMAN 3,873,500,000, AREA 2,539,601,000 from its IPO of 2024-04-01 (2,029,601,000 before), ATAP 1,250,000,000 and BATR 3,025,000,000 from its IPO of 2024-06-10 |
+| `V1.0.42__data_BBHI_shares.sql` | BBHI files its interim EPS annualized, so its H1 2026 filing's par value inference halved the 2025-06-30 count (10,865,128,221); sets the 21,730,256,442 of par Rp 100, also after every upload |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |

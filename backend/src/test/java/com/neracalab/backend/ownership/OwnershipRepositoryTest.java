@@ -282,9 +282,11 @@ class OwnershipRepositoryTest {
         // the day before the first list is not stored: who fell below 5% that day is unknown, not "nobody"
         assertThat(reports.getLast().exited()).isNull();
         assertThat(exited).noneMatch(r -> r.reportDate().equals(reports.getLast().reportDate()));
-        assertThat(reports.getFirst().exited()).isEqualTo(3);
-        assertThat(reports.getFirst().entered()).isEqualTo(3);
-        assertThat(reports.getFirst().announcementNumber()).isEqualTo("00104");
+        // 27 October's list by its date: later lists join the folder (28 and 29 October since 2026-10-30)
+        ReportRow oct27Report = reports.stream().filter(r -> r.reportDate().equals(oct27)).findFirst().orElseThrow();
+        assertThat(oct27Report.exited()).isEqualTo(3);
+        assertThat(oct27Report.entered()).isEqualTo(3);
+        assertThat(oct27Report.announcementNumber()).isEqualTo("00104");
 
         // Lo Kheng Hong's companies
         Entity lo = repository.entities("IDX", TYPE, "lo kheng hong", 5).stream()

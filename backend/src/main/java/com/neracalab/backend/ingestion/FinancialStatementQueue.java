@@ -50,16 +50,17 @@ import com.neracalab.backend.price.PricesAfterUpload;
  * A filing holds no prices, and a company without prices has no valuation: when a filing was stored, the
  * company's daily prices are queued too ({@link PricesAfterUpload}), unless they are already up to date.
  * <p>
- * Several workers ({@code neracalab.jobs.workers}, 5): that many filings are stored at the same time,
- * each by its own agent, also filings of the same company (five years of one company uploaded
- * together). Their write steps never overlap ({@code IngestionRepository.companyLock}), so the stored
- * data is what storing them one after the other in some order gives.
+ * Several workers ({@code neracalab.jobs.workers}, 5): that many filings are stored at the same time.
  * <p>
- * With {@code neracalab.ingestion.same-company-in-order=true} filings of the SAME company are stored
- * one after the other in upload order instead (other companies still beside them): only the first
- * waiting filing of a company is offered to the workers, the next one follows when it is done. The
- * stored data does not depend on it (also a share split restated by a later filing ends the same in
- * either order); in order, a job never verifies a period another filing is writing. At most one
+ * With {@code neracalab.ingestion.same-company-in-order=true} (the default) filings of the SAME company are
+ * stored one after the other in upload order (other companies still beside them): only the first waiting
+ * filing of a company is offered to the workers, the next one follows when it is done. In order, a job never
+ * verifies a period another filing is writing, and the currency check of a filing
+ * ({@code IngestionService.currencyConflict}, when the job opens the workbook) sees every filing of the company
+ * stored before it. With {@code false} filings of one company run at the same time too; their write steps never
+ * overlap ({@code IngestionRepository.companyLock}), but each passes the currency check before any of them is
+ * stored: ANJT's FY2025 filing in USD, uploaded with its H1 / 9M 2026 filings in IDR, stored FY2024 / FY2025 in
+ * dollars beside rupiah periods (errors 1398 - 1401); DEWA's FY2022 filing in USD stored FY2021 / FY2022 so. At most one
  * active job per stored file (an identical upload while it is queued / running returns that job).
  * The queue is in memory: jobs still active when the application stops are failed at the next start
  * ({@code IngestionJobRecovery}); upload the file again (the stored file is reused).
@@ -110,7 +111,7 @@ public class FinancialStatementQueue implements SmartLifecycle {
     public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
                                    IngestionErrorRepository errors, IngestionUsageRecorder usage,
                                    @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout,
-                                   @Value("${neracalab.ingestion.same-company-in-order:false}") boolean sameCompanyInOrder,
+                                   @Value("${neracalab.ingestion.same-company-in-order:true}") boolean sameCompanyInOrder,
                                    JobProperties properties, PricesAfterUpload pricesAfterUpload) {
         this.service = service;
         this.files = files;

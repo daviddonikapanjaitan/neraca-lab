@@ -27,8 +27,28 @@ class IngestionVerifierRoundingTest {
         BigDecimal ending = new BigDecimal("38281513468848");
 
         assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, ending)))
-                .contains("differ by 468848").contains("less than the filing's rounding unit 1000000");
-        assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, cash.add(new BigDecimal("1000000"))))).isNull();
+                .contains("differ by 468848").contains("at most the filing's rounding unit 1000000");
+        // one unit apart is each cell rounded on its own, as the mapper's checks accept (changed 2026-10-30: before, a
+        // whole unit was a problem; BATA H1 2026 and BBLD ended INCOMPLETE over it); more than a unit stays a problem
+        assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, cash.add(new BigDecimal("1000000")))))
+                .contains("differ by 1000000");
+        assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, cash.add(new BigDecimal("1000001"))))).isNull();
+    }
+
+    /**
+     * BATA H1 2026 (thousands, error 1414): balance-sheet cash 26,809,538 and the cash flow's ending cash 26,809,539 -
+     * one unit, a note; BBLD H1 2026 (millions, error 1416): 580,173 and 580,174. BBLD FY2022's 69 million (514,065
+     * beside 514,134, error 1419) stays a problem.
+     */
+    @Test
+    void endingCashOneUnitApartIsANote() throws Exception {
+        assertThat(IngestionVerifier.roundingExplanation(session("BATA", "2026-II"),
+                stored(new BigDecimal("26809538000"), new BigDecimal("26809539000"))))
+                .contains("differ by 1000").contains("rounding unit 1000");
+        assertThat(IngestionVerifier.roundingExplanation(session("BBLD", "2026-II"),
+                stored(new BigDecimal("580173000000"), new BigDecimal("580174000000")))).contains("differ by 1000000");
+        assertThat(IngestionVerifier.roundingExplanation(session("BBLD", "2022-Tahunan"),
+                stored(new BigDecimal("514065000000"), new BigDecimal("514134000000")))).isNull();
     }
 
     /**

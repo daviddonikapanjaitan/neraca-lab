@@ -71,6 +71,7 @@ spring:
         - classpath:db/V1.0.33__schema_ownership.sql            # KSEI daily lists of the shareholders of more than 5% (Companies > Ownership)
         - classpath:db/V1.0.34__schema_ownership_one_percent.sql # KSEI monthly lists of the shareholders of more than 1% (Companies > Ownership (>=1%))
         - classpath:db/V1.0.36__schema_valuation_ebitda_basis.sql # the EBITDA of EV / EBITDA: TTM, else the full year
+        - classpath:db/V1.0.40__schema_dev_context.sql            # development context of Claude Code (RAG)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -84,6 +85,8 @@ spring:
         - classpath:db/V1.0.37__data_RANS_shares.sql      # share counts before and after the IPO of 2026-07-10
         - classpath:db/V1.0.38__data_ABDA_expenses.sql    # FY2021 / FY2022 G&A its FY2022 filing tags as interest
         - classpath:db/V1.0.39__data_ACRO_AGAR_AISA_shares.sql # share counts their filings and Yahoo Finance do not give
+        - classpath:db/V1.0.41__data_ALKA_AMAN_AREA_ATAP_BATR_shares.sql # share counts from KSEI and the listing records
+        - classpath:db/V1.0.42__data_BBHI_shares.sql      # the 2025-06-30 count its annualized H1 EPS halved
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
@@ -154,10 +157,12 @@ neracalab:
       model-call-timeout: 150s                    # one of its model calls (one long JSON answer)
       max-chars: 120000                           # most workbook text sent to the model (statement sheets first)
       rounds: 3                                   # answers of the model: the first, then corrections of rejected mappings
-    # false: filings of one company uploaded together are stored at the same time (up to neracalab.jobs.workers).
-    # true: one after the other in upload order (other companies still beside them). The stored data is the same
-    # either way; in order, a job never verifies a period while another filing of the company is writing it.
-    same-company-in-order: ${INGESTION_SAME_COMPANY_IN_ORDER:false}
+    # true: filings of one company are stored one after the other in upload order (other companies still beside
+    # them): a job never verifies a period while another filing of the company is writing it, and a filing in another
+    # currency is checked against the filings stored before it (IngestionService.currencyConflict). false: at the same
+    # time (up to neracalab.jobs.workers) - filings of one company uploaded together then each pass the currency check
+    # before any of them is stored (ANJT FY2025 in USD stored beside H1 / 9M 2026 in IDR; DEWA FY2021 / FY2022).
+    same-company-in-order: ${INGESTION_SAME_COMPANY_IN_ORDER:true}
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:

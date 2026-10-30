@@ -181,18 +181,20 @@ public class IngestionVerifier {
 
     /**
      * A filing in thousands or millions whose cash flow cell carries more digits than its rounding unit (UNTR FY2022:
-     * ending cash 38281513.468848 million, the balance sheet 38281513): the two differ by less than one unit, which
-     * the mapper's own check accepts. Stored as filed; {@code null} when the difference is a unit or more.
+     * ending cash 38281513.468848 million, the balance sheet 38281513), or whose two cells are one unit apart because
+     * each is rounded on its own (BATA H1 2026: 26,809,539 thousand beside 26,809,538; BBLD FY2023, FY2024, H1 2026:
+     * one million; errors 1414 - 1418): at most one unit, which the mapper's own check accepts. Stored as filed;
+     * {@code null} when the difference is more than a unit.
      */
     static String roundingExplanation(IngestionSession session, StoredPeriod p) {
         BigDecimal unit = session.mapper().unit();
         BigDecimal difference = p.endingCash().subtract(p.balanceSheetCash()).abs();
-        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) >= 0) {
+        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) > 0) {
             return null;
         }
         return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "
                 + p.balanceSheetCash().toPlainString() + " differ by " + difference.toPlainString()
-                + ", less than the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
+                + ", at most the filing's rounding unit " + unit.toPlainString() + ": stored as filed";
     }
 
     /**
@@ -272,15 +274,16 @@ public class IngestionVerifier {
         BigDecimal filedEnding = mapped(session, column, "cash_flow_statement", "ending_cash");
         BigDecimal mappedDebt = mapped(session, column, "balance_sheet", "short_term_debt");
         BigDecimal shortTermDebt = mappedDebt != null ? mappedDebt : storedShortTermDebt;
-        if (filedCash == null || filedEnding == null || shortTermDebt == null
+        if (filedCash == null || filedEnding == null
                 || filedCash.compareTo(p.balanceSheetCash()) != 0 || filedEnding.compareTo(p.endingCash()) != 0) {
             return null;
         }
         BigDecimal difference = filedCash.subtract(filedEnding);
         if (difference.signum() < 0) {
+            // needs no borrowings: an insurer has no short-term debt row (AMAG)
             return depositsExplanation(session, column, filedCash, filedEnding);
         }
-        if (difference.signum() == 0 || difference.compareTo(shortTermDebt) > 0) {
+        if (shortTermDebt == null || difference.signum() == 0 || difference.compareTo(shortTermDebt) > 0) {
             return null;
         }
         return "cash-flow ending cash " + filedEnding.toPlainString() + " is balance-sheet cash " + filedCash.toPlainString()
@@ -290,7 +293,9 @@ public class IngestionVerifier {
 
     /**
      * The mirror case (e.g. PWON): the cash flow statement's cash also counts time deposits or restricted funds
-     * the balance sheet shows among other current financial assets. Accepted when the excess is within them.
+     * the balance sheet shows among other current financial assets. Accepted when the excess is within them. An
+     * insurer's are its time deposits (AMAG FY2022 - 9M 2026: 485,425,155 thousand = cash 64,021,213 + 421,403,942
+     * within time deposits of 651,473,868 at FY2025; ASDM FY2025 / 9M 2026; errors 1354, 1356 - 1360, 1407, 1409).
      */
     private static String depositsExplanation(IngestionSession session, StatementColumn column, BigDecimal filedCash,
                                               BigDecimal filedEnding) {

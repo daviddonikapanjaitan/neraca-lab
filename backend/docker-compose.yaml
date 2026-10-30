@@ -68,8 +68,9 @@ services:
       JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx1024m}
       # jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time
       INGESTION_WORKERS: ${INGESTION_WORKERS:-5}
-      # true: filings of one company are stored one after the other in upload order, not at the same time
-      INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-false}
+      # true (default): filings of one company are stored one after the other in upload order, not at the same time
+      # (a filing in another currency is then always refused against the filings stored before it: ANJT, DEWA)
+      INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-true}
       # full-text extraction when the standard extraction cannot store a workbook, and when it takes over
       INGESTION_FALLBACK_ENABLED: ${INGESTION_FALLBACK_ENABLED:-true}
       INGESTION_FALLBACK_MODEL: ${INGESTION_FALLBACK_MODEL:-anthropic/claude-haiku-5.5}

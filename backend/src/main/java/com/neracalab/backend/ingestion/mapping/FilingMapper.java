@@ -1671,10 +1671,15 @@ public final class FilingMapper {
     /**
      * Current financial assets outside cash (time deposits, restricted funds, short-term investments) of a
      * column's balance sheet, which some issuers count as cash in the cash flow statement; {@code null} when
-     * none is reported.
+     * none is reported. An insurer's balance sheet (Insurance Industry, 6220000) is not split into current and
+     * non-current: its time deposits, which its cash flow statement counts as cash when they mature within three months
+     * (AMAG FY2025: ending cash 485,425,155 thousand beside cash 64,021,213 and time deposits 651,473,868; ASDM).
      */
     public BigDecimal currentFinancialAssetsOutsideCash(StatementColumn column) {
         int ctx = instantIndex(column);
+        if (ctx >= 0 && balanceSheet != null && taxonomy == IdxTaxonomy.INSURANCE) {
+            return sumOrNull(balanceSheet, List.of("Investments in time deposits"), ctx);
+        }
         if (ctx < 0 || balanceSheet == null || financial) {
             return null;
         }
@@ -2148,8 +2153,18 @@ public final class FilingMapper {
                         + "them); not counted"));
                 other = ZERO;
             }
-            checks.add(equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
-                    beginning.add(change).add(other).add(deconsolidated), ending));
+            BigDecimal rolled = beginning.add(change).add(other).add(deconsolidated);
+            Check rollforward = equal("cash_rollforward", "beginning cash + net change + FX / other effects = ending cash",
+                    rolled, ending);
+            // a full-amount filing rounds every line to the unit as well: a roll-forward one unit apart is its rounding,
+            // the ending cash as filed (ALMI FY2024: 507,776 - 480,438 = 27,338, filed 27,337; ARTI FY2023 995,261,912 /
+            // 995,261,913; ASHA FY2025 230,491,386 / 230,491,387; errors 1355, 1408, 1410). Only here: elsewhere a unit
+            // apart still tells two candidate lines apart (ENRG's double-reported other income)
+            if (rollforward.isError() && rolled.subtract(ending).abs().compareTo(BigDecimal.ONE) <= 0) {
+                rollforward = Check.warning("cash_rollforward", rollforward.message()
+                        + " (one unit apart: the filing's rounding; the reported figure is stored)");
+            }
+            checks.add(rollforward);
         }
         // the filed totals proven by the filing's own figures: they give the net change, which rolls forward to the
         // ending cash
@@ -2296,14 +2311,18 @@ public final class FilingMapper {
         return totals;
     }
 
-    /** True when the section's header and total are in the sheet and no line between them has a value in the column. */
+    /**
+     * True when the section's header and total are in the sheet and no line between them has a value other than 0 in
+     * the column (AMMS H1 2026: its one investing line, receipts from stockholders, filed as 0, no total, no financing
+     * section; operating -44,107,270 is the net change).
+     */
     private static boolean sectionHasNoLines(StatementTable c, int ctx, String headerLabel, String totalLabel) {
         int from = c.indexOf(headerLabel);
         int to = c.indexOf(totalLabel);
         if (from < 0 || to <= from) {
             return false;
         }
-        return c.lines().subList(from + 1, to).stream().noneMatch(l -> l.hasValue(ctx));
+        return c.lines().subList(from + 1, to).stream().noneMatch(l -> l.hasValue(ctx) && l.value(ctx).signum() != 0);
     }
 
     /**
@@ -2745,7 +2764,12 @@ public final class FilingMapper {
     /**
      * Intangibles opening + purchases - closing; current column only (needs the opening balance). The bank
      * template reports acquisitions net of disposals in one signed line: a net disposal leaves the carrying
-     * amount of what was sold unknown, so no amortization is derived then.
+     * amount of what was sold unknown, so no amortization is derived then. Neither when the goodwill fell by half or
+     * more: goodwill is not amortized, so a business left the group or was written off, and the intangibles roll holds
+     * more than amortization - PTRO H1 2026: intangibles 134,250 -> 60,088 thousand USD and goodwill 21,395 -> 2,408,
+     * so the roll gives 134,250 + 4,050 - 60,088 = 78,212 while its cost of sales note states an amortization of 6,075;
+     * CUAN H1 2026 152,773 -> 72,543, goodwill 21,395 -> 2,426. A smaller fall (exchange rates, a partial impairment:
+     * TOBA H1 2026, TLKM, RAJA) leaves the roll as it is; of the 2021 - 2026 workbooks 14 have a halved goodwill.
      */
     public BigDecimal amortization(StatementColumn column) {
         if (column != StatementColumn.CURRENT_PERIOD || balanceSheet == null || cashFlow == null) {
@@ -2768,7 +2792,20 @@ public final class FilingMapper {
         BigDecimal opening = nz(amount(balanceSheet.value("Intangible assets other than goodwill", 1)));
         BigDecimal closing = nz(amount(balanceSheet.value("Intangible assets other than goodwill", 0)));
         BigDecimal result = opening.add(purchases).subtract(closing);
+        if (result.signum() > 0 && goodwillHalvedOrMore()) {
+            return null;    // intangibles left with a business or were written off: the roll is not the amortization
+        }
         return result.signum() < 0 ? null : result;
+    }
+
+    /** Whether the goodwill at the end of the current period is half or less of a positive opening goodwill. */
+    private boolean goodwillHalvedOrMore() {
+        if (balanceSheet == null) {
+            return false;
+        }
+        BigDecimal opening = amount(balanceSheet.value("Goodwill", 1));
+        BigDecimal closing = nz(amount(balanceSheet.value("Goodwill", 0)));
+        return opening != null && opening.signum() > 0 && closing.multiply(BigDecimal.TWO).compareTo(opening) <= 0;
     }
 
     // ------------------------------------------------------------------ revenue segments
