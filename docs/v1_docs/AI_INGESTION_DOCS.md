@@ -101,6 +101,25 @@ OPENAI_MODEL=deepseek/deepseek-v4.1-flash-1017
 the Spring AI OpenAI client at OpenRouter; real environment variables take precedence. Docker
 compose reads the same file and passes the values to the backend container at runtime.
 
+**OpenCode Go** (`OpenCodeGoRouting`, `neracalab.llm.opencode-go.*`): with `OPENCODE_GO_API_KEY` set, a call whose
+model is listed in `OPENCODE_GO_MODELS` (`openrouter-id=go-id`, default
+`deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5`) goes to
+OpenCode Go (`https://opencode.ai/inference/go/openai/v1`, a monthly subscription) with its own OpenAI client; every
+other call stays on OpenRouter. `IngestionAgent` and `LlmGateway` wrap the Spring AI `ChatModel` with it, so the
+standard extraction, the full-text extraction and the screening / analysis agents are all routed by model. The request
+is translated: `provider` and `usage` (OpenRouter only) are left out, `"reasoning": {"enabled": false}` becomes
+`"thinking": {"type": "disabled"}`, `"reasoning": {"effort": e}` the `reasoning_effort` e, and the header
+`x-opencode-session` (without it: "Request is missing x-opencode-session") is added. Go answers `usage.cost` 0 (billed
+to the plan), so `llm_usage.cost_usd` is 0 for its calls. Its DeepSeek models answer only a workspace whose Privacy
+settings allow Global regions ("This Go model requires Global regions"); Claude Haiku 5.5 answers without. Until the
+setting is changed `backend/.env` routes Haiku alone (`OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5`).
+Test: `OpenCodeGoRoutingTest`.
+
+```properties
+OPENCODE_GO_API_KEY=oc_sk_...
+OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5
+```
+
 **Every request names `OPENAI_MODEL`.** Spring AI 2.0's `OpenAiChatOptions` fills a missing model
 with its own default, `gpt-5-mini`, and per-request options override the configured default. The
 agent's planner, executor and reviewer built their options without a model, so until this was fixed
@@ -921,7 +940,7 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 | Property (`neracalab.ingestion.fallback.*`) | Default | Meaning                                                    |
 |---------------------------------------------|---------|------------------------------------------------------------|
 | `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
-| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-sonnet-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash and dearer per token (USD 2 / 10 per million against 0.15 / 0.60; one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
+| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-haiku-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash; empty = the standard extraction's model. Since 2026-10-30 Claude Haiku 5.5 through OpenCode Go (section 2; BUKA FY2024: three answers in 47 s, cost 0 against USD 0.05 - 0.20 a filing on Sonnet 5.5 through OpenRouter, the default from 2026-10-23). Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
 | `reasoning-effort` (`INGESTION_FALLBACK_REASONING_EFFORT`) | `low` | OpenRouter reasoning effort of its calls, sent as `"reasoning": {"effort": "low"}` in place of the standard extraction's `"enabled": false` (`model-reasoning`): Claude Sonnet 5.5 refuses reasoning switched off with HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled" (error 878, every full-text extraction failed on its first call); empty = the standard extraction's setting |
 | `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
 | `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
@@ -961,6 +980,28 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-10-30 (errors 1177 - 1199): out of credit, two jobs of one company, MNCN's breakdown
+
+The filings by nature of BUVA, MNCN, NICL, NSSS, BUKA and MSIN (and RAFI FY2022) were uploaded again to take their
+gross profit from the cost of sales note, 31 at once. Three causes:
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **OpenRouter out of credit.** 402 "This request would exceed your available credits given your current in-flight requests" (USD 0.85 left, 31 full-text extractions reserving at once); nothing was extracted, the stored data unchanged. | 1177 - 1179, 1181 - 1198 | Uploaded again one at a time after the credit was topped up, the last ones on Claude Haiku 5.5 through OpenCode Go: all `SUCCEEDED`. |
+| **Two filings of one company at the same time.** MNCN FY2024's own cost of sales note is empty, so its job cleared cost of revenue and gross profit; the FY2025 job, running beside it, filled FY2024's from its comparative note (3,929,468 / 4,024,344 million) before the FY2024 job verified ("stored ... but the filing says null"). | 1180 | Not a data error: the stored figures are right; uploaded again alone, `SUCCEEDED`. `INGESTION_SAME_COMPANY_IN_ORDER=true` avoids it. |
+| **A breakdown the filing gets wrong.** MNCN H1 2026, the H1 2025 comparative of note 1617000: 'Service revenue 1' 4,070,760 million (the revenue) and lines 2 - 6 add up to 2,687,578; no reading gives the revenue. | 1177, 1199 | Not changed (the filing): the breakdown is left open, the statements stored. |
+
+**A cost a fraction above the expenses** (RAFI FY2021, in its FY2022 filing with fractions of a rupiah): the note's
+cost 89,901,586,207 is 0.36 above the expenses 89,901,586,206.6389 it is one of, so the cost of sales note was
+refused and the year had no gross profit. `FullTextExtractor.costOfSalesFromTheNote` takes a cost less than a filed
+unit above the expenses as the same amount (operating expenses then 0): gross profit 27,211,617,032. Test
+`FullTextExtractorTest.aCostOfSalesAFractionAboveTheExpensesIsTheSameAmount`.
+
+Gross profit afterwards: BUVA, MSIN, NICL, NSSS and RAFI in every period. Left empty: MNCN FY2021 - FY2023 (the
+cost of sales notes of the FY2022 - FY2024 filings are empty) and BUKA FY2025, whose note's cost 5,990,751,222
+thousand is above its expenses by nature (4,432,364,338: 'Other expenses' is a gain of -1,988,280,296), so the
+operating expenses would turn negative.
 
 ### Valuation gaps of 2026-10-29: EBITDA of the interim comparative, POLY, RANS
 
@@ -1382,7 +1423,7 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
 |--------|---------|
 | `job_id` | the upload job (`ingestion_job`); deleted with it |
 | `stage` | `PLAN` (the planner), `EXECUTE` (a tool turn of the agent loop), `REVIEW` (the reviewer) of the standard extraction; `FULL_TEXT` (an answer of the full-text extraction) |
-| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4.1 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Sonnet 5.5) for the full-text extraction |
+| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4.1 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Haiku 5.5; Sonnet 5.5 before 2026-10-30) for the full-text extraction |
 | `ticker` | the filing's company |
 | `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens` | as the provider reports them |
 | `cost_usd`, `cost_estimated` | the cost OpenRouter reports for the call (`usage.cost`; every request asks for it with `"usage": {"include": true}`). A call without one is priced from `neracalab.screening.llm.prices` and flagged |
@@ -1398,6 +1439,8 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
   ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 2). The IDX XBRL Ingestion page shows the cost in
   the jobs table and the breakdown under "Model cost" in the job details.
 - Uploads stored before this was added have no rows, so no cost is shown for them.
+- A call through OpenCode Go (section 2) reports `usage.cost` 0, billed to the subscription: its rows have
+  `cost_usd` 0 and `cost_estimated` false.
 - **Failed calls go to the error log too.** When an upload is recorded in `ingestion_error` (section 6), the
   row's `details.failedModelCalls` lists the job's failed model calls from these rows, so a full-text
   extraction whose model (Sonnet) timed out or was refused shows what the provider said:

@@ -251,6 +251,17 @@ never commit keys. Use real passwords outside local development. The AI upload s
 request (Spring AI 2.0 otherwise substitutes its default `gpt-5-mini`, which earlier versions of the
 upload did); each job's `metrics.models` shows the model OpenRouter answered with.
 
+**OpenCode Go.** With `OPENCODE_GO_API_KEY` set, the models listed in `OPENCODE_GO_MODELS` (OpenRouter id =
+OpenCode Go id) are called through OpenCode Go, a monthly subscription, instead of OpenRouter
+(`OpenCodeGoRouting`): by default DeepSeek V4.1 Flash (`deepseek-v4.1-flash`) and Claude Haiku 5.5
+(`claude-haiku-5-5`, the full-text extraction). Every other model (Claude Opus of the screening synthesis) and the
+RAG embeddings stay on OpenRouter. A routed request leaves out OpenRouter's own fields (`provider`, `usage`), turns
+`"reasoning": {"enabled": false}` into DeepSeek's `"thinking": {"type": "disabled"}` and a reasoning effort into
+`reasoning_effort`, and carries the `x-opencode-session` header OpenCode Go requires. Go reports a cost of 0, so
+`llm_usage` records 0 for its calls. OpenCode Go serves its DeepSeek models only to a workspace whose Privacy
+settings allow Global regions ("This Go model requires Global regions"); until then route only Haiku:
+`OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5`. Empty key: every call goes to OpenRouter.
+
 To run the backend from the IDE instead, start only the infrastructure with
 `docker compose up -d postgres redis` (in `backend/`); `application.yaml` defaults to `localhost`.
 The IDE backend uses port 8080, so stop the full stack (or the backend container) first.
@@ -329,7 +340,8 @@ with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded wo
 
 When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
 statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
-extraction** takes over: its own model (Claude Sonnet 5.5, `neracalab.ingestion.fallback.model` /
+extraction** takes over: its own model (Claude Haiku 5.5 since 2026-10-30, through OpenCode Go when its key is set,
+before that Claude Sonnet 5.5 on OpenRouter; `neracalab.ingestion.fallback.model` /
 `INGESTION_FALLBACK_MODEL`; the standard extraction stays on `OPENAI_MODEL`, DeepSeek) gets the text of the
 whole workbook - every sheet of the file, whatever its taxonomy - and **decides every value that is not stored
 yet** - which rows make up every database field. A workbook of a taxonomy the rules do not map (Financing Industry, e.g. BFIN: sheets
@@ -342,7 +354,8 @@ add up is saved, reported (INCOMPLETE) and logged, never dropped. A field for wh
 that cannot be used (a row of a notes sheet, a row that does not exist) is left empty instead of being stored
 as the sum of its other rows, and the model is asked again; a profit or loss presented by nature (e.g. NSSS:
 no cost of sales and no gross profit row) gets its `cost_of_revenue` and `gross_profit` only from the filing's own cost
-of sales note (1670000, 'Cost of sales and revenue': BIPI, BUVA, BUKA, NSSS, MSIN ...), never from expense rows by nature; revenue must be the
+of sales note (1670000, 'Cost of sales and revenue': BIPI, BUVA, BUKA, NSSS, MSIN, NICL, RAFI ...; a cost less than a
+filed unit above the expenses is the same amount, RAFI FY2021), never from expense rows by nature; revenue must be the
 profit or loss's own 'Sales and revenue' row (EXCL, BUVA, TLKM: the model had added 'Other income'), and a row left
 empty on the face is shown to the model with the total of the filing's revenue breakdown (EXCL FY2023). Operating income
 is checked against the filing: rows below operating profit counted in it (ISAT's 'Other gains (losses)') and, by nature,
@@ -363,7 +376,7 @@ an error and leaves no row. A row of the error log names the model of the full-t
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Model cost per upload.** Every model call of an upload - the standard extraction's plan, tool turns and
-review (DeepSeek) and the full-text extraction's answers (Sonnet) - is a row of `llm_usage` tied to the job
+review (DeepSeek) and the full-text extraction's answers (Haiku) - is a row of `llm_usage` tied to the job
 (`llm_usage.job_id`), with its stage, model, tokens and the cost OpenRouter reports, as for a screening run.
 The IDX XBRL Ingestion page shows the cost of each job in the jobs table and the breakdown per stage and model
 under "Model cost" in the job details; `GET /api/v1/ingestions` returns it as `cost`,
@@ -552,8 +565,11 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.prices.schedule.enabled` / `PRICE_SCHEDULE_ENABLED` | `false`            | evening run: like "Update all companies" - the `IDX` companies behind, IHSG and LQ45 |
 | `neracalab.ingestion.prices-after-upload` / `INGESTION_PRICES_AFTER_UPLOAD` | `true` | a stored filing queues the daily prices of its company (nothing when they are up to date) |
 | `neracalab.ingestion.provider-ignore` / `INGESTION_PROVIDER_IGNORE` | `OpenInference`   | OpenRouter providers the ingestion's model calls never use |
-| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-sonnet-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
-| `neracalab.ingestion.fallback.reasoning-effort` / `INGESTION_FALLBACK_REASONING_EFFORT` | `low` | OpenRouter reasoning effort of the full-text extraction's calls (Claude Sonnet 5.5 refuses reasoning switched off: HTTP 400); empty = `neracalab.ingestion.model-reasoning` |
+| `neracalab.ingestion.fallback.model` / `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id; through OpenCode Go when listed in `OPENCODE_GO_MODELS`); empty = `OPENAI_MODEL` |
+| `neracalab.ingestion.fallback.reasoning-effort` / `INGESTION_FALLBACK_REASONING_EFFORT` | `low` | reasoning effort of the full-text extraction's calls (Claude Sonnet 5.5 refuses reasoning switched off: HTTP 400); empty = `neracalab.ingestion.model-reasoning` |
+| `neracalab.llm.opencode-go.api-key` / `OPENCODE_GO_API_KEY` | empty | OpenCode Go key; empty = every model call on OpenRouter |
+| `neracalab.llm.opencode-go.models` / `OPENCODE_GO_MODELS` | `deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5` | models called through OpenCode Go (OpenRouter id = Go id) |
+| `neracalab.llm.opencode-go.base-url` / `OPENCODE_GO_BASE_URL` | `https://opencode.ai/inference/go/openai/v1` | OpenCode Go's OpenAI-compatible endpoint |
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 | `neracalab.markets.world-bank.file-url` / `WORLD_BANK_PINK_SHEET_URL` | empty     | the Pink Sheet workbook (coal, LNG, nickel, tin, rubber, urea, DAP, potash); empty = the link on the World Bank Commodity Markets page |

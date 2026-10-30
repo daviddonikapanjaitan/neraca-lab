@@ -328,6 +328,37 @@ public class FullTextExtractorTest {
     }
 
     /**
+     * RAFI FY2021 (the prior period of its FY2022 filing, amounts with fractions of a rupiah): the note's cost
+     * 89,901,586,207 is 0.36 above the expenses 89,901,586,206.6389 it is one of, so it was refused and the year had
+     * no gross profit. Less than a filed unit apart is the same amount.
+     */
+    @Test
+    void aCostOfSalesAFractionAboveTheExpensesIsTheSameAmount() throws Exception {
+        IngestionSession session = session("RAFI", "2022-Tahunan");
+        assertThat(session.mapper().costOfSales(StatementColumn.PRIOR_PERIOD)).isEqualByComparingTo("89901586207");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1312000";
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
+                Map.entry("operating_expenses", terms(text, sheet, "+Raw materials and consumables used")),
+                Map.entry("operating_income", terms(text, sheet, "+Sales and revenue",
+                        "-Raw materials and consumables used")),
+                Map.entry("interest_expense", terms(text, sheet, "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity"))));
+        answers("{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}");
+
+        extractor(1).extract(session, List.of(StatementColumn.PRIOR_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("89901586207");
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("27211617032");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("0");
+    }
+
+    /**
      * MSIN FY2025 (by nature, no 'profit from operation' row): the model's answer left operating_income empty, the
      * upload ended SUCCEEDED, and the company had no EV / operating profit from then on. Profit from operations is
      * a total a profit or loss cannot do without: the model is asked again and gives the rows that compute it.

@@ -115,7 +115,9 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `INGESTION_SAME_COMPANY_IN_ORDER` | `false` | `true`: filings of one company are stored one after the other in upload order, not at the same time |
 | `INGESTION_PROVIDER_IGNORE` | `OpenInference` | OpenRouter providers the ingestion's model calls never use (a looping DeepSeek endpoint) |
 | `INGESTION_FALLBACK_ENABLED` | `true` | full-text extraction when the standard extraction cannot store an upload ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6) |
-| `INGESTION_FALLBACK_MODEL` | `anthropic/claude-sonnet-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
+| `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id; through OpenCode Go when listed in `OPENCODE_GO_MODELS`); empty = `OPENAI_MODEL` |
+| `OPENCODE_GO_API_KEY` | empty | OpenCode Go key (`backend/.env`): the models of `OPENCODE_GO_MODELS` are called through OpenCode Go instead of OpenRouter; empty = all on OpenRouter |
+| `OPENCODE_GO_MODELS` | `deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5` | OpenRouter id = OpenCode Go id; DeepSeek needs the workspace's Global regions (Privacy settings), until then `anthropic/claude-haiku-5.5=claude-haiku-5-5` alone |
 | `INGESTION_FALLBACK_REASONING_EFFORT` | `low` | reasoning effort of the full-text extraction's calls (Claude Sonnet 5.5 refuses reasoning switched off); empty = as the standard extraction |
 | `INGESTION_FALLBACK_AFTER`, `INGESTION_FALLBACK_TIMEOUT` | `3m`, `5m` | when it takes over from the standard extraction, and how long it may run |
 | `AUTH_SESSION_TTL`       | `12h`   | how long a login stays valid                                        |

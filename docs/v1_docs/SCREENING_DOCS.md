@@ -245,6 +245,11 @@ times after 2 s, 4 s; each attempt is a row. The cost is
 OpenRouter's `usage.cost`; when a provider reports none it is estimated from
 `llm.prices` (marked `*`).
 
+With `OPENCODE_GO_API_KEY` set, the DeepSeek calls go to OpenCode Go instead of OpenRouter when
+`OPENCODE_GO_MODELS` lists them (`LlmGateway` wraps its model with `OpenCodeGoRouting`; the provider routing
+above is then left out, see [AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 2). Go reports a cost of 0;
+the Opus synthesis stays on OpenRouter.
+
 ## 7. Settings (`application.yaml`, `neracalab.screening`)
 
 | Property                          | Default                          | Meaning                                       |

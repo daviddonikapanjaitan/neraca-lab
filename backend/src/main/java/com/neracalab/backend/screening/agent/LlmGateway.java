@@ -17,6 +17,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
+import com.neracalab.backend.llm.OpenCodeGoRouting;
 import com.neracalab.backend.screening.ScreeningProperties;
 import com.neracalab.backend.screening.ScreeningProperties.ModelPrice;
 import com.openai.core.JsonValue;
@@ -65,7 +66,13 @@ public class LlmGateway {
     private final ScreeningProperties.Llm properties;
 
     public LlmGateway(ChatModel chatModel, ScreeningProperties properties) {
-        this.chatModel = chatModel;
+        this(chatModel, properties, null);
+    }
+
+    /** @param routing sends the DeepSeek calls to OpenCode Go when it is configured ({@code null}: all to OpenRouter) */
+    @org.springframework.beans.factory.annotation.Autowired
+    public LlmGateway(ChatModel chatModel, ScreeningProperties properties, OpenCodeGoRouting routing) {
+        this.chatModel = routing == null ? chatModel : routing.route(chatModel);
         this.properties = properties.llm();
     }
 

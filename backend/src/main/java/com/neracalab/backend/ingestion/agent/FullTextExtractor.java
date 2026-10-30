@@ -1113,12 +1113,16 @@ public class FullTextExtractor {
         BigDecimal cost = mapper.costOfSales(target.column());
         BigDecimal revenue = values.get("revenue");
         BigDecimal expenses = values.get("operating_expenses");
-        if (cost == null || cost.signum() <= 0 || revenue == null || expenses == null || cost.compareTo(expenses) > 0) {
+        // a cost less than a filed unit above the expenses is the same amount (RAFI FY2021: 89,901,586,207 in the
+        // note, 89,901,586,206.6389 among the expenses of a filing with fractions of a rupiah)
+        BigDecimal slack = mapper.precision().max(BigDecimal.ONE);
+        if (cost == null || cost.signum() <= 0 || revenue == null || expenses == null
+                || cost.compareTo(expenses.add(slack)) >= 0) {
             return false;
         }
         values.put("cost_of_revenue", cost);
         values.put("gross_profit", plainScale(revenue.subtract(cost)));
-        values.put("operating_expenses", plainScale(expenses.subtract(cost)));
+        values.put("operating_expenses", plainScale(expenses.subtract(cost).max(BigDecimal.ZERO)));
         how.put("cost_of_revenue", "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
                 + FilingMapper.COST_OF_SALES_TOTAL + "'): the profit or loss by nature shows no cost of sales on its face");
         how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");

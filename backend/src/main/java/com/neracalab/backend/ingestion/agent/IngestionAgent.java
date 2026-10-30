@@ -96,16 +96,24 @@ public class IngestionAgent {
      *                       so a call routed to it cost a minute and a retry - two in a row most of the 3 minutes
      *                       of an upload. Sent as {@code "provider": {"ignore": [...]}}; empty: no restriction.
      */
+    public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
+                          AgentProperties properties, JsonMapper json, String model, boolean reasoning,
+                          java.time.Duration callTimeout, List<String> providerIgnore) {
+        this(chatModel, repository, verifier, properties, json, model, reasoning, callTimeout, providerIgnore, null);
+    }
+
+    /** @param routing sends the DeepSeek calls to OpenCode Go when it is configured ({@code null}: all to OpenRouter) */
     @org.springframework.beans.factory.annotation.Autowired
     public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
                           AgentProperties properties, JsonMapper json,
                           @Value("${spring.ai.openai.chat.model}") String model,
                           @Value("${neracalab.ingestion.model-reasoning:false}") boolean reasoning,
                           @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout,
-                          @Value("${neracalab.ingestion.provider-ignore:OpenInference}") List<String> providerIgnore) {
+                          @Value("${neracalab.ingestion.provider-ignore:OpenInference}") List<String> providerIgnore,
+                          com.neracalab.backend.llm.OpenCodeGoRouting routing) {
         this.providerIgnore = providerIgnore == null ? List.of()
                 : providerIgnore.stream().filter(p -> p != null && !p.isBlank()).map(String::trim).toList();
-        this.chatModel = chatModel;
+        this.chatModel = routing == null ? chatModel : routing.route(chatModel);
         this.repository = repository;
         this.verifier = verifier;
         this.properties = properties;
