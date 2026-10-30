@@ -1258,7 +1258,9 @@ public final class FilingMapper {
         // the D&A the profit or loss states wins: the same in every column (see statedDepreciationAndAmortization)
         BigDecimal statedDa = statedDepreciationAndAmortization(column);
         BigDecimal ebitda = ebit == null ? null : statedDa != null ? ebit.add(statedDa)
-                : depreciation == null || amortization == null ? null : ebit.add(depreciation).add(amortization);
+                : depreciation == null ? null
+                : amortization != null ? ebit.add(depreciation).add(amortization)
+                : immaterialIntangibles(column, ebit.add(depreciation)) ? ebit.add(depreciation) : null;
 
         BigDecimal basicEps = signOfProfit(epsWithDiscontinued(income, EPS_BASIC, EPS_BASIC_DISC, ctx, checks), parent, checks, "Basic");
         BigDecimal dilutedEps = signOfProfit(epsWithDiscontinued(income, EPS_DILUTED, EPS_DILUTED_DISC, ctx, checks), parent, checks, "Diluted");
@@ -1306,6 +1308,8 @@ public final class FilingMapper {
         how.put("ebit", "profit before tax + finance costs - finance income");
         how.put("ebitda", ebitda == null ? "not derivable: depreciation or amortization not disclosed for this column"
                 : statedDa != null ? "ebit + '" + STATED_DEPRECIATION_AND_AMORTISATION + "' as the profit or loss states it"
+                : amortization == null ? "ebit + depreciation (roll-forward notes); amortization not derivable, but the "
+                + "intangible assets are under 1% of it"
                 : "ebit + depreciation + amortization (roll-forward notes)");
         how.put("depreciation", depreciation == null ? "not disclosed for this column"
                 : "PP&E + right-of-use additions to accumulated depreciation (roll-forward notes)");
@@ -1676,6 +1680,66 @@ public final class FilingMapper {
         }
         return sumOrNull(balanceSheet, List.of("Other current financial assets", "Current other financial assets",
                 "Short-term investments", "Current restricted funds"), ctx);
+    }
+
+    /** Balance-sheet rows of a financing company's balances with banks (Financing Industry, 8220000). */
+    private static final List<String> BANK_BALANCE_PREFIXES = List.of("Current accounts with ", "Placements with ");
+
+    /**
+     * @param balanceSheetCash the balance sheet's 'Cash and cash equivalents' row
+     * @param cash             the cash flow statement's cash and cash equivalents at the end of the period
+     * @param rows             the bank rows that make up the difference
+     */
+    public record CashWithBanks(BigDecimal balanceSheetCash, BigDecimal cash, List<String> rows) {
+    }
+
+    /**
+     * Cash and cash equivalents of a financing company (Financing Industry taxonomy) as its cash flow statement counts
+     * them, where its balance sheet splits them: the row 'Cash and cash equivalents' holds the cash alone and the current
+     * accounts and placements with banks are rows of their own (ADMF FY2025: 77,878 + 176,714 + 566,324 = 820,916 million,
+     * the ending cash; DEFI FY2023: 8,801,000 + 4,487,369,146 + 8,500,000,000 = 12,996,170,146). Only when the ending cash
+     * is exactly the row plus some of those bank rows; {@code null} otherwise (BFIN: the row is the ending cash already;
+     * SMMA: the ending cash counts more than its bank rows give).
+     */
+    public CashWithBanks cashWithBankBalances(StatementColumn column) {
+        int ctx = instantIndex(column);
+        int flow = durationIndex(column);
+        if (taxonomy != IdxTaxonomy.FINANCING || ctx < 0 || flow < 0 || balanceSheet == null || cashFlow == null) {
+            return null;
+        }
+        BigDecimal cash = amount(balanceSheet.value("Cash and cash equivalents", ctx));
+        BigDecimal ending = amount(cashFlow.value(CASH_END, flow));
+        if (cash == null || ending == null || ending.compareTo(cash) <= 0) {
+            return null;
+        }
+        List<StatementTable.Line> banks = balanceSheet.lines().stream()
+                .filter(l -> BANK_BALANCE_PREFIXES.stream().anyMatch(l.label()::startsWith))
+                .filter(l -> l.value(ctx) != null && l.value(ctx).signum() != 0)
+                .toList();
+        if (banks.isEmpty() || banks.size() > 12) {
+            return null;
+        }
+        BigDecimal gap = ending.subtract(cash);
+        // the most rows first: a placement counted in the cash flow is counted with the current accounts
+        for (int size = banks.size(); size > 0; size--) {
+            for (int mask = 1; mask < (1 << banks.size()); mask++) {
+                if (Integer.bitCount(mask) != size) {
+                    continue;
+                }
+                BigDecimal sum = ZERO;
+                List<String> rows = new ArrayList<>();
+                for (int i = 0; i < banks.size(); i++) {
+                    if ((mask & (1 << i)) != 0) {
+                        sum = sum.add(amount(banks.get(i).value(ctx)));
+                        rows.add(banks.get(i).label());
+                    }
+                }
+                if (sum.compareTo(gap) == 0) {
+                    return new CashWithBanks(cash, ending, rows);
+                }
+            }
+        }
+        return null;
     }
 
     public Optional<MappedStatement> balanceSheet(StatementColumn column, ShareCapital shares) {
@@ -2572,6 +2636,21 @@ public final class FilingMapper {
         return value == null ? null : amount(value).abs();
     }
 
+    /**
+     * Whether the column's cash flow statement has a row of capital expenditure with an amount (the rows the rule-based
+     * extraction counts, bank template included); {@code true} when it cannot tell (no cash flow statement read or no
+     * figures in the column). FUJI, a financing company, has no investing section at all; ADCP's 9M 2025 comparative
+     * invests only in land for development, a joint venture and restricted funds: neither spends on capital assets.
+     */
+    public boolean reportsCapitalExpenditure(StatementColumn column) {
+        int ctx = durationIndex(column);
+        if (cashFlow == null || ctx < 0 || !cashFlow.hasData(ctx)) {
+            return true;
+        }
+        return java.util.stream.Stream.concat(CAPEX.stream(), FIN_CAPEX.stream())
+                .anyMatch(label -> cashFlow.value(label, ctx) != null);
+    }
+
     /** PP&E + right-of-use depreciation of the column's period, {@code null} when not disclosed. */
     public BigDecimal depreciation(StatementColumn column) {
         String ppeSheet;
@@ -2646,6 +2725,24 @@ public final class FilingMapper {
     }
 
     /**
+     * Whether the column's amortization cannot matter to its EBITDA: the intangible assets other than goodwill, opening
+     * and closing, are both under 1% of EBIT + depreciation, so a year's amortization of them - at most the balance
+     * itself - changes it by less than 1%. Where {@link #amortization} is not derivable - intangibles grown by more than
+     * the cash paid for them (acquired, capitalised: KETR FY2025 241,481,810 -> 283,072,592 with no purchase) or sold
+     * (MIKA FY2025) - EBITDA is then EBIT + depreciation instead of nothing (KETR: intangibles 283 million beside
+     * EBIT + depreciation of 249 billion). Current column only (needs the opening balance), like the amortization.
+     */
+    private boolean immaterialIntangibles(StatementColumn column, BigDecimal base) {
+        if (column != StatementColumn.CURRENT_PERIOD || balanceSheet == null || financial || base == null || base.signum() <= 0) {
+            return false;
+        }
+        BigDecimal limit = base.multiply(new BigDecimal("0.01"));
+        BigDecimal opening = nz(amount(balanceSheet.value("Intangible assets other than goodwill", 1)));
+        BigDecimal closing = nz(amount(balanceSheet.value("Intangible assets other than goodwill", 0)));
+        return opening.abs().compareTo(limit) < 0 && closing.abs().compareTo(limit) < 0;
+    }
+
+    /**
      * Intangibles opening + purchases - closing; current column only (needs the opening balance). The bank
      * template reports acquisitions net of disposals in one signed line: a net disposal leaves the carrying
      * amount of what was sold unknown, so no amortization is derived then.
@@ -2711,6 +2808,23 @@ public final class FilingMapper {
      * (by nature) leaves the row empty in both columns - the revenue, 32,322,651,000,000, is only in its breakdown by
      * type - and the model mapped 'Other income' 424,062,000,000 as revenue.
      */
+    /**
+     * Whether a column's profit or loss reports no revenue at all: a General taxonomy profit or loss whose 'Sales and
+     * revenue' row is empty or missing, without a revenue breakdown. PEGE (an investment company) files only general and administrative
+     * expenses, finance income (its investment results, -101,635,308,012 in FY2022), other income and other expenses,
+     * in every filing; the model made up a different revenue each year (FY2022 -94,297,438,110: finance + other income;
+     * FY2024 28,879,851,458; FY2025 the finance income 19,282,262,084). {@code false} for a bank, financing company or
+     * insurer, and when the workbook has no profit or loss.
+     */
+    public boolean reportsNoRevenue(StatementColumn column) {
+        StatementTable profitOrLoss = profitOrLossAsFiled();
+        int ctx = durationIndex(column);
+        if (financial || profitOrLoss == null || ctx < 0) {
+            return false;
+        }
+        return filedRevenue(column).isEmpty();
+    }
+
     public Optional<FiledRevenue> filedRevenue(StatementColumn column) {
         StatementTable profitOrLoss = profitOrLossAsFiled();
         int ctx = durationIndex(column);
@@ -3767,17 +3881,15 @@ public final class FilingMapper {
     private Check equal(String rule, String description, BigDecimal computed, BigDecimal reported) {
         BigDecimal diff = computed.subtract(reported).abs();
         // filings in thousands / millions may be off by one reported unit because every line is rounded separately
-        if (precision.compareTo(BigDecimal.ONE) > 0) {
-            return diff.compareTo(precision) <= 0
-                    ? Check.ok(rule, description)
-                    : Check.error(rule, description + ": computed " + computed.toPlainString()
-                    + " vs reported " + reported.toPlainString() + " (difference " + diff.toPlainString() + ")");
+        if (precision.compareTo(BigDecimal.ONE) > 0 && diff.compareTo(precision) <= 0) {
+            return Check.ok(rule, description);
         }
         if (diff.signum() == 0) {
             return Check.ok(rule, description);
         }
-        // full-amount filings must match, up to a slip of under a billionth of the amount (WIFI FY2022: beginning cash
-        // 10,565,474,157 + net change 10,363,301,088 = 20,928,775,245, ending cash filed 20,928,775,242)
+        // otherwise they must match, up to a slip of under a billionth of the amount (WIFI FY2022, full amounts: beginning
+        // cash 10,565,474,157 + net change 10,363,301,088 = 20,928,775,245, ending cash filed 20,928,775,242; AGRO FY2022,
+        // thousands: 2,140,267,174 - 9,894,016 = 2,130,373,158, ending cash filed 2,130,373,160)
         BigDecimal tolerance = computed.abs().max(reported.abs()).multiply(FULL_AMOUNT_SLIP);
         return diff.compareTo(tolerance) < 0
                 ? Check.warning(rule, description + ": computed " + computed.toPlainString() + " vs reported "

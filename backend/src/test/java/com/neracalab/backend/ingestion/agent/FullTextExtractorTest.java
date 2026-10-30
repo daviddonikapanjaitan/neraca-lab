@@ -328,6 +328,107 @@ public class FullTextExtractorTest {
     }
 
     /**
+     * BUKA FY2025 (by nature): the note's cost of sales 5,990,751,222 thousand ('Raw materials and consumables used' on
+     * the face) is more than the operating expenses by nature, 4,432,364,338, which a gain of 1,988,280,296 filed as
+     * negative 'Other expenses' nets down - so the year had no gross profit. The positive expense rows hold the cost.
+     */
+    @Test
+    void theCostOfSalesIsHeldByThePositiveExpenseRows() throws Exception {
+        IngestionSession session = session("BUKA", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1312000";
+        String[] expenses = {"+Ticketing, sales and promotion expenses", "+Raw materials and consumables used",
+                "+Employee benefits expenses", "+Depreciation and amortisation expenses", "+Final tax expenses",
+                "+Other expenses"};
+        List<String> operating = new ArrayList<>(List.of("+Sales and revenue", "+Other income"));
+        for (String e : expenses) {
+            operating.add("-" + e.substring(1));
+        }
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
+                Map.entry("operating_expenses", terms(text, sheet, expenses)),
+                Map.entry("operating_income", terms(text, sheet, operating.toArray(String[]::new))),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity"))));
+        answers("{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("5990751222000");
+        // 6,510,030,453 - 5,990,751,222
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("519279231000");
+        // 4,432,364,338 - 5,990,751,222: negative, the gain netted in
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("-1558386884000");
+    }
+
+    /**
+     * The model names the row of the cost as cost of revenue and leaves it out of the operating expenses (PGEO FY2023:
+     * 'Exploration expenses' 178,977,000, the cost of sales note's total, beside 'Other expenses' 5,526,000 as operating
+     * expenses; it stayed without gross profit). The note gives the gross profit; the operating expenses stay as mapped
+     * - taking the cost out of them would count it twice. Here BUKA FY2025, 'Raw materials and consumables used'
+     * 5,990,751,222 thousand, the note's cost, answered the same way.
+     */
+    @Test
+    void theModelsOwnCostRowsAreTheNotesCost() throws Exception {
+        IngestionSession session = session("BUKA", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1312000";
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Sales and revenue")),
+                Map.entry("cost_of_revenue", terms(text, sheet, "+Raw materials and consumables used")),
+                Map.entry("operating_expenses", terms(text, sheet, "+Ticketing, sales and promotion expenses",
+                        "+Employee benefits expenses", "+Depreciation and amortisation expenses", "+Other expenses")),
+                Map.entry("operating_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)"))));
+        answers("{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("5990751222000");
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("519279231000");
+        // 212,681,610 + 108,376,169 + 108,835,633 - 1,988,280,296, as mapped
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("-1558386884000");
+        assertThat(income.derivations().get("cost_of_revenue")).contains("the rows the model named as cost of revenue");
+    }
+
+    /**
+     * PGEO FY2023 (by nature): its face leaves revenue empty (406,288,000 only in its breakdown by party), so no gross
+     * profit can be derived here - but the note's cost 178,977,000 is stored and taken out of the operating expenses
+     * (184,503,000 -> 5,526,000), and the gross profit another filing stored (the FY2024 filing's comparative) is kept,
+     * not cleared.
+     */
+    @Test
+    void withoutRevenueTheNotesCostIsStoredAndAGrossProfitKept() throws Exception {
+        IngestionSession session = session("PGEO", "2023-Tahunan");
+        assertThat(session.mapper().costOfSales(StatementColumn.CURRENT_PERIOD)).isEqualByComparingTo("178977000");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "3312000";
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("operating_expenses", terms(text, sheet, "+Exploration expenses", "+Other expenses")),
+                Map.entry("operating_income", terms(text, sheet, "+Total profit (loss) before tax", "-Other gains (losses)",
+                        "-Finance income", "+Interest and finance costs")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)"))));
+        answers("{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isNull();
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("178977000");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("5526000");
+        assertThat(income.values().get("gross_profit")).isNull();
+        assertThat(income.rejected()).doesNotContain("gross_profit", "cost_of_revenue");
+    }
+
+    /**
      * RAFI FY2021 (the prior period of its FY2022 filing, amounts with fractions of a rupiah): the note's cost
      * 89,901,586,207 is 0.36 above the expenses 89,901,586,206.6389 it is one of, so it was refused and the year had
      * no gross profit. Less than a filed unit apart is the same amount.
@@ -572,7 +673,10 @@ public class FullTextExtractorTest {
         assertThat(prompts.get(1)).contains("but operating income + the rows below it must give the filed profit before tax");
         MappedStatement statement = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
         assertThat(statement.values().get("operating_income")).isEqualByComparingTo("221785000");
-        assertThat(statement.values().get("operating_expenses")).isEqualByComparingTo("184503000");
+        // the expenses by nature 184,503,000 less the cost of sales note's 178,977,000, stored as the cost of revenue
+        // (withoutRevenueTheNotesCostIsStoredAndAGrossProfitKept)
+        assertThat(statement.values().get("operating_expenses")).isEqualByComparingTo("5526000");
+        assertThat(statement.values().get("cost_of_revenue")).isEqualByComparingTo("178977000");
         assertThat(statement.values().get("pretax_income")).isEqualByComparingTo("240961000");
     }
 
@@ -826,6 +930,10 @@ public class FullTextExtractorTest {
         assertThat(current.values().get("revenue").subtract(current.values().get("cost_of_revenue"))
                 .subtract(current.values().get("operating_expenses"))).isEqualByComparingTo(current.values().get("pretax_income"));
         assertThat(current.values().get("pretax_income")).isEqualByComparingTo("554777023000");
+        // the answer names no gross profit: revenue - cost of revenue, by the field's definition (it was left empty)
+        assertThat(current.values().get("gross_profit")).isEqualByComparingTo(
+                current.values().get("revenue").subtract(current.values().get("cost_of_revenue")));
+        assertThat(current.derivations().get("gross_profit")).isEqualTo("revenue - cost of revenue");
         assertThat(current.values().get("basic_eps")).isEqualByComparingTo("135");
         assertThat(current.values().get("basic_shares")).isEqualByComparingTo("3555575600");
         MappedStatement prior = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
@@ -929,6 +1037,89 @@ public class FullTextExtractorTest {
         MappedStatement prior = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
         assertThat(prior.values().get("revenue")).isEqualByComparingTo("14525080000000");
         assertThat(prior.values().get("operating_income")).isEqualByComparingTo("4405601000000");
+    }
+
+    /**
+     * PEGE (an investment company, errors 1238 - 1245): its profit or loss has no revenue, only general and
+     * administrative expenses, finance income (its investment results), other income and other expenses. The model made
+     * a revenue of finance income (FY2025 19,282,262,084), of finance and other income in other years; such a revenue
+     * is not stored, and a revenue stored before is cleared.
+     */
+    @Test
+    void aRevenueMadeOfFinanceAndOtherIncomeIsNotStored() throws Exception {
+        IngestionSession session = session("PEGE", "2025-Tahunan");
+        assertThat(session.mapper().reportsNoRevenue(StatementColumn.CURRENT_PERIOD)).isTrue();
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1311000";
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Finance income")),
+                Map.entry("operating_expenses", terms(text, sheet, "+General and administrative expenses", "+Other expenses")),
+                Map.entry("operating_income", terms(text, sheet, "-General and administrative expenses", "-Other expenses")),
+                Map.entry("interest_income", terms(text, sheet, "+Finance income")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")));
+        answers("{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "No 'Sales and revenue' reported",
+                new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isNull();
+        assertThat(income.rejected()).contains("revenue");
+        assertThat(income.derivations().get("revenue")).startsWith("not reported: the model named only + 'Finance income'");
+        // the rest as the model mapped it: 12,499,052,288 + 35,021,744,977
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("47520797265");
+        assertThat(income.values().get("pretax_income")).isEqualByComparingTo("-28238535181");
+    }
+
+    /**
+     * ABDA H1 2026 (error 1246), PSAK 117 from 2025: the H1 2025 column keeps four cells of the former presentation the
+     * H1 2026 column leaves empty (unearned premiums -36,572,748, premium income ceded 2,178,670, estimated claims
+     * liability -4,409,958, commission 54,538,876 thousand). With them revenue - costs were -2,274,276 for a profit
+     * before tax of 86,606,060; the model kept them after it was shown so, and they are left out for it.
+     */
+    @Test
+    void rowsOfAnInsurersComparativeAloneAreLeftOutWhenOnlySoItReconciles() throws Exception {
+        IngestionSession session = session("ABDA", "2026-II");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "6312000";
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Revenue from insurance premiums", "-Reinsurance premiums",
+                        "-Decrease (increase) in premium income ceded to reinsurancer",
+                        "+Decrease (increase) in unearned premiums", "+Net investment income", "+Other underwriting income")),
+                Map.entry("cost_of_revenue", terms(text, sheet, "+Claim expenses", "-Reinsurance claims",
+                        "+Increase (decrease) in estimated claims liability", "+Commission expenses",
+                        "+Other underwriting expenses")),
+                Map.entry("operating_expenses", terms(text, sheet, "+General and administrative expenses")),
+                Map.entry("operating_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")));
+        String answer = "{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}";
+        answers(answer, answer);
+
+        FullTextExtractor.Report report = extractor(2).extract(session, List.of(StatementColumn.CURRENT_PERIOD,
+                StatementColumn.PRIOR_PERIOD), "Unsupported filing", new AgentTrace());
+
+        assertThat(prompts.get(1)).contains("revenue - costs equal profit before tax in c2 exactly without "
+                + "'Decrease (increase) in premium income ceded to reinsurancer' (6312000!R");
+        assertThat(report.problems()).noneMatch(p -> p.contains("income_statement"));
+        assertThat(report.notes()).anyMatch(n -> n.startsWith("Full-text extraction of PRIOR_PERIOD 2025 H1 income_statement: ")
+                && n.contains("left out of the model's answer"));
+        MappedStatement prior = session.income(StatementColumn.PRIOR_PERIOD).orElseThrow();
+        // 513,344,921 - 26,051,158 + 73,538,385 + 6,204,879
+        assertThat(prior.values().get("revenue")).isEqualByComparingTo("567037027000");
+        // 403,267,530 + 20,187,790 + 25,551,031
+        assertThat(prior.values().get("cost_of_revenue")).isEqualByComparingTo("449006351000");
+        assertThat(prior.values().get("pretax_income")).isEqualByComparingTo("86606060000");
+        // H1 2026 has none of the rows: as the model mapped it
+        MappedStatement current = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        // 600,646,610 - 48,280,392 + 76,161,712 + 3,302,226
+        assertThat(current.values().get("revenue")).isEqualByComparingTo("631830156000");
+        assertThat(current.checks()).noneMatch(c -> c.message().startsWith("Left out of the model's answer"));
     }
 
     /**

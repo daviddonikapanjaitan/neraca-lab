@@ -40,7 +40,7 @@ class OpenCodeGoRoutingTest {
     void deepSeekGoesToOpenCodeGoWithoutTheOpenRouterFields() {
         Recording openRouter = new Recording();
         Recording go = new Recording();
-        ChatModel routed = new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).route(openRouter);
+        ChatModel routed = new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).wrap(openRouter);
 
         routed.call(prompt(DEEPSEEK, Map.of("reasoning", Map.of("enabled", false),
                 "provider", Map.of("ignore", List.of("OpenInference")), "usage", Map.of("include", true),
@@ -58,7 +58,7 @@ class OpenCodeGoRoutingTest {
     @Test
     void aReasoningEffortBecomesTheReasoningEffort() {
         Recording go = new Recording();
-        new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).route(new Recording())
+        new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).wrap(new Recording())
                 .call(prompt(DEEPSEEK, Map.of("reasoning", Map.of("effort", "low"))));
 
         OpenAiChatOptions sent = (OpenAiChatOptions) go.prompts.get(0).getOptions();
@@ -71,16 +71,27 @@ class OpenCodeGoRoutingTest {
         Recording openRouter = new Recording();
         Recording go = new Recording();
         Prompt claude = prompt("anthropic/claude-sonnet-5.5", Map.of("usage", Map.of("include", true)));
-        new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).route(openRouter).call(claude);
+        new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).wrap(openRouter).call(claude);
 
         assertThat(go.prompts).isEmpty();
         assertThat(openRouter.prompts).containsExactly(claude);
     }
 
+    /**
+     * A model that is not the OpenRouter client - a test's scripted or mocked one - is never routed: with the key in
+     * backend/.env, the controller tests' DeepSeek calls had reached OpenCode Go instead of their script.
+     */
+    @Test
+    void onlyTheOpenRouterClientIsRouted() {
+        Recording scripted = new Recording();
+        Recording go = new Recording();
+        assertThat(new OpenCodeGoRouting(go, Map.of(DEEPSEEK, "deepseek-v4.1-flash")).route(scripted)).isSameAs(scripted);
+    }
+
     @Test
     void withoutAKeyNothingIsRouted() {
         Recording openRouter = new Recording();
-        assertThat(new OpenCodeGoRouting("", "https://x", List.of(DEEPSEEK + "=deepseek-v4.1-flash")).route(openRouter))
+        assertThat(new OpenCodeGoRouting("", "https://x", List.of(DEEPSEEK + "=deepseek-v4.1-flash")).wrap(openRouter))
                 .isSameAs(openRouter);
         assertThat(OpenCodeGoRouting.parse(List.of(" a = b ", "broken", "=c")))
                 .isEqualTo(Map.of("a", "b"));

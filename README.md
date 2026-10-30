@@ -142,6 +142,8 @@ neraca_lab/
 │               ├── V1.0.35__data_ENRG_shares.sql  (ENRG share counts: its USD filings give none, the June 2026 placement)
 │               ├── V1.0.36__schema_valuation_ebitda_basis.sql  (valuation_snapshot.ebitda_basis)
 │               ├── V1.0.37__data_RANS_shares.sql  (RANS share counts before and after its IPO of 2026-07-10)
+│               ├── V1.0.38__data_ABDA_expenses.sql  (ABDA FY2021 / FY2022 G&A its FY2022 filing tags as interest)
+│               ├── V1.0.39__data_ACRO_AGAR_AISA_shares.sql  (share counts their filings and Yahoo Finance do not give)
 │               ├── V1.0.6__data_metrics_valuation.sql
 │               └── V1.0.26__data_markets_macro.sql (catalog: 35 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
@@ -260,7 +262,8 @@ RAG embeddings stay on OpenRouter. A routed request leaves out OpenRouter's own 
 `reasoning_effort`, and carries the `x-opencode-session` header OpenCode Go requires. Go reports a cost of 0, so
 `llm_usage` records 0 for its calls. OpenCode Go serves its DeepSeek models only to a workspace whose Privacy
 settings allow Global regions ("This Go model requires Global regions"); until then route only Haiku:
-`OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5`. Empty key: every call goes to OpenRouter.
+`OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5`. Empty key: every call goes to OpenRouter. Only the
+OpenRouter client (`OpenAiChatModel`) is routed: a test's scripted or mocked `ChatModel` keeps its calls.
 
 To run the backend from the IDE instead, start only the infrastructure with
 `docker compose up -d postgres redis` (in `backend/`); `application.yaml` defaults to `localhost`.
@@ -355,9 +358,18 @@ that cannot be used (a row of a notes sheet, a row that does not exist) is left 
 as the sum of its other rows, and the model is asked again; a profit or loss presented by nature (e.g. NSSS:
 no cost of sales and no gross profit row) gets its `cost_of_revenue` and `gross_profit` only from the filing's own cost
 of sales note (1670000, 'Cost of sales and revenue': BIPI, BUVA, BUKA, NSSS, MSIN, NICL, RAFI ...; a cost less than a
-filed unit above the expenses is the same amount, RAFI FY2021), never from expense rows by nature; revenue must be the
+filed unit above the expenses is the same amount, RAFI FY2021; the positive expense rows hold it, BUKA FY2025; the
+model's own cost rows equal to it, PGEO FY2023; without a revenue on the face the cost is still stored), never from
+expense rows by nature; revenue must be the
 profit or loss's own 'Sales and revenue' row (EXCL, BUVA, TLKM: the model had added 'Other income'), and a row left
-empty on the face is shown to the model with the total of the filing's revenue breakdown (EXCL FY2023). Operating income
+empty on the face is shown to the model with the total of the filing's revenue breakdown (EXCL FY2023); a revenue made
+only of finance income, other income, gains or dividends is not stored (PEGE, an investment company, files none). An
+insurer's or financing company's gross profit is revenue - cost of revenue; a financing company whose 'Cash and cash
+equivalents' row leaves out its current accounts and placements with banks (ADMF, DEFI) gets the cash flow's cash when
+those rows make up the difference exactly; an insurer's comparative restated for PSAK 117 that reconciles only without
+the cells it alone fills has them left out (ABDA); a cash flow without a capital expenditure row has capex 0 (FUJI). In
+the rule-based extraction, EBITDA is EBIT + depreciation where amortization is not derivable but the intangible assets
+are under 1% of it, and a slip of under a billionth of the amount is a warning in every unit (AGRO). Operating income
 is checked against the filing: rows below operating profit counted in it (ISAT's 'Other gains (losses)') and, by nature,
 operating expenses other than the expense rows it subtracts (ISAT FY2023, PGEO FY2023) are shown to the model when the
 corrected figure and the rows below it give the filed profit before tax - by nature, where none of the model's rows do,
@@ -1091,6 +1103,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.31__data_BNBR_shares.sql`       | BNBR share counts, which its filings cannot give (five par-value series) and Yahoo Finance gives wrong (201.4 billion): 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31 (company announcement and prospectus, KSEI) |
 | `V1.0.36__schema_valuation_ebitda_basis.sql` | `valuation_snapshot.ebitda_basis`: EV / EBITDA of an interim period whose trailing EBITDA is not derivable (its comparative has no depreciation until the company's own H1 filing is uploaded) takes the full year inside the window, marked "(FY 2025)" |
 | `V1.0.37__data_RANS_shares.sql`       | RANS share counts (listed 2026-07-10): 10,084,250,000 before the IPO, 12,609,250,000 after it (2,525,000,000 offered); market cap, EV and P/B, no P/E until its first full year |
+| `V1.0.38__data_ABDA_expenses.sql`     | ABDA FY2021 / FY2022: the general and administrative expenses its FY2022 filing tags as 'Interest and finance costs' (284,745,743 / 328,420,609 thousand; its FY2023 filing files them as G&A) are operating expenses, operating income = profit before tax; only while the rows hold the tag's figures |
+| `V1.0.39__data_ACRO_AGAR_AISA_shares.sql` | Share counts their filings do not state and Yahoo Finance does not fit, from KSEI's 1% lists (a holder's shares / its percentage) and the listing records: ACRO 3,469,138,591 from its IPO of 2024-01-11, AGAR 1,000,000,000, AISA 9,311,800,000; they had prices but no market cap and no valuation |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |

@@ -100,10 +100,13 @@ class DerivedDataRefreshTest {
                 .query(String.class).list();
         assertThat(unvalued).isEmpty();
 
+        // no trailing twelve months at all - not merely no revenue (PEGE, an investment company, files none: it has
+        // trailing earnings, so a P/E, and no P/S)
         List<Long> withoutTtm = jdbc.sql("""
                 SELECT DISTINCT vs.company_id FROM valuation_snapshot vs WHERE vs.revenue_ttm IS NULL
                   AND NOT EXISTS (SELECT 1 FROM v_ttm_financials t WHERE t.company_id = vs.company_id
-                                    AND t.period_end <= vs.valuation_date AND t.revenue_ttm IS NOT NULL)""")
+                                    AND t.period_end <= vs.valuation_date
+                                    AND (t.revenue_ttm IS NOT NULL OR t.net_income_to_parent_ttm IS NOT NULL))""")
                 .query(Long.class).list();
         for (long companyId : withoutTtm) {
             assertThat(jdbc.sql("""

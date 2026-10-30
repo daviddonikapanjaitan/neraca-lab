@@ -82,8 +82,15 @@ public class OpenCodeGoRouting {
         return models;
     }
 
-    /** {@code openRouter} with the routed models sent to OpenCode Go; {@code openRouter} itself when off. */
+    /**
+     * {@code openRouter} with the routed models sent to OpenCode Go; {@code openRouter} itself when off, and when it is
+     * not the OpenRouter client (a test's scripted or mocked model: its calls must stay with it, never reach Go).
+     */
     public ChatModel route(ChatModel openRouter) {
+        return openRouter instanceof OpenAiChatModel ? wrap(openRouter) : openRouter;
+    }
+
+    ChatModel wrap(ChatModel openRouter) {
         if (go == null || models.isEmpty()) {
             return openRouter;
         }

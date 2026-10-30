@@ -82,6 +82,8 @@ spring:
         - classpath:db/V1.0.31__data_BNBR_shares.sql      # share counts of five par-value series (2023 - 2026 rights issue)
         - classpath:db/V1.0.35__data_ENRG_shares.sql      # share counts (USD filings without them), the June 2026 placement
         - classpath:db/V1.0.37__data_RANS_shares.sql      # share counts before and after the IPO of 2026-07-10
+        - classpath:db/V1.0.38__data_ABDA_expenses.sql    # FY2021 / FY2022 G&A its FY2022 filing tags as interest
+        - classpath:db/V1.0.39__data_ACRO_AGAR_AISA_shares.sql # share counts their filings and Yahoo Finance do not give
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
