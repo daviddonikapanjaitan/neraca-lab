@@ -907,7 +907,7 @@ npm run dev                   # http://localhost:3000
 | `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
-| `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation, market & shares, filings |
+| `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation (incl. forward EPS: the period's profit to the parent made a year, Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, and BVPS), market & shares, filings |
 | `/screening`                     | Screening dropdown (like Ingestion), Fundamental (All): exchange, market cap, top N, investor agents (multi-select); saved screenings |
 | `/screening/selected`            | Fundamental (Selected): stocks chosen from the companies table (search, multi-select), top N, investor agents; saved screenings of selected stocks |
 | `/screening/selected/{id}`       | report of a screening of selected stocks (same content; the selected stocks and their flags shown) |
@@ -1128,7 +1128,12 @@ IDX "Kuartal I / II / III" filings are year-to-date, stored as `Q1` / `H1` / `9M
 | `v_ttm_financials`   | trailing-twelve-month revenue, operating income, EBITDA, profit and FCF per period                   |
 
 Ratios are fractions (`0.25` = 25%). `*_annualized` columns scale partial-year flows by
-12 / period months; `valuation_snapshot` uses trailing twelve months instead. Examples:
+12 / period months; `valuation_snapshot` uses trailing twelve months instead. The company page's
+valuation table shows both: EPS TTM from `valuation_snapshot` and forward EPS
+(`net_income_to_parent_annualized` / `shares` of the valuation's period), beside BVPS
+(`book_value_per_share`). A company with one filing since its IPO (BACH, RANS: H1 2026) has no
+trailing twelve months until its FY2026 filing, so P/E, P/S, EV / EBITDA, EV/Sales, EV/OP and the
+yields stay empty; market cap, EV, P/B, forward EPS and BVPS are there. Examples:
 
 ```sql
 -- valuation history incl. EV / operating profit

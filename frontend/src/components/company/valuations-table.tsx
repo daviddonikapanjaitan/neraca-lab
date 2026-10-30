@@ -27,7 +27,14 @@ const COLUMNS: Column[] = [
   { label: "EV", title: "Market cap + debt incl. leases - cash and investments + NCI", render: (v) => formatCompact(v.enterpriseValue) },
   { label: "Revenue TTM", title: "Trailing twelve months revenue", render: (v) => formatCompact(v.revenueTtm) },
   { label: "EPS TTM", title: "TTM profit to parent / shares outstanding", render: (v) => formatPrice(v.epsTtm) },
+  {
+    label: "Forward EPS",
+    title: "Profit to parent of the period made a year (Q1 x 4, H1 x 2, 9M x 4/3, FY x 1) / shares outstanding",
+    render: (v) => formatPrice(v.forwardEps),
+    numeric: (v) => v.forwardEps,
+  },
   { label: "P/E", title: "Price / EPS TTM", render: (v) => formatMultiple(v.peRatio) },
+  { label: "BVPS", title: "Equity attributable to the parent / shares outstanding", render: (v) => formatPrice(v.bookValuePerShare) },
   { label: "P/B", title: "Market cap / equity attributable to the parent", render: (v) => formatMultiple(v.pbRatio) },
   { label: "P/S", title: "Market cap / revenue TTM", render: (v) => formatMultiple(v.psRatio) },
   {

@@ -997,6 +997,9 @@ public class FullTextExtractor {
 
         List<Check> checks = new ArrayList<>();
         BigDecimal tolerance = mapper.unit().max(BigDecimal.ONE).multiply(BigDecimal.valueOf(2));
+        if (target.kind() == Kind.CASH_FLOW) {
+            emptySectionAsZero(values, how, tolerance);
+        }
         for (String required : REQUIRED.get(table)) {
             if (values.get(required) == null) {
                 issues.add(required + " has no amount: its rows are empty in " + columnName(target) + " or it is not mapped");
@@ -1197,6 +1200,28 @@ public class FullTextExtractor {
 
     private static String columnName(Target target) {
         return "c" + (target.valueColumn() + 1);
+    }
+
+    /**
+     * A cash flow section without any row the model could map counts as 0 when the other two add up to the change in
+     * cash (as {@code FilingMapper#sectionTotals} counts it): AHAP FY2024, an insurer with no financing activity -
+     * no lines, no total - operating 1,356,295,483 + investing -580,969,819 = net change 775,325,664 (errors 1146 -
+     * 1148). Otherwise it stays empty, and a required field without an amount is pointed out.
+     */
+    static void emptySectionAsZero(Map<String, BigDecimal> values, Map<String, String> how, BigDecimal tolerance) {
+        List<String> sections = List.of("operating_cash_flow", "investing_cash_flow", "financing_cash_flow");
+        List<String> empty = sections.stream().filter(s -> values.get(s) == null).toList();
+        BigDecimal change = values.get("cash_change");
+        if (empty.size() != 1 || change == null) {
+            return;
+        }
+        BigDecimal others = sections.stream().filter(s -> !empty.contains(s)).map(values::get)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (others.subtract(change).abs().compareTo(tolerance) > 0) {
+            return;
+        }
+        values.put(empty.get(0), BigDecimal.ZERO);
+        how.put(empty.get(0), "full-text extraction: no rows in this column; 0, the other sections add up to the change in cash");
     }
 
     /** The D&A the profit or loss states for the column ({@link FilingMapper#statedDepreciationAndAmortization}). */

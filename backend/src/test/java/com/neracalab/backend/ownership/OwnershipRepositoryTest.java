@@ -291,7 +291,9 @@ class OwnershipRepositoryTest {
                 .filter(e -> e.holderKey().equals("DRS LO KHENG HONG")).findFirst().orElseThrow();
         assertThat(lo.holdings()).extracting(OwnershipRepository.EntityHolding::ticker).contains("ABMM");
 
-        Digest adro = OwnershipDigest.of("ADRO", repository.holders("IDX", TYPE, "ADRO", null, null));
+        // the days of the files: the database may hold lists of earlier days whose files are no longer in the folder
+        Digest adro = OwnershipDigest.of("ADRO", repository.holders("IDX", TYPE, "ADRO",
+                java.util.Collections.min(fileDates), java.util.Collections.max(fileDates)));
         assertThat(adro.days()).isEqualTo(files.size());
         assertThat(adro.holders().getFirst().name()).isEqualTo("ADARO STRATEGIC INVESTMENTS");
         assertThat(adro.totals().accountMoveDays()).isPositive();

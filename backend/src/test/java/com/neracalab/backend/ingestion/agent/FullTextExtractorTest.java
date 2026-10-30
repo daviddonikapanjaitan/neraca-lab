@@ -1200,6 +1200,38 @@ public class FullTextExtractorTest {
         return "[" + String.join(", ", terms) + "]";
     }
 
+    /**
+     * AHAP FY2024 (errors 1146 - 1148), an insurer with no financing activity: no financing rows, no total; operating
+     * 1,356,295,483 + investing -580,969,819 = net change 775,325,664. Financing is 0. A section that is not empty, or
+     * two empty sections, or others that do not add up to the net change: left as they are.
+     */
+    @Test
+    void anEmptyCashFlowSectionIsZeroWhenTheOthersGiveTheNetChange() {
+        Map<String, BigDecimal> values = cashFlow("1356295483", "-580969819", null, "775325664");
+        Map<String, String> how = new java.util.HashMap<>();
+        FullTextExtractor.emptySectionAsZero(values, how, BigDecimal.valueOf(2));
+        assertThat(values.get("financing_cash_flow")).isEqualByComparingTo("0");
+        assertThat(how.get("financing_cash_flow")).contains("the other sections add up to the change in cash");
+
+        Map<String, BigDecimal> notAddingUp = cashFlow("1356295483", "-580969819", null, "30775325664");
+        FullTextExtractor.emptySectionAsZero(notAddingUp, new java.util.HashMap<>(), BigDecimal.valueOf(2));
+        assertThat(notAddingUp.get("financing_cash_flow")).isNull();
+
+        Map<String, BigDecimal> twoEmpty = cashFlow("775325664", null, null, "775325664");
+        FullTextExtractor.emptySectionAsZero(twoEmpty, new java.util.HashMap<>(), BigDecimal.valueOf(2));
+        assertThat(twoEmpty.get("investing_cash_flow")).isNull();
+        assertThat(twoEmpty.get("financing_cash_flow")).isNull();
+    }
+
+    private static Map<String, BigDecimal> cashFlow(String operating, String investing, String financing, String change) {
+        Map<String, BigDecimal> values = new java.util.HashMap<>();
+        values.put("operating_cash_flow", operating == null ? null : new BigDecimal(operating));
+        values.put("investing_cash_flow", investing == null ? null : new BigDecimal(investing));
+        values.put("financing_cash_flow", financing == null ? null : new BigDecimal(financing));
+        values.put("cash_change", change == null ? null : new BigDecimal(change));
+        return values;
+    }
+
     private static IngestionSession session(String filing) throws Exception {
         return session("TINS", filing);
     }

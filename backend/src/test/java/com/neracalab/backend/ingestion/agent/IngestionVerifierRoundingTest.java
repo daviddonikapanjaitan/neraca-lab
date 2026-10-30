@@ -72,6 +72,26 @@ class IngestionVerifierRoundingTest {
     }
 
     /**
+     * RAFI FY2022 (full rupiah, errors 1149, 1150) files its revenue with a fraction: 375,886,948,578.9396 beside a
+     * breakdown of 375,886,948,579. Less than one rupiah apart: a note, in its own filing and its FY2023 one; a rupiah
+     * or more stays a problem.
+     */
+    @Test
+    void segmentRevenueWithinARupiahOfAFullAmountFilingIsANote() throws Exception {
+        BigDecimal segments = new BigDecimal("375886948579");
+        StoredPeriod within = new StoredPeriod("FY", true, true, true, 6, segments, new BigDecimal("375886948578.9396"),
+                null, null, null, null, null);
+        StoredPeriod beyond = new StoredPeriod("FY", true, true, true, 6, segments, new BigDecimal("375886948577.9396"),
+                null, null, null, null, null);
+        for (String filing : new String[] {"2022-Tahunan", "2023-Tahunan"}) {
+            IngestionSession rafi = session("RAFI", filing);
+            assertThat(IngestionVerifier.segmentRoundingExplanation(rafi, within))
+                    .contains("differ by 0.0604").contains("less than the filing's rounding unit 1");
+            assertThat(IngestionVerifier.segmentRoundingExplanation(rafi, beyond)).isNull();
+        }
+    }
+
+    /**
      * MEDC FY2022 (full USD amounts) files common stocks 121,798,945.72: liabilities + equity 6,931,905,825.7 beside total
      * assets 6,931,905,826 (errors 711, 712). Less than one unit apart: a note, in its own filing and its FY2023 one.
      */

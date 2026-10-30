@@ -236,12 +236,13 @@ public class IngestionVerifier {
      * A revenue breakdown filed with more digits than the filing's rounding unit (EXCL FY2022, millions: Data & Digital
      * Services 26,546,951.253861 and two more lines with decimals, 29,141,993.900667 in all, beside revenue 29,141,994):
      * the two differ by less than one unit, which the mapper's own check accepts. Stored as filed; {@code null} when the
-     * difference is a unit or more.
+     * difference is a unit or more. Alike in a full-amount filing whose revenue carries a fraction of a rupiah (RAFI
+     * FY2022: revenue 375,886,948,578.9396 beside a breakdown of 375,886,948,579; errors 1149, 1150).
      */
     static String segmentRoundingExplanation(IngestionSession session, StoredPeriod p) {
-        BigDecimal unit = session.mapper().precision();
+        BigDecimal unit = session.mapper().precision().max(BigDecimal.ONE);
         BigDecimal difference = p.segmentRevenue().subtract(p.revenue()).abs();
-        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) >= 0) {
+        if (difference.compareTo(unit) >= 0) {
             return null;
         }
         return "segment revenue " + p.segmentRevenue().toPlainString() + " and revenue " + p.revenue().toPlainString()

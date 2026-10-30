@@ -978,6 +978,32 @@ only); only HRTA and INDF had their own H1 2025 filing uploaded.
 
 Tests: `FilingMapperStatedDaTest`, `FullTextExtractorDeriveTest`, `ValuationEbitdaBasisTest`, `RansSharesTest`.
 
+### Valuation gaps of 2026-10-30: RAFI, and the companies without a full valuation
+
+Of 222 companies, RAFI alone had no valuation at all. Three more have a latest valuation with gaps, by design:
+
+| Ticker | Cause | Fix |
+|---|---|---|
+| **RAFI** | Its par value is Rp 15 (common stocks 46,921,350,000 = 3,128,090,000 shares after the IPO of 2022-07-28; FY2023 EPS 127,469,201,017 / 3,128,090,000 = 40.75), which is not in `FilingMapper.STANDARD_PAR_VALUES`, and Yahoo Finance has no count: no share counts, no market cap. | 15 added; `inferParValue` skips a par that does not divide the share capital (1 / 15 has no exact decimal quotient: `RoundingMode.UNNECESSARY` threw on every other workbook), `sharesAtPar` likewise. A sweep of all 1,048 workbooks in `data/IDX_XBRL`: only RAFI FY2023 / FY2024 (2,180,000,000 at 2021-12-31, 3,128,090,000 at 2022 - 2023, 3,128,140,475 at 2024-12-31) and IRSX's H1 2026 change (below). RAFI's FY2023 and FY2024 filings uploaded again (2026-10-30, full-text extraction, `SUCCEEDED`): four share counts, a market cap and valuations from FY2022 (latest on the last close, 2026-02-13: P/B 0.41, P/E -18.2 on the FY2024 loss). |
+| IRSX | H1 2026 now resolves par 15 (92,925,710,655 = 6,195,047,377 shares, the count already stored; EPS 1.25 and -0.32 both fit), and carries 5,000,353,976 to 2024-12-31, where 6,892,377,912 is stored from another source. | Not uploaded again until the 2024 count is checked. |
+| BACH, RANS | Listed in July 2026 with one filing (H1 2026): no trailing twelve months, so no P/E, P/S or EV / EBITDA until their FY2026 filings; market cap, EV and P/B are there. | None (by design). |
+| INPS | Its latest valuation uses the close of 2026-09-17: IDX suspended its shares from 2026-09-18 (more than a year on the Special Monitoring Board). | None. |
+| FORU | Not empty but wrong since 2026-09-14: the price falls from 3,720 to 238.41 with about 15 times the volume and a week of fractional (adjusted) closes, a corporate action (rights issue or split) that no source has recorded; the share count stays 465,224,000, so the market cap (Rp 40.9 billion on 2026-10-28) and P/E, P/B, EV are too low. | Open: the share count after the action, from its IDX announcement. |
+
+Test: `FilingMapperRafiTest`.
+
+### The review of 2026-10-30 (errors 1146 - 1154): AHAP, RAFI, BGTG, MAXI and UVCR
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A cash flow section without rows.** AHAP, an insurer, has no financing activity in FY2024, FY2025, H1 2025 and H1 2026 (no lines, no total; FY2024: operating 1,356,295,483 + investing -580,969,819 = net change 775,325,664). The full-text extraction left `financing_cash_flow` empty and every upload ended `INCOMPLETE`. | 1146 - 1148 | `FullTextExtractor.emptySectionAsZero`: a section without rows is 0 when the other two add up to the change in cash (within two units), as `FilingMapper.sectionTotals` counts it for the rule-based extraction (CEKA). |
+| **A revenue with a fraction of a rupiah.** RAFI FY2022 (full amounts) files revenue 375,886,948,578.9396 beside a breakdown of 375,886,948,579. `IngestionVerifier.segmentRoundingExplanation` only accepted such a gap in filings in thousands or millions. | 1149, 1150 | A gap under the rounding unit, at least 1, is a note for full amounts too (as `balanceRoundingExplanation`). |
+| **An ending cash cell the filing contradicts.** UVCR 9M 2026: the sections add up to the net change 568,862,927, and 1,805,621,319 + 568,862,927 = 2,374,484,246, the balance-sheet cash. Only the ending cash cell says 2,824,484,246. | 1153 | `FilingMapper.correctEndingCash`: in a non-financial current period whose sections give the net change and whose roll-forward gives the balance-sheet cash exactly, the ending cash is the balance sheet's (a warning says so). Not where the roll-forward reaches the filed ending cash (overdrafts, deposits). |
+| **Filings that contradict themselves.** BGTG's FY2025 filing restates FY2024 and still files non-operating income 617 million: it reconciles only without it (259,526 - 4,849 = 254,677). UVCR's H1 2025 comparative is 164,852,231 apart from its profit before tax; AHAP's FY2024 (2,673,553,844) and H1 2025 (14,746,914,718) comparatives too, with no line or sign to explain it. MAXI FY2023 rolls forward 180 rupiah above its ending cash, the balance-sheet cash; its FY2024 filing restates the net change 180 lower, so the slip is in one of the FY2023 lines. | 1147, 1148, 1151, 1152, 1154 | Not changed: nothing in the workbooks decides which figure is wrong. Stored by the full-text extraction with the filed totals; BGTG, MAXI and UVCR H1 2026 `SUCCEEDED`. |
+
+Tests: `FilingMapperUvcrTest`, `FullTextExtractorTest.anEmptyCashFlowSectionIsZeroWhenTheOthersGiveTheNetChange`,
+`IngestionVerifierRoundingTest.segmentRevenueWithinARupiahOfAFullAmountFilingIsANote`.
+
 ### The review of 2026-10-29 (errors 1067, 1068): MGLV and JARR
 
 | Cause | Rows | Fix |

@@ -110,7 +110,8 @@ public final class FilingMapper {
     private static final List<String> DIVIDENDS_PAID = List.of(
             "Dividends paid from financing activities", "Dividends paid from operating activities");
 
-    private static final List<BigDecimal> STANDARD_PAR_VALUES = List.of(1, 5, 10, 20, 25, 50, 100, 125, 200, 250,
+    // 15: RAFI (common stocks 46,921,350,000 = 3,128,090,000 shares at Rp 15; FY2023 EPS 40.75)
+    private static final List<BigDecimal> STANDARD_PAR_VALUES = List.of(1, 5, 10, 15, 20, 25, 50, 100, 125, 200, 250,
             500, 1000).stream().map(BigDecimal::valueOf).toList();
 
     // ---- Financial and Sharia Industry (banks): balance sheet groups as {header, parts...}
@@ -2048,6 +2049,7 @@ public final class FilingMapper {
         BigDecimal beginning = amount(c.value(CASH_BEGINNING, ctx));
         BigDecimal ending = req(c, CASH_END, ctx, checks);
         correctSectionTotal(c, ctx, totals, change, beginning, ending, checks);
+        ending = correctEndingCash(c, ctx, column, totals, change, beginning, ending, checks);
         BigDecimal operating = totals[0];
         BigDecimal investing = totals[1];
         BigDecimal financing = totals[2];
@@ -2290,6 +2292,37 @@ public final class FilingMapper {
                 + "of the lines operating + investing + financing = the net change in cash as filed, and beginning cash + "
                 + "net change = ending cash: counted at the sum of its lines"));
         totals[section] = lines;
+    }
+
+    /**
+     * A filed ending cash that the filing's own figures contradict: operating + investing + financing gives the net
+     * change in cash, beginning cash + net change + FX / other effects gives the balance-sheet cash of the period end
+     * exactly, and only the ending cash cell differs. Then the cell is a slip, and the ending cash is the balance
+     * sheet's. UVCR 9M 2026: 1,805,621,319 + 568,862,927 = 2,374,484,246, the balance-sheet cash, beside an ending cash
+     * filed 2,824,484,246 (error 1153). Not for a bank, whose balance-sheet cash is taken from this statement, and not
+     * where the filed ending cash differs from the balance sheet for a reason (overdrafts, deposits): there the
+     * roll-forward reaches the filed ending cash.
+     */
+    private BigDecimal correctEndingCash(StatementTable c, int ctx, StatementColumn column, BigDecimal[] totals,
+                                         BigDecimal change, BigDecimal beginning, BigDecimal ending, List<Check> checks) {
+        if (financial || column != StatementColumn.CURRENT_PERIOD || balanceSheet == null || change == null
+                || beginning == null || ending == null || totals[0] == null || totals[1] == null || totals[2] == null
+                || totals[0].add(totals[1]).add(totals[2]).compareTo(change) != 0) {
+            return ending;
+        }
+        BigDecimal bsCash = amount(balanceSheet.value("Cash and cash equivalents", 0));
+        BigDecimal other = sum(c, List.of("Effect of exchange rate changes on cash and cash equivalents",
+                "Other increase (decrease) in cash and cash equivalents"), ctx);
+        BigDecimal rolled = beginning.add(change).add(other);
+        if (bsCash == null || rolled.compareTo(bsCash) != 0 || rolled.compareTo(ending) == 0
+                || sum(c, List.of("Cash and cash equivalent of deconsolidated subsidiaries"), ctx).signum() != 0) {
+            return ending;
+        }
+        checks.add(Check.warning("cash_rollforward", "The filed ending cash " + ending.stripTrailingZeros().toPlainString()
+                + " is not beginning cash + net change + FX / other effects " + rolled.stripTrailingZeros().toPlainString()
+                + " (difference " + ending.subtract(rolled).stripTrailingZeros().toPlainString() + "), which is the "
+                + "balance-sheet cash; the sections add up to the net change: the ending cash is the balance sheet's"));
+        return rolled;
     }
 
     /** Signed sum of the lines of a cash flow section; {@code null} when its bounds or a line's direction are unknown. */
@@ -3027,7 +3060,7 @@ public final class FilingMapper {
                 // stock are those of the period it was derived from
                 shares = epsShares.matches(p.common(), p.treasury()) ? epsShares.shares() : null;
             } else {
-                shares = par == null || treasury ? null : p.common().divide(par);
+                shares = par == null || treasury ? null : sharesAtPar(p.common(), par);
             }
             if (treasury && shares == null) {
                 checks.add(Check.warning("treasury", "Treasury stock at " + p.date()
@@ -3595,7 +3628,16 @@ public final class FilingMapper {
                 || (treasuryStartEnd[1] != null && treasuryStartEnd[1].signum() != 0))) {
             return null;
         }
-        return startEnd[1].divide(par);
+        return sharesAtPar(startEnd[1], par);
+    }
+
+    /** Share capital / par value; exact where the quotient terminates (not always for par 15). */
+    private static BigDecimal sharesAtPar(BigDecimal commonStock, BigDecimal par) {
+        try {
+            return commonStock.divide(par);
+        } catch (ArithmeticException nonTerminating) {
+            return commonStock.divide(par, MathContext.DECIMAL64);
+        }
     }
 
     private BigDecimal inferParValue(StatementColumn column, BigDecimal commonStock, List<Check> checks) {
@@ -3614,6 +3656,9 @@ public final class FilingMapper {
         BigDecimal tolerance = epsHalfUlp(profitOrLoss, EPS_BASIC, ctx).add(new BigDecimal("1e-9"));
         List<BigDecimal> matches = new ArrayList<>();
         for (BigDecimal par : STANDARD_PAR_VALUES) {
+            if (commonStock.remainder(par).signum() != 0) {
+                continue;   // not a whole number of shares (and 1 / 15 has no exact decimal quotient)
+            }
             BigDecimal shares = commonStock.divide(par, 10, RoundingMode.UNNECESSARY).stripTrailingZeros();
             if (shares.scale() > 0 || shares.signum() <= 0) {
                 continue;

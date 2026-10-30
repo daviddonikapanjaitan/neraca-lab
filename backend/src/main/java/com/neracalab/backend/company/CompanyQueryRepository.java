@@ -339,9 +339,12 @@ public class CompanyQueryRepository {
                                vs.share_price, vs.market_cap, vs.enterprise_value, vs.eps_ttm, vs.revenue_ttm,
                                vs.ebitda_ttm, vs.operating_income_ttm, vs.fcf_ttm, vs.book_value, vs.pe_ratio,
                                vs.ps_ratio, vs.pb_ratio, vs.ev_ebitda, vs.ev_sales, vs.ev_op, vs.fcf_yield,
-                               vs.earnings_yield, vs.ebitda_basis, fx.rate
+                               vs.earnings_yield, vs.ebitda_basis, fx.rate,
+                               ROUND(km.net_income_to_parent_annualized / NULLIF(km.shares, 0), 8) AS forward_eps,
+                               km.book_value_per_share
                         FROM valuation_snapshot vs
                         LEFT JOIN reporting_period rp ON rp.period_id = vs.period_id
+                        LEFT JOIN v_key_metrics km ON km.period_id = vs.period_id
                         LEFT JOIN LATERAL (
                             SELECT max(pd.trading_date) AS trading_date FROM price_daily pd
                             WHERE pd.company_id = vs.company_id AND pd.trading_date <= vs.valuation_date
@@ -362,7 +365,8 @@ public class CompanyQueryRepository {
                             rs.getBigDecimal("pb_ratio"), rs.getBigDecimal("ev_ebitda"), rs.getBigDecimal("ev_sales"),
                             rs.getBigDecimal("ev_op"), rs.getBigDecimal("fcf_yield"), rs.getBigDecimal("earnings_yield"),
                             rate == null ? null : listing, quoted(rs.getBigDecimal("share_price"), rate),
-                            rs.getString("ebitda_basis"));
+                            rs.getString("ebitda_basis"), rs.getBigDecimal("forward_eps"),
+                            rs.getBigDecimal("book_value_per_share"));
                 })
                 .list();
     }

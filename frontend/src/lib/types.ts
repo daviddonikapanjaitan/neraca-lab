@@ -259,6 +259,10 @@ export interface Valuation {
   earningsYield: Amount
   quoteCurrency: string | null
   quotePrice: Amount
+  /** the period's profit to the parent made a year (Q1 x 4, H1 x 2, 9M x 4/3, FY x 1) / shares */
+  forwardEps: Amount
+  /** equity attributable to the parent / shares */
+  bookValuePerShare: Amount
 }
 
 export interface CorporateAction {
