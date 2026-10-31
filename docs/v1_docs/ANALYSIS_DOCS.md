@@ -59,7 +59,9 @@ with **Fundamental (All)** (`/screening`, the exchange screening), **Fundamental
 
 The more the database holds, the deeper the analysis: upload the IDX XBRL filings (statements),
 run Screening Data IDX (market data and scorecards), upload the PDF filings and ingest the news
-(Ingestion > PDF Documents (RAG), News (RAG)). Without documents the research agent is skipped (no
+(Ingestion > PDF Documents (RAG), News (RAG)). The text of the uploaded IDX XBRL workbooks is in the vector store too
+(source type `XBRL`, [RAG_DOCS.md](RAG_DOCS.md) section 2b), but the research agent does not search it: its filing
+searches read the financial statement PDFs. Without documents the research agent is skipped (no
 model call) and the agents judge from the statements alone; without market data they have no
 quantitative prior. The report notes every such gap.
 

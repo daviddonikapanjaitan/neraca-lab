@@ -26,8 +26,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class RagRepository {
 
-    /** PDF: an uploaded PDF; NEWS: a news article; XLSX: a document built from uploaded Excel lists (ownership). */
-    public enum SourceType { PDF, NEWS, XLSX }
+    /**
+     * PDF: an uploaded PDF; NEWS: a news article; XLSX: a document built from uploaded Excel lists (ownership); XBRL:
+     * an uploaded IDX XBRL financial statement workbook (.xlsx, Ingestion > IDX XBRL).
+     */
+    public enum SourceType { PDF, NEWS, XLSX, XBRL }
 
     public record Company(long companyId, String exchange, String ticker, String companyName) {
     }
@@ -35,7 +38,8 @@ public class RagRepository {
     /**
      * A document to store; {@code fileId} / {@code fileName} and {@code documentType} for a PDF (null for news),
      * {@code sourceUrl} / {@code publishedAt} for news; an Excel document has the latest workbook as its file, no
-     * type and the date of its latest list as {@code publishedAt}.
+     * type and the date of its latest list as {@code publishedAt}; an XBRL workbook has its file, the type
+     * FINANCIAL_STATEMENT and no pages.
      */
     public record NewDocument(long companyId, SourceType sourceType, CompanyDocumentType documentType, String sourceKey,
                               String title, String sourceName, String sourceUrl, Long fileId, String fileName,
@@ -59,12 +63,19 @@ public class RagRepository {
     }
 
     /**
-     * Documents and chunks stored: PDFs, news and Excel documents of the companies, macro PDFs of the countries.
+     * Documents and chunks stored: PDFs, news, Excel documents and XBRL workbooks of the companies, macro PDFs of the
+     * countries.
      *
      * @param xlsxDocuments the companies' documents built from Excel lists (their holders of 5% or more)
      * @param chunks        every chunk (companies and countries)
+     * @param xbrlDocuments the companies' IDX XBRL financial statement workbooks
      */
-    public record Counts(long pdfDocuments, long newsDocuments, long macroDocuments, long chunks, long xlsxDocuments) {
+    public record Counts(long pdfDocuments, long newsDocuments, long macroDocuments, long chunks, long xlsxDocuments,
+                         long xbrlDocuments) {
+    }
+
+    /** A stored document of a company, as {@link #storedDocument} finds it. */
+    public record StoredDocument(long documentId, int characters, int chunks, String embeddingModel) {
     }
 
     public record Hit(long chunkId, long documentId, String ticker, SourceType sourceType, String title, String sourceUrl,
@@ -119,6 +130,16 @@ public class RagRepository {
                         WHERE company_id = :c AND source_type = :t AND source_key = :k AND chunks > 0""")
                 .param("c", companyId).param("t", type.name()).param("k", sourceKey)
                 .query(Long.class).single() > 0;
+    }
+
+    /** The company's document of the source type and key, when one with chunks is stored. */
+    public Optional<StoredDocument> storedDocument(long companyId, SourceType type, String sourceKey) {
+        return jdbc.sql("""
+                        SELECT document_id, characters, chunks, embedding_model FROM rag_document
+                        WHERE company_id = :c AND source_type = :t AND source_key = :k AND chunks > 0""")
+                .param("c", companyId).param("t", type.name()).param("k", sourceKey)
+                .query((rs, i) -> new StoredDocument(rs.getLong(1), rs.getInt(2), rs.getInt(3), rs.getString(4)))
+                .optional();
     }
 
     /**
@@ -342,8 +363,10 @@ public class RagRepository {
                                (SELECT count(*) FROM rag_document WHERE source_type = 'NEWS'),
                                (SELECT count(*) FROM rag_document WHERE country IS NOT NULL),
                                (SELECT count(*) FROM rag_chunk),
-                               (SELECT count(*) FROM rag_document WHERE source_type = 'XLSX')""")
-                .query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getLong(5)))
+                               (SELECT count(*) FROM rag_document WHERE source_type = 'XLSX'),
+                               (SELECT count(*) FROM rag_document WHERE source_type = 'XBRL')""")
+                .query((rs, i) -> new Counts(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getLong(5),
+                        rs.getLong(6)))
                 .single();
     }
 

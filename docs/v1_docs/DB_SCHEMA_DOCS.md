@@ -40,6 +40,7 @@ foreign key.
 | `V1.0.24__data_BACH_shares.sql`           | BACH's share count after its IPO of 2026-07-08 (615,000,000 new shares at Rp 442, after its only filing, H1 2026): 4,084,430,000 from the listing date and the IPO in `corporate_action`; no-op until BACH is uploaded; also run after every upload |
 | `V1.0.31__data_BNBR_shares.sql`           | BNBR share counts its filings cannot give (five par-value series) and Yahoo Finance gives wrong: 160,057,457,509 from 2023-12-31, 173,416,832,509 from the PMTHMETD of 2024-12-11, 263,336,671,587 from the PMHMETD V of 2026-07-31; the placement and the rights issue in `corporate_action`. Runs before V1.0.6 and after every upload |
 | `V1.0.37__data_RANS_shares.sql`           | RANS share counts its only filing does not give and Yahoo Finance gives wrong: 10,084,250,000 founders' shares at 2025-12-31, 12,609,250,000 from the IPO of 2026-07-10 (2,525,000,000 shares offered) and that corporate action |
+| `V1.0.46__schema_rag_xbrl.sql`            | source type `XBRL` in `rag_document`: the uploaded IDX XBRL workbooks in the RAG vector store, document type `FINANCIAL_STATEMENT`, keyed by the file's SHA-256 ([RAG_DOCS.md](RAG_DOCS.md) section 2b); the checks are in V1.0.29 / V1.0.33, which re-create them first on every start; column comments (section 4.12) |
 | `V1.0.40__schema_dev_context.sql`         | `dev_context`: the development context of Claude Code - issues, fixes, data gaps, decisions, procedures - with an embedding (`vector(1536)`, HNSW) and a full-text vector; API `/api/v1/dev-context` ([DEV_CONTEXT_DOCS.md](DEV_CONTEXT_DOCS.md)) |
 | `V1.0.38__data_ABDA_expenses.sql`         | ABDA FY2021 / FY2022 income statements: the G&A its FY2022 filing tags as interest and finance costs are operating expenses, no interest, operating income = profit before tax (only while the rows hold the tag's figures) |
 | `V1.0.39__data_ACRO_AGAR_AISA_shares.sql` | share counts of ACRO (3,469,138,591 from its IPO of 2024-01-11), AGAR (1,000,000,000) and AISA (9,311,800,000), from KSEI's 1% lists and the listing records: their filings give none and no Yahoo Finance count fits |
@@ -684,12 +685,12 @@ CASCADE`: deleting a company deletes its documents and chunks) or to a country, 
 |                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE`; NULL for a macro document             |
 |                | `country`                      | VARCHAR(10)    | macro document: its country (`ID`); NULL for a company document       |
 |                | `issuer`                       | VARCHAR(100)   | macro document: who published it (Bank Indonesia, IMF, ...)           |
-|                | `document_type`                | VARCHAR(30)    | macro document (required, `ck_rag_document_macro`): `MONETARY_POLICY`, `FINANCIAL_STABILITY`, `FISCAL`, `EXTERNAL_SECTOR`, `ECONOMIC_OUTLOOK`, `STATISTICS`, `DEVELOPMENT_PLAN`, `RESEARCH`, `OTHER` (check) |
-|                | `source_type`                  | VARCHAR(10)    | `PDF` or `NEWS` (check); a macro document is a `PDF`                  |
-|                | `source_key`                   | VARCHAR(1000)  | PDF: SHA-256 of the file; NEWS: the article URL; **unique** per company and type (`uq_rag_document_source`) or per country and type (`uq_rag_document_country_source`, partial) |
-|                | `title`                        | VARCHAR(1000)  | file name without `.pdf`, or the article title                        |
-|                | `source_name`, `source_url`    | VARCHAR        | `PDF upload` / the news site; the article URL (required for `NEWS`, check) |
-|                | `file_id`, `file_name`         | BIGINT FK, VARCHAR(255) | `ingestion_file` of a PDF (required for `PDF`, check)        |
+|                | `document_type`                | VARCHAR(30)    | macro document (required, `ck_rag_document_macro`): `MONETARY_POLICY`, `FINANCIAL_STABILITY`, `FISCAL`, `EXTERNAL_SECTOR`, `ECONOMIC_OUTLOOK`, `STATISTICS`, `DEVELOPMENT_PLAN`, `RESEARCH`, `OTHER` (check); company PDF `FINANCIAL_STATEMENT` / `REGISTRATION`; XBRL workbook `FINANCIAL_STATEMENT` |
+|                | `source_type`                  | VARCHAR(10)    | `PDF`, `NEWS`, `XLSX` (V1.0.33) or `XBRL` (an uploaded IDX XBRL workbook, V1.0.46) (check); a macro document is a `PDF` |
+|                | `source_key`                   | VARCHAR(1000)  | PDF and XBRL: SHA-256 of the file; NEWS: the article URL; XLSX: the ownership document type; **unique** per company and type (`uq_rag_document_source`) or per country and type (`uq_rag_document_country_source`, partial) |
+|                | `title`                        | VARCHAR(1000)  | file name without `.pdf` / `.xlsx`, or the article title              |
+|                | `source_name`, `source_url`    | VARCHAR        | `PDF upload` / `IDX XBRL upload` / the news site; the article URL (required for `NEWS`, check) |
+|                | `file_id`, `file_name`         | BIGINT FK, VARCHAR(255) | `ingestion_file` of a PDF (required for `PDF`, check) or of an XBRL workbook |
 |                | `published_at`                 | TIMESTAMPTZ    | news: publication time; macro PDF: publication date at 00:00 Jakarta (required); company PDF: NULL |
 |                | `pages`, `characters`, `chunks`| INTEGER        | PDF pages; text length; number of chunks (non-negative, check)        |
 |                | `embedding_model`              | VARCHAR(100)   | e.g. `openai/text-embedding-3-small`                                  |
@@ -700,7 +701,7 @@ CASCADE`: deleting a company deletes its documents and chunks) or to a country, 
 |                | `company_id`                   | BIGINT FK      | `company`, `ON DELETE CASCADE` (repeated for filtered search); NULL for a macro document |
 |                | `country`                      | VARCHAR(10)    | the macro document's country (repeated for filtered search)           |
 |                | `chunk_index`                  | INTEGER        | 0-based order; **unique** with `document_id` (`uq_rag_chunk`)         |
-|                | `page_from`, `page_to`         | INTEGER        | PDF pages of the chunk; NULL for news                                 |
+|                | `page_from`, `page_to`         | INTEGER        | PDF pages of the chunk; NULL for news, Excel and XBRL documents       |
 |                | `content`                      | TEXT           | the chunk text (not empty, check)                                     |
 |                | `embedding`                    | `vector(1536)` | pgvector; HNSW index with `vector_cosine_ops` (search by `<=>`)       |
 
@@ -712,7 +713,7 @@ file or URL for the same company) updates its row and replaces all its chunks in
 `V1.0.29__schema_registration.sql` adds the company PDF types to `rag_document.document_type`: `FINANCIAL_STATEMENT`
 (every company PDF stored before; the default) or `REGISTRATION`. `ck_rag_document_company_type`: a company PDF has
 one of the two, a news article none, a macro document a macro type (`ck_rag_document_type` lists all; `V1.0.28`
-lists them too, as it runs first on every start).
+lists them too, as it runs first on every start). An `XBRL` document (V1.0.46) is always a `FINANCIAL_STATEMENT`.
 
 ### 4.12a Monthly registration reports (`V1.0.29__schema_registration.sql`)
 

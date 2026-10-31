@@ -114,6 +114,7 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `INGESTION_WORKERS`      | `5`     | jobs each ingestion queue (prices, RAG, screening data) runs at the same time ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
 | `INGESTION_UPLOAD_WORKERS` | `50`  | financial statement uploads stored at the same time (0 = as `INGESTION_WORKERS`) |
 | `INGESTION_FAST_PATH`    | `true`  | a filing whose every column maps cleanly is stored without the agent ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6) |
+| `INGESTION_RAG_AFTER_UPLOAD` | `true` | every uploaded workbook's text goes into the RAG vector store at the end of its job ([RAG_DOCS.md](RAG_DOCS.md), section 2b) |
 | `DB_POOL_SIZE`, `DB_POOL_MIN_IDLE` | `40`, `5` | the backend's database connections under load / kept when idle |
 | `POSTGRES_MAX_CONNECTIONS` | `200` | PostgreSQL's connection limit (`-c max_connections`; a change recreates the postgres container, the data volume stays) |
 | `JAVA_OPTS`              | `-Xms512m -Xmx4g` | the backend's heap: up to 50 workbooks are read at once |

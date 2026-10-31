@@ -378,7 +378,7 @@ class RagControllerTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(get("/api/v1/rag/documents").param("source", "VIDEO"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.detail").value("Unknown source 'VIDEO'; use PDF, NEWS or XLSX"));
+                .andExpect(jsonPath("$.detail").value("Unknown source 'VIDEO'; use PDF, NEWS, XLSX or XBRL"));
         mvc.perform(get("/api/v1/rag/documents").param("limit", "5").param("offset", "5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").isNumber())

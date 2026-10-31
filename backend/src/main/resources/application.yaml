@@ -80,6 +80,7 @@ spring:
         - classpath:db/V1.0.34__schema_ownership_one_percent.sql # KSEI monthly lists of the shareholders of more than 1% (Companies > Ownership (>=1%))
         - classpath:db/V1.0.36__schema_valuation_ebitda_basis.sql # the EBITDA of EV / EBITDA: TTM, else the full year
         - classpath:db/V1.0.40__schema_dev_context.sql            # development context of Claude Code (RAG)
+        - classpath:db/V1.0.46__schema_rag_xbrl.sql               # IDX XBRL workbooks in the RAG vector store (source type XBRL)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -158,6 +159,11 @@ neracalab:
     # A filing holds no prices, and without prices a company has no market cap and no valuation: when a filing was
     # stored, the company's daily prices are queued too (nothing when they already reach the last completed trading day).
     prices-after-upload: ${INGESTION_PRICES_AFTER_UPLOAD:true}
+    # The text of every uploaded workbook (all sheets) is chunked, embedded and stored in the RAG vector store as a
+    # document of the company (rag_document source type XBRL, document type FINANCIAL_STATEMENT), at the end of the
+    # upload job: as a PDF financial statement on Ingestion > PDF Documents (RAG). A workbook already stored (same file,
+    # same embedding model) is not embedded again; a failure here never changes the upload's outcome.
+    rag-after-upload: ${INGESTION_RAG_AFTER_UPLOAD:true}
     # Full-text extraction: takes over when the standard extraction (the AI agent above) does not store a workbook -
     # it cannot map it ("No balance sheet data"), leaves open items (INCOMPLETE), fails, or runs longer than `after`.
     # The model then decides every value that is not stored yet from the text of the whole workbook (it names the rows,

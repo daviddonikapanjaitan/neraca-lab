@@ -40,7 +40,8 @@ function query(source: RagSourceType, prefix: string, page: number, pageSize: nu
 }
 
 /**
- * What the vector store holds for one source type (PDF, NEWS or XLSX: the companies' ownership documents), newest first and page by page (10 rows, or
+ * What the vector store holds for one source type (PDF, NEWS, XLSX: the companies' ownership documents, or XBRL: the
+ * uploaded financial statement workbooks), newest first and page by page (10 rows, or
  * 5 / 20 / 50, as the jobs table), and a retrieval test: the chunks closest to a question, as the RAG answers will
  * receive them. The ticker box narrows the table to the tickers starting with it.
  */
@@ -77,8 +78,17 @@ export function RagDocumentsCard({
       ? status.stored.pdfDocuments
       : source === "XLSX"
         ? (status.stored.xlsxDocuments ?? list.total)
-        : status.stored.newsDocuments
-  const label = source === "PDF" ? "PDF documents" : source === "XLSX" ? "ownership documents" : "news articles"
+        : source === "XBRL"
+          ? (status.stored.xbrlDocuments ?? list.total)
+          : status.stored.newsDocuments
+  const label =
+    source === "PDF"
+      ? "PDF documents"
+      : source === "XLSX"
+        ? "ownership documents"
+        : source === "XBRL"
+          ? "financial statement workbooks"
+          : "news articles"
   const current = query(source, prefix, page, pageSize)
   const loading = loadedQuery !== current
 
@@ -181,7 +191,7 @@ export function RagDocumentsCard({
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder={
-                source === "PDF"
+                source === "PDF" || source === "XBRL"
                   ? "Test a question, e.g. total revenue 2025"
                   : source === "XLSX"
                     ? "Test a question, e.g. foreign shareholder sold"
@@ -262,7 +272,9 @@ export function RagDocumentsCard({
                   ? "Upload a PDF above. Its chunks will show here once the job is done."
                   : source === "XLSX"
                     ? "Upload an ownership list above. Each stored company of the list gets its document here."
-                    : "Ingest the news of a company above. The stored articles will show here."
+                    : source === "XBRL"
+                      ? "Upload a workbook above. Its text will show here once the upload job is done."
+                      : "Ingest the news of a company above. The stored articles will show here."
               }
             />
           ) : (
@@ -272,9 +284,11 @@ export function RagDocumentsCard({
                   <TableRow>
                     <TableHead className="pl-4">Company</TableHead>
                     <TableHead>{source === "NEWS" ? "Article" : "Document"}</TableHead>
-                    <TableHead className="hidden md:table-cell">
-                      {source === "PDF" ? "Pages" : source === "XLSX" ? "Latest list" : "Published"}
-                    </TableHead>
+                    {source !== "XBRL" && (
+                      <TableHead className="hidden md:table-cell">
+                        {source === "PDF" ? "Pages" : source === "XLSX" ? "Latest list" : "Published"}
+                      </TableHead>
+                    )}
                     <TableHead className="text-right">Chunks</TableHead>
                     <TableHead className="hidden pr-4 text-right lg:table-cell">Stored</TableHead>
                   </TableRow>
@@ -319,9 +333,11 @@ export function RagDocumentsCard({
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="hidden md:table-cell tabular-nums">
-                          {source === "PDF" ? formatNumber(doc.pages, 0) : formatDate(doc.publishedAt)}
-                        </TableCell>
+                        {source !== "XBRL" && (
+                          <TableCell className="hidden md:table-cell tabular-nums">
+                            {source === "PDF" ? formatNumber(doc.pages, 0) : formatDate(doc.publishedAt)}
+                          </TableCell>
+                        )}
                         <TableCell className="text-right tabular-nums">{formatNumber(doc.chunks, 0)}</TableCell>
                         <TableCell className="hidden pr-4 text-right text-xs text-muted-foreground lg:table-cell">
                           {formatTimestamp(doc.updatedAt)}

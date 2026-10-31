@@ -40,7 +40,12 @@ import type {
 
 /** The data of one Ingestion page: each page shows its own card. */
 export type IngestionSectionData =
-  | { section: "xbrl" }
+  | {
+      section: "xbrl"
+      rag: RagStatus
+      /** first page of the uploaded workbooks in the vector store */
+      documents: RagDocumentPage
+    }
   | {
       section: "prices"
       exchanges: Exchange[]
@@ -191,9 +196,20 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
         </div>
       )}
 
-      {(data.section === "rag-pdf" || data.section === "rag-excel" || data.section === "rag-news") && (
+      {(data.section === "xbrl" ||
+        data.section === "rag-pdf" ||
+        data.section === "rag-excel" ||
+        data.section === "rag-news") && (
         <RagDocumentsCard
-          source={data.section === "rag-pdf" ? "PDF" : data.section === "rag-excel" ? "XLSX" : "NEWS"}
+          source={
+            data.section === "xbrl"
+              ? "XBRL"
+              : data.section === "rag-pdf"
+                ? "PDF"
+                : data.section === "rag-excel"
+                  ? "XLSX"
+                  : "NEWS"
+          }
           initial={data.documents}
           status={data.rag}
         />

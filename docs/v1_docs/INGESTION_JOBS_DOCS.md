@@ -58,6 +58,10 @@ curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRT
    the same user, unless its prices already reach the last completed trading day or a price job of the
    company is active (`PricesAfterUpload`; [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md), section 1).
    It appears in the job list like a requested one.
+6. Before the job ends (whatever the statements' outcome), the workbook's text is stored in the RAG vector store as a
+   document of its company (`XbrlRagService`, stage `Embedding the text of ... for the vector store`; the result's
+   `rag`, the stage ending `; vector store: 84 chunks`; a failure never changes the job's status;
+   [RAG_DOCS.md](RAG_DOCS.md), section 2b).
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|

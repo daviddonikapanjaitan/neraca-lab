@@ -8,12 +8,15 @@ import com.neracalab.backend.ingestion.agent.AgentTrace;
 import com.neracalab.backend.ingestion.agent.IngestionAgent;
 import com.neracalab.backend.ingestion.agent.IngestionVerifier;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository.WriteResult;
+import com.neracalab.backend.rag.XbrlRagService;
 
 /**
  * Result of one upload.
  *
  * @param status COMPLETED (everything stored and verified), INCOMPLETE (something is pending or
  *               failed validation; see verification) or FAILED (the agent could not run)
+ * @param rag    the workbook's text in the RAG vector store (written by the upload job after the statements, whatever
+ *               their outcome; never changes it); {@code null} when not written (switched off, the job interrupted)
  */
 public record IngestionResponse(
         String ingestionId,
@@ -32,7 +35,25 @@ public record IngestionResponse(
         List<String> notes,
         Metrics metrics,
         String error,
-        Fallback fallback) {
+        Fallback fallback,
+        XbrlRagService.Result rag) {
+
+    /** Without the vector store part (the upload job adds it, {@link #withRag}). */
+    public IngestionResponse(String ingestionId, Status status, String fileName, Filing filing, Company company,
+                             IngestionAgent.IngestionPlan plan, boolean planFromModel, List<IngestionAgent.Round> rounds,
+                             List<AgentTrace.Step> steps, List<AgentTrace.ToolInvocation> toolCalls,
+                             Map<String, List<WriteResult>> savedStatements, Map<String, List<String>> savedSegments,
+                             IngestionVerifier.Verification verification, List<String> notes, Metrics metrics,
+                             String error, Fallback fallback) {
+        this(ingestionId, status, fileName, filing, company, plan, planFromModel, rounds, steps, toolCalls,
+                savedStatements, savedSegments, verification, notes, metrics, error, fallback, null);
+    }
+
+    /** This result with the workbook's document in the vector store. */
+    public IngestionResponse withRag(XbrlRagService.Result result) {
+        return new IngestionResponse(ingestionId, status, fileName, filing, company, plan, planFromModel, rounds, steps,
+                toolCalls, savedStatements, savedSegments, verification, notes, metrics, error, fallback, result);
+    }
 
     public enum Status { COMPLETED, INCOMPLETE, FAILED }
 

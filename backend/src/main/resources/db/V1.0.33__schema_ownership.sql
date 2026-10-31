@@ -23,9 +23,11 @@
 -- ---------------------------------------------------------------------
 -- rag_document : the Excel documents of a company
 -- ---------------------------------------------------------------------
+-- (XBRL: an IDX XBRL financial statement workbook, V1.0.46; this script runs first on every start, so it must accept
+-- it too)
 ALTER TABLE rag_document
     DROP CONSTRAINT IF EXISTS ck_rag_document_source_type,
-    ADD  CONSTRAINT ck_rag_document_source_type CHECK (source_type IN ('PDF', 'NEWS', 'XLSX'));
+    ADD  CONSTRAINT ck_rag_document_source_type CHECK (source_type IN ('PDF', 'NEWS', 'XLSX', 'XBRL'));
 
 COMMENT ON COLUMN rag_document.source_key IS 'PDF: SHA-256 of the file (one document per file and company or country); NEWS: the article URL; XLSX: the Excel document type (OWNERSHIP_5_PERCENT: one document per company, rebuilt from every stored list).';
 

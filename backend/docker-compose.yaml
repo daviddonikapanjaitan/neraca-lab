@@ -78,6 +78,8 @@ services:
       DB_POOL_SIZE: ${DB_POOL_SIZE:-40}
       # a filing that maps cleanly is stored without the agent (false: always the agent)
       INGESTION_FAST_PATH: ${INGESTION_FAST_PATH:-true}
+      # every uploaded workbook's text goes into the RAG vector store at the end of its job (false: not stored)
+      INGESTION_RAG_AFTER_UPLOAD: ${INGESTION_RAG_AFTER_UPLOAD:-true}
       # true (default): filings of one company are stored one after the other in upload order, not at the same time
       # (a filing in another currency is then always refused against the filings stored before it: ANJT, DEWA)
       INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-true}

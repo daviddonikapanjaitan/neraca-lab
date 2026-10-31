@@ -142,6 +142,7 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.model-call-timeout`| 45s     | a model call taking longer counts as a stalled response and is retried (env `INGESTION_MODEL_CALL_TIMEOUT`) |
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
 | `neracalab.ingestion.prices-after-upload` | true  | queue the company's daily prices when a filing was stored, so that it gets its market caps and valuations (env `INGESTION_PRICES_AFTER_UPLOAD`), section 4 |
+| `neracalab.ingestion.rag-after-upload` | true    | store the text of every uploaded workbook in the RAG vector store at the end of its job (`rag_document` source type `XBRL`; env `INGESTION_RAG_AFTER_UPLOAD`; off in the tests), section 4 and [RAG_DOCS.md](RAG_DOCS.md) section 2b |
 | `neracalab.jobs.upload-workers`         | 50      | uploads stored at the same time (env `INGESTION_UPLOAD_WORKERS`; 0 = as `neracalab.jobs.workers`, 5, which the other queues keep) ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
 | `neracalab.ingestion.fast-path`         | true    | a filing whose every column maps without a failed check or an unclassified line is stored without the agent; the deterministic verification decides, anything open goes to the agent as before (env `INGESTION_FAST_PATH`), section 6 |
 | `neracalab.ingestion.same-company-in-order` | true | filings of one company are stored one after the other in upload order, so a filing in another currency is checked against those stored before it; false: at the same time (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
@@ -662,6 +663,16 @@ failure to queue never changes the upload's outcome. Before, the prices had to b
 (`POST /api/v1/prices/ingestions?exchange=IDX&ticker=...`): DSNG, ELSA, ICBP, JPFA and SIDO had five
 years of statements and share counts and an empty valuation history. Switch off with
 `neracalab.ingestion.prices-after-upload: false`.
+
+**The workbook's text goes into the RAG vector store** (`XbrlRagService`, called by `FinancialStatementQueue` at the
+end of the job, after the statements, whatever their outcome), as a PDF financial statement does on Ingestion > PDF
+Documents (RAG): every sheet (general information, statements, notes), each row with an amount, a date or a label /
+value / English label as one line, chunked per sheet with the sheet's title and value columns in front of every chunk,
+embedded and stored as a document of the company (`rag_document` source type `XBRL`, document type
+`FINANCIAL_STATEMENT`, keyed by the file's SHA-256). The same file again with the same embedding model is not embedded
+again. The outcome is the job result's `rag` and the end of the stage (`; vector store: 84 chunks`); a failure never
+changes the upload's status. Switch off with `neracalab.ingestion.rag-after-upload: false`. Details:
+[RAG_DOCS.md](RAG_DOCS.md), section 2b.
 
 ## 5. Tests
 

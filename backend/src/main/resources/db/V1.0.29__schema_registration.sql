@@ -29,7 +29,8 @@ ALTER TABLE rag_document
 UPDATE rag_document SET document_type = 'FINANCIAL_STATEMENT'
 WHERE company_id IS NOT NULL AND source_type = 'PDF' AND document_type IS NULL;
 
--- a company PDF has a company type, a macro PDF a macro type, a news article none
+-- a company PDF has a company type, a macro PDF a macro type, a news article none; an IDX XBRL workbook (source type
+-- XBRL of V1.0.46: this script runs first on every start, so it must accept it too) is a FINANCIAL_STATEMENT
 ALTER TABLE rag_document
     DROP CONSTRAINT IF EXISTS ck_rag_document_company_type,
     ADD  CONSTRAINT ck_rag_document_company_type
@@ -37,6 +38,7 @@ ALTER TABLE rag_document
                    WHEN company_id IS NULL THEN document_type IS NULL
                                                 OR document_type NOT IN ('FINANCIAL_STATEMENT', 'REGISTRATION')
                    WHEN source_type = 'PDF' THEN document_type IN ('FINANCIAL_STATEMENT', 'REGISTRATION')
+                   WHEN source_type = 'XBRL' THEN document_type = 'FINANCIAL_STATEMENT'
                    ELSE document_type IS NULL
                END);
 

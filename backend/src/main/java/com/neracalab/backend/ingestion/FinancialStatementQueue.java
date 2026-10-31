@@ -37,6 +37,7 @@ import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.job.WorkerThreads;
 import com.neracalab.backend.price.PricesAfterUpload;
+import com.neracalab.backend.rag.XbrlRagService;
 
 /**
  * Asynchronous financial statement uploads. {@link #submit} stores the workbook in
@@ -49,6 +50,10 @@ import com.neracalab.backend.price.PricesAfterUpload;
  * <p>
  * A filing holds no prices, and a company without prices has no valuation: when a filing was stored, the
  * company's daily prices are queued too ({@link PricesAfterUpload}), unless they are already up to date.
+ * <p>
+ * Once the statements are stored (whatever the outcome), the text of the whole workbook is stored in the RAG vector
+ * store as a document of the company ({@link XbrlRagService}, as a PDF financial statement on Ingestion > PDF Documents
+ * (RAG)); its outcome is the job result's {@code rag} and never changes the upload's status.
  * <p>
  * Several workers ({@code neracalab.jobs.upload-workers}, 50): that many filings are stored at the same time.
  * <p>
@@ -88,6 +93,8 @@ public class FinancialStatementQueue implements SmartLifecycle {
     private final IngestionUsageRecorder usage;
     /** Queues the company's prices after a stored filing; {@code null}: not queued. */
     private final PricesAfterUpload pricesAfterUpload;
+    /** Stores the workbook's text in the RAG vector store; {@code null}: not stored. */
+    private final XbrlRagService xbrlRag;
     private final Duration jobTimeout;
     private final boolean sameCompanyInOrder;
     /** Filings a worker may take; with {@link #sameCompanyInOrder} at most one per company. */
@@ -106,29 +113,31 @@ public class FinancialStatementQueue implements SmartLifecycle {
      * @param sameCompanyInOrder store the filings of one company one after the other in upload order instead of
      *                           at the same time
      * @param pricesAfterUpload  queues the daily prices of a company whose filing was stored
+     * @param xbrlRag            stores the workbook's text in the RAG vector store after its statements
      */
     @Autowired
     public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
                                    IngestionErrorRepository errors, IngestionUsageRecorder usage,
                                    @Value("${neracalab.ingestion.job-timeout:5m}") Duration jobTimeout,
                                    @Value("${neracalab.ingestion.same-company-in-order:true}") boolean sameCompanyInOrder,
-                                   JobProperties properties, PricesAfterUpload pricesAfterUpload) {
+                                   JobProperties properties, PricesAfterUpload pricesAfterUpload, XbrlRagService xbrlRag) {
         this.service = service;
         this.files = files;
         this.jobs = jobs;
         this.errors = errors;
         this.usage = usage;
         this.pricesAfterUpload = pricesAfterUpload;
+        this.xbrlRag = xbrlRag;
         this.jobTimeout = jobTimeout;
         this.sameCompanyInOrder = sameCompanyInOrder;
         this.workers = new WorkerThreads("financial-statement-ingestion", properties.uploads(), this::work);
     }
 
-    /** Without the prices of a stored filing's company (tests). */
+    /** Without the prices of a stored filing's company and without the vector store (tests). */
     public FinancialStatementQueue(IngestionService service, IngestionFileRepository files, IngestionJobRepository jobs,
                                    IngestionErrorRepository errors, IngestionUsageRecorder usage, Duration jobTimeout,
                                    boolean sameCompanyInOrder, JobProperties properties) {
-        this(service, files, jobs, errors, usage, jobTimeout, sameCompanyInOrder, properties, null);
+        this(service, files, jobs, errors, usage, jobTimeout, sameCompanyInOrder, properties, null, null);
     }
 
     // ------------------------------------------------------------------ API
@@ -261,10 +270,12 @@ public class FinancialStatementQueue implements SmartLifecycle {
             finish(id, IngestionJobStatus.FAILED, "Interrupted", "Stopped: the application is shutting down", response);
             return;
         }
+        response = withText(task, session, content, ticker, response);
         // the full-text extraction took over: say so, with the columns the model mapped
-        String by = response.fallback() == null ? ""
+        String by = (response.fallback() == null ? ""
                 : response.fallback().columns().isEmpty() ? "; full-text extraction took over"
-                : "; full-text extraction of " + String.join(", ", response.fallback().columns());
+                : "; full-text extraction of " + String.join(", ", response.fallback().columns()))
+                + vectorStore(response.rag());
         IngestionJobStatus status;
         String stage;
         String message;
@@ -295,6 +306,44 @@ public class FinancialStatementQueue implements SmartLifecycle {
         if (status != IngestionJobStatus.FAILED) {
             queuePrices(task, ticker);
         }
+    }
+
+    /**
+     * The workbook's text in the RAG vector store, as a document of the filing's company ({@link XbrlRagService}): after
+     * the statements, so that a new company is stored by then. A failure is logged and returned in the result; it
+     * never changes the upload's outcome.
+     */
+    private IngestionResponse withText(Task task, IngestionSession session, byte[] content, String ticker,
+                                       IngestionResponse response) {
+        if (xbrlRag == null || !xbrlRag.enabled()) {
+            return response;
+        }
+        XbrlRagService.Result rag = xbrlRag.store(task.jobId(), ticker, task.fileId(), task.fileName(),
+                IngestionFileRepository.sha256(content), session.mapper().workbook(),
+                stage -> jobs.progress(task.jobId(), stage, null, null));
+        switch (rag.outcome()) {
+            case STORED -> log.info("upload job {}: {} stored in the vector store ({} chunks of {} sheets)", task.jobId(),
+                    task.fileName(), rag.chunks(), rag.sheets());
+            case FAILED -> log.warn("upload job {}: {} not stored in the vector store: {}", task.jobId(), task.fileName(),
+                    rag.message());
+            default -> log.info("upload job {}: {} vector store: {}{}", task.jobId(), task.fileName(), rag.outcome(),
+                    rag.message() == null ? "" : " (" + rag.message() + ")");
+        }
+        return response.withRag(rag);
+    }
+
+    /** "; vector store: 84 chunks", for the job stage; "" when not written. */
+    static String vectorStore(XbrlRagService.Result rag) {
+        if (rag == null) {
+            return "";
+        }
+        return switch (rag.outcome()) {
+            case STORED -> "; vector store: " + rag.chunks() + (rag.chunks() == 1 ? " chunk" : " chunks");
+            case ALREADY_STORED -> "; vector store: already stored";
+            case NO_COMPANY -> "; vector store: no stored company";
+            case NO_TEXT -> "; vector store: no text";
+            case FAILED -> "; vector store: failed";
+        };
     }
 
     /**

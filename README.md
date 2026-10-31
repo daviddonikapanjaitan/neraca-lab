@@ -151,6 +151,7 @@ neraca_lab/
 │               ├── V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql  (wrong par values, RMKE's split, share issues)
 │               ├── V1.0.45__data_KOIN_HILL_shares.sql  (KOIN, HILL, FLMC counts from share capital and KSEI)
 │               ├── V1.0.40__schema_dev_context.sql  (dev_context: the development context of Claude Code, with embeddings)
+│               ├── V1.0.46__schema_rag_xbrl.sql  (source type XBRL: the uploaded IDX XBRL workbooks in the RAG vector store)
 │               ├── V1.0.6__data_metrics_valuation.sql
 │               └── V1.0.26__data_markets_macro.sql (catalog: 35 instruments, 25 macro series)
 ├── frontend/                    Next.js web app (login, companies, screening, ingestion, admin center, profile)
@@ -347,6 +348,16 @@ history for a new company, else the missing days; nothing when they are up to da
 ends with the company's valuations. Every ingestion (uploads and prices) records its progress and the
 user who started it in `ingestion_job`; `GET /api/v1/ingestions` lists them, `GET /api/v1/ingestions/{id}` returns one
 with its result and `GET /api/v1/ingestions/{id}/file` downloads the uploaded workbook. Details: [`docs/v1_docs/INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md).
+
+At the end of every upload job the **workbook's text goes into the RAG vector store**, as a PDF financial statement
+does on PDF Documents (RAG): every sheet (general information, statements, notes) as lines of label | amounts |
+English label, chunked per sheet with the sheet's title and value columns in front of each chunk, embedded and stored
+as a document of the company (`rag_document` source type `XBRL`, document type `FINANCIAL_STATEMENT`, one per file).
+The IDX XBRL page lists them with a search test (`GET /api/v1/rag/search?source=XBRL&ticker=HRTA&q=...`); the job
+detail shows the chunks stored. A failure there never changes the upload's outcome; the same file again is not
+embedded again; `neracalab.ingestion.rag-after-upload: false` switches it off. The workbooks uploaded before were
+stored once by a Python script that rebuilt the same text and chunks. Details:
+[`docs/v1_docs/RAG_DOCS.md`](docs/v1_docs/RAG_DOCS.md), section 2b.
 
 When the standard extraction does not store a workbook - it cannot map it ("No balance sheet data"), a
 statement fails a validation (INCOMPLETE), it fails, or it runs longer than 3 minutes - the **full-text
@@ -606,6 +617,7 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 | `neracalab.jobs.workers` / `INGESTION_WORKERS`        | `5`                         | jobs each ingestion queue (prices, RAG, screening data) runs at the same time |
 | `neracalab.jobs.upload-workers` / `INGESTION_UPLOAD_WORKERS` | `50`                 | financial statement uploads stored at the same time (0 = as `INGESTION_WORKERS`) |
 | `neracalab.ingestion.fast-path` / `INGESTION_FAST_PATH` | `true`                    | a filing whose every column maps cleanly is stored without the agent |
+| `neracalab.ingestion.rag-after-upload` / `INGESTION_RAG_AFTER_UPLOAD` | `true`      | every uploaded workbook's text goes into the RAG vector store (source type XBRL) at the end of its job |
 | `spring.datasource.hikari.maximum-pool-size` / `DB_POOL_SIZE` | `40`               | the backend's database connections under load (PostgreSQL `max_connections` 200: `POSTGRES_MAX_CONNECTIONS`) |
 | `neracalab.prices.schedule.cron`                      | `0 30 17 * * MON-FRI` (WIB) |                                                     |
 | `neracalab.markets.world-bank.file-url` / `WORLD_BANK_PINK_SHEET_URL` | empty     | the Pink Sheet workbook (coal, LNG, nickel, tin, rubber, urea, DAP, potash); empty = the link on the World Bank Commodity Markets page |
@@ -618,7 +630,8 @@ limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTI
 
 ## RAG vector store (PDF documents, news and macro documents)
 
-Two Ingestion pages fill a pgvector store that the AI features can search by meaning; every
+The Ingestion pages below fill a pgvector store (and every `.xlsx` upload of IDX XBRL adds its workbook's text, see
+[Uploading financial statements](#uploading-financial-statements-ai-ingestion)) that the AI features can search by meaning; every
 document is linked to its company (`rag_document.company_id` -> `company`) or, a macro document, to
 its country (`rag_document.country`):
 
@@ -633,11 +646,17 @@ its country (`rag_document.country`):
 - **News (RAG)**: choose an IDX company and a date range (this month, last 7 / 30 days, previous
   month or custom, Jakarta time, up to 366 days). Articles from EmitenNews, Investor.id, IDX Channel
   and Pasardana published in the range are read and stored; articles already stored are skipped.
+- **IDX XBRL**: every uploaded financial statement workbook is stored by its upload job (source type `XBRL`, document
+  type `FINANCIAL_STATEMENT`): all sheets as lines of label | amounts | English label, chunked per sheet with the
+  sheet's title and value columns in front of each chunk. The page lists them under the upload card with a search
+  test. 3,128 workbooks of 625 companies (346,413 chunks) were stored on 2026-11-01, the uploads before the feature
+  included.
 
 ```bash
 curl -H "$AUTH" -F file=@data/IDX_XBRL/HRTA/pdf/FinancialStatement-2025-Tahunan-HRTA.pdf -F ticker=HRTA      http://localhost:8080/api/v1/rag/pdf                                         # queue a PDF
 curl -H "$AUTH" -X POST "http://localhost:8080/api/v1/rag/news?ticker=HRTA&from=2026-10-01&to=2026-10-08"
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?ticker=HRTA&q=gold%20sales%202025"   # closest chunks
+curl -H "$AUTH" "http://localhost:8080/api/v1/rag/search?source=XBRL&ticker=HRTA&q=revenue%202026"  # of the workbooks
 curl -H "$AUTH" -F file=@Monetary-Policy-Review-August-2026.pdf -F country=ID -F documentType=MONETARY_POLICY \
      -F publishedOn=2026-08-20 -F issuer="Bank Indonesia" http://localhost:8080/api/v1/rag/macro/pdf     # a macro PDF
 curl -H "$AUTH" "http://localhost:8080/api/v1/rag/macro/search?country=ID&q=rupiah%20stabilisation"  # its chunks
@@ -998,7 +1017,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 886 tests
+(cd backend && ./mvnw test)                      # 902 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -1069,7 +1088,7 @@ reflection critic, synthesis rules), `FundamentalRepositoryTest` and `ScreeningC
 RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PDF), `NewsCollectorTest`
 (date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, macro documents of a country by publication date, rolled back)
 and `RagControllerTest` (a company PDF and a macro PDF of Indonesia through the worker into the store with stub
-embeddings, validation, the United States and China not available yet, permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; see `docs/v1_docs/RAG_DOCS.md`, section 7.
+embeddings, validation, the United States and China not available yet, permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; `XbrlDocumentTextTest`, `XbrlRagServiceTest` and `FinancialStatementQueueWorkersTest` the uploaded workbooks in the vector store (HRTA FY2025's sheets, headings, rows and chunks; stored as an XBRL financial statement, listed and searched apart from the ownership documents, not embedded twice, nothing stored for an unknown company or a failing provider; the upload job's outcome never changed by it); see `docs/v1_docs/RAG_DOCS.md`, section 7.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
