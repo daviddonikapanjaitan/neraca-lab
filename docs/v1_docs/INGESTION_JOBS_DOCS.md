@@ -58,6 +58,10 @@ curl -H "$AUTH" -F "file=@data/IDX_XBRL/HRTA/xlsx/FinancialStatement-2026-II-HRT
    the same user, unless its prices already reach the last completed trading day or a price job of the
    company is active (`PricesAfterUpload`; [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md), section 1).
    It appears in the job list like a requested one.
+6. Before the job ends (whatever the statements' outcome), the workbook's text is stored in the RAG vector store as a
+   document of its company (`XbrlRagService`, stage `Embedding the text of ... for the vector store`; the result's
+   `rag`, the stage ending `; vector store: 84 chunks`; a failure never changes the job's status;
+   [RAG_DOCS.md](RAG_DOCS.md), section 2b).
 
 | HTTP | Meaning                                                                         |
 |------|---------------------------------------------------------------------------------|
@@ -203,9 +207,29 @@ that many of its jobs run at the same time and the others wait as QUEUED. To run
 `workers: 6` under `neracalab.jobs` in `application.yaml` (or `INGESTION_WORKERS=6` in `backend/.env`)
 and restart the backend.
 
+The financial statement upload queue has its own number, `neracalab.jobs.upload-workers` (env
+`INGESTION_UPLOAD_WORKERS`, **50** since 2026-10-31; 0 = as `workers`). An upload mostly waits on model calls, and
+since 2026-10-31 its database work is short: a filing that maps cleanly is stored without the agent (the fast path,
+[AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6), and an upload recalculates only its own company's derived
+data (`IngestionRepository.refreshDerivedData(companyId)`, under a second, beside other companies) instead of the
+whole `V1.0.6` script for every company (10.8 s, one at a time for all uploads). What 50 workers need, set in
+`application.yaml` and `docker-compose.yaml`:
+
+| Setting | Value | Why |
+|---|---|---|
+| `INGESTION_UPLOAD_WORKERS` | `50` | uploads stored at the same time |
+| `DB_POOL_SIZE` (`spring.datasource.hikari.maximum-pool-size`) | `40` | connections under load; 5 kept when idle (`DB_POOL_MIN_IDLE`), each released after 60 s |
+| `POSTGRES_MAX_CONNECTIONS` (postgres `-c max_connections`) | `200` | the backend's pool beside the test suite's contexts (5 each) and the tools |
+| `JAVA_OPTS` | `-Xms512m -Xmx4g` | up to 50 workbooks in memory at once (29 at once grew the heap to 3 GB) |
+| `INGESTION_FAST_PATH` | `true` | a cleanly mapped filing needs no agent (`false`: always the agent) |
+
+The share counts an upload asks Yahoo Finance for (when its filing states none) are kept per company for 6 hours
+(`WebShareCounts`): Yahoo is asked one request at a time with a 1 - 2 s pause, shared with the price ingestion, and a
+company's filings arrive together.
+
 | Queue (job type)                              | Runs at the same time                     | Still one after the other                                                                 |
 |-----------------------------------------------|-------------------------------------------|-------------------------------------------------------------------------------------------|
-| Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings, also several of one company | the write steps of filings of one company (never two at the same moment); the recalculation of the derived data |
+| Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings (`upload-workers`, 50), one company's in upload order | the write steps of filings of one company (never two at the same moment); the share scripts after each upload (milliseconds); the requests to Yahoo Finance for share counts |
 | Prices (`PRICE`)                              | different companies (one job per company) | the requests to the provider: one at a time with the 1-2 s pause; an HTTP 429 pauses every worker |
 | RAG (`RAG_PDF`, `RAG_NEWS`)                   | different documents / companies           | the requests to one news site                                                             |
 | Screening data (`FUNDAMENTALS`)               | different exchanges (one run per exchange) | the requests to Yahoo Finance                                                            |
@@ -220,9 +244,12 @@ differ from storing them one by one: a job may end `INCOMPLETE` because it verif
 period's own filing was between two of its steps (revenue already replaced, segments not yet): upload
 that file again.
 
-`neracalab.ingestion.same-company-in-order=true` (env `INGESTION_SAME_COMPANY_IN_ORDER`) stores the
-filings of one company one after the other in upload order instead (other companies still run beside
-them); the waiting ones stay `QUEUED`.
+`neracalab.ingestion.same-company-in-order=true` (env `INGESTION_SAME_COMPANY_IN_ORDER`, the default since
+2026-10-31) stores the filings of one company one after the other in upload order (other companies still run
+beside them); the waiting ones stay `QUEUED`. With `false` they run at the same time: their writes never overlap,
+but each filing passes the currency check (`IngestionService.currencyConflict`, when its job opens the workbook)
+before any of them is stored - ANJT's FY2025 filing in USD, uploaded with its H1 / 9M 2026 filings in IDR, was
+stored beside them, DEWA's FY2022 filing in USD beside FY2023 in IDR.
 
 More workers therefore store more uploads and documents at the same time; they do not send requests
 to Yahoo Finance or a news site faster. Screening runs and analyses are not ingestion jobs: each of
@@ -231,8 +258,10 @@ those queues keeps one worker.
 The queues are in memory. At startup, before the web server accepts requests,
 `IngestionJobRecovery` marks every job still QUEUED / RUNNING / WAITING_RATE_LIMIT as `FAILED`
 (`stage: Interrupted`). Submit it again; an uploaded file is not stored twice. The database is meant
-for one backend instance: a second instance (or a test run) on the same database also fails the jobs
-the first one is still running.
+for one backend instance: a second instance on the same database also fails the jobs the first one is
+still running. The tests switch it off (`neracalab.jobs.recover-on-start=false` in
+`src/test/resources/application.properties`, since 2026-10-31: a suite run had failed 170 uploads Hermes had just
+queued; the running backend still worked through them from memory, so their rows went FAILED -> RUNNING -> done).
 
 ## 5. Tables (`V1.0.7__schema_ingestion.sql`, `V1.0.9__schema_ingestion_created_by.sql`, `V1.0.18__schema_ingestion_error.sql`, `V1.0.19__schema_ingestion_cost.sql`)
 

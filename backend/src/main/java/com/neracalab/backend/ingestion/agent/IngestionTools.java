@@ -24,6 +24,7 @@ import com.neracalab.backend.ingestion.mapping.StatementColumn;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository.CompanyRow;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository.SegmentRow;
+import com.neracalab.backend.ingestion.persistence.IngestionRepository.StoredPeriod;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository.WriteResult;
 
 /**
@@ -322,6 +323,9 @@ public class IngestionTools {
             for (MappedStatement s : statements) {
                 writes.add(repository.writeStatement(company.companyId(), periodId, s, current || own, storedByOtherFiling));
             }
+            if (current) {
+                removeBreakdownOfAnotherRevenue(company.companyId(), period, periodId);
+            }
             // a split detected from another filing of the company: this column's figures of before it are adjusted too
             repository.applyDetectedSplits(company.companyId()).forEach(session::note);
             session.statementsSaved(column, writes);
@@ -329,6 +333,35 @@ public class IngestionTools {
                     : own ? "REFRESH (this filing wrote the period)" : "FILL GAPS (comparative)",
                     writes, "Saved. Remaining work is listed by verifyStoredData.");
         });
+    }
+
+    /**
+     * How far a revenue breakdown may be from the period's revenue and still describe it: two units of the coarsest
+     * rounding of IDX filings (millions), as a breakdown another filing gives in millions beside a revenue in full
+     * rupiah (INPP FY2024: 1,309,662 million in its FY2025 filing beside its own 1,309,661,867,481).
+     */
+    static final BigDecimal BREAKDOWN_SLACK = new BigDecimal("2000000");
+
+    /** True when a breakdown adding up to {@code breakdown} is one of {@code revenue} (or no revenue is stored). */
+    static boolean describes(BigDecimal breakdown, BigDecimal revenue) {
+        return revenue == null || breakdown.subtract(revenue).abs().compareTo(BREAKDOWN_SLACK) < 0;
+    }
+
+    /**
+     * A period's own filing replaces its revenue: a stored breakdown that no longer adds up to it is another filing's
+     * breakdown of a restated revenue, filled in while the period had none (BHIT FY2024: its FY2025 filing restates the
+     * revenue 15,226,314 million as 15,139,665 and splits that into ten lines; uploaded before the FY2024 filing, the
+     * ten lines stayed beside the FY2024 filing's own 15,226,314; errors 1468, 1471). It is removed, so a period never
+     * shows a revenue with the breakdown of another; a breakdown of the filing itself is saved after this
+     * ({@link #saveRevenueSegments}) and the comparative never fills it again.
+     */
+    private void removeBreakdownOfAnotherRevenue(long companyId, PeriodRef period, long periodId) {
+        repository.storedPeriod(companyId, period)
+                .filter(p -> p.segments() > 0 && p.revenue() != null && !describes(p.segmentRevenue(), p.revenue()))
+                .ifPresent(p -> session.note(period.key() + ": the stored revenue breakdown "
+                        + p.segmentRevenue().toPlainString() + " (" + String.join(", ", repository.removeSegmentRevenue(periodId))
+                        + ") is not one of this filing's revenue " + p.revenue().toPlainString()
+                        + " (another filing's restated revenue): removed"));
     }
 
     public record SegmentNaming(
@@ -404,6 +437,21 @@ public class IngestionTools {
                 session.segmentsSaved(column, saved);
                 return new SegmentSaveResult(column, extraction.period().key(), saved, reused, removed);
             }
+            // a comparative breakdown of a revenue the filing restated is not one of the period's own revenue (BMHS
+            // FY2023: its FY2024 filing restates the revenue 1,287,690,839,110 as 1,488,197,483,371 and splits that;
+            // error 1480): the period keeps no breakdown rather than one of another revenue
+            BigDecimal storedRevenue = current ? null
+                    : repository.storedPeriod(company.companyId(), extraction.period()).map(StoredPeriod::revenue).orElse(null);
+            BigDecimal total = extraction.lines().stream().map(SegmentExtraction.SegmentLine::revenue)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (!describes(total, storedRevenue)) {
+                for (SegmentExtraction.SegmentLine line : extraction.lines()) {
+                    saved.add(line.name() + " KEPT_OUT (the breakdown adds up to " + total.toPlainString()
+                            + ", the filing's restated revenue; the period's stored revenue is " + storedRevenue.toPlainString() + ")");
+                }
+                session.segmentsSaved(column, saved);
+                return new SegmentSaveResult(column, extraction.period().key(), saved, reused, removed);
+            }
             List<Long> segmentIds = new ArrayList<>();
             for (SegmentExtraction.SegmentLine line : extraction.lines()) {
                 SegmentNaming naming = byName.get(line.name());
@@ -467,7 +515,7 @@ public class IngestionTools {
     public RefreshResult refreshDerivedData() {
         return locked(() -> {
             CompanyRow company = requireCompany();
-            repository.refreshDerivedData();
+            repository.refreshDerivedData(company.companyId());
             session.derivedRefreshed();
             return new RefreshResult(true, repository.derivedCounts(company.companyId()));
         });

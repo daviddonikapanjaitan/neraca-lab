@@ -23,7 +23,11 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.neracalab.backend.ingestion.mapping.MappedStatement;
+import com.neracalab.backend.ingestion.mapping.SegmentExtraction;
+import com.neracalab.backend.ingestion.mapping.StatementColumn;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
+import com.neracalab.backend.ingestion.persistence.IngestionRepository.SegmentRow;
 import com.openai.errors.OpenAIIoException;
 import com.openai.errors.OpenAIServiceException;
 
@@ -62,6 +66,8 @@ public class IngestionAgent {
     private final boolean reasoning;
     private final java.time.Duration callTimeout;
     private final List<String> providerIgnore;
+    /** {@code neracalab.ingestion.fast-path}: store a filing whose every column maps cleanly without the agent. */
+    private final boolean fastPath;
 
     /**
      * @param model the configured chat model ({@code spring.ai.openai.chat.model}, env {@code OPENAI_MODEL}).
@@ -96,16 +102,31 @@ public class IngestionAgent {
      *                       so a call routed to it cost a minute and a retry - two in a row most of the 3 minutes
      *                       of an upload. Sent as {@code "provider": {"ignore": [...]}}; empty: no restriction.
      */
+    public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
+                          AgentProperties properties, JsonMapper json, String model, boolean reasoning,
+                          java.time.Duration callTimeout, List<String> providerIgnore) {
+        this(chatModel, repository, verifier, properties, json, model, reasoning, callTimeout, providerIgnore, null, false);
+    }
+
+    /**
+     * @param routing  sends the DeepSeek calls to OpenCode Go when it is configured ({@code null}: all to OpenRouter)
+     * @param fastPath {@code neracalab.ingestion.fast-path}: a filing whose every column maps without a failed check or
+     *                 an unclassified line is stored without the agent ({@link #fastPath}); off in the constructors
+     *                 above, which the agent's own tests use
+     */
     @org.springframework.beans.factory.annotation.Autowired
     public IngestionAgent(ChatModel chatModel, IngestionRepository repository, IngestionVerifier verifier,
                           AgentProperties properties, JsonMapper json,
                           @Value("${spring.ai.openai.chat.model}") String model,
                           @Value("${neracalab.ingestion.model-reasoning:false}") boolean reasoning,
                           @Value("${neracalab.ingestion.model-call-timeout:45s}") java.time.Duration callTimeout,
-                          @Value("${neracalab.ingestion.provider-ignore:OpenInference}") List<String> providerIgnore) {
+                          @Value("${neracalab.ingestion.provider-ignore:OpenInference}") List<String> providerIgnore,
+                          com.neracalab.backend.llm.OpenCodeGoRouting routing,
+                          @Value("${neracalab.ingestion.fast-path:true}") boolean fastPath) {
+        this.fastPath = fastPath;
         this.providerIgnore = providerIgnore == null ? List.of()
                 : providerIgnore.stream().filter(p -> p != null && !p.isBlank()).map(String::trim).toList();
-        this.chatModel = chatModel;
+        this.chatModel = routing == null ? chatModel : routing.route(chatModel);
         this.repository = repository;
         this.verifier = verifier;
         this.properties = properties;
@@ -158,6 +179,11 @@ public class IngestionAgent {
         Map<String, ToolCallback> catalog = new LinkedHashMap<>();
         for (ToolCallback cb : ToolCallbacks.from(tools)) {
             catalog.put(cb.getToolDefinition().name(), cb);
+        }
+        // ---- 0. Fast path: a filing that maps cleanly needs no agent
+        Outcome fast = fastPath(session, tools, trace);
+        if (fast != null) {
+            return fast;
         }
         String overview = toJson(tools.getFilingOverview());
 
@@ -239,12 +265,125 @@ public class IngestionAgent {
 
         // ---- safety net: derived data must reflect the final state, whatever the model did
         trace.deadline().check("the final refresh and verification");
-        if (session.hasWrites() && !session.isDerivedCurrent()) {
-            repository.refreshDerivedData();
+        if (session.hasWrites() && !session.isDerivedCurrent() && session.company().isPresent()) {
+            repository.refreshDerivedData(session.company().get().companyId());
             session.derivedRefreshed();
             session.note("Derived data was refreshed by the safety net (the agent did not refresh after its last save)");
         }
         return new Outcome(plan, planFromModel, rounds, trace, verifier.verify(session), session.notes());
+    }
+
+    // ------------------------------------------------------------------ fast path
+
+    /**
+     * The fast path. 85% of the 1,766 workbooks of 2026-10-31 map every column without a failed check or an
+     * unclassified income line (the rest: 217 templates the model maps by design, 37 with a failed check, 12 with lines
+     * to classify, 3 with a breakdown that does not reconcile). For those the agent's 6 - 12 model calls (about 41 s of
+     * a 60 s upload) only choose the tools in the order {@link #defaultPlan} gives: the same steps run here without
+     * it ({@link DeterministicFinisher}, through the agent's own tools, so every validation and lock applies), and the
+     * company's new revenue segments get their English names from one model call. The deterministic verification
+     * decides: complete, the upload is done; anything open, the agent continues from what was saved (saves are
+     * idempotent), and after it the full-text extraction as before. {@code null}: not taken.
+     */
+    private Outcome fastPath(IngestionSession session, IngestionTools tools, AgentTrace trace) {
+        if (!fastPath || !mapsCleanly(session)) {
+            return null;
+        }
+        Map<String, IngestionTools.SegmentNaming> named = segmentNames(session, trace);
+        List<String> steps = DeterministicFinisher.finish(tools, session, repository, trace.deadline(), named);
+        trace.deadline().check("verifying the stored data");
+        IngestionVerifier.Verification verification = verifier.verify(session);
+        if (!verification.complete()) {
+            session.note("Fast path: every column mapped cleanly, but the verification left open items (pending "
+                    + verification.pending() + ", problems " + verification.problems() + "); the agent continues");
+            log.info("fast path left open items: {} {}; the agent continues", verification.pending(), verification.problems());
+            return null;
+        }
+        session.note("Stored by the fast path without the agent: every column mapped and passed its checks, so the "
+                + "standard steps ran deterministically (" + String.join("; ", steps) + ")");
+        log.info("fast path: stored {} {} without the agent", session.info().ticker(), session.info().current().key());
+        Round round = new Round(1, 0, "(fast path: stored without the agent)", verification, new Reflection(true,
+                "Fast path: every column mapped cleanly and the deterministic verification found nothing open",
+                List.of(), List.of()));
+        return new Outcome(defaultPlan(), false, List.of(round), trace, verification, session.notes());
+    }
+
+    /**
+     * Whether every column of the filing maps without a failed check or an unclassified income line, in a template the
+     * rule-based extraction reads (not one the model decides by design): nothing is left for the agent to judge.
+     */
+    static boolean mapsCleanly(IngestionSession session) {
+        if (session.mapper().decidedByModel() || !session.mapper().templateProblems().isEmpty()) {
+            return false;
+        }
+        for (StatementColumn column : session.mapper().columns()) {
+            for (MappedStatement statement : session.statements(column)) {
+                if (statement.hasErrors() || !statement.unclassified().isEmpty()) {
+                    return false;       // a judgement the agent makes: classify a line, report a failed check
+                }
+            }
+        }
+        return true;
+    }
+
+    /** The model's answer for the company's new segments. */
+    public record SegmentNames(List<IngestionTools.SegmentNaming> segments) {
+    }
+
+    /**
+     * English names (and, for a residual-slot line, OTHER where it is not revenue from customers) of the revenue
+     * segments the company does not have yet - the only judgement a cleanly mapped filing needs. One model call, none
+     * when every segment is known; when it fails the filed names are used, as {@link DeterministicFinisher} does.
+     */
+    private Map<String, IngestionTools.SegmentNaming> segmentNames(IngestionSession session, AgentTrace trace) {
+        java.util.Set<String> known = session.company().or(() -> repository.findCompany(session.info().ticker()))
+                .map(c -> repository.segments(c.companyId()).stream().map(SegmentRow::segmentName)
+                        .collect(java.util.stream.Collectors.toSet()))
+                .orElse(java.util.Set.of());
+        Map<String, SegmentExtraction.SegmentLine> lines = new LinkedHashMap<>();
+        for (StatementColumn column : session.mapper().columns()) {
+            session.segments(column).filter(e -> !e.hasErrors()).ifPresent(e -> e.lines().forEach(l -> {
+                if (!known.contains(l.name())) {
+                    lines.putIfAbsent(l.name(), l);
+                }
+            }));
+        }
+        if (lines.isEmpty()) {
+            return Map.of();
+        }
+        List<Map<String, Object>> asked = lines.values().stream().map(l -> {
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("segmentName", l.name());
+            line.put("filingType", l.filingType());
+            line.put("residualSlot", l.residualSlot());
+            return line;
+        }).toList();
+        BeanOutputConverter<SegmentNames> converter = new BeanOutputConverter<>(SegmentNames.class);
+        Prompt prompt = new Prompt(List.of(
+                new SystemMessage(Prompts.SEGMENT_NAMER),
+                new UserMessage("Company: " + session.info().legalName() + " (" + session.info().ticker() + ")\n"
+                        + "Revenue segments:\n" + toJson(asked) + "\n\n" + converter.getFormat())),
+                options().build());
+        try {
+            trace.stage(ModelCallListener.SEGMENT_NAMES);
+            SegmentNames answer = converter.convert(call(prompt, trace).getResult().getOutput().getText());
+            Map<String, IngestionTools.SegmentNaming> named = new LinkedHashMap<>();
+            if (answer != null && answer.segments() != null) {
+                for (IngestionTools.SegmentNaming n : answer.segments()) {
+                    if (n != null && n.segmentName() != null && lines.containsKey(n.segmentName())) {
+                        named.put(n.segmentName(), n);
+                    }
+                }
+            }
+            return named;
+        } catch (JobDeadline.JobTimeoutException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            log.warn("segment names not available: {}", e.getMessage());
+            session.note("The English segment names could not be asked (" + ToolExecutor.rootMessage(e)
+                    + "); the filed names are used");
+            return Map.of();
+        }
     }
 
     // ------------------------------------------------------------------ plan

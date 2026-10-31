@@ -104,7 +104,7 @@ upper-cased like at ingestion (`Tickers.normalize`).
 | `shareSnapshots[]`                                                 | share counts, most recent first                                                      | `share_snapshot`                                                             |
 | `latestPrice`                                                      | last trading day (OHLCV); `null` without prices                                      | `price_daily`                                                                |
 | `latestMarketSnapshot`                                             | last market cap / enterprise value; `null` without prices                            | `market_snapshot`                                                            |
-| `valuations[]`                                                     | valuation snapshots, most recent first, with the `period` whose TTM figures they use | `valuation_snapshot`                                                         |
+| `valuations[]`                                                     | valuation snapshots, most recent first, with the `period` whose TTM figures they use; `forwardEps` (the period's profit to the parent made a year: Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, / shares) and `bookValuePerShare` (equity attributable to the parent / shares), both of that period, with its share count, as EPS TTM | `valuation_snapshot`, `v_key_metrics` (`net_income_to_parent_annualized`, `book_value_per_share`) |
 | `corporateActions[]`                                               | most recent first                                                                    | `corporate_action`                                                           |
 
 Shortened example:

@@ -259,6 +259,10 @@ export interface Valuation {
   earningsYield: Amount
   quoteCurrency: string | null
   quotePrice: Amount
+  /** the period's profit to the parent made a year (Q1 x 4, H1 x 2, 9M x 4/3, FY x 1) / shares */
+  forwardEps: Amount
+  /** equity attributable to the parent / shares */
+  bookValuePerShare: Amount
 }
 
 export interface CorporateAction {
@@ -300,8 +304,11 @@ export type IngestionJobType =
   | "TECHNICAL_SCREENING"
   | "RAG_XLSX"
 
-/** PDF: an uploaded PDF; NEWS: a news article; XLSX: a company's document built from Excel lists (its ownership) */
-export type RagSourceType = "PDF" | "NEWS" | "XLSX"
+/**
+ * PDF: an uploaded PDF; NEWS: a news article; XLSX: a company's document built from Excel lists (its ownership); XBRL:
+ * an uploaded IDX XBRL financial statement workbook (.xlsx, Ingestion > IDX XBRL)
+ */
+export type RagSourceType = "PDF" | "NEWS" | "XLSX" | "XBRL"
 
 /**
  * What a PDF of a company is (Ingestion > PDF Documents (RAG)): a financial statement (the default) or a monthly
@@ -329,9 +336,17 @@ export interface RagStatus {
   pending: number
   /**
    * pdfDocuments: of the companies; macroDocuments: of the countries; xlsxDocuments: the companies' ownership
-   * documents (KSEI lists of the shareholders of more than 5%); chunks: all
+   * documents (KSEI lists of the shareholders of more than 5%); xbrlDocuments: the companies' IDX XBRL financial
+   * statement workbooks; chunks: all
    */
-  stored: { pdfDocuments: number; newsDocuments: number; macroDocuments: number; chunks: number; xlsxDocuments?: number }
+  stored: {
+    pdfDocuments: number
+    newsDocuments: number
+    macroDocuments: number
+    chunks: number
+    xlsxDocuments?: number
+    xbrlDocuments?: number
+  }
   /** the countries of the macro documents (only the available ones take uploads) */
   macroCountries: MacroDocumentCountry[]
   macroDocumentTypes: MacroDocumentTypeOption[]

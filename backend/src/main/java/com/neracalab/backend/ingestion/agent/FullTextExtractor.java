@@ -167,6 +167,13 @@ public class FullTextExtractor {
      */
     private static final String LEFT_EMPTY = "; the field is left empty";
 
+    /**
+     * Rows of a General taxonomy profit or loss that are never revenue (the field definition says so): a revenue the
+     * model makes of these alone is not stored.
+     */
+    private static final Set<String> NOT_REVENUE = Set.of("Finance income", "Other income", "Other gains (losses)",
+            "Dividends income");
+
     /** Fields a profit or loss by nature does not have; left empty by the model, a value stored before is cleared. */
     private static final List<String> BY_FUNCTION_ONLY = List.of("cost_of_revenue", "gross_profit");
 
@@ -252,8 +259,8 @@ public class FullTextExtractor {
         IngestionTools tools = new IngestionTools(session, repository, verifier);
         List<String> steps = DeterministicFinisher.finish(tools, session, repository, session.deadline());
         session.deadline().check("the final refresh and verification");
-        if (session.hasWrites() && !session.isDerivedCurrent()) {
-            repository.refreshDerivedData();
+        if (session.hasWrites() && !session.isDerivedCurrent() && session.company().isPresent()) {
+            repository.refreshDerivedData(session.company().get().companyId());
             session.derivedRefreshed();
         }
         return new Result(report, steps, verifier.verify(session), trace);
@@ -420,6 +427,8 @@ public class FullTextExtractor {
         // the model's terms of each stored statement, and the rows whose reversed sign would reconcile it
         Map<Target, Map<String, List<Term>>> termsOf = new LinkedHashMap<>();
         Map<Target, List<Term>> reversals = new LinkedHashMap<>();
+        // and the rows without which an insurer's comparative reconciles
+        Map<Target, List<Term>> stales = new LinkedHashMap<>();
         List<String> errors = new ArrayList<>();
         for (int round = 1; round <= properties.rounds(); round++) {
             trace.deadline().check("the full-text extraction's model call");
@@ -453,6 +462,7 @@ public class FullTextExtractor {
                 List<String> issues = new ArrayList<>();
                 termsOf.remove(target);
                 reversals.remove(target);
+                stales.remove(target);
                 if (mapping.adopt().contains(target.key()) && target.adoptable()) {
                     statements.put(target, adopted(target));
                     continue;
@@ -462,7 +472,8 @@ public class FullTextExtractor {
                             + "failed checks; map its fields");
                 }
                 List<Term> reversal = new ArrayList<>();
-                MappedStatement statement = statement(session, text, target, mapping.of(target), issues, reversal);
+                List<Term> stale = new ArrayList<>();
+                MappedStatement statement = statement(session, text, target, mapping.of(target), issues, reversal, stale);
                 // a value the model's rows gave (not one filled in from the notes)
                 if (MODEL_FIELDS.get(target.kind()).stream().map(Field::name)
                         .anyMatch(f -> statement.values().get(f) != null
@@ -470,6 +481,7 @@ public class FullTextExtractor {
                     statements.put(target, statement);
                     termsOf.put(target, mapping.of(target));
                     reversals.put(target, reversal);
+                    stales.put(target, stale);
                     operatingIssue(mapper, text, target, mapping.of(target), statement).ifPresent(c -> issues.add(c.issue()));
                 } else if (!text.hasFigures(target.kind(), target.valueColumn())) {
                     statements.remove(target);
@@ -529,6 +541,29 @@ public class FullTextExtractor {
             open.remove(target);
             notes.add("Full-text extraction of " + target.name(mapper) + ": the sign of " + which + " reversed from the "
                     + "model's answer, the only choice that makes revenue - costs equal the filed profit before tax");
+        }
+        // rows of an insurer's comparative the model was shown and kept, without which it reconciles exactly (cells of
+        // the former presentation in a column restated for PSAK 117): left out, when the statement then has no open check
+        for (Target target : List.copyOf(open.keySet())) {
+            List<Term> rows = stales.getOrDefault(target, List.of());
+            if (rows.isEmpty() || !statements.containsKey(target)) {
+                continue;
+            }
+            List<String> issues = new ArrayList<>();
+            MappedStatement corrected = statement(session, text, target, without(termsOf.get(target), rows), issues, new ArrayList<>());
+            if (!issues.isEmpty()) {
+                continue;
+            }
+            String which = String.join(", ", rows.stream().map(t -> "'" + t.row().label() + "' (" + t.row().ref() + ")").toList());
+            List<Check> checks = new ArrayList<>(corrected.checks());
+            checks.add(Check.warning("full_text", "Left out of the model's answer: " + which + ", filled in this column only; "
+                    + "only without them do revenue - costs equal the filed profit before tax"));
+            statements.put(target, new MappedStatement(corrected.table(), corrected.column(), corrected.period(),
+                    corrected.sourceSheet(), corrected.values(), corrected.derivations(), checks, corrected.unclassified(),
+                    corrected.rejected()));
+            open.remove(target);
+            notes.add("Full-text extraction of " + target.name(mapper) + ": " + which + " left out of the model's answer, "
+                    + "rows filled in this column only, without which revenue - costs equal the filed profit before tax");
         }
         // profit from operations as the fields define it, which the model was shown and did not follow: its own rows
         // without the non-operating ones (and by nature the expense rows it subtracts as the operating expenses), when
@@ -889,6 +924,12 @@ public class FullTextExtractor {
      */
     private MappedStatement statement(IngestionSession session, WorkbookText text, Target target, Map<String, List<Term>> terms,
                                       List<String> issues, List<Term> reversal) {
+        return statement(session, text, target, terms, issues, reversal, new ArrayList<>());
+    }
+
+    /** @param stale gets the rows without which an insurer's comparative reconciles (see {@link #staleHint}) */
+    private MappedStatement statement(IngestionSession session, WorkbookText text, Target target, Map<String, List<Term>> terms,
+                                      List<String> issues, List<Term> reversal, List<Term> stale) {
         FilingMapper mapper = session.mapper();
         String table = target.kind().table();
         boolean bank = mapper.financial();
@@ -961,7 +1002,38 @@ public class FullTextExtractor {
         if (target.kind() == Kind.INCOME && !bank) {
             derive(values, how, statedDa(mapper, target.column()));
         }
+        if (target.kind() == Kind.INCOME && (mapper.insurance() || mapper.taxonomy() == com.neracalab.backend.ingestion.xlsx.IdxTaxonomy.FINANCING)
+                && values.get("gross_profit") == null && values.get("revenue") != null) {
+            // an insurer's or financing company's gross profit is revenue - cost of revenue by the field's definition;
+            // the model left it empty in some answers (TUGU FY2024 4,050.8 - 2,047.7 billion, PNLF H1 2025, FUJI FY2023)
+            BigDecimal cost = values.get("cost_of_revenue");
+            values.put("gross_profit", plainScale(cost == null ? values.get("revenue") : values.get("revenue").subtract(cost)));
+            how.put("gross_profit", cost == null ? "revenue (no cost of revenue)" : "revenue - cost of revenue");
+        }
         Set<String> rejected = new java.util.LinkedHashSet<>();
+        List<Counted> grossProfitRows = counted.getOrDefault("gross_profit", List.of());
+        if (target.kind() == Kind.INCOME && values.get("revenue") == null && values.get("gross_profit") != null
+                && !grossProfitRows.isEmpty() && grossProfitRows.stream().allMatch(c -> c.term().sign() < 0)) {
+            // a gross profit made of cost rows alone, without a revenue: CASA's FY2023 profit or loss (a bank holding
+            // with an insurer) files no revenue in this column, and the model's 'revenue rows - cost rows' gave
+            // -5,416,776 million (claims 5,340,349 + commissions 76,427; the revenue rows it named are empty cells and
+            // count nothing). A filed negative gross profit is its own row (GTBO H1 2026's 'Total gross profit'
+            // -1,299,512, sign +1) and stays.
+            values.put("gross_profit", null);
+            how.put("gross_profit", "not stored: no revenue, and a gross profit is not made of cost rows alone");
+            rejected.add("gross_profit");
+        }
+        if (target.kind() == Kind.INCOME && !bank && values.get("revenue") != null) {
+            List<Term> revenueRows = terms.getOrDefault("revenue", List.of());
+            if (!revenueRows.isEmpty() && revenueRows.stream().allMatch(t -> NOT_REVENUE.contains(t.row().label()))) {
+                // a profit or loss without revenue (PEGE, an investment company: finance income and other income only,
+                // FY2022 -94,297,438,110 and FY2024 28,879,851,458 stored as revenue): no revenue is made of these rows
+                values.put("revenue", null);
+                how.put("revenue", "not reported: the model named only " + rowsOf(revenueRows)
+                        + ", which are not revenue (the profit or loss has no 'Sales and revenue')");
+                rejected.add("revenue");
+            }
+        }
         String epsContradiction = target.kind() == Kind.INCOME ? mapper.epsContradiction() : null;
         if (epsContradiction != null) {
             // the rule-based extraction does not store them either (FilingMapper#incomeStatement): an EPS whose unit or
@@ -970,6 +1042,18 @@ public class FullTextExtractor {
                 values.put(eps, null);
                 how.put(eps, "not stored: " + epsContradiction);
                 rejected.add(eps);
+            }
+        }
+        if (target.kind() == Kind.BALANCE_SHEET) {
+            // a financing company's 'Cash and cash equivalents' row without its current accounts and placements with
+            // banks, which its cash flow statement counts in cash (ADMF, DEFI): the cash flow's, as for a bank
+            FilingMapper.CashWithBanks withBanks = mapper.cashWithBankBalances(target.column());
+            BigDecimal cash = values.get("cash_and_equivalents");
+            if (withBanks != null && cash != null && cash.compareTo(withBanks.balanceSheetCash()) == 0) {
+                values.put("cash_and_equivalents", plainScale(withBanks.cash()));
+                how.put("cash_and_equivalents", "cash and cash equivalents of the cash flow statement at this date: the "
+                        + "balance sheet's 'Cash and cash equivalents' " + withBanks.balanceSheetCash().toPlainString()
+                        + " + " + withBanks.rows());
             }
         }
         if (target.kind() == Kind.BALANCE_SHEET && !bank && values.get("total_liabilities") != null) {
@@ -997,6 +1081,17 @@ public class FullTextExtractor {
 
         List<Check> checks = new ArrayList<>();
         BigDecimal tolerance = mapper.unit().max(BigDecimal.ONE).multiply(BigDecimal.valueOf(2));
+        if (target.kind() == Kind.CASH_FLOW) {
+            emptySectionAsZero(values, how, tolerance);
+            if (values.get("capital_expenditure") == null && values.get("operating_cash_flow") != null
+                    && !mapper.reportsCapitalExpenditure(target.column())) {
+                // no row of capital expenditure in the column: 0, as the rule-based extraction stores it - else the
+                // period has no free cash flow (FUJI's interim periods, ADCP 9M 2025: no FCF yield)
+                values.put("capital_expenditure", BigDecimal.ZERO);
+                how.put("capital_expenditure", "full-text extraction: no capital expenditure row in the cash flow statement "
+                        + "(0, as the rule-based extraction stores it)");
+            }
+        }
         for (String required : REQUIRED.get(table)) {
             if (values.get(required) == null) {
                 issues.add(required + " has no amount: its rows are empty in " + columnName(target) + " or it is not mapped");
@@ -1034,11 +1129,18 @@ public class FullTextExtractor {
                             values.get("pretax_income"), fromLines,
                             values.get("revenue"), values.get("cost_of_revenue"), values.get("operating_expenses"));
                     if (issues.size() > before) {
-                        signHint(counted, values.get("pretax_income").subtract(fromLines), tolerance, columnName(target))
-                                .ifPresent(hint -> {
-                                    issues.add(hint.getKey());
-                                    reversal.addAll(hint.getValue());
-                                });
+                        BigDecimal gap = values.get("pretax_income").subtract(fromLines);
+                        Optional<Map.Entry<String, List<Term>>> sign = signHint(counted, gap, tolerance, columnName(target));
+                        sign.ifPresent(hint -> {
+                            issues.add(hint.getKey());
+                            reversal.addAll(hint.getValue());
+                        });
+                        if (sign.isEmpty()) {
+                            staleHint(mapper, text, target, counted, gap, tolerance).ifPresent(hint -> {
+                                issues.add(hint.getKey());
+                                stale.addAll(hint.getValue());
+                            });
+                        }
                     }
                 }
                 BigDecimal afterTax = sum(values.get("pretax_income"), negate(values.get("income_tax")));
@@ -1078,7 +1180,17 @@ public class FullTextExtractor {
             checks.add(Check.warning("eps_columns", epsContradiction + "; the EPS of this column is not stored"));
         }
         Set<String> cleared = new java.util.LinkedHashSet<>(rejected);
-        if (target.kind() == Kind.INCOME && mapper.incomeByNature() && costOfSalesFromTheNote(mapper, target, values, how, checks)) {
+        BigDecimal positiveExpenses = counted.getOrDefault("operating_expenses", List.of()).stream()
+                .map(Counted::amount).filter(a -> a.signum() > 0).reduce(BigDecimal::add).orElse(null);
+        // cost rows not counted in the operating expenses as well (costAsOperatingExpenses moves those the operating
+        // income subtracts there: then the cost is taken out of the operating expenses below)
+        Set<String> inExpenses = counted.getOrDefault("operating_expenses", List.of()).stream()
+                .map(c -> c.term().row().ref()).collect(java.util.stream.Collectors.toSet());
+        BigDecimal modelCost = counted.getOrDefault("cost_of_revenue", List.of()).stream()
+                .filter(c -> !inExpenses.contains(c.term().row().ref()))
+                .map(Counted::amount).reduce(BigDecimal::add).orElse(null);
+        if (target.kind() == Kind.INCOME && mapper.incomeByNature()
+                && costOfSalesFromTheNote(mapper, target, values, how, checks, positiveExpenses, modelCost)) {
             // the filing's own cost of sales note gives the cost of revenue and the gross profit
         } else if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
             for (String field : BY_FUNCTION_ONLY) {
@@ -1099,26 +1211,64 @@ public class FullTextExtractor {
      * ({@link FilingMapper#costOfSales}): the face shows no cost of sales, but the note states it (BIPI FY2025: 200,443,257
      * of revenue 235,089,682, gross profit 34,646,425). The cost is one of the expenses by nature the operating income
      * deducts, so it moves out of the operating expenses (212,368,437 -> 11,925,180) and the operating income stays as
-     * filed. Only when the note has a positive cost for the column, the revenue is known and the operating expenses hold
-     * at least the cost; otherwise the two fields stay empty, as before. A gross profit the model builds from expense rows
-     * by nature is still never stored.
+     * filed. Only when the note has a positive cost for the column and the operating expenses hold at least the cost;
+     * otherwise the two fields stay empty, as before. Without a revenue on the face the gross profit is not derived, but
+     * the cost is still stored and taken out of the operating expenses. A gross profit the model builds from expense rows
+     * by nature is still never stored. The expenses that must hold the cost are the positive expense rows: a gain filed
+     * negative among them (BUKA FY2025 'Other expenses' -1,988,280,296 thousand) nets them below the cost (4,432,364,338
+     * beside 5,990,751,222, which its 'Raw materials and consumables used' row states), and the operating expenses
+     * without the cost are then negative, as filed: revenue 6,510,030,453 - 5,990,751,222 = gross profit 519,279,231.
      *
+     * Where the model named the row of the cost as cost of revenue, not among the operating expenses, and those rows
+     * are the note's cost (PGEO FY2023: 'Exploration expenses' 178,977 thousand, the note's 'Cost of sales and
+     * revenue'; operating expenses the other expenses of 5,526), the operating expenses stay as they are.
+     *
+     * @param positiveExpenses the positive rows of the model's operating expenses, full units; {@code null}: none named
+     * @param modelCost        the rows the model named as cost of revenue, full units; {@code null}: none named
      * @return whether the fields were set
      */
     private static boolean costOfSalesFromTheNote(FilingMapper mapper, Target target, Map<String, BigDecimal> values,
-                                                  Map<String, String> how, List<Check> checks) {
+                                                  Map<String, String> how, List<Check> checks, BigDecimal positiveExpenses,
+                                                  BigDecimal modelCost) {
         BigDecimal cost = mapper.costOfSales(target.column());
         BigDecimal revenue = values.get("revenue");
         BigDecimal expenses = values.get("operating_expenses");
-        if (cost == null || cost.signum() <= 0 || revenue == null || expenses == null || cost.compareTo(expenses) > 0) {
+        // a cost less than a filed unit above the expenses is the same amount (RAFI FY2021: 89,901,586,207 in the
+        // note, 89,901,586,206.6389 among the expenses of a filing with fractions of a rupiah)
+        BigDecimal slack = mapper.precision().max(BigDecimal.ONE);
+        if (cost != null && cost.signum() > 0 && expenses != null && modelCost != null
+                && modelCost.subtract(cost).abs().compareTo(slack) < 0) {
+            values.put("cost_of_revenue", cost);
+            how.put("cost_of_revenue", "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
+                    + FilingMapper.COST_OF_SALES_TOTAL + "'), the rows the model named as cost of revenue");
+            if (revenue != null) {
+                values.put("gross_profit", plainScale(revenue.subtract(cost)));
+                how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");
+            }
+            checks.add(Check.ok("gross_profit", "Profit or loss by nature: cost of revenue " + cost.toPlainString()
+                    + " from the filing's cost of sales note, the rows the model named; the operating expenses as mapped"));
+            return true;
+        }
+        BigDecimal held = expenses == null ? null : positiveExpenses == null ? expenses : positiveExpenses.max(expenses);
+        if (cost == null || cost.signum() <= 0 || expenses == null || cost.compareTo(held.add(slack)) >= 0) {
             return false;
         }
+        BigDecimal remaining = expenses.subtract(cost);
+        if (remaining.signum() < 0 && remaining.negate().compareTo(slack) < 0) {
+            remaining = BigDecimal.ZERO;    // the RAFI fraction
+        }
         values.put("cost_of_revenue", cost);
-        values.put("gross_profit", plainScale(revenue.subtract(cost)));
-        values.put("operating_expenses", plainScale(expenses.subtract(cost)));
+        values.put("operating_expenses", plainScale(remaining));
         how.put("cost_of_revenue", "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
                 + FilingMapper.COST_OF_SALES_TOTAL + "'): the profit or loss by nature shows no cost of sales on its face");
-        how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");
+        if (revenue != null) {
+            values.put("gross_profit", plainScale(revenue.subtract(cost)));
+            how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");
+        } else {
+            // the face leaves revenue empty (PGEO FY2023: only in its breakdown by party, 406,288,000): the cost still
+            // comes out of the operating expenses, and a gross profit another filing stored is kept, not cleared
+            how.put("gross_profit", "not derived: the profit or loss states no revenue for the column");
+        }
         how.put("operating_expenses", how.getOrDefault("operating_expenses", "") + "; less the cost of revenue of the "
                 + "cost of sales note (" + cost.toPlainString() + ")");
         checks.add(Check.ok("gross_profit", "Profit or loss by nature: cost of revenue " + cost.toPlainString()
@@ -1197,6 +1347,28 @@ public class FullTextExtractor {
 
     private static String columnName(Target target) {
         return "c" + (target.valueColumn() + 1);
+    }
+
+    /**
+     * A cash flow section without any row the model could map counts as 0 when the other two add up to the change in
+     * cash (as {@code FilingMapper#sectionTotals} counts it): AHAP FY2024, an insurer with no financing activity -
+     * no lines, no total - operating 1,356,295,483 + investing -580,969,819 = net change 775,325,664 (errors 1146 -
+     * 1148). Otherwise it stays empty, and a required field without an amount is pointed out.
+     */
+    static void emptySectionAsZero(Map<String, BigDecimal> values, Map<String, String> how, BigDecimal tolerance) {
+        List<String> sections = List.of("operating_cash_flow", "investing_cash_flow", "financing_cash_flow");
+        List<String> empty = sections.stream().filter(s -> values.get(s) == null).toList();
+        BigDecimal change = values.get("cash_change");
+        if (empty.size() != 1 || change == null) {
+            return;
+        }
+        BigDecimal others = sections.stream().filter(s -> !empty.contains(s)).map(values::get)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (others.subtract(change).abs().compareTo(tolerance) > 0) {
+            return;
+        }
+        values.put(empty.get(0), BigDecimal.ZERO);
+        how.put(empty.get(0), "full-text extraction: no rows in this column; 0, the other sections add up to the change in cash");
     }
 
     /** The D&A the profit or loss states for the column ({@link FilingMapper#statedDepreciationAndAmortization}). */
@@ -1303,6 +1475,54 @@ public class FullTextExtractor {
         Map<String, List<Term>> result = new LinkedHashMap<>();
         terms.forEach((field, list) -> result.put(field, list.stream()
                 .map(t -> refs.contains(t.row().ref()) ? new Term(t.row(), -t.sign()) : t).toList()));
+        return result;
+    }
+
+    /**
+     * The rows of an insurer's comparative column that the current period's column leaves empty, when revenue - costs
+     * equal the filed profit before tax exactly without all of them: cells of the former presentation left in a column
+     * restated for PSAK 117. ABDA's H1 2026 filing: H1 2025 'Decrease (increase) in unearned premiums' -36,572,748,
+     * 'Decrease (increase) in premium income ceded to reinsurancer' 2,178,670, 'Increase (decrease) in estimated claims
+     * liability' -4,409,958 and 'Commission expenses' 54,538,876 thousand, empty for H1 2026; with them revenue - costs
+     * were -2,274,276 for a profit before tax of 86,606,060, without them exactly 86,606,060 (error 1246; its FY2025 filing
+     * the same for FY2024, 165,459,501, error 1247). A hint for the model, which decides; when its last answer keeps the
+     * rows all the same, they are left out for it (see {@link #without}).
+     *
+     * @param gap profit before tax - (revenue - costs), full units
+     * @return the hint and the terms to leave out
+     */
+    private static Optional<Map.Entry<String, List<Term>>> staleHint(FilingMapper mapper, WorkbookText text, Target target,
+                                                                     Map<String, List<Counted>> counted, BigDecimal gap,
+                                                                     BigDecimal tolerance) {
+        if (target.column() == StatementColumn.CURRENT_PERIOD) {
+            return Optional.empty();
+        }
+        int current = mapper.durationIndex(StatementColumn.CURRENT_PERIOD);
+        BigDecimal effect = BigDecimal.ZERO;
+        List<Term> rows = new ArrayList<>();
+        for (Map.Entry<String, Integer> field : INSURER_RESULT) {
+            for (Counted row : counted.getOrDefault(field.getKey(), List.of())) {
+                if (row.amount().signum() != 0 && text.value(row.term().row(), current) == null) {
+                    // leaving the row out changes revenue - costs by minus what it adds now
+                    effect = effect.subtract(row.amount().multiply(BigDecimal.valueOf(field.getValue())));
+                    rows.add(row.term());
+                }
+            }
+        }
+        if (rows.isEmpty() || effect.subtract(gap).abs().compareTo(tolerance) > 0) {
+            return Optional.empty();
+        }
+        return Optional.of(Map.entry("revenue - costs equal profit before tax in " + columnName(target) + " exactly without "
+                + String.join(", ", rows.stream().map(t -> "'" + t.row().label() + "' (" + t.row().ref() + ")").toList())
+                + ", rows filled in this column only (empty in the current period's): check whether the filing's profit "
+                + "before tax counts them", rows));
+    }
+
+    /** The terms of a statement without the given rows, in every field that names them. */
+    private static Map<String, List<Term>> without(Map<String, List<Term>> terms, List<Term> rows) {
+        Set<String> refs = rows.stream().map(t -> t.row().ref()).collect(java.util.stream.Collectors.toSet());
+        Map<String, List<Term>> result = new LinkedHashMap<>();
+        terms.forEach((field, list) -> result.put(field, list.stream().filter(t -> !refs.contains(t.row().ref())).toList()));
         return result;
     }
 

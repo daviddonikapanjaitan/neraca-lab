@@ -30,6 +30,14 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/neracalab}
     username: ${DB_USERNAME:neracalab}
     password: ${DB_PASSWORD:neracalab}
+    hikari:
+      # 50 upload workers (neracalab.jobs.upload-workers) besides the price, RAG and screening queues and the API: up
+      # to 40 connections under load, few when idle (PostgreSQL allows 200: docker-compose.yaml; the test suite keeps
+      # pools of 5 per context, src/test/resources/application.properties)
+      maximum-pool-size: ${DB_POOL_SIZE:40}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      idle-timeout: 60000          # ms
+      connection-timeout: 60000    # ms: a worker waits this long for a free connection
   data:
     redis:
       # Redis of backend/docker-compose.yaml (the backend container sets SPRING_DATA_REDIS_HOST=redis); the Macro page's
@@ -71,6 +79,8 @@ spring:
         - classpath:db/V1.0.33__schema_ownership.sql            # KSEI daily lists of the shareholders of more than 5% (Companies > Ownership)
         - classpath:db/V1.0.34__schema_ownership_one_percent.sql # KSEI monthly lists of the shareholders of more than 1% (Companies > Ownership (>=1%))
         - classpath:db/V1.0.36__schema_valuation_ebitda_basis.sql # the EBITDA of EV / EBITDA: TTM, else the full year
+        - classpath:db/V1.0.40__schema_dev_context.sql            # development context of Claude Code (RAG)
+        - classpath:db/V1.0.46__schema_rag_xbrl.sql               # IDX XBRL workbooks in the RAG vector store (source type XBRL)
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -82,6 +92,13 @@ spring:
         - classpath:db/V1.0.31__data_BNBR_shares.sql      # share counts of five par-value series (2023 - 2026 rights issue)
         - classpath:db/V1.0.35__data_ENRG_shares.sql      # share counts (USD filings without them), the June 2026 placement
         - classpath:db/V1.0.37__data_RANS_shares.sql      # share counts before and after the IPO of 2026-07-10
+        - classpath:db/V1.0.38__data_ABDA_expenses.sql    # FY2021 / FY2022 G&A its FY2022 filing tags as interest
+        - classpath:db/V1.0.39__data_ACRO_AGAR_AISA_shares.sql # share counts their filings and Yahoo Finance do not give
+        - classpath:db/V1.0.41__data_ALKA_AMAN_AREA_ATAP_BATR_shares.sql # share counts from KSEI and the listing records
+        - classpath:db/V1.0.42__data_BBHI_shares.sql      # the 2025-06-30 count its annualized H1 EPS halved
+        - classpath:db/V1.0.43__data_BMBL_BOAT_shares.sql # share counts from the share capital, KSEI and the listing records
+        - classpath:db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql # wrong par / split / share issues
+        - classpath:db/V1.0.45__data_KOIN_HILL_shares.sql # wrong par values, KOIN's false reverse split
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
@@ -97,6 +114,16 @@ server:
     max-swallow-size: 60MB
 
 neracalab:
+  # The DeepSeek calls of the ingestion and the screening through OpenCode Go (monthly subscription) instead of
+  # OpenRouter (OpenCodeGoRouting); Claude and the embeddings stay on OpenRouter. Off without a key.
+  llm:
+    opencode-go:
+      api-key: ${OPENCODE_GO_API_KEY:}
+      base-url: ${OPENCODE_GO_BASE_URL:https://opencode.ai/inference/go/openai/v1}
+      # OpenRouter id = OpenCode Go id; models not listed stay on OpenRouter. Claude Haiku 5.5: the full-text
+      # extraction (neracalab.ingestion.fallback.model)
+      models: ${OPENCODE_GO_MODELS:deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5}
+
   # Login (POST /api/v1/auth/login); every other API needs the bearer token of a session
   auth:
     session-ttl: ${AUTH_SESSION_TTL:12h}            # a login is valid this long
@@ -108,9 +135,17 @@ neracalab:
     # The requests to Yahoo Finance and to each news site stay paced one at a time (more workers do not send
     # requests faster).
     workers: ${INGESTION_WORKERS:5}
+    # Worker threads of the financial statement upload queue (0: as many as `workers`). An upload mostly waits on model
+    # calls; its database work is short and refreshes only its own company's derived data, so 50 run side by side
+    # (needs the connection pool below and a heap of 4 GB: JAVA_OPTS in docker-compose.yaml).
+    upload-workers: ${INGESTION_UPLOAD_WORKERS:50}
 
   # AI ingestion agent (POST /api/v1/financial-statements/upload)
   ingestion:
+    # A filing whose every column maps without a failed check or an unclassified income line is stored without the
+    # agent (the same tools in the default plan's order, one model call for the English names of new revenue segments);
+    # the deterministic verification decides, and anything open goes to the agent and the full-text extraction as before.
+    fast-path: ${INGESTION_FAST_PATH:true}
     max-iterations: 30      # model turns per execution round
     reflection-rounds: 2    # extra rounds the reviewer may request
     temperature: 0.0
@@ -124,15 +159,21 @@ neracalab:
     # A filing holds no prices, and without prices a company has no market cap and no valuation: when a filing was
     # stored, the company's daily prices are queued too (nothing when they already reach the last completed trading day).
     prices-after-upload: ${INGESTION_PRICES_AFTER_UPLOAD:true}
+    # The text of every uploaded workbook (all sheets) is chunked, embedded and stored in the RAG vector store as a
+    # document of the company (rag_document source type XBRL, document type FINANCIAL_STATEMENT), at the end of the
+    # upload job: as a PDF financial statement on Ingestion > PDF Documents (RAG). A workbook already stored (same file,
+    # same embedding model) is not embedded again; a failure here never changes the upload's outcome.
+    rag-after-upload: ${INGESTION_RAG_AFTER_UPLOAD:true}
     # Full-text extraction: takes over when the standard extraction (the AI agent above) does not store a workbook -
     # it cannot map it ("No balance sheet data"), leaves open items (INCOMPLETE), fails, or runs longer than `after`.
     # The model then decides every value that is not stored yet from the text of the whole workbook (it names the rows,
     # the amounts are read from the cells); no rule of the Java code overrules it.
     # Every such upload is recorded in the table ingestion_error (fixed_by_claude_code).
     fallback:
-      # its own model (OpenRouter id), stronger than the standard extraction's; empty = spring.ai.openai.chat.model
-      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-sonnet-5.5}
-      # OpenRouter reasoning effort of its calls; Sonnet 5.5 refuses reasoning switched off (HTTP 400, error 878).
+      # its own model (OpenRouter id), stronger than the standard extraction's; empty = spring.ai.openai.chat.model.
+      # Claude Haiku 5.5, through OpenCode Go when its key is set (neracalab.llm.opencode-go), else OpenRouter
+      model: ${INGESTION_FALLBACK_MODEL:anthropic/claude-haiku-5.5}
+      # reasoning effort of its calls; Sonnet 5.5 refuses reasoning switched off (HTTP 400, error 878).
       # Empty = neracalab.ingestion.model-reasoning, as the standard extraction
       reasoning-effort: ${INGESTION_FALLBACK_REASONING_EFFORT:low}
       enabled: ${INGESTION_FALLBACK_ENABLED:true}
@@ -141,10 +182,12 @@ neracalab:
       model-call-timeout: 150s                    # one of its model calls (one long JSON answer)
       max-chars: 120000                           # most workbook text sent to the model (statement sheets first)
       rounds: 3                                   # answers of the model: the first, then corrections of rejected mappings
-    # false: filings of one company uploaded together are stored at the same time (up to neracalab.jobs.workers).
-    # true: one after the other in upload order (other companies still beside them). The stored data is the same
-    # either way; in order, a job never verifies a period while another filing of the company is writing it.
-    same-company-in-order: ${INGESTION_SAME_COMPANY_IN_ORDER:false}
+    # true: filings of one company are stored one after the other in upload order (other companies still beside
+    # them): a job never verifies a period while another filing of the company is writing it, and a filing in another
+    # currency is checked against the filings stored before it (IngestionService.currencyConflict). false: at the same
+    # time (up to neracalab.jobs.workers) - filings of one company uploaded together then each pass the currency check
+    # before any of them is stored (ANJT FY2025 in USD stored beside H1 / 9M 2026 in IDR; DEWA FY2021 / FY2022).
+    same-company-in-order: ${INGESTION_SAME_COMPANY_IN_ORDER:true}
 
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:

@@ -101,6 +101,27 @@ OPENAI_MODEL=deepseek/deepseek-v4.1-flash-1017
 the Spring AI OpenAI client at OpenRouter; real environment variables take precedence. Docker
 compose reads the same file and passes the values to the backend container at runtime.
 
+**OpenCode Go** (`OpenCodeGoRouting`, `neracalab.llm.opencode-go.*`): with `OPENCODE_GO_API_KEY` set, a call whose
+model is listed in `OPENCODE_GO_MODELS` (`openrouter-id=go-id`, default
+`deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5`) goes to
+OpenCode Go (`https://opencode.ai/inference/go/openai/v1`, a monthly subscription) with its own OpenAI client; every
+other call stays on OpenRouter. `IngestionAgent` and `LlmGateway` wrap the Spring AI `ChatModel` with it, so the
+standard extraction, the full-text extraction and the screening / analysis agents are all routed by model. The request
+is translated: `provider` and `usage` (OpenRouter only) are left out, `"reasoning": {"enabled": false}` becomes
+`"thinking": {"type": "disabled"}`, `"reasoning": {"effort": e}` the `reasoning_effort` e, and the header
+`x-opencode-session` (without it: "Request is missing x-opencode-session") is added. Go answers `usage.cost` 0 (billed
+to the plan), so `llm_usage.cost_usd` is 0 for its calls. Its DeepSeek models answer only a workspace whose Privacy
+settings allow Global regions ("This Go model requires Global regions"); Claude Haiku 5.5 answers without. Until the
+setting is changed `backend/.env` routes Haiku alone (`OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5`).
+Only the OpenRouter client (`OpenAiChatModel`) is routed: a test's scripted or mocked `ChatModel` is used as it is (with
+the key in `backend/.env` the Analysis, Macro and Technical screening controller tests had sent their DeepSeek calls to Go
+instead of their script). Test: `OpenCodeGoRoutingTest`.
+
+```properties
+OPENCODE_GO_API_KEY=oc_sk_...
+OPENCODE_GO_MODELS=anthropic/claude-haiku-5.5=claude-haiku-5-5
+```
+
 **Every request names `OPENAI_MODEL`.** Spring AI 2.0's `OpenAiChatOptions` fills a missing model
 with its own default, `gpt-5-mini`, and per-request options override the configured default. The
 agent's planner, executor and reviewer built their options without a model, so until this was fixed
@@ -121,8 +142,10 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.model-call-timeout`| 45s     | a model call taking longer counts as a stalled response and is retried (env `INGESTION_MODEL_CALL_TIMEOUT`) |
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
 | `neracalab.ingestion.prices-after-upload` | true  | queue the company's daily prices when a filing was stored, so that it gets its market caps and valuations (env `INGESTION_PRICES_AFTER_UPLOAD`), section 4 |
-| `neracalab.jobs.workers`                | 5       | uploads stored at the same time, each by its own agent (env `INGESTION_WORKERS`), also several filings of one company ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
-| `neracalab.ingestion.same-company-in-order` | false | true: filings of one company are stored one after the other in upload order instead (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
+| `neracalab.ingestion.rag-after-upload` | true    | store the text of every uploaded workbook in the RAG vector store at the end of its job (`rag_document` source type `XBRL`; env `INGESTION_RAG_AFTER_UPLOAD`; off in the tests), section 4 and [RAG_DOCS.md](RAG_DOCS.md) section 2b |
+| `neracalab.jobs.upload-workers`         | 50      | uploads stored at the same time (env `INGESTION_UPLOAD_WORKERS`; 0 = as `neracalab.jobs.workers`, 5, which the other queues keep) ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `neracalab.ingestion.fast-path`         | true    | a filing whose every column maps without a failed check or an unclassified line is stored without the agent; the deterministic verification decides, anything open goes to the agent as before (env `INGESTION_FAST_PATH`), section 6 |
+| `neracalab.ingestion.same-company-in-order` | true | filings of one company are stored one after the other in upload order, so a filing in another currency is checked against those stored before it; false: at the same time (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
 | `neracalab.ingestion.provider-ignore`   | OpenInference | OpenRouter providers the ingestion's model calls never use (env `INGESTION_PROVIDER_IGNORE`), section 6 |
 | `neracalab.ingestion.fallback.*`        | on, 3m  | the full-text extraction that takes over when the standard extraction does not store a workbook, and its time limits (section 6) |
 | `spring.ai.openai.chat.timeout`         | 180s    | read timeout of one model call                  |
@@ -175,7 +198,7 @@ final status is decided by the deterministic database read-back, not by the mode
 | `extractRevenueSegments` | read  | revenue by type (else by source) of a column                                               |
 | `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
 | `saveShareSnapshots`     | write | share counts at every date in the statements of changes in equity                          |
-| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL; one run at a time, about 2 s, and a request that waited for a whole run is served by it |
+| `refreshDerivedData`     | write | recalculates the company's derived data: the share scripts, then `ValuationRepository.refreshAfterFiling` (V1.0.6 for this company: market / valuation snapshots, cleared trailing ratios, fundamental and valuation metrics, stale valuation metrics deleted); about 0.4 s, beside other companies' refreshes (until 2026-10-31 the whole script for every company, one run at a time) |
 | `verifyStoredData`       | read  | database read-back: pending work and inconsistencies (the final gate of `COMPLETED`)       |
 
 **One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
@@ -641,6 +664,16 @@ failure to queue never changes the upload's outcome. Before, the prices had to b
 years of statements and share counts and an empty valuation history. Switch off with
 `neracalab.ingestion.prices-after-upload: false`.
 
+**The workbook's text goes into the RAG vector store** (`XbrlRagService`, called by `FinancialStatementQueue` at the
+end of the job, after the statements, whatever their outcome), as a PDF financial statement does on Ingestion > PDF
+Documents (RAG): every sheet (general information, statements, notes), each row with an amount, a date or a label /
+value / English label as one line, chunked per sheet with the sheet's title and value columns in front of every chunk,
+embedded and stored as a document of the company (`rag_document` source type `XBRL`, document type
+`FINANCIAL_STATEMENT`, keyed by the file's SHA-256). The same file again with the same embedding model is not embedded
+again. The outcome is the job result's `rag` and the end of the stage (`; vector store: 84 chunks`); a failure never
+changes the upload's status. Switch off with `neracalab.ingestion.rag-after-upload: false`. Details:
+[RAG_DOCS.md](RAG_DOCS.md), section 2b.
+
 ## 5. Tests
 
 | Test                             | What it proves                                                                                                                                                                                                                                       |
@@ -680,8 +713,25 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperWebSharesTest` (unit) | web share counts against the real filings: BNGA FY2025 gets the three audited counts, H1 2026 rejects the inconsistent 2026-06-30 point, counts five times too high are rejected, SMDR's FY2022 filing rejects the split-adjusted count and its FY2025 filing accepts it, a filing with its own counts is kept, NSSS (profit or loss by nature) gets the count that fits its EPS and refuses one that does not; BBCA FY2022: the count accepted at 2022-12-31 is carried to 2021-12-31 and 2020-12-31 (share capital unchanged, no treasury stock, the FY2021 EPS confirms it), never to a date the website publishes itself, never with treasury stock (BFIN), never where the EPS contradicts it |
 | `FilingMapperWebSplitsTest` (unit) | the share counts of the error log of 2026-10-16: BKSL FY2025 uses no par value (par 50 fits only FY2024's EPS) and gets Yahoo's 167,708,902,705; CUAN FY2024 accepts Yahoo's split-adjusted count only with the 1:10 split of 2025-07-15 (11,241,890,000 before it), CUAN H1 2026 has dates on both sides of it; DSSA FY2023 predates both splits and its end count fits between the start and end counts (buyback), FY2024 needs only the 2026 split, H1 2026's EPS fits no count; BUKA FY2025's end count 92,970,828,660 with 10,177,877,407 treasury shares (buyback), H1 2026's EPS outside the counts refused; BKSL FY2023's rights issue gives no range |
 | `FilingMapperAdroTest` (unit) | ADRO FY2023 tags only gross profit: revenue from the revenue breakdown (6,517,556 thousand USD), cost = revenue - gross profit; without a breakdown both stay empty |
-| `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error; MGLV FY2024: ending cash 3 rupiah above the balance sheet's 7,783,983,677, under a billionth of it - a note; INDO FY2022's 20,000,000 stays an error |
+| `FilingMapperCashRoundingTest` (unit) | the review of 2026-10-31: a full-amount roll-forward one rupiah off is the filing's rounding (ALMI FY2024 27,338 / 27,337, ARTI FY2023, ASHA FY2025: a warning, the filed ending cash stored); AMMS H1 2026's investing section whose only line is 0 counts as 0 |
+| `FilingMapperAmortizationTest` (unit) | no amortization from the intangibles roll when the goodwill halved (PTRO H1 2026: 134,250 + 4,050 - 60,088 = 78,212 against the note's 6,075; CUAN H1 2026); ARKO, without goodwill, keeps the roll |
+| `IngestionVerifierInsurerDepositsTest` (unit) | AMAG FY2025, an insurer: ending cash 485,425,155 thousand = cash 64,021,213 + 421,403,942 within time deposits 651,473,868 is a note; beyond the deposits, or stored figures not the filing's, a problem |
+| `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error; one unit in a full-amount filing too (BRAM H1 2026 24,367,847 / 24,367,846 USD, BMBL FY2022), two units (BMBL FY2023) a problem; MGLV FY2024: ending cash 3 rupiah above the balance sheet's 7,783,983,677, under a billionth of it - a note; INDO FY2022's 20,000,000 stays an error |
+| `IngestionToolsSegmentsTest` (unit, mocked repository) | a comparative breakdown of a restated revenue is kept out (BMHS FY2024's 1,488,197,483,371 for FY2023's 1,287,690,839,110), one of the same revenue in millions is saved (INPP FY2025's 1,309,662 million for 1,309,661,867,481); the period's own filing removes a stored breakdown of another revenue (BHIT FY2024) and keeps one of its revenue |
+| `IngestionAgentFastPathTest` (Docker Postgres, rolled back) | the fast path: HRTA H1 2026 maps cleanly and is stored and verified without a model call; a company without segments gets them named by one call (stage `SEGMENT_NAMES`) and nothing else is asked; BUDI FY2025 and BMBL FY2023 (failed checks) and BTEL FY2024 (by nature) are not for it; the model's names apply to new segments only, OTHER only in the residual slot |
+| `DerivedDataRefreshTest.theRefreshOfOneCompanyLeavesWhatTheScriptComputes` (Docker Postgres) | the per-company refresh after an upload leaves every derived row of all 361 companies as V1.0.6 computes it (and the script changes nothing it left), under a second per company |
+| `PacedHttpClientAheadTest` (local HTTP server) | a request made `ahead` (an upload's share counts) is sent right after the one in flight, before three waiting background requests |
+| `WebShareCountsTest.aCompanysAnswerIsReusedForItsNextFilingAndAFailureIsNot` (unit) | Yahoo's share counts are fetched once per company (a 429 is not kept) |
+| `JobWorkersConfigurationTest.theUploadQueueHasItsOwnNumberOfWorkers` (unit) | `upload-workers` 50 beside `workers` 5; unset: as `workers` |
+| `MarketInstrumentSequenceTest` (Docker Postgres) | running V1.0.26 again draws no `instrument_id` (the SMALLSERIAL ran out at 32,767 and no start succeeded) |
+| `BmblBoatSharesTest` (Docker Postgres) | V1.0.43: BMBL 1,030,080,995 (share capital at par Rp 40, H1 2026 EPS -1.05), BOAT 3,501,680,000 from its IPO of 2024-11-12; market cap = price x count |
+| `ShareCountCorrectionsTest` (Docker Postgres) | V1.0.44: MSIN 60,676,178,205 and its H1 2026 EPS 4.69, SMGA 7,000,000,000 / 8,750,000,000, RMKE 21,875,000,000 with its split of 2026-07-17 recorded, WIFI, INET and PACK after their share issues |
 | `FilingMapperAdmrArtoBrmsTest` (unit) | the error log of 2026-10-18: ADMR lines filed with decimals outside the investing total (-322,409,000); ARTO's syirkah funds from their lines (526,059 / 110,361 million); BRMS's EPS filed per 1,000 shares (0.00035 per share with Yahoo's 141,784,040,338 shares; counts that fit neither way change nothing) |
+| `IngestionServiceUnitTest` (unit) | IMJS FY2024 ("Full Amount" over millions) is read in millions when FY2023's stored total assets prove it, keeps its unit without such a figure; IPCC 9M 2026's par-derived counts contradicting the stored FY2025 count are dropped (kept after a recorded split), ATIC's share issue kept |
+| `KoinHillSharesTest` (Docker Postgres) | V1.0.45: KOIN 980,843,732 at every date and no reverse split at 2023-01-01; HILL 14,741,500,000 at 2024-12-31 / 2025-12-31; FLMC 781,250,000, no count of 1 |
+| `IngestionVerifierOverdraftTest` (unit) | GGRM: overdrafts netted against cash are a note, other stored figures a problem; LPPF FY2023 within the stored short-term debt; LAJU FY2022: an ending cash cell with a binary fraction beyond the stored scale is the stored amount |
+| `FilingMapperEpsCellTest` (unit) | FLMC FY2025's EPS cell holding the profit gives no share count; CBPE FY2021's 35,000 shares before its IPO stay |
+| `FilingMapperTabarruTest` (unit) | CASA FY2025's tabarru funds balance the balance sheet with the syirkah funds; ARTO FY2022's syirkah total on that row is not counted twice |
 | `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
 | `FilingMapperTuguMoliCnmaTest` (unit) | the filings behind the error rows of 2026-10-14: TUGU read in the Insurance Industry taxonomy with 3,555,575,600 shares at par 50 (EPS in millions in FY2024, an unrestated split in FY2023), MOLI's EPS in thousands (H1 2026) and its contradicting FY2025 columns (no par 1), CNMA's depreciation with its balance sheet by order of liquidity |
@@ -921,13 +971,40 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 | Property (`neracalab.ingestion.fallback.*`) | Default | Meaning                                                    |
 |---------------------------------------------|---------|------------------------------------------------------------|
 | `enabled` (`INGESTION_FALLBACK_ENABLED`)    | `true`  | `false`: an upload ends where the standard extraction ends; an unsupported workbook is refused with 422 again |
-| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-sonnet-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash and dearer per token (USD 2 / 10 per million against 0.15 / 0.60; one long answer, up to `rounds` times); empty = the standard extraction's model. Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
+| `model` (`INGESTION_FALLBACK_MODEL`)        | `anthropic/claude-haiku-5.5` | its own model (OpenRouter id), stronger than the standard extraction's DeepSeek flash; empty = the standard extraction's model. Since 2026-10-30 Claude Haiku 5.5 through OpenCode Go (section 2; BUKA FY2024: three answers in 47 s, cost 0 against USD 0.05 - 0.20 a filing on Sonnet 5.5 through OpenRouter, the default from 2026-10-23). Recorded as `details.fullTextExtraction.model` in `ingestion_error` |
 | `reasoning-effort` (`INGESTION_FALLBACK_REASONING_EFFORT`) | `low` | OpenRouter reasoning effort of its calls, sent as `"reasoning": {"effort": "low"}` in place of the standard extraction's `"enabled": false` (`model-reasoning`): Claude Sonnet 5.5 refuses reasoning switched off with HTTP 400 "Reasoning is mandatory for this endpoint and cannot be disabled" (error 878, every full-text extraction failed on its first call); empty = the standard extraction's setting |
 | `after` (`INGESTION_FALLBACK_AFTER`)        | `3m`    | longest the standard extraction runs before the full-text extraction takes over |
 | `timeout` (`INGESTION_FALLBACK_TIMEOUT`)    | `5m`    | longest the full-text extraction runs                      |
 | `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
 | `max-chars`                                 | `120000`| most workbook text sent to the model; the statement sheets always fit, notes sheets are left out first |
 | `rounds`                                    | `3`     | answers of the model: the first, then its own corrections; the last one is stored |
+
+### Speed and 50 uploads at once (2026-10-31)
+
+Measured on the 991 uploads of 2026-10-29 - 31 (5 workers): an upload that the standard extraction stored ran about
+60 s - 11.7 model calls took 41 s, the rest mostly the derived-data refresh: `V1.0.6` over every company (10.8 s with
+361 companies and 1.06 million prices, one run at a time for all uploads) - and waited 615 s on average in the queue;
+30% went to the full-text extraction (by design for the by-nature, Financing and Insurance templates; the rest
+filings that fail a check, mostly the workbooks' own errors - `ingestion_error`).
+
+| Change | Where | Effect |
+|---|---|---|
+| **Fast path**: a filing whose every column maps without a failed check or an unclassified income line, in a template the rule-based extraction reads, is stored without the agent - the default plan's steps through the agent's own tools (`DeterministicFinisher`), one model call for the English names of the company's new revenue segments (`Prompts.SEGMENT_NAMER`, stage `SEGMENT_NAMES`). The deterministic verification decides; anything open goes to the agent, then the full-text extraction, as before | `IngestionAgent.fastPath` / `mapsCleanly`, `neracalab.ingestion.fast-path` | 85% of the 1,766 workbooks qualify; such an upload takes about 2 s alone (16.7 s median with 29 at once) and no planner / executor / reviewer call |
+| **Derived data of the uploaded company only**: `IngestionRepository.refreshDerivedData(companyId)` = the share scripts, then `ValuationRepository.refreshAfterFiling` (V1.0.6 for one company: market and valuation snapshots, cleared trailing ratios, fundamental and valuation metrics); the whole script still runs at start | `IngestionTools`, `IngestionAgent`, `FullTextExtractor`, `IngestionService` | 0.36 s per company instead of 10.8 s, beside other companies' refreshes. `DerivedDataRefreshTest.theRefreshOfOneCompanyLeavesWhatTheScriptComputes` compares every derived row of all 361 companies with the script's |
+| **History revalued**: V1.0.6 also revalues the existing valuation dates (each day's latest-trading-day row stays) | `V1.0.6__data_metrics_valuation.sql` | the test above found MSIN's valuations of 2026-10-09 .. 23 still on the 6,067,620,000 shares V1.0.44 corrected, GOTO's and DYAN's on an EBITDA since cleared |
+| **Upload workers of their own**: `neracalab.jobs.upload-workers` 50 (the price, RAG and screening queues keep `workers` 5); connection pool 40 (5 idle), PostgreSQL `max_connections` 200, heap 4 GB | `JobProperties.uploads()`, `application.yaml`, `docker-compose.yaml` | no queue wait |
+| **Yahoo Finance share counts**: kept per company for 6 h, and asked `PacedHttpClient.ahead` of the waiting price requests (still one request at a time with the 1 - 2 s pause) | `WebShareCounts`, `PacedHttpClient` | 40% of the uploads asked Yahoo (three filings per company); in the first 50-upload test they waited up to 53 s behind the price jobs the uploads queue |
+
+Load tests on the live backend (FY2025 workbooks of 50 different companies, every one already stored, so the stored
+data must not change): 50 of 50 SUCCEEDED in 105 s (40 fast path, median 2.0 s; 9 full-text by design, 1 agent);
+then 49 of 49 in 129 s (41 fast path, 8 full-text; 29 running at once, 18 database connections; 67 model calls, none
+failed) with ANJT's USD filing refused (422) as intended. The fast path's current-period statements were written
+with no difference from the stored ones (120 of 120); the comparative columns kept the stored figures as the rules
+require. With 5 workers and the agent the same 50 would have taken about 10 minutes plus the queue.
+
+`ingest.py upload --parallel` (skill `fix-xlsx-ingestion-api`) submits with 16 threads, one company's files in order
+by one thread, reports a refused file and goes on, and prints a summary (wall time, run median / max, fast path /
+full-text, model calls).
 
 ### The error log `ingestion_error`
 
@@ -962,6 +1039,135 @@ WHERE error_id = 26;
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
 
+### The review of 2026-10-31 (3) (errors 1553 - 1627): units and share counts proven by the stored data, comparative breakdowns
+
+Hermes' batch of 2026-10-31 (1,343 files SUCCEEDED, 26 INCOMPLETE, every period stored with an income statement): 75
+open rows. The fixes below were uploaded again on the new backend (48 files), the rest is the filings' (dev_context 189 - 201).
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **Amounts in millions under a "Full Amount" declaration.** IMJS FY2024: total assets 29,410,622, prior year end 28,711,560 (FY2023 stored 28,711,561,013,612), profit to parent 228,477 / EPS 26.4 = 8,654 shares as filed. FY2024 was stored a million times too small - the only period in the database 1e3 / 1e6 off its neighbours. | 1607 | `IngestionService.provenUnit`: when the EPS contradicts the declared rounding but is plausible in unit x 1e3 / 1e6 / 1e9, and the filing's prior year end total assets are the stored total assets of that date (rounded to that unit, within one filed unit), the workbook is read in that unit (`FilingMapper(workbook, provenUnit)`). Test `IngestionServiceUnitTest`. |
+| **A refused comparative breakdown left the upload INCOMPLETE** (BUKK, CASS, DKHH, FWCT, GEMA: lines filed twice or above the revenue). | 1553, 1555, 1557, 1562, 1575, 1589, 1590 | The user's decision: `IngestionVerifier` makes it a note also where no breakdown of the period is stored (the period's own filing stores one). `IngestionVerifierSegmentsTest`. |
+| **An EPS cell holding the profit** (FLMC FY2022 - FY2025: basic EPS -22,991,911,126 = the profit) gave 1 share outstanding at every year end. | 1585 - 1588 | `FilingMapper.sharesFromEps` rejects a count of 1 (CBPE FY2021's real 35,000 before its IPO stays) and a count above the rupiah share capital (par under Rp 1: CCSI 9M 2026, EPS in thousands, 1,304,109,585,324 shares). `FilingMapperEpsCellTest`. |
+| **A par value inferred from an EPS filed in another scale** (found by `valuation_check.py`): IPCC 9M 2026 par Rp 1 (181,838,482,000 at 2025-12-31 beside its FY2025's 1,818,384,820), GLVA H1 2026 par 500, KSIX and LABA 9M 2026, KAEF FY2025 par 50, JGLE FY2025 par 10; CFIN / CCSI from the EPS. Where the *stored* history was the wrong one - KOIN (980,843,732 = share capital Rp 98,084 million at par Rp 100, KSEI; stored 9,808,400,000 and a false reverse split 100:1 the split detection recorded), HILL (14,741,500,000 at par Rp 20, KSEI; stored 29,483,000,000) - and FLMC without any count: `V1.0.45__data_KOIN_HILL_shares.sql` (FLMC 781,250,000 = Rp 62,500,000,000 at par Rp 80). | - | `IngestionService.dropContradictedShareCounts`: a filing's counts are not stored when one of its comparative dates is more than 10% from the stored count of that date and no split is recorded in between; the published counts (checked against the EPS) are tried instead (HILL H1 2026: 14,741,500,000). 25 stored snapshots cleared by SQL (guarded on the exact values), the filings uploaded again; V1.0.45 in `IngestionRepository.SHARE_SCRIPTS`. Tests `IngestionServiceUnitTest`, `KoinHillSharesTest`. |
+| **Cash with bank balances one filed unit off** (HDFA H1 2026: 5,013 + 56,101,280 = 56,106,293 thousand beside 56,106,292). | 1597 | `FilingMapper.cashWithBankBalances`: exact first, then within one unit. |
+| **A cell's binary fraction** (LAJU FY2022: ending cash 3.7643576861000004E9, stored 3,764,357,686.1000) failed the overdraft explanation's filed = stored test. | 1622 | `IngestionVerifier.overdraftExplanation` compares at the stored scale. `IngestionVerifierOverdraftTest`. |
+| **A Sharia insurer's tabarru funds** (CASA FY2025: 24,667,114 + 2,207,986 + 24,781 + 10,401,954 = 37,301,835 million) left out of the bank balance check: every CASA filing went to the full-text extraction. | 1558 - 1572 | `FilingMapper.financialBalanceSheet` stores them with the syirkah funds when the balance then holds and not without (ARTO FY2022's syirkah total on that row stays). `FilingMapperTabarruTest`. |
+| **A gross profit of cost rows alone** (CASA FY2023 files no revenue rows: -5,416,776 million). | (income check) | `FullTextExtractor`: not stored when there is no revenue and every gross profit term is subtracted; a filed negative 'Total gross profit' row (GTBO H1 2026) stays. `FullTextExtractorTest`. |
+| **The filings'**: workbooks without statements (CENT, GRIA FY2023, IBOS FY2024; GRPH FY2023 empty column), DNAR FY2023 without a cash flow, cash flows contradicting the balance sheet (GSMF 9M 2026, IBOS H1 2026, KIAS FY2022, KINO FY2025, IMJS), restated comparatives and slips (CITA, IDEA, LFLO, HAJJ / IKAN ending cash without its minus sign), EPS cells in another scale (DLTA, JRPT, KARW, KING), and the remaining SUCCEEDED rows the full-text extraction stored (restated comparative columns, empty profit before tax cells, no revenue in the period). | the rest | Not changed. USD filings of ESTI, KOBX, MBSS refused by design (their later filings restate them in IDR; MBSS FY2023 waits for the FY2024 workbook). LAPD's tiny FY2021 - 2022 figures are real. |
+
+After the uploads: 47 of 48 SUCCEEDED (IMJS FY2024 INCOMPLETE on its 300 million cash gap only), all 87 rows closed;
+`valuation_check.py` 170 -> 165 flags, every clean-factor share count gone (open: ELTY, GIAA, CMNP, LPPF, FORU, GMFI; HILL
+2023-12-31 before its likely split). `DerivedDataRefreshTest`: the whole V1.0.6 takes 17.6 s with 625 companies (10.8 s at ~360), its limit is 30 s; the
+per-company refresh needed a `VACUUM ANALYZE` after the day's uploads (2.3 s -> under 1 s a company).
+
+### The review of 2026-10-31 (2) (errors 1468 - 1512): restated breakdowns, one unit in full amounts, share counts
+
+Hermes' B-tickers (BHIT, BOSS, BRAM, BMBL, BKSW, BOLA, BELL, BSIM, BUDI, BMHS, BUAH): 16 rows, nine INCOMPLETE. Every
+file was uploaded again on the backend of the morning's fixes first (rows 1496 - 1512), then the affected ones after
+the fixes below. 34 rows closed, none open.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A later filing's restated breakdown beside the period's own revenue.** BHIT's FY2025 filing restates FY2024 revenue 15,226,314 million as 15,139,665 and splits the restated figure into ten lines; BMHS's FY2024 filing restates FY2023 1,287,690,839,110 as 1,488,197,483,371 (cost alike, gross profit unchanged). Uploaded before the earlier filing (Hermes uploads newest first), the comparative filled the empty breakdown and stayed beside the own filing's revenue (segment revenue != revenue). | 1471, 1480, 1496, 1505, 1506 | `IngestionTools.saveRevenueSegments`: a comparative breakdown that does not add up to the stored revenue (within `BREAKDOWN_SLACK` 2,000,000: a breakdown in millions beside a full-rupiah revenue, INPP FY2024 1,309,662 million vs 1,309,661,867,481, stays) is kept out (`KEPT_OUT`); `saveStatements` of a period's own filing removes a stored breakdown of another revenue (`removeBreakdownOfAnotherRevenue`, `IngestionRepository.removeSegmentRevenue`). Only these two periods in the database. Test `IngestionToolsSegmentsTest`. |
+| **Ending cash one filed unit from the balance sheet in a full-amount filing** (BRAM H1 2026, full USD: 21,668,146 + 2,721,874 - 22,173 = 24,367,847 beside 24,367,846; BMBL FY2022, full rupiah: 479,564,255 beside 479,564,254). Too small a balance for the billionth of `immaterialExplanation`. | 1472, 1482, 1497, 1498 | `IngestionVerifier.roundingExplanation`: one unit is rounding in every filing (before: only thousands / millions), as the mapper's full-amount roll-forward accepts (ALMI). Two units stay a problem (BMBL FY2023 / FY2024, MGLV FY2023, WINE FY2023). |
+| **The filings'** (dev_context, tag `xlsx-error`, 151 - 159): BOLA FY2022 cash flow without the 47,750,000,000 'other increase' its FY2023 filing restates (151); BELL FY2023 without -2,231,893,807 (152); BMBL's 2-rupiah carried slip and a FY2023 face row missing (153); BHIT's and BKSW's restated FY2024 investing sections (154, 155); BSIM's 9M 2025 collateral recovery counted twice (156); BUDI's FY2024 1,052 million on two rows (157); BUAH FY2023 'Other gains (losses)' with the wrong sign (158); BOLA 9M 2026 profit before tax cell empty (159). | the rest | Not changed: the full-text extraction stored the filed figures (an amount repeated on two rows is the workbook's, not bent into `doubleReportedLines`). BOSS FY2024 has no revenue (the company). |
+
+Valuations (`valuation_check.py`, 84 flags): BMBL and BOAT had prices but no share count (`V1.0.43__data_BMBL_BOAT_shares.sql`:
+BMBL 1,030,080,995 = share capital Rp 41,203,239,800 at par Rp 40, not added to `STANDARD_PAR_VALUES` because Rp 40 makes
+DEFI FY2025's Rp 50 ambiguous; BOAT 3,501,680,000 from its IPO of 2024-11-12). Wrong or missing counts
+(`V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql`, in `IngestionRepository.SHARE_SCRIPTS`): MSIN's H1 2026 filing
+files its EPS ten times too large, so the par inference took Rp 100 (6,067,620,000 for 60,676,178,205; P/E 0.63 -> 6.26);
+SMGA's par value Rp 20 (8,750,000,000; the inference took Rp 10 and stored twice the count); RMKE's split 1:5 of
+2026-07-17 (21,875,000,000, earlier counts and EPS split-adjusted like the prices); the counts after the share issues of
+WIFI (5,308,549,015), INET (22,374,111,088) and PACK (32,379,253,695, its 2026 rights issue of convertible bonds - not a
+split) from their share capital at the par value of their earlier filings. Real, not errors: treasury shares (MNCN,
+DSSA, UNTR, DGIK, GOTO ...), KRAS's P/E 0.39 (FY2025 profit USD 325 million), BHAT's 43,388 (FY2024 profit Rp 204 million).
+Open: FORU (rights issue of September 2026, final count not published), GMFI (rights issue II, counts disagree), BIMA
+(KSEI 608.2 million vs EPS 578.6 / 289.4 million), BNBR's P/E basis (a decision). EBITDA not derivable: ARKO, BINO, BMBL
+(intangibles), BATA (no right-of-use depreciation), BAPI (no D&A). Income: BSML's FY2025 workbook missing; BTEL files by
+nature with an empty cost of sales note.
+
+### The review of 2026-10-31 (errors 1354 - 1423): filings of one company at once, rounding units, insurers' deposits
+
+Hermes uploaded about 300 filings of 60 companies, several years of one company two seconds apart.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **Two currencies in one company.** Filings of one company ran at the same time (`same-company-in-order` was off), so each passed the currency check (`IngestionService.currencyConflict`, when the job opens the workbook) before any of them was stored: ANJT's FY2025 filing in USD stored FY2024 / FY2025 in dollars (revenue 236,598,588) beside H1 / 9M 2026 in rupiah (2,345,605,324,970), its FY2022 - FY2024 filings were refused; DEWA's FY2022 filing in USD stored FY2021 / FY2022 beside FY2023 on in rupiah (its FY2023 filing restates FY2022 in IDR). | 1398 - 1401 | `neracalab.ingestion.same-company-in-order` defaults to `true` (application.yaml, docker-compose, `FinancialStatementQueue`): filings of one company one after the other in upload order, so a filing in another currency is checked against every filing of the company stored before it. ANJT FY2024 / FY2025 and DEWA FY2021 / FY2022 deleted; the IDR filings uploaded again (ANJT's year end 2025 from its 2026 filings, DEWA FY2022 from its FY2023 filing's comparative). ANJT FY2025's income in IDR comes with its FY2026 annual filing. |
+| **Ending cash one rounding unit from the balance sheet** (BATA H1 2026: 26,809,539 thousand beside 26,809,538; BBLD FY2023, FY2024, H1 2026: one million). | 1414, 1416 - 1418 | `IngestionVerifier.roundingExplanation`: at most one unit is a note, as the mapper's checks accept (before: less than one unit). BBLD FY2022's 69 million (514,065 / 514,134) stays a problem: the filing (dev_context 107). |
+| **An insurer's cash flow counts its short time deposits as cash** (AMAG FY2022 - 9M 2026: FY2025 ending cash 485,425,155 thousand = cash 64,021,213 + 421,403,942, within time deposits 651,473,868; ASDM FY2025 / 9M 2026). | 1354, 1356 - 1360, 1407, 1409 | `FilingMapper.currentFinancialAssetsOutsideCash`: an insurer's 'Investments in time deposits' (its balance sheet is not split into current and non-current); `IngestionVerifier.overdraftExplanation` checks the deposits without needing a short-term debt row. Test `IngestionVerifierInsurerDepositsTest`. |
+| **A full-amount roll-forward one rupiah off** (ALMI FY2024: 507,776 - 480,438 = 27,338, ending cash filed 27,337; ARTI FY2023, ASHA FY2025). The full-text extraction stored them. | 1355, 1408, 1410 | `FilingMapper.cashFlow`: the final roll-forward check accepts one unit as the filing's rounding (a warning). Only there: in `equal` a unit apart still tells two candidate lines apart (ENRG's double-reported other income). Test `FilingMapperCashRoundingTest`. |
+| **A cash flow section whose only line is filed as 0** (AMMS H1 2026: receipts from stockholders 0, no investing total, no financing section; operating -44,107,270 is the net change). | 1371 | `FilingMapper.sectionHasNoLines`: a line of 0 is no line; the section counts as 0 when the other totals give the net change. |
+| **Amortization of a business that left the group** (PTRO H1 2026: intangibles 134,250 -> 60,088 thousand USD and goodwill 21,395 -> 2,408, so opening + purchases - closing = 78,212 while its cost of sales note states 6,075; CUAN H1 2026 152,773 -> 72,543). EBITDA was overstated. | - | `FilingMapper.amortization`: none when the roll is positive and the goodwill fell by half or more (goodwill is not amortized: a business left the group or was written off); a smaller fall (exchange rates, TOBA H1 2026, TLKM) leaves the roll. 14 of the 2021 - 2026 workbooks: besides PTRO and CUAN H1 2026 the roll had given ADRO FY2024 (the AADI spin-off), DGWG FY2025, DYAN FY2025, GOTO FY2023 - FY2025 (goodwill impairments) and MPMX FY2022 an amortization. An upload keeps a stored value the new mapping leaves empty, so their amortization and EBITDA were cleared by SQL and the filings uploaded again. Test `FilingMapperAmortizationTest`. |
+| **Stale valuations after periods were removed.** ANJT's 2026-06-30 and 2026-09-30 valuations kept a P/E of 21.6 / 12.0 and an EV / EBITDA of -407,653 / -491,668 from the deleted USD FY2025: a period end without trailing twelve months is no valuation date of `V1.0.6` any more, so nothing refreshed the row (`DerivedDataRefreshTest` found it). | - | `V1.0.6__data_metrics_valuation.sql`: such a row's trailing ratios are cleared (market cap, EV, book value and P/B stay). It reached exactly those two rows. |
+| **Prior-period breakdown pending while the period's own filing ran beside it** (BEEF FY2024). | 1422 | Uploaded again in order: SUCCEEDED. |
+| **The filings'** (dev_context, tag `xlsx-error`): AYLS H1 2026 cash 9,712,274 apart (106), BBLD FY2022 (107), ASMI's restated FY2024 column (108), ATLA H1 2025 breakdown (109), AMAR FY2023 roll-forward missing 25,986 million (110), APII FY2024 / FY2025 (111), ARKO H1 2026 (112), ARTA FY2024 investing (113), BBSI one impairment twice (114), ANJT H1 2025 pretax 460,442 apart (115), BEKS FY2022 two units (116), BBHI FY2024 without a cash flow (117). Slow standard extractions of AMMS (1373, 1374): the queue was full. | the rest | Not changed: the full-text extraction stored the filed figures. |
+
+Valuations: ALKA, AMAN, AREA, ATAP and BATR had prices but no share count (`V1.0.41__data_ALKA_AMAN_AREA_ATAP_BATR_shares.sql`: ALKA 507,665,055; AMAN 3,873,500,000 = share capital at par Rp 100; AREA 2,029,601,000 founders' shares, 2,539,601,000 from its IPO of 2024-04-01; ATAP 1,250,000,000 = share capital at par Rp 40; BATR 3,025,000,000 from its IPO of 2024-06-10 - each within KSEI's 1% lists). BBHI's H1 2026 filing stored half its count at 2025-06-30 (10,865,128,221): the bank files its interim EPS annualized and the par value inference fitted Rp 200 instead of Rp 100 (`V1.0.42__data_BBHI_shares.sql`, run after every upload; the inference itself is an open issue, dev_context 122). New companies without EV / EBITDA by the filings: ARKO (intangibles grew), BAPI and BATA FY2025 (no depreciation). Gross profit: AMOR, APIC and ARGO (from FY2025) file by nature with empty cost of sales notes - not derivable.
+
+### Revenue, gross profit and net income of every company (2026-10-30)
+
+A check of all 250 companies. Net income is in every period with an income statement; revenue too, except PEGE (no
+revenue filed, see below). Gross profit:
+
+| Gap | Fix |
+|---|---|
+| **Insurers and financing companies without gross profit in some periods** (TUGU FY2021, FY2024, H1 2025, FY2025, H1 2026; PNLF H1 2025, H1 2026; FUJI FY2023): revenue and cost of revenue stored, the model left gross profit out. | `FullTextExtractor`: an insurer's or financing company's gross profit is revenue - cost of revenue (revenue where there is no cost), as the field defines it. Test: `anInsurerIsMappedWithItsTabarruFundsAndItsShareCapital`. |
+| **PGEO FY2021 - FY2023** (by nature): its cost of sales note (3670000) states the cost (FY2023 178,977 thousand), but the filings were stored before the note was used (2026-10-26). Uploaded again, FY2023 still had none: the model named 'Exploration expenses' (the note's 178,977) as cost of revenue and only 'Other expenses' 5,526 as operating expenses, which cannot hold the cost. | `costOfSalesFromTheNote`: where the rows the model names as cost of revenue - and not among the operating expenses - are the note's cost, the note gives the gross profit and the operating expenses stay as mapped (test `theModelsOwnCostRowsAreTheNotesCost`). FY2023's face has no revenue at all (406,288,000 only in its breakdown by party; the stored revenue is the FY2024 filing's comparative): the cost is still stored and taken out of the operating expenses (184,503,000 -> 5,526,000), and a gross profit another filing stored is kept instead of cleared (test `withoutRevenueTheNotesCostIsStoredAndAGrossProfitKept`). The FY2024 filing, uploaded again, filled FY2023's gross profit from its note's prior column (227,311,000) and gave FY2024 its own cost (164,885,000; it had the FY2025 comparative's 166,721,000). |
+| **BUKA FY2025** (by nature): the note's cost 5,990,751,222 thousand is more than the operating expenses by nature, 4,432,364,338, because a gain of 1,988,280,296 is filed as negative 'Other expenses'. | `costOfSalesFromTheNote`: the positive expense rows must hold the cost (6,420.7 billion do); the operating expenses without it are negative, as filed. Gross profit 519,279,231 thousand. Test `theCostOfSalesIsHeldByThePositiveExpenseRows`. |
+| **No gross profit in the filings**: BREN, EXCL, GMFI, ISAT, TLKM (by nature, cost of sales notes empty or 0 in every filing), MNCN FY2021 - FY2023 and BMTR FY2021 - FY2022 (notes empty). | None: not derivable without making a cost of sales of expense rows by nature. |
+| **FY2025 without an income statement**: ASLC, ADES, ALII (their FY2025 annual workbooks are not in `data/IDX_XBRL`; the year end is only the balance sheet comparative of a 2026 filing), BACH and RANS (listed in 2026: no FY2025 annual filing). | ASLC, ADES, ALII: download `FinancialStatement-2025-Tahunan-<TICKER>.xlsx` from IDX and upload it (IDX refuses a script with HTTP 403). |
+
+### Valuation gaps of 2026-10-30 (2): ACRO, AGAR, AISA, EBITDA without amortization, capex without a row
+
+A check of every company's latest valuation. By design without a value: EV and the EV ratios of banks, insurers and
+financing companies; P/E, P/S and EV / EBITDA of BACH and RANS (no trailing twelve months yet); P/S of PEGE (no revenue).
+The rest:
+
+| Gap | Fix |
+|---|---|
+| **ACRO, AGAR, AISA: no valuation at all.** Prices but no share count: none of their filings states one and no Yahoo Finance count fits (AISA's is 2.45 times smaller than its EPS gives; AGAR's filed EPS fits no count). | `V1.0.39__data_ACRO_AGAR_AISA_shares.sql` from KSEI's 1% lists (a holder's shares / its percentage) and the listing records: ACRO 3,469,138,591 from its IPO of 2024-01-11 (KSEI 3,469.26 - 3,469.70 million in 2026: Series I warrants exercised since, at most 0.016%), AGAR 1,000,000,000 (KSEI exactly), AISA 9,311,800,000 (KSEI 9,311.2 - 9,312.6 million; every EPS 9.28 - 9.31 billion). |
+| **No EV / EBITDA for 17 non-financial companies.** The latest (H1 2026) valuation takes FY2025's EBITDA when the trailing one is not derivable, and FY2025 had none: amortization = intangibles opening + purchases - closing is not derivable where the intangibles grew by more than the cash paid for them (KETR, BNBR, CUAN, DSNG, GGRM, HATM, IMPC, IRSX, PTRO, TOBA, WIRG ...) or were sold (MIKA), and none of these workbooks states its D&A. | `FilingMapper.immaterialIntangibles`: EBITDA = EBIT + depreciation when the intangible assets, opening and closing, are under 1% of it (a year's amortization cannot exceed them): BNBR, DSNG, HATM, KETR, WINS FY2025 and AKPI, ANTM, INET, KIJA, PGAS, WIFI, WIIM, HATM, KETR in earlier filings. Where intangibles matter (GGRM 14.9 trillion, WIRG, IMPC, MIKA, IRSX, CUAN, PTRO, TOBA) EBITDA stays empty: not derivable from the filing. EMTK and JPFA FY2025 leave the right-of-use roll-forward empty with right-of-use assets of 249,586 and 216,025 million a year before, ADCP and MGLV their PP&E roll-forward: no depreciation, no EBITDA. Test `FilingMapperImmaterialIntangiblesTest`. |
+| **FUJI, ADCP: no FCF yield.** The full-text extraction left capital expenditure empty where the cash flow has no such row (FUJI, a financing company, has no investing section; ADCP's 9M 2025 invests only in land for development, a joint venture and restricted funds), so the trailing free cash flow was unknown. | `FilingMapper.reportsCapitalExpenditure`: no capital expenditure row with an amount in the column -> 0, as the rule-based extraction stores it. Test `FilingMapperCapexTest`. |
+
+### The review of 2026-10-30 (errors 1233 - 1256): financing companies' cash, PSAK 117 comparatives, PEGE, ABDA
+
+New uploads of SMMA, PEGE, DEFI, ABDA, ADCP, ADMF, AGRS and AGRO.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A financing company's cash without its bank balances.** In the Financing Industry taxonomy (8220000) ADMF's and DEFI's row 'Cash and cash equivalents' holds the cash alone; the current accounts and placements with banks are rows of their own, and the cash flow statement counts them in cash: ADMF FY2025 77,878 + 176,714 + 566,324 = 820,916 million, the ending cash; DEFI FY2023 8,801,000 + 4,487,369,146 + 8,500,000,000 = 12,996,170,146. | 1243, 1249 - 1254 | `FilingMapper.cashWithBankBalances`: where the ending cash is exactly the row plus some of the 'Current accounts with ...' / 'Placements with ...' rows, the full-text extraction stores the cash flow's cash and cash equivalents, as for a bank. Every ADMF filing and DEFI FY2021 and FY2023 match; BFIN and FUJI (the row is the ending cash already) and SMMA do not. Test `FilingMapperFinancingCashTest`. |
+| **DEFI FY2022:** its cash flow ends at 15,857,547,033, 501,250,000 below cash + current accounts + placements; the FY2023 filing restates the FY2022 cash flow to 16,358,797,033. | 1244 | Not changed (the filing): stored as filed. |
+| **SMMA**, a financial conglomerate: its ending cash (FY2025 22,053,772 million) is more than cash 9,180,682 + placements 8,655,785; no combination of up to three asset rows makes up the rest in FY2025 or FY2024, so the balance sheet does not show which securities the cash flow counts as cash equivalents. | 1233 - 1237 | Not changed (the filing): the balance sheet's row is stored. |
+| **Cells of the former presentation in an insurer's restated comparative.** ABDA applies PSAK 117 from 2025; its H1 2025 column (H1 2026 filing) and FY2024 column (FY2025 filing) keep 'Decrease (increase) in unearned premiums', 'premium income ceded', 'estimated claims liability' and 'Commission expenses', which the current column leaves empty and the restated profit before tax does not count (H1 2025: -2,274,276 against 86,606,060; FY2024: the four make up exactly 165,459,501). | 1246, 1247 | `FullTextExtractor.staleHint`: the model is shown that the comparative reconciles exactly without the rows filled in it alone; when it keeps them, they are left out (`without`). ABDA H1 2025 revenue 567,037,027 and cost of revenue 449,006,351 thousand. Test `rowsOfAnInsurersComparativeAloneAreLeftOutWhenOnlySoItReconciles`. FY2024 is stored from its own filing. |
+| **ABDA FY2021 / FY2022: G&A tagged as interest.** The FY2022 filing tags its general and administrative expenses 'Interest and finance costs' (328,420,609 and 284,745,743 thousand); the FY2023 filing files 328,420,609 as G&A. Operating income came to 459,445,724 and 434,411,704 for profits before tax of 174,699,981 and 105,991,095. | - | `V1.0.38__data_ABDA_expenses.sql` (only while the rows hold the tag's figures): operating expenses, no interest, operating income = profit before tax. Test `AbdaExpensesTest`. |
+| **PEGE: a revenue made of finance and other income.** PEGE, an investment company, files no revenue: G&A, finance income (its investment results, often negative), other income, other expenses. The model made a different revenue each year (FY2021 -83,563,969,959, FY2022 -94,297,438,110: finance + other income; FY2023 80,992,772,897 and FY2024 28,879,851,458: other income - finance income; FY2025 finance income 19,282,262,084); interim periods had none. | 1238 - 1242, 1245 | A revenue made only of 'Finance income', 'Other income', 'Other gains (losses)' and 'Dividends income' is not stored and a stored one is cleared (`NOT_REVENUE`); operating expenses and income stay (other income - G&A - other expenses in every period). `FilingMapper.reportsNoRevenue` names such a profit or loss (PEGE in every filing; ESSA, PANI FY2023 start at gross profit and PGEO FY2023 keeps revenue in a note, so a missing row alone is no proof). Test `aRevenueMadeOfFinanceAndOtherIncomeIsNotStored`. Uploaded again, the model left FY2023 and FY2024 revenue empty, which keeps a stored value: those two (80,992,772,897 and 28,879,851,458, the earlier uploads') were cleared in the database once; PEGE has no revenue in any period now. |
+| **A slip of two units in thousands.** AGRO FY2022 (a bank): 2,140,267,174 - 9,894,016 = 2,130,373,158, ending cash filed 2,130,373,160. | 1256 | `FilingMapper.equal`: a filing in thousands or millions is off by up to one unit, else, like a full-amount filing, by under a billionth of the amount (a warning; the reported figure is stored). |
+| **AGRS H1 2025** (a bank) files one impairment of 9,913 million twice ('Recovery of impairment loss' -9,913 and 'Allowances for impairment losses' 9,913); its profit from operation counts it once. **ADCP 9M 2025** repeats amounts on unrelated financing rows (108,056,829,048 as non-bank loans and as due to related parties); its totals are its own. | 1248, 1255 | Not changed (the filings): the full-text extraction stored the filed totals, `SUCCEEDED`. |
+
+### The review of 2026-10-30 (errors 1177 - 1199): out of credit, two jobs of one company, MNCN's breakdown
+
+The filings by nature of BUVA, MNCN, NICL, NSSS, BUKA and MSIN (and RAFI FY2022) were uploaded again to take their
+gross profit from the cost of sales note, 31 at once. Three causes:
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **OpenRouter out of credit.** 402 "This request would exceed your available credits given your current in-flight requests" (USD 0.85 left, 31 full-text extractions reserving at once); nothing was extracted, the stored data unchanged. | 1177 - 1179, 1181 - 1198 | Uploaded again one at a time after the credit was topped up, the last ones on Claude Haiku 5.5 through OpenCode Go: all `SUCCEEDED`. |
+| **Two filings of one company at the same time.** MNCN FY2024's own cost of sales note is empty, so its job cleared cost of revenue and gross profit; the FY2025 job, running beside it, filled FY2024's from its comparative note (3,929,468 / 4,024,344 million) before the FY2024 job verified ("stored ... but the filing says null"). | 1180 | Not a data error: the stored figures are right; uploaded again alone, `SUCCEEDED`. `INGESTION_SAME_COMPANY_IN_ORDER=true` avoids it. |
+| **A breakdown the filing gets wrong.** MNCN H1 2026, the H1 2025 comparative of note 1617000: 'Service revenue 1' 4,070,760 million (the revenue) and lines 2 - 6 add up to 2,687,578; no reading gives the revenue. | 1177, 1199 | Not changed (the filing): the breakdown is left open, the statements stored. |
+
+**A cost a fraction above the expenses** (RAFI FY2021, in its FY2022 filing with fractions of a rupiah): the note's
+cost 89,901,586,207 is 0.36 above the expenses 89,901,586,206.6389 it is one of, so the cost of sales note was
+refused and the year had no gross profit. `FullTextExtractor.costOfSalesFromTheNote` takes a cost less than a filed
+unit above the expenses as the same amount (operating expenses then 0): gross profit 27,211,617,032. Test
+`FullTextExtractorTest.aCostOfSalesAFractionAboveTheExpensesIsTheSameAmount`.
+
+Gross profit afterwards: BUVA, MSIN, NICL, NSSS and RAFI in every period. Left empty: MNCN FY2021 - FY2023 (the
+cost of sales notes of the FY2022 - FY2024 filings are empty) and BUKA FY2025, whose note's cost 5,990,751,222
+thousand is above its expenses by nature (4,432,364,338: 'Other expenses' is a gain of -1,988,280,296), so the
+operating expenses would turn negative.
+
 ### Valuation gaps of 2026-10-29: EBITDA of the interim comparative, POLY, RANS
 
 Companies › Fundamentals had no EV / EBITDA in the latest valuation of 191 of 198 companies (20 financials, none by
@@ -977,6 +1183,32 @@ only); only HRTA and INDF had their own H1 2025 filing uploaded.
 | **A new listing without a share count.** RANS listed on 2026-07-10; its H1 2026 filing gives none and Yahoo Finance's fits none of its EPS. | `V1.0.37__data_RANS_shares.sql`: 10,084,250,000 founders' shares, 12,609,250,000 after the offering (IDX's listing announcement; KSEI's lists bound it to 12,608.2 - 12,610.3 million). Market cap, EV and P/B; no P/E until its first full year, as BACH. |
 
 Tests: `FilingMapperStatedDaTest`, `FullTextExtractorDeriveTest`, `ValuationEbitdaBasisTest`, `RansSharesTest`.
+
+### Valuation gaps of 2026-10-30: RAFI, and the companies without a full valuation
+
+Of 222 companies, RAFI alone had no valuation at all. Three more have a latest valuation with gaps, by design:
+
+| Ticker | Cause | Fix |
+|---|---|---|
+| **RAFI** | Its par value is Rp 15 (common stocks 46,921,350,000 = 3,128,090,000 shares after the IPO of 2022-07-28; FY2023 EPS 127,469,201,017 / 3,128,090,000 = 40.75), which is not in `FilingMapper.STANDARD_PAR_VALUES`, and Yahoo Finance has no count: no share counts, no market cap. | 15 added; `inferParValue` skips a par that does not divide the share capital (1 / 15 has no exact decimal quotient: `RoundingMode.UNNECESSARY` threw on every other workbook), `sharesAtPar` likewise. A sweep of all 1,048 workbooks in `data/IDX_XBRL`: only RAFI FY2023 / FY2024 (2,180,000,000 at 2021-12-31, 3,128,090,000 at 2022 - 2023, 3,128,140,475 at 2024-12-31) and IRSX's H1 2026 change (below). RAFI's FY2023 and FY2024 filings uploaded again (2026-10-30, full-text extraction, `SUCCEEDED`): four share counts, a market cap and valuations from FY2022 (latest on the last close, 2026-02-13: P/B 0.41, P/E -18.2 on the FY2024 loss). |
+| IRSX | H1 2026 now resolves par 15 (92,925,710,655 = 6,195,047,377 shares, the count already stored; EPS 1.25 and -0.32 both fit), and carries 5,000,353,976 to 2024-12-31, where 6,892,377,912 is stored from another source. | Not uploaded again until the 2024 count is checked. |
+| BACH, RANS | Listed in July 2026 with one filing (H1 2026): no trailing twelve months, so no P/E, P/S or EV / EBITDA until their FY2026 filings; market cap, EV and P/B are there. | None (by design). |
+| INPS | Its latest valuation uses the close of 2026-09-17: IDX suspended its shares from 2026-09-18 (more than a year on the Special Monitoring Board). | None. |
+| FORU | Not empty but wrong since 2026-09-14: the price falls from 3,720 to 238.41 with about 15 times the volume and a week of fractional (adjusted) closes, a corporate action (rights issue or split) that no source has recorded; the share count stays 465,224,000, so the market cap (Rp 40.9 billion on 2026-10-28) and P/E, P/B, EV are too low. | Open: the share count after the action, from its IDX announcement. |
+
+Test: `FilingMapperRafiTest`.
+
+### The review of 2026-10-30 (errors 1146 - 1154): AHAP, RAFI, BGTG, MAXI and UVCR
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A cash flow section without rows.** AHAP, an insurer, has no financing activity in FY2024, FY2025, H1 2025 and H1 2026 (no lines, no total; FY2024: operating 1,356,295,483 + investing -580,969,819 = net change 775,325,664). The full-text extraction left `financing_cash_flow` empty and every upload ended `INCOMPLETE`. | 1146 - 1148 | `FullTextExtractor.emptySectionAsZero`: a section without rows is 0 when the other two add up to the change in cash (within two units), as `FilingMapper.sectionTotals` counts it for the rule-based extraction (CEKA). |
+| **A revenue with a fraction of a rupiah.** RAFI FY2022 (full amounts) files revenue 375,886,948,578.9396 beside a breakdown of 375,886,948,579. `IngestionVerifier.segmentRoundingExplanation` only accepted such a gap in filings in thousands or millions. | 1149, 1150 | A gap under the rounding unit, at least 1, is a note for full amounts too (as `balanceRoundingExplanation`). |
+| **An ending cash cell the filing contradicts.** UVCR 9M 2026: the sections add up to the net change 568,862,927, and 1,805,621,319 + 568,862,927 = 2,374,484,246, the balance-sheet cash. Only the ending cash cell says 2,824,484,246. | 1153 | `FilingMapper.correctEndingCash`: in a non-financial current period whose sections give the net change and whose roll-forward gives the balance-sheet cash exactly, the ending cash is the balance sheet's (a warning says so). Not where the roll-forward reaches the filed ending cash (overdrafts, deposits). |
+| **Filings that contradict themselves.** BGTG's FY2025 filing restates FY2024 and still files non-operating income 617 million: it reconciles only without it (259,526 - 4,849 = 254,677). UVCR's H1 2025 comparative is 164,852,231 apart from its profit before tax; AHAP's FY2024 (2,673,553,844) and H1 2025 (14,746,914,718) comparatives too, with no line or sign to explain it. MAXI FY2023 rolls forward 180 rupiah above its ending cash, the balance-sheet cash; its FY2024 filing restates the net change 180 lower, so the slip is in one of the FY2023 lines. | 1147, 1148, 1151, 1152, 1154 | Not changed: nothing in the workbooks decides which figure is wrong. Stored by the full-text extraction with the filed totals; BGTG, MAXI and UVCR H1 2026 `SUCCEEDED`. |
+
+Tests: `FilingMapperUvcrTest`, `FullTextExtractorTest.anEmptyCashFlowSectionIsZeroWhenTheOthersGiveTheNetChange`,
+`IngestionVerifierRoundingTest.segmentRevenueWithinARupiahOfAFullAmountFilingIsANote`.
 
 ### The review of 2026-10-29 (errors 1067, 1068): MGLV and JARR
 
@@ -1356,7 +1588,7 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
 |--------|---------|
 | `job_id` | the upload job (`ingestion_job`); deleted with it |
 | `stage` | `PLAN` (the planner), `EXECUTE` (a tool turn of the agent loop), `REVIEW` (the reviewer) of the standard extraction; `FULL_TEXT` (an answer of the full-text extraction) |
-| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4.1 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Sonnet 5.5) for the full-text extraction |
+| `model` | the model the request asked: `spring.ai.openai.chat.model` (`OPENAI_MODEL`, DeepSeek V4.1 Flash) for the standard extraction, `neracalab.ingestion.fallback.model` (`INGESTION_FALLBACK_MODEL`, Claude Haiku 5.5; Sonnet 5.5 before 2026-10-30) for the full-text extraction |
 | `ticker` | the filing's company |
 | `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens` | as the provider reports them |
 | `cost_usd`, `cost_estimated` | the cost OpenRouter reports for the call (`usage.cost`; every request asks for it with `"usage": {"include": true}`). A call without one is priced from `neracalab.screening.llm.prices` and flagged |
@@ -1372,6 +1604,8 @@ Every model call of an upload job is recorded with its tokens and cost, as the s
   ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 2). The IDX XBRL Ingestion page shows the cost in
   the jobs table and the breakdown under "Model cost" in the job details.
 - Uploads stored before this was added have no rows, so no cost is shown for them.
+- A call through OpenCode Go (section 2) reports `usage.cost` 0, billed to the subscription: its rows have
+  `cost_usd` 0 and `cost_estimated` false.
 - **Failed calls go to the error log too.** When an upload is recorded in `ingestion_error` (section 6), the
   row's `details.failedModelCalls` lists the job's failed model calls from these rows, so a full-text
   extraction whose model (Sonnet) timed out or was refused shows what the provider said:

@@ -66,7 +66,7 @@ import com.neracalab.backend.registration.RegistrationParser.RegistrationFormatE
  *   <li>{@code POST /api/v1/rag/news?exchange=IDX&ticker=HRTA&from=2026-10-01&to=2026-10-08} - queue the news of a
  *       date range (inclusive, Jakarta time, at most 366 days, not in the future); 202 / 200 as above</li>
  *   <li>{@code GET /api/v1/rag/status} - settings (embedding model, chunking, news limits) and what is stored</li>
- *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF|NEWS|XLSX&documentType&limit&offset]} -
+ *   <li>{@code GET /api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF|NEWS|XLSX|XBRL&documentType&limit&offset]} -
  *       one page of the stored documents, with the number matching the filters</li>
  *   <li>{@code GET /api/v1/rag/search?q=...[&exchange&ticker&source&limit]} - the closest chunks (cosine)</li>
  *   <li>{@code POST /api/v1/rag/macro/pdf} (multipart {@code file}, {@code country}, {@code documentType},
@@ -365,7 +365,7 @@ public class RagController {
         try {
             return SourceType.valueOf(source.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new InvalidRequestException("Unknown source '" + source + "'; use PDF, NEWS or XLSX");
+            throw new InvalidRequestException("Unknown source '" + source + "'; use PDF, NEWS, XLSX or XBRL");
         }
     }
 

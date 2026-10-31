@@ -282,16 +282,20 @@ class OwnershipRepositoryTest {
         // the day before the first list is not stored: who fell below 5% that day is unknown, not "nobody"
         assertThat(reports.getLast().exited()).isNull();
         assertThat(exited).noneMatch(r -> r.reportDate().equals(reports.getLast().reportDate()));
-        assertThat(reports.getFirst().exited()).isEqualTo(3);
-        assertThat(reports.getFirst().entered()).isEqualTo(3);
-        assertThat(reports.getFirst().announcementNumber()).isEqualTo("00104");
+        // 27 October's list by its date: later lists join the folder (28 and 29 October since 2026-10-30)
+        ReportRow oct27Report = reports.stream().filter(r -> r.reportDate().equals(oct27)).findFirst().orElseThrow();
+        assertThat(oct27Report.exited()).isEqualTo(3);
+        assertThat(oct27Report.entered()).isEqualTo(3);
+        assertThat(oct27Report.announcementNumber()).isEqualTo("00104");
 
         // Lo Kheng Hong's companies
         Entity lo = repository.entities("IDX", TYPE, "lo kheng hong", 5).stream()
                 .filter(e -> e.holderKey().equals("DRS LO KHENG HONG")).findFirst().orElseThrow();
         assertThat(lo.holdings()).extracting(OwnershipRepository.EntityHolding::ticker).contains("ABMM");
 
-        Digest adro = OwnershipDigest.of("ADRO", repository.holders("IDX", TYPE, "ADRO", null, null));
+        // the days of the files: the database may hold lists of earlier days whose files are no longer in the folder
+        Digest adro = OwnershipDigest.of("ADRO", repository.holders("IDX", TYPE, "ADRO",
+                java.util.Collections.min(fileDates), java.util.Collections.max(fileDates)));
         assertThat(adro.days()).isEqualTo(files.size());
         assertThat(adro.holders().getFirst().name()).isEqualTo("ADARO STRATEGIC INVESTMENTS");
         assertThat(adro.totals().accountMoveDays()).isPositive();

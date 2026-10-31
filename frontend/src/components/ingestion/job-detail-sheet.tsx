@@ -52,6 +52,15 @@ interface FilingResult {
     modelRetries?: number
   } | null
   error?: string | null
+  /** the workbook's text in the RAG vector store (XbrlRagService.Result); absent when not written */
+  rag?: {
+    outcome?: "STORED" | "ALREADY_STORED" | "NO_COMPANY" | "NO_TEXT" | "FAILED"
+    sheets?: number
+    chunks?: number
+    characters?: number
+    embeddingModel?: string | null
+    message?: string | null
+  } | null
 }
 
 /** Fields of the price ingestion result (PriceIngestionService.Result). */
@@ -210,6 +219,23 @@ function FilingSummary({ result }: { result: FilingResult }) {
           {formatDuration(result.metrics.durationMs)} · {count(result.metrics.modelCalls)} model calls ·{" "}
           {count(result.metrics.toolCalls)} tool calls ({count(result.metrics.toolErrors)} errors)
           {(result.metrics.modelRetries ?? 0) > 0 && <> · {count(result.metrics.modelRetries)} model retries</>}
+        </Field>
+      )}
+      {result.rag && (
+        <Field label="Vector store">
+          {result.rag.outcome === "STORED" ? (
+            <>
+              {count(result.rag.chunks)} chunks of {count(result.rag.sheets)} sheets (
+              {count(result.rag.characters)} characters) ·{" "}
+              <span className="font-mono text-xs">{result.rag.embeddingModel ?? EMPTY}</span>
+            </>
+          ) : result.rag.outcome === "ALREADY_STORED" ? (
+            <>Already stored ({count(result.rag.chunks)} chunks): not embedded again</>
+          ) : result.rag.outcome === "FAILED" ? (
+            <span className="text-destructive">Not written: {result.rag.message ?? EMPTY}</span>
+          ) : (
+            <>Not written: {result.rag.message ?? EMPTY}</>
+          )}
         </Field>
       )}
     </dl>

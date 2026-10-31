@@ -199,8 +199,8 @@ class AnalysisControllerTest {
 
         // the fact sheet from the stored filings: the latest interim period, its comparative, then fiscal years
         JsonNode periods = report.path("context").path("factSheet").path("periods");
-        assertThat(periods.path(0).path("period").asString()).isEqualTo("2026 H1");
-        assertThat(periods.path(1).path("period").asString()).isEqualTo("2025 H1");
+        assertThat(periods.path(0).path("period").asString()).isEqualTo("2026 9M");
+        assertThat(periods.path(1).path("period").asString()).isEqualTo("2025 9M");
         assertThat(periods.path(2).path("period").asString()).isEqualTo("2025 FY");
         assertThat(periods.path(2).path("income").path("revenue").isNumber()).isTrue();
         assertThat(report.path("context").path("factSheet").path("amountUnit").asString()).startsWith("IDR billions");

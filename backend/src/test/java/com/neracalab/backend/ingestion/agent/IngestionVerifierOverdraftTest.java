@@ -74,6 +74,29 @@ class IngestionVerifierOverdraftTest {
                 .isNull();
     }
 
+    /**
+     * LAJU FY2022 (error 1622): 14,795,628,146 - short-term bank loans 11,031,270,459 = 3,764,357,687, the ending cash cell
+     * 3.7643576861000004E9 (stored 3,764,357,686.1000; its prior year: 1,000,933,932 - 10,230,902,120 = -9,229,968,188, the
+     * beginning cash). The cell's binary fraction beyond the stored scale made the stored figures look like another filing's.
+     */
+    @Test
+    void anEndingCashCellWithABinaryFractionIsTheStoredAmount() throws Exception {
+        Path file = Path.of("..", "data", "IDX_XBRL", "LAJU", "xlsx", "FinancialStatement-2022-Tahunan-LAJU.xlsx");
+        assumeTrue(Files.exists(file), "LAJU source data not available: " + file);
+        IngestionSession session;
+        try (InputStream in = Files.newInputStream(file)) {
+            session = new IngestionSession(new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString())));
+        }
+        BigDecimal cash = new BigDecimal("14795628146.0000");
+        BigDecimal ending = new BigDecimal("3764357686.1000");
+
+        assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending)))
+                .contains("bank overdrafts netted against cash");
+        // another stored figure is still a problem
+        assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending.add(new BigDecimal("0.0001")))))
+                .isNull();
+    }
+
     private static StoredPeriod stored(BigDecimal balanceSheetCash, BigDecimal endingCash) {
         return new StoredPeriod("FY", true, true, true, 0, BigDecimal.ZERO, null, null, null,
                 balanceSheetCash, endingCash, null);

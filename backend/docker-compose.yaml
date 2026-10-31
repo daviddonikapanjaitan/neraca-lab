@@ -15,6 +15,9 @@ services:
     image: neracalab-postgres:17-pgvector
     container_name: neracalab-postgres
     restart: unless-stopped
+    # 200 connections: the backend's pool grows to 40 under 50 parallel uploads (DB_POOL_SIZE), beside the test
+    # suite's contexts (5 each) and the tools
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     environment:
       POSTGRES_DB: ${DB_NAME:-neracalab}
       POSTGRES_USER: ${DB_USERNAME:-neracalab}
@@ -64,15 +67,25 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-neracalab}
-      # 1 GB heap: several uploads / PDFs are read at the same time (INGESTION_WORKERS)
-      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx1024m}
-      # jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time
+      # 4 GB heap: up to 50 workbooks (INGESTION_UPLOAD_WORKERS) and several PDFs are read at the same time (29 uploads at
+      # once grew the heap to 3 GB on 2026-10-31)
+      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx4g}
+      # jobs each ingestion queue (prices, RAG, screening data) runs at the same time
       INGESTION_WORKERS: ${INGESTION_WORKERS:-5}
-      # true: filings of one company are stored one after the other in upload order, not at the same time
-      INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-false}
+      # financial statement uploads stored at the same time (their own number; 0: as INGESTION_WORKERS)
+      INGESTION_UPLOAD_WORKERS: ${INGESTION_UPLOAD_WORKERS:-50}
+      # database connections of the backend (PostgreSQL allows POSTGRES_MAX_CONNECTIONS)
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-40}
+      # a filing that maps cleanly is stored without the agent (false: always the agent)
+      INGESTION_FAST_PATH: ${INGESTION_FAST_PATH:-true}
+      # every uploaded workbook's text goes into the RAG vector store at the end of its job (false: not stored)
+      INGESTION_RAG_AFTER_UPLOAD: ${INGESTION_RAG_AFTER_UPLOAD:-true}
+      # true (default): filings of one company are stored one after the other in upload order, not at the same time
+      # (a filing in another currency is then always refused against the filings stored before it: ANJT, DEWA)
+      INGESTION_SAME_COMPANY_IN_ORDER: ${INGESTION_SAME_COMPANY_IN_ORDER:-true}
       # full-text extraction when the standard extraction cannot store a workbook, and when it takes over
       INGESTION_FALLBACK_ENABLED: ${INGESTION_FALLBACK_ENABLED:-true}
-      INGESTION_FALLBACK_MODEL: ${INGESTION_FALLBACK_MODEL:-anthropic/claude-sonnet-5.5}
+      INGESTION_FALLBACK_MODEL: ${INGESTION_FALLBACK_MODEL:-anthropic/claude-haiku-5.5}
       INGESTION_FALLBACK_REASONING_EFFORT: ${INGESTION_FALLBACK_REASONING_EFFORT:-low}
       # OpenRouter providers the ingestion never uses (OpenInference: its DeepSeek endpoint loops for 60 s)
       INGESTION_PROVIDER_IGNORE: ${INGESTION_PROVIDER_IGNORE:-OpenInference}
@@ -82,6 +95,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://openrouter.ai/api/v1}
       OPENAI_MODEL: ${OPENAI_MODEL:-deepseek/deepseek-v4.1-flash-1017}
+      # the DeepSeek calls through OpenCode Go instead of OpenRouter (empty key: off)
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
+      OPENCODE_GO_MODELS: ${OPENCODE_GO_MODELS:-deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5}
       # daily price ingestion (yahoo needs no key; eodhd is the paid fallback)
       PRICE_PROVIDER: ${PRICE_PROVIDER:-yahoo}
       EODHD_API_TOKEN: ${EODHD_API_TOKEN:-}

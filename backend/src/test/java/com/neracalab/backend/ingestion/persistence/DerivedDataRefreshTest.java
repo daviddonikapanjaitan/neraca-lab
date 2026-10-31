@@ -43,7 +43,9 @@ class DerivedDataRefreshTest {
         Duration took = Duration.ofNanos(System.nanoTime() - started);
 
         assertThat(fingerprint()).isEqualTo(before);
-        assertThat(took).as("a refresh with nothing to change").isLessThan(Duration.ofSeconds(15));
+        // V1.0.6 over every company: 10.8 s with ~360 companies, 17.6 s with 625 (2026-10-31) - it grows with the data;
+        // an upload refreshes its own company only (theRefreshOfOneCompanyLeavesWhatTheScriptComputes, under a second)
+        assertThat(took).as("a refresh with nothing to change").isLessThan(Duration.ofSeconds(30));
     }
 
     /** The market snapshot of a trading day carries the latest balance sheet on or before it, as before the rewrite. */
@@ -100,10 +102,13 @@ class DerivedDataRefreshTest {
                 .query(String.class).list();
         assertThat(unvalued).isEmpty();
 
+        // no trailing twelve months at all - not merely no revenue (PEGE, an investment company, files none: it has
+        // trailing earnings, so a P/E, and no P/S)
         List<Long> withoutTtm = jdbc.sql("""
                 SELECT DISTINCT vs.company_id FROM valuation_snapshot vs WHERE vs.revenue_ttm IS NULL
                   AND NOT EXISTS (SELECT 1 FROM v_ttm_financials t WHERE t.company_id = vs.company_id
-                                    AND t.period_end <= vs.valuation_date AND t.revenue_ttm IS NOT NULL)""")
+                                    AND t.period_end <= vs.valuation_date
+                                    AND (t.revenue_ttm IS NOT NULL OR t.net_income_to_parent_ttm IS NOT NULL))""")
                 .query(Long.class).list();
         for (long companyId : withoutTtm) {
             assertThat(jdbc.sql("""
@@ -146,6 +151,48 @@ class DerivedDataRefreshTest {
         long runs = repository.derivedDataRuns();
         repository.refreshDerivedData();
         assertThat(repository.derivedDataRuns()).isEqualTo(runs + 1);
+    }
+
+    /**
+     * After an upload only its company is refreshed ({@code IngestionRepository.refreshDerivedData(companyId)}:
+     * {@link ValuationRepository#refreshAfterFiling}, 2026-10-31, for 50 uploads at once). For every company it leaves
+     * exactly what V1.0.6 computes - market and valuation snapshots (the existing valuation dates revalued in both: the
+     * first run of this test found MSIN's, GOTO's, DYAN's ... history rows stale in the script), cleared trailing ratios,
+     * fundamental and valuation metrics, every row compared - and the script changes nothing it left; well under a
+     * second per company.
+     */
+    @Test
+    void theRefreshOfOneCompanyLeavesWhatTheScriptComputes(@Autowired ValuationRepository valuations) {
+        repository.refreshDerivedData();
+        String before = rows();
+        List<Long> companies = jdbc.sql("SELECT company_id FROM company ORDER BY company_id").query(Long.class).list();
+
+        long started = System.nanoTime();
+        companies.forEach(valuations::refreshAfterFiling);
+        Duration perCompany = Duration.ofNanos((System.nanoTime() - started) / Math.max(1, companies.size()));
+
+        assertThat(rows()).isEqualTo(before);
+        assertThat(perCompany).isLessThan(Duration.ofSeconds(1));
+        // and the script changes nothing the per-company refresh left
+        repository.refreshDerivedData();
+        assertThat(rows()).isEqualTo(before);
+    }
+
+    /** Every derived row (key and values) hashed and summed: two states are the same only when every row is. */
+    private String rows() {
+        return jdbc.sql("""
+                SELECT (SELECT count(*) || ':' || COALESCE(sum(hashtextextended(x::text, 0)::numeric), 0) FROM (
+                            SELECT company_id, snapshot_date, share_price, shares_outstanding, market_cap, enterprise_value
+                            FROM market_snapshot) x)
+                    || '/' || (SELECT count(*) || ':' || COALESCE(sum(hashtextextended(x::text, 0)::numeric), 0) FROM (
+                            SELECT company_id, period_id, valuation_date, share_price, market_cap, enterprise_value, eps_ttm,
+                                   revenue_ttm, ebitda_ttm, operating_income_ttm, fcf_ttm, book_value, pe_ratio, ps_ratio,
+                                   pb_ratio, ev_ebitda, ev_sales, ev_op, fcf_yield, earnings_yield, ebitda_basis
+                            FROM valuation_snapshot) x)
+                    || '/' || (SELECT count(*) || ':' || COALESCE(sum(hashtextextended(x::text, 0)::numeric), 0) FROM (
+                            SELECT company_id, period_id, metric_date, metric_name, metric_category, metric_value, unit,
+                                   calculation_formula, source
+                            FROM financial_metric) x)""").query(String.class).single();
     }
 
     private String fingerprint() {

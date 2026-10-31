@@ -58,6 +58,114 @@ public class ValuationRepository {
         return new Refreshed(market, valuations, metrics, deleted);
     }
 
+    /**
+     * Everything {@code V1.0.6} derives, for ONE company, after a filing of it was stored: market and valuation
+     * snapshots, the trailing ratios of a valuation whose trailing twelve months no longer exist cleared, the
+     * fundamental metrics per reporting period and the valuation metrics. A filing changes only its own company's
+     * statements, so this replaces the run of the whole script for every company after each upload (10.8 s with 361
+     * companies and 1.06 million prices on 2026-10-31, under one lock for all uploads; this takes well under a second
+     * and runs beside the refreshes of other companies, whose rows it never touches).
+     */
+    public Refreshed refreshAfterFiling(long companyId) {
+        int market = refreshMarketSnapshots(companyId);
+        int valuations = refreshValuationSnapshots(companyId) + clearStaleTrailingRatios(companyId);
+        refreshFundamentalMetrics(companyId);
+        int metrics = refreshValuationMetrics(companyId);
+        int deleted = deleteStaleValuationMetrics(companyId);
+        return new Refreshed(market, valuations, metrics, deleted);
+    }
+
+    /**
+     * The valuations on a period end whose trailing twelve months no longer exist (their periods were removed or
+     * replaced: ANJT's USD FY2025) lose their trailing ratios; market cap, EV, book value and P/B stay (V1.0.6).
+     */
+    int clearStaleTrailingRatios(long companyId) {
+        return jdbc.sql("""
+                        UPDATE valuation_snapshot vs
+                        SET eps_ttm = NULL, revenue_ttm = NULL, ebitda_ttm = NULL, operating_income_ttm = NULL, fcf_ttm = NULL,
+                            pe_ratio = NULL, ps_ratio = NULL, ev_ebitda = NULL, ev_sales = NULL, ev_op = NULL, fcf_yield = NULL,
+                            earnings_yield = NULL, ebitda_basis = NULL
+                        WHERE vs.company_id = :c
+                          AND (vs.eps_ttm IS NOT NULL OR vs.revenue_ttm IS NOT NULL OR vs.ebitda_ttm IS NOT NULL
+                               OR vs.pe_ratio IS NOT NULL OR vs.ps_ratio IS NOT NULL OR vs.ev_ebitda IS NOT NULL
+                               OR vs.fcf_yield IS NOT NULL)
+                          AND EXISTS (SELECT 1 FROM reporting_period rp
+                                      WHERE rp.company_id = vs.company_id AND rp.period_end = vs.valuation_date)
+                          AND NOT EXISTS (SELECT 1 FROM v_ttm_financials t
+                                          WHERE t.company_id = vs.company_id AND t.period_end = vs.valuation_date
+                                            AND (t.revenue_ttm IS NOT NULL OR t.net_income_to_parent_ttm IS NOT NULL))""")
+                .param("c", companyId)
+                .update();
+    }
+
+    /** The fundamental metrics of every reporting period of the company, from {@code v_key_metrics} (V1.0.6). */
+    int refreshFundamentalMetrics(long companyId) {
+        return jdbc.sql("""
+                        INSERT INTO financial_metric (
+                            company_id, period_id, metric_date, metric_name, metric_category,
+                            metric_value, unit, calculation_formula, source)
+                        SELECT km.company_id, km.period_id, km.period_end,
+                               m.metric_name, m.metric_category, m.metric_value,
+                               CASE m.unit WHEN 'CUR' THEN km.currency
+                                           WHEN 'CUR/share' THEN km.currency || '/share'
+                                           ELSE m.unit END,
+                               m.calculation_formula, 'v_key_metrics'
+                        FROM v_key_metrics km
+                        CROSS JOIN LATERAL (VALUES
+                            ('gross_margin',               'PROFITABILITY', km.gross_margin,               'ratio', 'gross_profit / revenue'),
+                            ('operating_margin',           'PROFITABILITY', km.operating_margin,           'ratio', 'operating_income / revenue'),
+                            ('ebitda_margin',              'PROFITABILITY', km.ebitda_margin,              'ratio', 'ebitda / revenue'),
+                            ('net_margin',                 'PROFITABILITY', km.net_margin,                 'ratio', 'net_income / revenue'),
+                            ('effective_tax_rate',         'PROFITABILITY', km.effective_tax_rate,         'ratio', 'income_tax / pretax_income'),
+                            ('interest_coverage',          'PROFITABILITY', km.interest_coverage,          'x',     'ebit / interest_expense'),
+                            ('roe_annualized',             'PROFITABILITY', km.roe_annualized,             'ratio', 'net_income_to_parent x 12/months / shareholders_equity'),
+                            ('roa_annualized',             'PROFITABILITY', km.roa_annualized,             'ratio', 'net_income x 12/months / total_assets'),
+                            ('roic_annualized',            'PROFITABILITY', km.roic_annualized,            'ratio', 'ebit x (1 - tax rate) x 12/months / (total_equity + total_debt - cash_and_investments)'),
+                            ('current_ratio',              'LIQUIDITY',     km.current_ratio,              'x',     'current_assets / current_liabilities'),
+                            ('quick_ratio',                'LIQUIDITY',     km.quick_ratio,                'x',     '(current_assets - inventory) / current_liabilities'),
+                            ('cash_ratio',                 'LIQUIDITY',     km.cash_ratio,                 'x',     'cash_and_investments / current_liabilities'),
+                            ('debt_to_equity',             'LEVERAGE',      km.debt_to_equity,             'x',     'total_debt / shareholders_equity'),
+                            ('net_debt_to_equity',         'LEVERAGE',      km.net_debt_to_equity,         'x',     'net_debt / shareholders_equity'),
+                            ('liabilities_to_equity',      'LEVERAGE',      km.liabilities_to_equity,      'x',     'total_liabilities / total_equity'),
+                            ('equity_to_assets',           'LEVERAGE',      km.equity_to_assets,           'ratio', 'total_equity / total_assets'),
+                            ('net_debt_to_ebitda_annualized', 'LEVERAGE',   km.net_debt_to_ebitda_annualized, 'x',  'net_debt / (ebitda x 12/months)'),
+                            ('inventory_days',             'EFFICIENCY',    km.inventory_days,             'days',  'inventory / cost_of_revenue x period_days'),
+                            ('receivable_days',            'EFFICIENCY',    km.receivable_days,            'days',  'accounts_receivable / revenue x period_days'),
+                            ('payable_days',               'EFFICIENCY',    km.payable_days,               'days',  'accounts_payable / cost_of_revenue x period_days'),
+                            ('cash_conversion_cycle_days', 'EFFICIENCY',    km.cash_conversion_cycle_days, 'days',  'inventory_days + receivable_days - payable_days'),
+                            ('free_cash_flow',             'CASH_FLOW',     km.free_cash_flow,             'CUR',   'operating_cash_flow + capital_expenditure'),
+                            ('fcf_after_leases',           'CASH_FLOW',     km.fcf_after_leases,           'CUR',   'free_cash_flow + lease_payments'),
+                            ('fcf_margin',                 'CASH_FLOW',     km.fcf_margin,                 'ratio', 'free_cash_flow / revenue'),
+                            ('ocf_to_net_income',          'CASH_FLOW',     km.ocf_to_net_income,          'x',     'operating_cash_flow / net_income'),
+                            ('capex_to_revenue',           'CASH_FLOW',     km.capex_to_revenue,           'ratio', '-capital_expenditure / revenue'),
+                            ('net_debt',                   'BALANCE_SHEET', km.net_debt,                   'CUR',   'short_term_debt + long_term_debt + lease_liabilities - cash_and_equivalents - marketable_securities'),
+                            ('working_capital',            'BALANCE_SHEET', km.working_capital,            'CUR',   'current_assets - current_liabilities'),
+                            ('tangible_book_value',        'BALANCE_SHEET', km.tangible_book_value,        'CUR',   'shareholders_equity - goodwill - intangible_assets'),
+                            ('ncav',                       'BALANCE_SHEET', km.ncav,                       'CUR',   'current_assets - total_liabilities (net-net)'),
+                            ('eps',                        'PER_SHARE',     km.eps,                        'CUR/share', 'reported diluted EPS, else basic EPS'),
+                            ('book_value_per_share',       'PER_SHARE',     km.book_value_per_share,       'CUR/share', 'shareholders_equity / shares'),
+                            ('tangible_book_per_share',    'PER_SHARE',     km.tangible_book_per_share,    'CUR/share', 'tangible_book_value / shares'),
+                            ('ncav_per_share',             'PER_SHARE',     km.ncav_per_share,             'CUR/share', 'ncav / shares'),
+                            ('net_cash_per_share',         'PER_SHARE',     km.net_cash_per_share,         'CUR/share', '-net_debt / shares'),
+                            ('fcf_per_share',              'PER_SHARE',     km.fcf_per_share,              'CUR/share', 'free_cash_flow / shares')
+                        ) AS m (metric_name, metric_category, metric_value, unit, calculation_formula)
+                        WHERE km.company_id = :c
+                          AND m.metric_value IS NOT NULL
+                        ON CONFLICT ON CONSTRAINT uq_financial_metric DO UPDATE SET
+                            metric_category     = EXCLUDED.metric_category,
+                            metric_value        = EXCLUDED.metric_value,
+                            unit                = EXCLUDED.unit,
+                            calculation_formula = EXCLUDED.calculation_formula,
+                            source              = EXCLUDED.source
+                        WHERE (financial_metric.metric_category, financial_metric.metric_value,
+                               financial_metric.unit, financial_metric.calculation_formula, financial_metric.source)
+                              IS DISTINCT FROM
+                              (EXCLUDED.metric_category, EXCLUDED.metric_value,
+                               EXCLUDED.unit, EXCLUDED.calculation_formula, EXCLUDED.source)""")
+                .param("c", companyId)
+                .update();
+    }
+
     int refreshMarketSnapshots(long companyId) {
         return jdbc.sql("""
                         INSERT INTO market_snapshot (

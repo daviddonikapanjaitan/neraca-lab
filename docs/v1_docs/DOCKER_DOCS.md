@@ -111,11 +111,19 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `PRICE_PROVIDER`         | `yahoo` | `yahoo` (no key) or `eodhd`                                          |
 | `EODHD_API_TOKEN`        | -       | required for `eodhd`                                                 |
 | `PRICE_SCHEDULE_ENABLED` | `false` | `true`: queue every active IDX company at 17:30 WIB, Monday-Friday   |
-| `INGESTION_WORKERS`      | `5`     | jobs each ingestion queue (uploads, prices, RAG, screening data) runs at the same time ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
-| `INGESTION_SAME_COMPANY_IN_ORDER` | `false` | `true`: filings of one company are stored one after the other in upload order, not at the same time |
+| `INGESTION_WORKERS`      | `5`     | jobs each ingestion queue (prices, RAG, screening data) runs at the same time ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `INGESTION_UPLOAD_WORKERS` | `50`  | financial statement uploads stored at the same time (0 = as `INGESTION_WORKERS`) |
+| `INGESTION_FAST_PATH`    | `true`  | a filing whose every column maps cleanly is stored without the agent ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6) |
+| `INGESTION_RAG_AFTER_UPLOAD` | `true` | every uploaded workbook's text goes into the RAG vector store at the end of its job ([RAG_DOCS.md](RAG_DOCS.md), section 2b) |
+| `DB_POOL_SIZE`, `DB_POOL_MIN_IDLE` | `40`, `5` | the backend's database connections under load / kept when idle |
+| `POSTGRES_MAX_CONNECTIONS` | `200` | PostgreSQL's connection limit (`-c max_connections`; a change recreates the postgres container, the data volume stays) |
+| `JAVA_OPTS`              | `-Xms512m -Xmx4g` | the backend's heap: up to 50 workbooks are read at once |
+| `INGESTION_SAME_COMPANY_IN_ORDER` | `true` | filings of one company are stored one after the other in upload order (`false`: at the same time; each then passes the currency check before any is stored) |
 | `INGESTION_PROVIDER_IGNORE` | `OpenInference` | OpenRouter providers the ingestion's model calls never use (a looping DeepSeek endpoint) |
 | `INGESTION_FALLBACK_ENABLED` | `true` | full-text extraction when the standard extraction cannot store an upload ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6) |
-| `INGESTION_FALLBACK_MODEL` | `anthropic/claude-sonnet-5.5` | model of the full-text extraction (OpenRouter id); empty = `OPENAI_MODEL` |
+| `INGESTION_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | model of the full-text extraction (OpenRouter id; through OpenCode Go when listed in `OPENCODE_GO_MODELS`); empty = `OPENAI_MODEL` |
+| `OPENCODE_GO_API_KEY` | empty | OpenCode Go key (`backend/.env`): the models of `OPENCODE_GO_MODELS` are called through OpenCode Go instead of OpenRouter; empty = all on OpenRouter |
+| `OPENCODE_GO_MODELS` | `deepseek/deepseek-v4.1-flash-1017=deepseek-v4.1-flash,anthropic/claude-haiku-5.5=claude-haiku-5-5` | OpenRouter id = OpenCode Go id; DeepSeek needs the workspace's Global regions (Privacy settings), until then `anthropic/claude-haiku-5.5=claude-haiku-5-5` alone |
 | `INGESTION_FALLBACK_REASONING_EFFORT` | `low` | reasoning effort of the full-text extraction's calls (Claude Sonnet 5.5 refuses reasoning switched off); empty = as the standard extraction |
 | `INGESTION_FALLBACK_AFTER`, `INGESTION_FALLBACK_TIMEOUT` | `3m`, `5m` | when it takes over from the standard extraction, and how long it may run |
 | `AUTH_SESSION_TTL`       | `12h`   | how long a login stays valid                                        |

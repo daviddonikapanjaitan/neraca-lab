@@ -139,6 +139,8 @@ public record CompanyDetailResponse(
     /**
      * @param period     reporting period whose trailing-twelve-month figures and balance sheet are used, e.g. "2026 H1"
      * @param quotePrice the share price as quoted on the exchange ({@link Quote}); {@code null} when it is sharePrice
+     * @param forwardEps the period's profit to the parent made a year (Q1 x 4, H1 x 2, 9M x 4/3, FY x 1) / shares
+     * @param bookValuePerShare equity attributable to the parent / shares
      */
     public record Valuation(LocalDate valuationDate, Long periodId, String period, BigDecimal sharePrice,
                             BigDecimal marketCap, BigDecimal enterpriseValue, BigDecimal epsTtm,
@@ -146,7 +148,7 @@ public record CompanyDetailResponse(
                             BigDecimal fcfTtm, BigDecimal bookValue, BigDecimal peRatio, BigDecimal psRatio,
                             BigDecimal pbRatio, BigDecimal evEbitda, BigDecimal evSales, BigDecimal evOp,
                             BigDecimal fcfYield, BigDecimal earningsYield, String quoteCurrency, BigDecimal quotePrice,
-                            String ebitdaBasis) {
+                            String ebitdaBasis, BigDecimal forwardEps, BigDecimal bookValuePerShare) {
     }
 
     public record CorporateAction(LocalDate actionDate, String actionType, BigDecimal ratioFrom, BigDecimal ratioTo,

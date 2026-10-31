@@ -46,6 +46,7 @@ import com.neracalab.backend.job.IngestionJobStatus;
 import com.neracalab.backend.job.JobProperties;
 import com.neracalab.backend.job.Requester;
 import com.neracalab.backend.price.PricesAfterUpload;
+import com.neracalab.backend.rag.XbrlRagService;
 
 /**
  * The upload workers, with a scripted agent and no database: filings are stored at the same time, also several
@@ -66,6 +67,7 @@ class FinancialStatementQueueWorkersTest {
     private final IngestionErrorRepository errors = mock(IngestionErrorRepository.class);
     private final IngestionUsageRecorder usage = mock(IngestionUsageRecorder.class);
     private final PricesAfterUpload prices = mock(PricesAfterUpload.class);
+    private final XbrlRagService rag = mock(XbrlRagService.class);
     private FinancialStatementQueue queue;
 
     @BeforeEach
@@ -401,7 +403,70 @@ class FinancialStatementQueueWorkersTest {
 
     private FinancialStatementQueue queueWithPrices() {
         return new FinancialStatementQueue(service, files, jobs, errors, usage, Duration.ofMinutes(5), false,
-                new JobProperties(1), prices);
+                new JobProperties(1), prices, null);
+    }
+
+    private FinancialStatementQueue queueWithVectorStore() {
+        return new FinancialStatementQueue(service, files, jobs, errors, usage, Duration.ofMinutes(5), false,
+                new JobProperties(1), null, rag);
+    }
+
+    /**
+     * After the statements, the workbook's text goes into the vector store as a document of the filing's company: the
+     * stored file and its SHA-256; the outcome is the job result's {@code rag} and the end of its stage.
+     */
+    @Test
+    void anUploadStoresTheWorkbookTextInTheVectorStore() {
+        XbrlRagService.Result stored = new XbrlRagService.Result(XbrlRagService.Outcome.STORED, 42L, "HRTA-1", 3, 12,
+                15_000, "openai/text-embedding-3-small", null);
+        when(rag.enabled()).thenReturn(true);
+        when(rag.store(any(), any(), anyLong(), any(), any(), any(), any())).thenReturn(stored);
+        queue = queueWithVectorStore();
+        submit("HRTA-1.xlsx");
+
+        queue.start();
+
+        ArgumentCaptor<String> stage = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), stage.capture(), any(), result.capture());
+        verify(rag).store(any(java.util.UUID.class), eq("HRTA"), eq(1L), eq("HRTA-1.xlsx"),
+                eq(IngestionFileRepository.sha256("HRTA-1.xlsx".getBytes(StandardCharsets.UTF_8))), any(), any());
+        assertThat(stage.getValue()).startsWith("Stored and verified HRTA").endsWith("; vector store: 12 chunks");
+        assertThat(((IngestionResponse) result.getValue()).rag()).isEqualTo(stored);
+    }
+
+    /** The vector store never changes the upload's outcome: a failed upload is offered too, a failure is only told. */
+    @Test
+    void aVectorStoreFailureLeavesTheUploadAsItEnded() {
+        when(rag.enabled()).thenReturn(true);
+        when(rag.store(any(), any(), anyLong(), any(), any(), any(), any())).thenReturn(new XbrlRagService.Result(
+                XbrlRagService.Outcome.FAILED, null, "HRTA-1", 0, 0, 0, null, "The embedding API answered HTTP 401"));
+        queue = queueWithVectorStore();
+        submit("HRTA-1.xlsx");
+        queue.start();
+
+        ArgumentCaptor<String> stage = ArgumentCaptor.forClass(String.class);
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), stage.capture(), any(), any());
+        assertThat(stage.getValue()).endsWith("; vector store: failed");
+
+        outcome = response(Status.FAILED, null);
+        submit("INDF-1.xlsx");
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.FAILED), any(), any(), any());
+        verify(rag, timeout(10_000)).store(any(), eq("INDF"), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void theVectorStoreSwitchedOffIsLeftAlone() {
+        when(rag.enabled()).thenReturn(false);
+        queue = queueWithVectorStore();
+        submit("HRTA-1.xlsx");
+
+        queue.start();
+
+        ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
+        verify(jobs, timeout(10_000)).finish(any(), eq(IngestionJobStatus.SUCCEEDED), any(), any(), result.capture());
+        verify(rag, org.mockito.Mockito.never()).store(any(), any(), anyLong(), any(), any(), any(), any());
+        assertThat(((IngestionResponse) result.getValue()).rag()).isNull();
     }
 
     private FinancialStatementQueue queue(int workers) {

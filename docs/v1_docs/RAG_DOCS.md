@@ -1,20 +1,22 @@
-# RAG vector store (PDF documents, news and macro documents)
+# RAG vector store (PDF documents, XBRL workbooks, news and macro documents)
 
 The RAG vector store holds text that the AI features can retrieve by meaning: PDF documents of a
-company (financial statements, annual reports), the company's news articles, and **macro documents
+company (financial statements, annual reports), the text of every **IDX XBRL financial statement workbook**
+uploaded on Ingestion > IDX XBRL (section 2b), the company's news articles, and **macro documents
 of a country** (central bank, finance ministry, IMF / World Bank reports). Every document is split
 into chunks; each chunk is embedded (a 1536-number vector) and stored in PostgreSQL with
 **pgvector**, linked either to its company (foreign key to `company`) or to its country.
 
-Two pages under **Ingestion** fill it (permission `INGESTION`):
+These pages under **Ingestion** fill it (permission `INGESTION`):
 
 | Page                | Path                    | Job type   | Source                                                  |
 |---------------------|-------------------------|------------|---------------------------------------------------------|
 | PDF Documents (RAG) | `/ingestion/rag-pdf`    | `RAG_PDF`  | left: an uploaded `.pdf` of a stored company; right: a macro `.pdf` of a country (section 2a) |
 | Excel Documents (RAG) | `/ingestion/rag-excel` | `RAG_XLSX` | an uploaded `.xlsx` of an exchange: KSEI's daily list of the shareholders of more than 5%, or its monthly list of the shareholders of more than 1% (IDX); per stored company one ownership document of each ([OWNERSHIP_DOCS.md](OWNERSHIP_DOCS.md), [OWNERSHIP_ONE_PERCENT_DOCS.md](OWNERSHIP_ONE_PERCENT_DOCS.md)) |
 | News (RAG)          | `/ingestion/rag-news`   | `RAG_NEWS` | the news of a stored IDX company within a date range    |
+| IDX XBRL            | `/ingestion/xbrl`       | `FINANCIAL_STATEMENT` | every uploaded `.xlsx` financial statement: after its statements, the upload job stores the workbook's text (section 2b) |
 
-Both run as background jobs in `ingestion_job` (shown in the jobs table of every Ingestion page);
+All run as background jobs in `ingestion_job` (shown in the jobs table of every Ingestion page);
 each page also lists what is stored and has a search box that runs the same similarity search the
 RAG answers will use.
 
@@ -105,6 +107,57 @@ statistics, `ms_equity` / `ms_bond` / `ms_sw` `_2609.pdf`).
 - **Stored macro documents** (below the company documents): the documents of a country, latest
   publication first, with a search test over that country's documents.
 
+## 2b. IDX XBRL workbooks (Ingestion > IDX XBRL)
+
+Every financial statement workbook uploaded on **IDX XBRL** (`POST /api/v1/financial-statements/upload`,
+[AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md)) is also stored in the vector store, as a PDF financial statement is:
+
+```text
+.xlsx upload -> FINANCIAL_STATEMENT job -> statements stored (standard / full-text extraction, as before)
+             -> XbrlRagService: XbrlDocumentText (every sheet) -> chunks per sheet -> embeddings
+             -> rag_document (source_type XBRL, document_type FINANCIAL_STATEMENT, source_key = SHA-256 of the file)
+                + rag_chunk (vector(1536))
+```
+
+- **When**: at the end of the upload job (`FinancialStatementQueue`), after the statements, whatever their outcome
+  (`SUCCEEDED`, `INCOMPLETE` or `FAILED`), so a new company is stored by then. Not for a workbook refused when it is
+  opened (not an IDX workbook, another currency than the company's) or a job interrupted by a restart. The outcome is
+  the job result's `rag` (`XbrlRagService.Result`: `STORED`, `ALREADY_STORED`, `NO_COMPANY`, `NO_TEXT`, `FAILED`,
+  with chunks, sheets, characters, model or the reason) and the end of the job stage (`; vector store: 84 chunks`); the
+  job detail shows it as **Vector store**. A failure (embedding API down) is logged and never changes the upload's
+  status. Switch off with `neracalab.ingestion.rag-after-upload: false` (env `INGESTION_RAG_AFTER_UPLOAD`; off in the
+  tests).
+- **The text** (`XbrlDocumentText`): every sheet of the file in its order (general information, the statements, every
+  note; not the technical sheets `Context`, `InlineXBRL`, `hidden`, `Token`). A row is one line of its cells joined by
+  ` | ` when it holds an amount or a date, or at least three cells (label, value, English label: general information,
+  the text of the notes); a row of labels alone (titles, section headings, empty template lines) is left out. Amounts
+  are written in full as filed, in the filing's unit (`4.4548424151152E13` -> `44548424151152`), dates as yyyy-mm-dd:
+  `Penjualan dan pendapatan usaha | 44548424151152 | 18228628989765 | Sales and revenue`.
+- **Chunks**: each sheet is chunked on its own (`TextChunker`, 1,500 / 200) and every chunk starts with the sheet's
+  heading - the document title, the sheet's title (cell A1) and its value columns - so an excerpt says by itself which
+  filing, statement and period its amounts are:
+  `FinancialStatement-2025-Tahunan-HRTA | [1311000] Statement of profit or loss and other comprehensive income` /
+  `columns: CurrentYearDuration | PriorYearDuration`. No pages (`page_from` / `page_to` NULL).
+- **The document**: one per file and company (`source_key` = the file's SHA-256, as a PDF), `title` = the file name
+  without `.xlsx`, `source_name` `IDX XBRL upload`, `file_id` / `file_name` the stored workbook, `job_id` the upload
+  job, `pages` and `published_at` NULL. A workbook whose document is stored already with the current embedding model
+  is not embedded again (`ALREADY_STORED`: the uploads of a fix are uploads of the same files); with another model it
+  is replaced. A workbook naming a company that is not stored stores nothing (`NO_COMPANY`).
+- **Its own source type** (`XBRL`, not `XLSX`): the `XLSX` documents are the companies' ownership documents (Excel
+  Documents (RAG)), whose counts, list and search stay as they were. `GET /api/v1/rag/documents?source=XBRL` and
+  `GET /api/v1/rag/search?source=XBRL&ticker=...` read the workbooks; `GET /api/v1/rag/status` counts them
+  (`stored.xbrlDocuments`). The IDX XBRL page lists them under the upload card (**Stored financial statement
+  workbooks**, with the search test). The AI analysis' research agent still searches the financial statement PDFs
+  only (`ContextTools`, source PDF).
+- **The workbooks uploaded before** (2026-11-01) were stored by a one-off Python script that rebuilt the same text
+  and chunks rule for rule (byte-identical with the Java output on all 3,142 local workbooks, and with a document the
+  backend wrote) and was then removed; their `job_id` is NULL. 3,128 workbooks of 625 companies (every uploaded workbook
+  of a stored company; three ANJT workbooks refused for their currency and one of a company no longer stored have
+  none): 346,413 chunks, 510 million characters, about 50 minutes with 24 parallel workers (the embedding requests
+  dominate). The vector store grew from 15,100 to about 365,000 chunks (`rag_chunk` 6.3 GB, the database 3.2 -> 9.1
+  GB); the searches of the other documents were checked against an exact search afterwards: the same results
+  (936 / 936; a search of one company uses the company index, so it stays exact).
+
 ## 3. News
 
 - Exchange IDX, a company stored in `company`, and a date range: presets *This month*, *Last 7
@@ -155,7 +208,7 @@ All endpoints need a session with the `INGESTION` permission.
 | `POST` | `/api/v1/rag/pdf` (multipart `file`, `exchange` = IDX, `ticker`, optional `documentType` = `FINANCIAL_STATEMENT` (default) or `REGISTRATION`) | 202 new job, 200 job already active; 400 not a `.pdf` / no `%PDF` header / unknown document type, 422 no text layer / protected / unreadable, or (REGISTRATION) not a registration report / another company's, 404 unknown company, 413 too large |
 | `POST` | `/api/v1/rag/news?exchange=IDX&ticker=HRTA&from=2026-10-01&to=2026-10-08` | 202 / 200 as above; 400 start after end, end in the future, range over 366 days, bad date; 404 unknown company |
 | `GET`  | `/api/v1/rag/status` | embedding model and dimensions, chunk size, news limits, queue length, stored documents and chunks |
-| `GET`  | `/api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF\|NEWS\|XLSX&documentType&limit=100&offset=0]` | one page of the stored documents, most recently stored first: `{ total, limit, offset, documents }` (`total` = documents matching the filters; limit 1-500, offset 0 or more; `ticker` one company, `tickerPrefix` the tickers starting with it; `documentType` FINANCIAL_STATEMENT or REGISTRATION; each document has its `documentType`, null for news) |
+| `GET`  | `/api/v1/rag/documents[?exchange&ticker&tickerPrefix&source=PDF\|NEWS\|XLSX\|XBRL&documentType&limit=100&offset=0]` | one page of the stored documents, most recently stored first: `{ total, limit, offset, documents }` (`total` = documents matching the filters; limit 1-500, offset 0 or more; `ticker` one company, `tickerPrefix` the tickers starting with it; `documentType` FINANCIAL_STATEMENT or REGISTRATION; each document has its `documentType`, null for news) |
 | `GET`  | `/api/v1/rag/search?q=...[&exchange=IDX&ticker&source&limit=8]` | closest chunks: ticker, document, pages, published date, content, `distance` (0 = same direction; limit 1-50, query up to 2,000 characters) |
 | `POST` | `/api/v1/rag/macro/pdf` (multipart `file`, `country` = ID, `documentType`, `publishedOn` = yyyy-mm-dd, optional `title`, `issuer`) | 202 new job, 200 job already active for the file and country; 400 country not available / unknown, type missing / unknown, date missing / not a date / in the future, title over 300 or issuer over 100 characters, not a `.pdf`; 422 no text layer |
 | `GET`  | `/api/v1/rag/macro/documents[?country&documentType&limit=100&offset=0]` | one page of the stored macro documents, latest publication first: `{ total, limit, offset, documents }` (country, title, issuer, documentType, publishedAt, pages, chunks) |
@@ -215,6 +268,12 @@ analysis' research agent searches the 5% and the 1% documents apart (refs O1 and
 `ck_rag_document_company_type`; existing company PDFs set to `FINANCIAL_STATEMENT`; news has none), and the
 registration tables (`REGISTRATION_DOCS.md`).
 
+`V1.0.46__schema_rag_xbrl.sql`: source type `XBRL`, an uploaded IDX XBRL workbook (section 2b), always of document
+type `FINANCIAL_STATEMENT`; the comments of the columns. The checks themselves are in the scripts that re-create them on
+every start before it: `ck_rag_document_source_type` (`V1.0.33`: PDF, NEWS, XLSX, XBRL) and
+`ck_rag_document_company_type` (`V1.0.29`: an XBRL document is a FINANCIAL_STATEMENT) - a narrower list there would
+stop the application once a workbook is stored.
+
 Column-level reference: `DB_SCHEMA_DOCS.md`.
 
 ## 6. Settings
@@ -240,7 +299,8 @@ Changing the embedding model makes old and new vectors incomparable: ingest the 
 
 `backend/src/main/java/com/neracalab/backend/rag/`: `RagController` (API), `RagQueue` (5 worker
 threads, `neracalab.jobs.workers`: that many PDFs / news ingestions at the same time; `JobWorkerPool`), `RagIngestionService`, `PdfText`, `TextChunker`, `EmbeddingClient`,
-`NewsCollector`, `RagRepository`, `RagProperties`, `MacroDocumentType`. Frontend:
+`NewsCollector`, `RagRepository`, `RagProperties`, `MacroDocumentType`, `XbrlDocumentText` and `XbrlRagService` (the
+uploaded workbooks, called by `ingestion/FinancialStatementQueue`). Frontend:
 `rag-pdf-card.tsx` and `rag-macro-pdf-card.tsx` (the two uploads), `rag-documents-card.tsx` and
 `rag-macro-documents-card.tsx` (the stored documents).
 
@@ -254,6 +314,10 @@ threads, `neracalab.jobs.workers`: that many PDFs / news ingestions at the same 
 | `NewsRetryTest` | which failures are retried (timeout, 404 of an article, 5xx) and which not (403, 404 of a tag page), the attempt limit, the growing pause, interruption |
 | `RagRepositoryTest` | store, cosine search with filters, replace on re-ingest, news keyed by URL, cascade; a macro document of a country: search by country and publication date (point in time), listing by country and type, never mixed with the company documents, replaced with its details, company or country but not both (real database, rolled back) |
 | `RagControllerTest` | a PDF through the worker into the store and back by search (stub embeddings, cleaned up); a macro PDF of Indonesia through the worker (`MACRO` / `ID` job, its details, listed, found by the country's search, not a company's); validation errors of both (the United States and China not available yet, type, date, title, issuer, file); status with the macro countries and types; permission |
+| `XbrlDocumentTextTest` | the HRTA FY2025 workbook: every sheet in the file's order without the technical ones, the headings (title, value columns), statement rows with their amounts in full, rows of labels alone left out, every chunk starting with its sheet's heading; cell forms (exponent, -0.0, dates, NUL) |
+| `XbrlRagServiceTest` | the HRTA FY2025 workbook stored as an XBRL financial statement of HRTA (every column of the document, the chunks as `XbrlDocumentText` makes them), listed and searched as XBRL apart from XLSX; the same file again not embedded again, with another model replaced; an unknown company and a failing embedding API store nothing (real database, stub embeddings, rolled back) |
+| `RagSourceTypeConstraintTest` | `V1.0.33` re-creates `ck_rag_document_source_type` with every source type and `V1.0.29` admits an XBRL financial statement (both run before `V1.0.46` on every start) |
+| `FinancialStatementQueueWorkersTest` | the upload job hands its stored file (id, name, SHA-256) and company to `XbrlRagService` after the statements, its outcome ends the stage and is the result's `rag`; a failure or a failed upload changes nothing; switched off: not called |
 | `IngestionJobTypeConstraintTest` | `V1.0.10` and `V1.0.14` re-create `ck_ingestion_job_type` on every start; both must list every job type (a narrower list stops the application once a RAG job is stored) |
 
 Frontend: `src/app/(dashboard)/ingestion/rag-pdf`, `rag-news`, `src/components/ingestion/rag-*.tsx`,

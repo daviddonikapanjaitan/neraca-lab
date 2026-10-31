@@ -27,8 +27,46 @@ class IngestionVerifierRoundingTest {
         BigDecimal ending = new BigDecimal("38281513468848");
 
         assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, ending)))
-                .contains("differ by 468848").contains("less than the filing's rounding unit 1000000");
-        assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, cash.add(new BigDecimal("1000000"))))).isNull();
+                .contains("differ by 468848").contains("at most the filing's rounding unit 1000000");
+        // one unit apart is each cell rounded on its own, as the mapper's checks accept (changed 2026-10-30: before, a
+        // whole unit was a problem; BATA H1 2026 and BBLD ended INCOMPLETE over it); more than a unit stays a problem
+        assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, cash.add(new BigDecimal("1000000")))))
+                .contains("differ by 1000000");
+        assertThat(IngestionVerifier.roundingExplanation(session, stored(cash, cash.add(new BigDecimal("1000001"))))).isNull();
+    }
+
+    /**
+     * BATA H1 2026 (thousands, error 1414): balance-sheet cash 26,809,538 and the cash flow's ending cash 26,809,539 -
+     * one unit, a note; BBLD H1 2026 (millions, error 1416): 580,173 and 580,174. BBLD FY2022's 69 million (514,065
+     * beside 514,134, error 1419) stays a problem.
+     */
+    @Test
+    void endingCashOneUnitApartIsANote() throws Exception {
+        assertThat(IngestionVerifier.roundingExplanation(session("BATA", "2026-II"),
+                stored(new BigDecimal("26809538000"), new BigDecimal("26809539000"))))
+                .contains("differ by 1000").contains("rounding unit 1000");
+        assertThat(IngestionVerifier.roundingExplanation(session("BBLD", "2026-II"),
+                stored(new BigDecimal("580173000000"), new BigDecimal("580174000000")))).contains("differ by 1000000");
+        assertThat(IngestionVerifier.roundingExplanation(session("BBLD", "2022-Tahunan"),
+                stored(new BigDecimal("514065000000"), new BigDecimal("514134000000")))).isNull();
+    }
+
+    /**
+     * A filing of full amounts has a unit of one rupiah or dollar, and one unit apart is the same rounding (changed
+     * 2026-10-31: before, only thousands / millions were judged so). BRAM H1 2026 (full USD, error 1472): balance-sheet
+     * cash 24,367,846, the cash flow 21,668,146 + 2,721,874 - 22,173 = 24,367,847; BMBL FY2022 (full rupiah, error
+     * 1482): 479,564,254 beside 355,711,311 + 123,852,944 = 479,564,255. BMBL FY2023's 2 rupiah (403,185,896 beside
+     * 403,185,898) stays a problem.
+     */
+    @Test
+    void endingCashOneUnitApartInAFullAmountFilingIsANote() throws Exception {
+        assertThat(IngestionVerifier.roundingExplanation(session("BRAM", "2026-II"),
+                stored(new BigDecimal("24367846"), new BigDecimal("24367847"))))
+                .contains("differ by 1").contains("rounding unit 1");
+        assertThat(IngestionVerifier.roundingExplanation(session("BMBL", "2022-Tahunan"),
+                stored(new BigDecimal("479564254"), new BigDecimal("479564255")))).contains("differ by 1");
+        assertThat(IngestionVerifier.roundingExplanation(session("BMBL", "2023-Tahunan"),
+                stored(new BigDecimal("403185896"), new BigDecimal("403185898")))).isNull();
     }
 
     /**
@@ -68,6 +106,26 @@ class IngestionVerifierRoundingTest {
             assertThat(IngestionVerifier.segmentRoundingExplanation(excl, within))
                     .contains("differ by 99333").contains("less than the filing's rounding unit 1000000");
             assertThat(IngestionVerifier.segmentRoundingExplanation(excl, beyond)).isNull();
+        }
+    }
+
+    /**
+     * RAFI FY2022 (full rupiah, errors 1149, 1150) files its revenue with a fraction: 375,886,948,578.9396 beside a
+     * breakdown of 375,886,948,579. Less than one rupiah apart: a note, in its own filing and its FY2023 one; a rupiah
+     * or more stays a problem.
+     */
+    @Test
+    void segmentRevenueWithinARupiahOfAFullAmountFilingIsANote() throws Exception {
+        BigDecimal segments = new BigDecimal("375886948579");
+        StoredPeriod within = new StoredPeriod("FY", true, true, true, 6, segments, new BigDecimal("375886948578.9396"),
+                null, null, null, null, null);
+        StoredPeriod beyond = new StoredPeriod("FY", true, true, true, 6, segments, new BigDecimal("375886948577.9396"),
+                null, null, null, null, null);
+        for (String filing : new String[] {"2022-Tahunan", "2023-Tahunan"}) {
+            IngestionSession rafi = session("RAFI", filing);
+            assertThat(IngestionVerifier.segmentRoundingExplanation(rafi, within))
+                    .contains("differ by 0.0604").contains("less than the filing's rounding unit 1");
+            assertThat(IngestionVerifier.segmentRoundingExplanation(rafi, beyond)).isNull();
         }
     }
 
