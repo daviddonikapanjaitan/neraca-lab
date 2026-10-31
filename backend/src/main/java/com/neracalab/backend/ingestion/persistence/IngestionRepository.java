@@ -47,7 +47,7 @@ public class IngestionRepository {
     private static final List<String> SHARE_SCRIPTS = List.of(
             "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql",
             "db/V1.0.24__data_BACH_shares.sql", "db/V1.0.31__data_BNBR_shares.sql", "db/V1.0.42__data_BBHI_shares.sql",
-            "db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql");
+            "db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql", "db/V1.0.45__data_KOIN_HILL_shares.sql");
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
@@ -153,6 +153,33 @@ public class IngestionRepository {
     public Optional<LocalDate> latestPeriodEnd(long companyId) {
         return jdbc.sql("SELECT MAX(period_end) FROM reporting_period WHERE company_id = :c").param("c", companyId)
                 .query((rs, i) -> rs.getObject(1, LocalDate.class)).list().stream().filter(java.util.Objects::nonNull).findFirst();
+    }
+
+    /** Stored total assets of the company's period ending on {@code periodEnd}, empty when none is stored. */
+    public Optional<BigDecimal> totalAssets(long companyId, LocalDate periodEnd) {
+        return jdbc.sql("""
+                        SELECT b.total_assets FROM balance_sheet b JOIN reporting_period rp ON rp.period_id = b.period_id
+                        WHERE rp.company_id = :c AND rp.period_end = :end AND b.total_assets IS NOT NULL""")
+                .param("c", companyId).param("end", periodEnd)
+                .query((rs, i) -> rs.getBigDecimal(1)).list().stream().findFirst();
+    }
+
+    /** Stored shares outstanding of the company on {@code date}, empty when none is stored. */
+    public Optional<BigDecimal> storedShareCount(long companyId, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT shares_outstanding FROM share_snapshot
+                        WHERE company_id = :c AND snapshot_date = :d AND shares_outstanding IS NOT NULL""")
+                .param("c", companyId).param("d", date)
+                .query((rs, i) -> rs.getBigDecimal(1)).list().stream().findFirst();
+    }
+
+    /** Whether a split or reverse split of the company is recorded after {@code from} and on or before {@code to}. */
+    public boolean splitBetween(long companyId, LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT count(*) FROM corporate_action
+                        WHERE company_id = :c AND action_type IN ('STOCK_SPLIT', 'REVERSE_SPLIT')
+                          AND action_date > :from AND action_date <= :to""")
+                .param("c", companyId).param("from", from).param("to", to).query(Long.class).single() > 0;
     }
 
     /** Keeps company.fiscal_year_end at the most recent fiscal year end seen in any filing. */

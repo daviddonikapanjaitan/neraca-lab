@@ -50,13 +50,16 @@ class IngestionVerifierSegmentsTest {
     }
 
     @Test
-    void withoutAStoredBreakdownTheComparativeStaysOpen() throws Exception {
+    void withoutAStoredBreakdownAFailingComparativeIsANoteToo() throws Exception {
+        // the user's decision of 2026-10-31 (it used to stay open and leave the upload INCOMPLETE: BUKK, CASS, DKHH,
+        // FWCT, GEMA, errors 1553 - 1590): a comparative breakdown that fails its checks is the filing's
         var none = new IngestionVerifier(repository(0, null)).verify(savedSession());
-        assertThat(none.pending()).containsExactly("saveRevenueSegments(PRIOR_PERIOD) for 2024 FY");
+        assertThat(none.pending()).isEmpty();
+        assertThat(none.notes()).anyMatch(n -> n.startsWith("2024 FY: the revenue breakdown of PRIOR_PERIOD does not reconcile")
+                && n.contains("it is not stored"));
 
-        // a stored breakdown that does not add up to the revenue is no reason to drop it either
         var partial = new IngestionVerifier(repository(3, new BigDecimal("1000"))).verify(savedSession());
-        assertThat(partial.pending()).contains("saveRevenueSegments(PRIOR_PERIOD) for 2024 FY");
+        assertThat(partial.pending()).doesNotContain("saveRevenueSegments(PRIOR_PERIOD) for 2024 FY");
     }
 
     /** The FY2025 filing with both columns' statements and the FY2025 breakdown saved, FY2024's extracted, the derived data refreshed. */

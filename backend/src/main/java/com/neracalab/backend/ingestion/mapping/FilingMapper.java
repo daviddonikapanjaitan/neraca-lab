@@ -162,6 +162,17 @@ public final class FilingMapper {
     private boolean parFromProfitOrLossByNature;
 
     public FilingMapper(IdxWorkbook workbook) {
+        this(workbook, null);
+    }
+
+    /**
+     * A mapper whose amounts are in {@code provenUnit} whatever the workbook declares: the unit another filing's
+     * stored figures prove ({@code IngestionService.provenUnit}). IMJS's FY2024 workbook declares "Satuan Penuh /
+     * Full Amount" but files total assets 29,410,622 and a prior year end of 28,711,560 - FY2023's stored
+     * 28,711,561,013,612 in millions - and its profit attributable to the parent 228,477 / basic EPS 26.4 gives 8,654
+     * shares as filed, 8.65 billion in millions. {@code null} resolves the unit from the workbook alone.
+     */
+    public FilingMapper(IdxWorkbook workbook, BigDecimal provenUnit) {
         this.workbook = workbook;
         this.info = FilingInfo.from(workbook);
         this.taxonomy = workbook.taxonomy();
@@ -176,10 +187,10 @@ public final class FilingMapper {
             this.income = data(IdxSheets.INCOME_BY_FUNCTION).or(() -> data(IdxSheets.INCOME_BY_FUNCTION_BEFORE_TAX)).orElse(null);
         }
         this.cashFlow = data(IdxSheets.CASH_FLOW_DIRECT).or(() -> data(IdxSheets.CASH_FLOW_INDIRECT)).orElse(null);
-        Units units = resolveUnits(info.unitMultiplier());
+        Units units = provenUnit != null ? provenUnits(provenUnit) : resolveUnits(info.unitMultiplier());
         this.unit = units.amounts();
         this.epsScale = units.eps();
-        this.precision = info.unitMultiplier();
+        this.precision = provenUnit != null ? provenUnit : info.unitMultiplier();
         if (balanceSheet == null) {
             String supported = financial ? IdxSheets.BALANCE_SHEET_LIQUIDITY : IdxSheets.BALANCE_SHEET;
             String other = financial ? IdxSheets.BALANCE_SHEET : IdxSheets.BALANCE_SHEET_LIQUIDITY;
@@ -391,10 +402,37 @@ public final class FilingMapper {
             return new Units(declared, declared);
         }
         if (impliedFull != null && !plausibleShares(impliedFull.multiply(declared))) {
+            roundingContradicted = true;
             templateProblems.add("Amounts contradict the declared rounding '" + info.rounding() + "': profit / basic EPS implies "
                     + impliedFull.multiply(declared).setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares");
         }
         return new Units(declared, BigDecimal.ONE);
+    }
+
+    /** Set by {@link #resolveUnits}: profit / basic EPS gives an impossible share count in the declared unit. */
+    private boolean roundingContradicted;
+
+    private Units provenUnits(BigDecimal proven) {
+        warnings.add("The workbook declares '" + info.rounding() + "' but its amounts are in units of " + proven.toPlainString()
+                + ": its prior year end total assets are the stored figure in that unit, and profit / basic EPS then implies "
+                + impliedSharesPerUnit().multiply(proven).setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares");
+        return new Units(proven, BigDecimal.ONE);
+    }
+
+    /**
+     * Whether the filed EPS contradicts the declared rounding (an impossible share count) while it gives a plausible
+     * one with the amounts in {@code unit}: one of the two signals that a workbook's amounts are in another unit
+     * than declared; the stored figures of another filing are the other ({@code IngestionService.provenUnit}).
+     */
+    public boolean roundingContradictedButPlausibleIn(BigDecimal unit) {
+        BigDecimal implied = impliedSharesPerUnit();
+        return roundingContradicted && implied != null && plausibleShares(implied.multiply(unit));
+    }
+
+    /** Total assets at the prior year end as filed (not scaled), {@code null} when the balance sheet has none. */
+    public BigDecimal filedPriorYearEndTotalAssets() {
+        StatementTable b = balanceSheetAsFiled();
+        return b == null ? null : b.value("Total assets", 1);
     }
 
     /** Multipliers an EPS may be filed off by: as filed, in thousands, in millions. */
@@ -1703,7 +1741,8 @@ public final class FilingMapper {
      * them, where its balance sheet splits them: the row 'Cash and cash equivalents' holds the cash alone and the current
      * accounts and placements with banks are rows of their own (ADMF FY2025: 77,878 + 176,714 + 566,324 = 820,916 million,
      * the ending cash; DEFI FY2023: 8,801,000 + 4,487,369,146 + 8,500,000,000 = 12,996,170,146). Only when the ending cash
-     * is exactly the row plus some of those bank rows; {@code null} otherwise (BFIN: the row is the ending cash already;
+     * is the row plus some of those bank rows, exactly or within one filed unit; {@code null} otherwise (BFIN: the row is
+     * the ending cash already;
      * SMMA: the ending cash counts more than its bank rows give).
      */
     public CashWithBanks cashWithBankBalances(StatementColumn column) {
@@ -1725,22 +1764,27 @@ public final class FilingMapper {
             return null;
         }
         BigDecimal gap = ending.subtract(cash);
-        // the most rows first: a placement counted in the cash flow is counted with the current accounts
-        for (int size = banks.size(); size > 0; size--) {
-            for (int mask = 1; mask < (1 << banks.size()); mask++) {
-                if (Integer.bitCount(mask) != size) {
-                    continue;
-                }
-                BigDecimal sum = ZERO;
-                List<String> rows = new ArrayList<>();
-                for (int i = 0; i < banks.size(); i++) {
-                    if ((mask & (1 << i)) != 0) {
-                        sum = sum.add(amount(banks.get(i).value(ctx)));
-                        rows.add(banks.get(i).label());
+        // exactly, else within one filed unit: each cell rounded on its own (HDFA H1 2026, thousands: 5,013 + 56,101,280 =
+        // 56,106,293 beside an ending cash of 56,106,292; its prior year end adds up exactly, 4,492 + 149,282,128 =
+        // 149,286,620), as IngestionVerifier.roundingExplanation accepts between the two statements
+        for (BigDecimal slack : List.of(ZERO, unit)) {
+            // the most rows first: a placement counted in the cash flow is counted with the current accounts
+            for (int size = banks.size(); size > 0; size--) {
+                for (int mask = 1; mask < (1 << banks.size()); mask++) {
+                    if (Integer.bitCount(mask) != size) {
+                        continue;
                     }
-                }
-                if (sum.compareTo(gap) == 0) {
-                    return new CashWithBanks(cash, ending, rows);
+                    BigDecimal sum = ZERO;
+                    List<String> rows = new ArrayList<>();
+                    for (int i = 0; i < banks.size(); i++) {
+                        if ((mask & (1 << i)) != 0) {
+                            sum = sum.add(amount(banks.get(i).value(ctx)));
+                            rows.add(banks.get(i).label());
+                        }
+                    }
+                    if (sum.subtract(gap).abs().compareTo(slack) <= 0) {
+                        return new CashWithBanks(cash, ending, rows);
+                    }
                 }
             }
         }
@@ -2005,6 +2049,19 @@ public final class FilingMapper {
                     + syirkahParts.stripTrailingZeros().toPlainString() + ", balances the balance sheet"));
             syirkah = syirkahParts;
             syirkahReported = syirkahParts;
+        }
+        BigDecimal tabarru = sumOrNull(b, List.of("Total accumulated tabarru's funds"), ctx);
+        if (tabarru != null && tabarru.signum() != 0 && liabilities != null && totalEquity != null && totalAssets != null
+                && liabilities.add(syirkah).add(totalEquity).compareTo(totalAssets) != 0
+                && liabilities.add(syirkah).add(tabarru).add(totalEquity).compareTo(totalAssets) == 0) {
+            // a Sharia insurer's participants' fund between the liabilities and the equity, as the syirkah funds are
+            // (CASA FY2025: 24,667,114 + 2,207,986 + 24,781 + 10,401,954 = 37,301,835 million; FY2022 - H1 2026 alike,
+            // errors 1558 - 1572): stored with the temporary syirkah funds. Only where the balance sheet then balances
+            // and does not without it - ARTO FY2022 filed its syirkah total on this row instead (above).
+            checks.add(Check.warning("tabarru", "'Total accumulated tabarru's funds' " + tabarru.stripTrailingZeros().toPlainString()
+                    + " balances the balance sheet; stored with the temporary syirkah funds"));
+            syirkah = syirkah.add(tabarru);
+            syirkahReported = syirkahReported == null ? tabarru : syirkahReported.add(tabarru);
         }
         if (liabilities != null && totalEquity != null && totalAssets != null) {
             checks.add(equal("balance", "total liabilities + temporary syirkah funds + total equity = total assets",
@@ -3756,7 +3813,18 @@ public final class FilingMapper {
         }
         BigDecimal implied = parent.divide(eps, 6, RoundingMode.HALF_UP);
         BigDecimal shares = implied.setScale(0, RoundingMode.HALF_UP);
-        if (shares.signum() <= 0 || implied.subtract(shares).abs().compareTo(new BigDecimal("0.01")) > 0) {
+        // one share is an EPS cell that holds the profit itself: FLMC's FY2022 - FY2025 workbooks file it as basic EPS
+        // (FY2025: -22,991,911,126 = profit attributable to the parent), which gave 1 share outstanding at every year
+        // end. A small count can be real (CBPE FY2021 before its IPO: 30,160,409,174 / 861,726 = 35,000 shares).
+        if (shares.signum() <= 0 || implied.subtract(shares).abs().compareTo(new BigDecimal("0.01")) > 0
+                || shares.compareTo(BigDecimal.ONE) == 0) {
+            return null;
+        }
+        // nor more shares than rupiah of share capital: no IDX share has a par value under Rp 1 (GOTO's is Rp 1). CCSI's
+        // 9M 2026 workbook (thousands) files its EPS in thousands too, 0.0099177777 for Rp 9.92: 12,933,869,000 / 0.0099177777
+        // = 1,304,109,585,324 shares beside a share capital of 133,333,333,000 (Rp 0.10 a share; 1,333,333,330 at par 100)
+        if (rupiahShareCapital() && commonStartEnd[1].signum() > 0
+                && commonStartEnd[1].divide(shares, MathContext.DECIMAL64).compareTo(BigDecimal.ONE) < 0) {
             return null;
         }
         return new EpsShares(column, shares, commonStartEnd[1], treasuryStartEnd[1],

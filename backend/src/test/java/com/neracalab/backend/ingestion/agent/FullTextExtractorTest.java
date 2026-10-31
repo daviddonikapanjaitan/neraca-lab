@@ -1467,4 +1467,37 @@ public class FullTextExtractorTest {
         }
         return new IngestionSession(new FilingMapper(workbook));
     }
+
+    /**
+     * CASA's FY2023 profit or loss (a bank holding with an insurer, 4312000) files no revenue rows: the model's 'revenue
+     * rows - cost rows' gross profit was -5,416,776 million (claims 5,340,349 + commissions 76,427). A gross profit of
+     * cost rows alone is not stored.
+     */
+    @Test
+    void aGrossProfitOfCostRowsAloneWithoutRevenueIsNotStored() throws Exception {
+        IngestionSession session = session("CASA", "2023-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "4312000";
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("cost_of_revenue", terms(text, sheet, "+Claim expenses", "+Insurance commission expenses")),
+                // the revenue rows the model names are empty in this column
+                Map.entry("revenue", terms(text, sheet, "+Revenue from insurance premiums")),
+                Map.entry("gross_profit", terms(text, sheet, "+Revenue from insurance premiums", "-Claim expenses",
+                        "-Insurance commission expenses")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")));
+        answers("{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "No interest income or other operating income reported",
+                new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isNull();
+        assertThat(income.values().get("gross_profit")).isNull();
+        assertThat(income.rejected()).contains("gross_profit");
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("5416776000000");
+        assertThat(income.values().get("net_income")).isEqualByComparingTo("96825000000");
+    }
 }

@@ -51,7 +51,19 @@ class FilingMapperFinancingCashTest {
         assertThat(mapper.cashWithBankBalances(StatementColumn.PRIOR_YEAR_END)).isNull();
     }
 
-    /** Nothing is changed where the bank rows do not make up the difference exactly. */
+    @Test
+    void withinOneFiledUnitEachCellRoundedOnItsOwn() throws Exception {
+        FilingMapper mapper = mapper("HDFA", "2026-II");
+
+        // thousands: 5,013 + 56,101,280 = 56,106,293 beside an ending cash of 56,106,292 (error 1597)
+        FilingMapper.CashWithBanks current = mapper.cashWithBankBalances(StatementColumn.CURRENT_PERIOD);
+        assertThat(current.cash()).isEqualByComparingTo("56106292000");
+        assertThat(current.rows()).containsExactly("Current accounts with other banks third parties");
+        // its prior year end adds up exactly: 4,492 + 149,282,128 = 149,286,620
+        assertThat(mapper.cashWithBankBalances(StatementColumn.PRIOR_YEAR_END)).isNull();   // no cash flow column of its own
+    }
+
+    /** Nothing is changed where the bank rows do not make up the difference (within one filed unit). */
     @Test
     void otherwiseNothingIsChanged() throws Exception {
         // DEFI FY2022: its cash flow ends at 15,857,547,033, 501,250,000 below cash + bank rows (restated in FY2023)

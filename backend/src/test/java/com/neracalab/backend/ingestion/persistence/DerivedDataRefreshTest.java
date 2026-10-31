@@ -43,7 +43,9 @@ class DerivedDataRefreshTest {
         Duration took = Duration.ofNanos(System.nanoTime() - started);
 
         assertThat(fingerprint()).isEqualTo(before);
-        assertThat(took).as("a refresh with nothing to change").isLessThan(Duration.ofSeconds(15));
+        // V1.0.6 over every company: 10.8 s with ~360 companies, 17.6 s with 625 (2026-10-31) - it grows with the data;
+        // an upload refreshes its own company only (theRefreshOfOneCompanyLeavesWhatTheScriptComputes, under a second)
+        assertThat(took).as("a refresh with nothing to change").isLessThan(Duration.ofSeconds(30));
     }
 
     /** The market snapshot of a trading day carries the latest balance sheet on or before it, as before the rewrite. */

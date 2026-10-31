@@ -1,6 +1,7 @@
 package com.neracalab.backend.ingestion.agent;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -102,6 +103,14 @@ public class IngestionVerifier {
                     notes.add(period.key() + ": the revenue breakdown of " + column + " does not reconcile " + failed
                             + "; the " + stored.get().segments() + " segments stored for " + period.key()
                             + " add up to its revenue and are kept (a comparative never overwrites them)");
+                } else if (column != StatementColumn.CURRENT_PERIOD && !failed.isEmpty()) {
+                    // the user's decision of 2026-10-31: a comparative breakdown that fails its own checks is the filing's,
+                    // not an open item, also where no breakdown of the period is stored - the period's own filing stores
+                    // one (BUKK FY2024 in its FY2025 filing, CASS, DKHH, FWCT H1 2025, GEMA 9M 2025: lines filed twice or
+                    // adding up above the revenue; errors 1553 - 1590). It used to leave the upload INCOMPLETE.
+                    notes.add(period.key() + ": the revenue breakdown of " + column + " does not reconcile " + failed
+                            + "; it is not stored (a comparative breakdown that fails its checks is left out; the period's"
+                            + " own filing stores its breakdown)");
                 } else {
                     pending.add("saveRevenueSegments(" + column + ") for " + period.key()
                             + (session.isSegmentsExtracted(column) ? "" : " (call extractRevenueSegments first)"));
@@ -279,7 +288,7 @@ public class IngestionVerifier {
         BigDecimal mappedDebt = mapped(session, column, "balance_sheet", "short_term_debt");
         BigDecimal shortTermDebt = mappedDebt != null ? mappedDebt : storedShortTermDebt;
         if (filedCash == null || filedEnding == null
-                || filedCash.compareTo(p.balanceSheetCash()) != 0 || filedEnding.compareTo(p.endingCash()) != 0) {
+                || !asStored(filedCash, p.balanceSheetCash()) || !asStored(filedEnding, p.endingCash())) {
             return null;
         }
         BigDecimal difference = filedCash.subtract(filedEnding);
@@ -311,6 +320,14 @@ public class IngestionVerifier {
         return "cash-flow ending cash " + filedEnding.toPlainString() + " is balance-sheet cash " + filedCash.toPlainString()
                 + " plus " + excess.toPlainString() + ", within other current financial assets " + deposits.toPlainString()
                 + ": deposits or restricted funds counted as cash in the cash flow statement, stored as filed";
+    }
+
+    /**
+     * A mapped amount equals its stored value at the stored scale (NUMERIC(24,4)): a cell can carry a binary fraction
+     * beyond it (LAJU FY2022: ending cash 3.7643576861000004E9, stored 3,764,357,686.1000), which is the same amount.
+     */
+    private static boolean asStored(BigDecimal mapped, BigDecimal stored) {
+        return mapped.setScale(Math.max(stored.scale(), 4), RoundingMode.HALF_UP).compareTo(stored) == 0;
     }
 
     /** A field of the period's stored row; {@code null} when not stored. */

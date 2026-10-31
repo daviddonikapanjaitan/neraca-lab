@@ -97,6 +97,7 @@ spring:
         - classpath:db/V1.0.42__data_BBHI_shares.sql      # the 2025-06-30 count its annualized H1 EPS halved
         - classpath:db/V1.0.43__data_BMBL_BOAT_shares.sql # share counts from the share capital, KSEI and the listing records
         - classpath:db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql # wrong par / split / share issues
+        - classpath:db/V1.0.45__data_KOIN_HILL_shares.sql # wrong par values, KOIN's false reverse split
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false

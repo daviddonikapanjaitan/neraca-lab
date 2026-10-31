@@ -3,6 +3,8 @@ package com.neracalab.backend.ingestion;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -24,8 +26,11 @@ import com.neracalab.backend.ingestion.agent.IngestionSession;
 import com.neracalab.backend.ingestion.agent.IngestionVerifier;
 import com.neracalab.backend.ingestion.agent.JobDeadline;
 import com.neracalab.backend.ingestion.error.IngestionErrorRepository;
+import com.neracalab.backend.ingestion.mapping.Check;
 import com.neracalab.backend.ingestion.mapping.FilingInfo;
 import com.neracalab.backend.ingestion.mapping.FilingMapper;
+import com.neracalab.backend.ingestion.mapping.ShareCapital;
+import com.neracalab.backend.ingestion.mapping.ShareCapital.ShareAt;
 import com.neracalab.backend.ingestion.mapping.StatementColumn;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository;
 import com.neracalab.backend.ingestion.persistence.IngestionRepository.WriteResult;
@@ -89,7 +94,99 @@ public class IngestionService {
         if (conflict != null) {
             throw new IdxWorkbookException(conflict);
         }
-        return new IngestionSession(mapper);
+        BigDecimal proven = provenUnit(mapper);
+        return new IngestionSession(proven == null ? mapper : new FilingMapper(workbook, proven));
+    }
+
+    /** Share counts more than this far from the stored count of the same date contradict it. */
+    private static final BigDecimal SHARE_COUNT_TOLERANCE = new BigDecimal("0.10");
+
+    /**
+     * Drops the share counts a filing's par value gives when they contradict the company's stored count at one of the
+     * filing's comparative dates. The par value is inferred from the EPS (FilingMapper.inferParValue), and an EPS filed
+     * in another scale fits another standard par: IPCC's 9M 2026 workbook (EPS 0.000974 thousand for Rp 97.4) gave par
+     * Rp 1 and 181,838,482,000 shares at 2025-12-31, where its FY2025 filing stored 1,818,384,820 (par Rp 100); GLVA H1
+     * 2026 par 500, KSIX and LABA 9M 2026, KAEF FY2025 par 50 (11.1 billion beside 5,566,688,932), JGLE FY2025 par 10.
+     * One count stands against the other: the stored count, which a filing reported for its own date. Where that
+     * stored count is the wrong one (KOIN, HILL: their annual filings' par values; V1.0.45, from the share capital and
+     * KSEI), the new filing's counts are dropped all the same and no wrong count is added. A split recorded in between
+     * explains a difference. The counts are then left to the published counts (WebShareCounts), which are checked
+     * against the filing's EPS (HILL H1 2026: 14,741,500,000, as KSEI).
+     */
+    void dropContradictedShareCounts(IngestionSession session) {
+        ShareCapital shares = session.shareCapital();
+        if (!shares.resolved() || shares.webSource() != null) {
+            return;
+        }
+        var company = repository.findCompany(session.info().ticker()).orElse(null);
+        if (company == null) {
+            return;
+        }
+        LocalDate current = session.info().current().end();
+        for (ShareAt s : shares.snapshots()) {
+            if (s.sharesOutstanding() == null || !s.date().isBefore(current)) {
+                continue;
+            }
+            BigDecimal stored = repository.storedShareCount(company.companyId(), s.date()).orElse(null);
+            if (stored == null || stored.signum() <= 0
+                    || s.sharesOutstanding().subtract(stored).abs().divide(stored, java.math.MathContext.DECIMAL64)
+                            .compareTo(SHARE_COUNT_TOLERANCE) <= 0
+                    || repository.splitBetween(company.companyId(), s.date(), current)) {
+                continue;
+            }
+            String why = "The filing's share counts (" + shares.basis() + ") are not stored: " + s.sharesOutstanding().toPlainString()
+                    + " shares at " + s.date() + " contradict the stored " + stored.toPlainString()
+                    + " of that date, and no split is recorded since";
+            session.note(why);
+            List<ShareAt> withoutCounts = shares.snapshots().stream()
+                    .map(a -> new ShareAt(a.date(), a.commonStock(), null, null, null, a.source())).toList();
+            List<Check> checks = new ArrayList<>(shares.checks());
+            checks.add(Check.warning("share_counts", why));
+            session.shareCapital(new ShareCapital(null, null, withoutCounts, null, null, checks, null));
+            return;
+        }
+    }
+
+    /** Powers of ten a workbook's amounts may be off its declared rounding by. */
+    private static final List<BigDecimal> UNIT_FACTORS = List.of(new BigDecimal("1000"), new BigDecimal("1000000"),
+            new BigDecimal("1000000000"));
+
+    /**
+     * The unit a workbook's amounts are really in when it declares another, {@code null} when the declared one stands.
+     * IMJS's FY2024 workbook declares "Satuan Penuh / Full Amount" over amounts in millions (total assets 29,410,622;
+     * its FY2025 workbook, "Jutaan / In Million", repeats 29,410,622 for FY2024): read as declared, FY2024 was stored a
+     * million times too small. The workbook alone cannot tell (its EPS gives 8,654 shares as filed - an impossible
+     * count, flagged as "Amounts contradict the declared rounding" - but no full-amount figure to scale by); the
+     * stored figures can. Both signals must agree: the filed EPS gives a plausible share count in the unit, and the
+     * filing's prior year end total assets are the stored total assets of that date, rounded to the unit, within
+     * one filed unit (28,711,560 against FY2023's 28,711,561,013,612 = 28,711,561 millions). In the whole database IMJS FY2024 was the
+     * only period a thousand or a million times off its neighbours (2026-10-31).
+     */
+    BigDecimal provenUnit(FilingMapper mapper) {
+        FilingInfo info = mapper.info();
+        BigDecimal filed = mapper.filedPriorYearEndTotalAssets();
+        if (filed == null || filed.signum() <= 0 || info.priorYearEnd() == null) {
+            return null;
+        }
+        var company = repository.findCompany(info.ticker()).orElse(null);
+        if (company == null) {
+            return null;
+        }
+        BigDecimal stored = repository.totalAssets(company.companyId(), info.priorYearEnd().end()).orElse(null);
+        if (stored == null) {
+            return null;
+        }
+        for (BigDecimal factor : UNIT_FACTORS) {
+            BigDecimal unit = mapper.unit().multiply(factor);
+            if (mapper.roundingContradictedButPlausibleIn(unit)
+                    && stored.divide(unit, 0, RoundingMode.HALF_UP).subtract(filed).abs().compareTo(BigDecimal.ONE) <= 0) {
+                log.info("{}: amounts read in units of {} (declared '{}'): prior year end total assets {} x {} = stored {}",
+                        info.fileName(), unit.toPlainString(), info.rounding(), filed.toPlainString(), unit.toPlainString(),
+                        stored.toPlainString());
+                return unit;
+            }
+        }
+        return null;
     }
 
     /**
@@ -178,12 +275,14 @@ public class IngestionService {
             trigger = IngestionErrorRepository.Type.UNSUPPORTED_WORKBOOK;
             reason = error;
             try {
+                dropContradictedShareCounts(session);
                 webShareCounts.complete(session);      // share counts are not rows of the statements
             } catch (RuntimeException e) {
                 log.warn("ingestion {}: web share counts not available: {}", session.id(), e.getMessage());
             }
         } else {
             try {
+                dropContradictedShareCounts(session);
                 webShareCounts.complete(session);
                 session.deadline().check("the AI agent started");
                 outcome = agent.run(session);

@@ -1011,6 +1011,18 @@ public class FullTextExtractor {
             how.put("gross_profit", cost == null ? "revenue (no cost of revenue)" : "revenue - cost of revenue");
         }
         Set<String> rejected = new java.util.LinkedHashSet<>();
+        List<Counted> grossProfitRows = counted.getOrDefault("gross_profit", List.of());
+        if (target.kind() == Kind.INCOME && values.get("revenue") == null && values.get("gross_profit") != null
+                && !grossProfitRows.isEmpty() && grossProfitRows.stream().allMatch(c -> c.term().sign() < 0)) {
+            // a gross profit made of cost rows alone, without a revenue: CASA's FY2023 profit or loss (a bank holding
+            // with an insurer) files no revenue in this column, and the model's 'revenue rows - cost rows' gave
+            // -5,416,776 million (claims 5,340,349 + commissions 76,427; the revenue rows it named are empty cells and
+            // count nothing). A filed negative gross profit is its own row (GTBO H1 2026's 'Total gross profit'
+            // -1,299,512, sign +1) and stays.
+            values.put("gross_profit", null);
+            how.put("gross_profit", "not stored: no revenue, and a gross profit is not made of cost rows alone");
+            rejected.add("gross_profit");
+        }
         if (target.kind() == Kind.INCOME && !bank && values.get("revenue") != null) {
             List<Term> revenueRows = terms.getOrDefault("revenue", List.of());
             if (!revenueRows.isEmpty() && revenueRows.stream().allMatch(t -> NOT_REVENUE.contains(t.row().label()))) {
