@@ -56,6 +56,31 @@ class WebShareCountsTest {
         assertThat(session.notes()).anyMatch(n -> n.contains("could not be read"));
     }
 
+    /**
+     * A company's filings arrive together (three per company in the uploads of 2026-10-29 - 31) and Yahoo is asked one
+     * request at a time: its answer is reused for the company's next filing; a failed fetch is not kept.
+     */
+    @Test
+    void aCompanysAnswerIsReusedForItsNextFilingAndAFailureIsNot() throws Exception {
+        when(yahoo.shareCounts(Exchange.IDX, "BNGA"))
+                .thenThrow(new RateLimitedException("HTTP 429", null))
+                .thenReturn(List.of(
+                        new ShareCount(LocalDate.parse("2024-12-31"), 25_137_965_543L, 25_142_205_843L, 4_240_300L),
+                        new ShareCount(LocalDate.parse("2025-12-31"), 25_140_519_043L, 25_142_205_843L, 1_686_800L)));
+        WebShareCounts web = new WebShareCounts(yahoo, true);
+
+        web.complete(session("BNGA", "2025-Tahunan"));     // 429: not kept
+        IngestionSession second = session("BNGA", "2025-Tahunan");
+        web.complete(second);
+        IngestionSession third = session("BNGA", "2025-Tahunan");
+        web.complete(third);
+
+        verify(yahoo, org.mockito.Mockito.times(2)).shareCounts(Exchange.IDX, "BNGA");
+        assertThat(web.fetches()).isEqualTo(2);
+        assertThat(second.shareCapital().resolved()).isTrue();
+        assertThat(third.shareCapital().resolved()).isTrue();
+    }
+
     @Test
     void notFetchedWhenDisabledOrWhenTheFilingHasCounts() throws Exception {
         new WebShareCounts(yahoo, false).complete(session("BNGA", "2025-Tahunan"));

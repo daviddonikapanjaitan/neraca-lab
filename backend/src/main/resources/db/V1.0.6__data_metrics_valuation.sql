@@ -99,6 +99,10 @@ INSERT INTO valuation_snapshot (
     share_price, market_cap, enterprise_value,
     eps_ttm, revenue_ttm, ebitda_ttm, operating_income_ttm, fcf_ttm, book_value,
     pe_ratio, ps_ratio, pb_ratio, ev_ebitda, ev_sales, ev_op, fcf_yield, earnings_yield, ebitda_basis)
+-- the existing valuation dates too (each day's latest-trading-day valuation stays when the next day's comes): they are
+-- revalued with the current statements and share counts, as the per-company refresh (ValuationRepository) does - before
+-- 2026-10-31 they kept the figures of the day they were made (MSIN's of 2026-10-09 .. 23 the 6,067,620,000 shares
+-- V1.0.44 corrected, GOTO's and DYAN's an EBITDA since cleared)
 WITH valuation_dates AS (
     SELECT t.company_id, t.period_end AS valuation_date
     FROM v_ttm_financials t
@@ -108,6 +112,9 @@ WITH valuation_dates AS (
     FROM price_daily pd
     WHERE pd.close_price IS NOT NULL
     GROUP BY pd.company_id
+    UNION
+    SELECT vs.company_id, vs.valuation_date
+    FROM valuation_snapshot vs
 ),
 -- the periods with a balance sheet, read once (the views are not evaluated per valuation date)
 fundamentals AS MATERIALIZED (

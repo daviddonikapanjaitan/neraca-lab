@@ -151,6 +151,48 @@ class DerivedDataRefreshTest {
         assertThat(repository.derivedDataRuns()).isEqualTo(runs + 1);
     }
 
+    /**
+     * After an upload only its company is refreshed ({@code IngestionRepository.refreshDerivedData(companyId)}:
+     * {@link ValuationRepository#refreshAfterFiling}, 2026-10-31, for 50 uploads at once). For every company it leaves
+     * exactly what V1.0.6 computes - market and valuation snapshots (the existing valuation dates revalued in both: the
+     * first run of this test found MSIN's, GOTO's, DYAN's ... history rows stale in the script), cleared trailing ratios,
+     * fundamental and valuation metrics, every row compared - and the script changes nothing it left; well under a
+     * second per company.
+     */
+    @Test
+    void theRefreshOfOneCompanyLeavesWhatTheScriptComputes(@Autowired ValuationRepository valuations) {
+        repository.refreshDerivedData();
+        String before = rows();
+        List<Long> companies = jdbc.sql("SELECT company_id FROM company ORDER BY company_id").query(Long.class).list();
+
+        long started = System.nanoTime();
+        companies.forEach(valuations::refreshAfterFiling);
+        Duration perCompany = Duration.ofNanos((System.nanoTime() - started) / Math.max(1, companies.size()));
+
+        assertThat(rows()).isEqualTo(before);
+        assertThat(perCompany).isLessThan(Duration.ofSeconds(1));
+        // and the script changes nothing the per-company refresh left
+        repository.refreshDerivedData();
+        assertThat(rows()).isEqualTo(before);
+    }
+
+    /** Every derived row (key and values) hashed and summed: two states are the same only when every row is. */
+    private String rows() {
+        return jdbc.sql("""
+                SELECT (SELECT count(*) || ':' || COALESCE(sum(hashtextextended(x::text, 0)::numeric), 0) FROM (
+                            SELECT company_id, snapshot_date, share_price, shares_outstanding, market_cap, enterprise_value
+                            FROM market_snapshot) x)
+                    || '/' || (SELECT count(*) || ':' || COALESCE(sum(hashtextextended(x::text, 0)::numeric), 0) FROM (
+                            SELECT company_id, period_id, valuation_date, share_price, market_cap, enterprise_value, eps_ttm,
+                                   revenue_ttm, ebitda_ttm, operating_income_ttm, fcf_ttm, book_value, pe_ratio, ps_ratio,
+                                   pb_ratio, ev_ebitda, ev_sales, ev_op, fcf_yield, earnings_yield, ebitda_basis
+                            FROM valuation_snapshot) x)
+                    || '/' || (SELECT count(*) || ':' || COALESCE(sum(hashtextextended(x::text, 0)::numeric), 0) FROM (
+                            SELECT company_id, period_id, metric_date, metric_name, metric_category, metric_value, unit,
+                                   calculation_formula, source
+                            FROM financial_metric) x)""").query(String.class).single();
+    }
+
     private String fingerprint() {
         return jdbc.sql("""
                 SELECT (SELECT count(*) || ':' || COALESCE(sum(market_cap), 0) || ':' || COALESCE(sum(enterprise_value), 0)

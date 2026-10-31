@@ -259,8 +259,8 @@ public class FullTextExtractor {
         IngestionTools tools = new IngestionTools(session, repository, verifier);
         List<String> steps = DeterministicFinisher.finish(tools, session, repository, session.deadline());
         session.deadline().check("the final refresh and verification");
-        if (session.hasWrites() && !session.isDerivedCurrent()) {
-            repository.refreshDerivedData();
+        if (session.hasWrites() && !session.isDerivedCurrent() && session.company().isPresent()) {
+            repository.refreshDerivedData(session.company().get().companyId());
             session.derivedRefreshed();
         }
         return new Result(report, steps, verifier.verify(session), trace);

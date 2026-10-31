@@ -55,6 +55,25 @@ class JobWorkersConfigurationTest {
         }
     }
 
+    /**
+     * The upload queue has its own number ({@code neracalab.jobs.upload-workers}, 50 in application.yaml since
+     * 2026-10-31): unset or 0 it is {@code workers}; the other queues keep {@code workers}.
+     */
+    @Test
+    void theUploadQueueHasItsOwnNumberOfWorkers() {
+        JobProperties fifty = bind(Map.of("neracalab.jobs.workers", "5", "neracalab.jobs.upload-workers", "50"));
+        assertThat(fifty.uploads()).isEqualTo(50);
+        assertThat(fifty.workers()).isEqualTo(5);
+        assertThat(bind(Map.of("neracalab.jobs.workers", "6")).uploads()).as("unset: as workers").isEqualTo(6);
+        assertThatThrownBy(() -> new JobProperties(5, -1)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("upload-workers");
+
+        Set<Thread> before = Thread.getAllStackTraces().keySet();
+        start(new FinancialStatementQueue(null, null, null, null, null, Duration.ofMinutes(5), false,
+                bind(Map.of("neracalab.jobs.workers", "2", "neracalab.jobs.upload-workers", "7"))));
+        assertThat(workerThreads("financial-statement-ingestion", before)).hasSize(7);
+    }
+
     @Test
     void atLeastOneWorkerIsNeeded() {
         assertThatThrownBy(() -> new JobProperties(0)).isInstanceOf(IllegalArgumentException.class)

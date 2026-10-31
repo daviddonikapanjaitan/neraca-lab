@@ -270,9 +270,9 @@ public class IngestionService {
 
     /** Keeps market / valuation data consistent with what was saved before a failure. */
     private void refreshAfterFailure(IngestionSession session) {
-        if (session.hasWrites() && !session.isDerivedCurrent()) {
+        if (session.hasWrites() && !session.isDerivedCurrent() && session.company().isPresent()) {
             try {
-                repository.refreshDerivedData();
+                repository.refreshDerivedData(session.company().get().companyId());
                 session.derivedRefreshed();
             } catch (RuntimeException refresh) {
                 log.error("ingestion {}: derived data refresh after the failure failed", session.id(), refresh);

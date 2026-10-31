@@ -203,9 +203,29 @@ that many of its jobs run at the same time and the others wait as QUEUED. To run
 `workers: 6` under `neracalab.jobs` in `application.yaml` (or `INGESTION_WORKERS=6` in `backend/.env`)
 and restart the backend.
 
+The financial statement upload queue has its own number, `neracalab.jobs.upload-workers` (env
+`INGESTION_UPLOAD_WORKERS`, **50** since 2026-10-31; 0 = as `workers`). An upload mostly waits on model calls, and
+since 2026-10-31 its database work is short: a filing that maps cleanly is stored without the agent (the fast path,
+[AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6), and an upload recalculates only its own company's derived
+data (`IngestionRepository.refreshDerivedData(companyId)`, under a second, beside other companies) instead of the
+whole `V1.0.6` script for every company (10.8 s, one at a time for all uploads). What 50 workers need, set in
+`application.yaml` and `docker-compose.yaml`:
+
+| Setting | Value | Why |
+|---|---|---|
+| `INGESTION_UPLOAD_WORKERS` | `50` | uploads stored at the same time |
+| `DB_POOL_SIZE` (`spring.datasource.hikari.maximum-pool-size`) | `40` | connections under load; 5 kept when idle (`DB_POOL_MIN_IDLE`), each released after 60 s |
+| `POSTGRES_MAX_CONNECTIONS` (postgres `-c max_connections`) | `200` | the backend's pool beside the test suite's contexts (5 each) and the tools |
+| `JAVA_OPTS` | `-Xms512m -Xmx4g` | up to 50 workbooks in memory at once (29 at once grew the heap to 3 GB) |
+| `INGESTION_FAST_PATH` | `true` | a cleanly mapped filing needs no agent (`false`: always the agent) |
+
+The share counts an upload asks Yahoo Finance for (when its filing states none) are kept per company for 6 hours
+(`WebShareCounts`): Yahoo is asked one request at a time with a 1 - 2 s pause, shared with the price ingestion, and a
+company's filings arrive together.
+
 | Queue (job type)                              | Runs at the same time                     | Still one after the other                                                                 |
 |-----------------------------------------------|-------------------------------------------|-------------------------------------------------------------------------------------------|
-| Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings, also several of one company | the write steps of filings of one company (never two at the same moment); the recalculation of the derived data |
+| Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings (`upload-workers`, 50), one company's in upload order | the write steps of filings of one company (never two at the same moment); the share scripts after each upload (milliseconds); the requests to Yahoo Finance for share counts |
 | Prices (`PRICE`)                              | different companies (one job per company) | the requests to the provider: one at a time with the 1-2 s pause; an HTTP 429 pauses every worker |
 | RAG (`RAG_PDF`, `RAG_NEWS`)                   | different documents / companies           | the requests to one news site                                                             |
 | Screening data (`FUNDAMENTALS`)               | different exchanges (one run per exchange) | the requests to Yahoo Finance                                                            |

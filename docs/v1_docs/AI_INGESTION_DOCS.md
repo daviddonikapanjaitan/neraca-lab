@@ -142,7 +142,8 @@ and the fix), and the job result lists the models the responses report (`metrics
 | `neracalab.ingestion.model-call-timeout`| 45s     | a model call taking longer counts as a stalled response and is retried (env `INGESTION_MODEL_CALL_TIMEOUT`) |
 | `neracalab.ingestion.job-timeout`       | 5m      | longest an upload job may run (from start, queue time excluded); then stopped and FAILED (env `INGESTION_JOB_TIMEOUT`) |
 | `neracalab.ingestion.prices-after-upload` | true  | queue the company's daily prices when a filing was stored, so that it gets its market caps and valuations (env `INGESTION_PRICES_AFTER_UPLOAD`), section 4 |
-| `neracalab.jobs.workers`                | 5       | uploads stored at the same time, each by its own agent (env `INGESTION_WORKERS`), also several filings of one company ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `neracalab.jobs.upload-workers`         | 50      | uploads stored at the same time (env `INGESTION_UPLOAD_WORKERS`; 0 = as `neracalab.jobs.workers`, 5, which the other queues keep) ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `neracalab.ingestion.fast-path`         | true    | a filing whose every column maps without a failed check or an unclassified line is stored without the agent; the deterministic verification decides, anything open goes to the agent as before (env `INGESTION_FAST_PATH`), section 6 |
 | `neracalab.ingestion.same-company-in-order` | true | filings of one company are stored one after the other in upload order, so a filing in another currency is checked against those stored before it; false: at the same time (env `INGESTION_SAME_COMPANY_IN_ORDER`) |
 | `neracalab.ingestion.provider-ignore`   | OpenInference | OpenRouter providers the ingestion's model calls never use (env `INGESTION_PROVIDER_IGNORE`), section 6 |
 | `neracalab.ingestion.fallback.*`        | on, 3m  | the full-text extraction that takes over when the standard extraction does not store a workbook, and its time limits (section 6) |
@@ -196,7 +197,7 @@ final status is decided by the deterministic database read-back, not by the mode
 | `extractRevenueSegments` | read  | revenue by type (else by source) of a column                                               |
 | `saveRevenueSegments`    | write | segments with English names and types; amounts from the filing; current period replaces the period's whole breakdown, comparatives fill only a period without one |
 | `saveShareSnapshots`     | write | share counts at every date in the statements of changes in equity                          |
-| `refreshDerivedData`     | write | re-runs `V1.0.6__data_metrics_valuation.sql` (market / valuation snapshots, metrics), then deletes valuation metrics whose value became NULL; one run at a time, about 2 s, and a request that waited for a whole run is served by it |
+| `refreshDerivedData`     | write | recalculates the company's derived data: the share scripts, then `ValuationRepository.refreshAfterFiling` (V1.0.6 for this company: market / valuation snapshots, cleared trailing ratios, fundamental and valuation metrics, stale valuation metrics deleted); about 0.4 s, beside other companies' refreshes (until 2026-10-31 the whole script for every company, one run at a time) |
 | `verifyStoredData`       | read  | database read-back: pending work and inconsistencies (the final gate of `COMPLETED`)       |
 
 **One company per (ticker, exchange).** The ticker comes from sheet `1000000` "Entity code",
@@ -706,6 +707,12 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `IngestionVerifierInsurerDepositsTest` (unit) | AMAG FY2025, an insurer: ending cash 485,425,155 thousand = cash 64,021,213 + 421,403,942 within time deposits 651,473,868 is a note; beyond the deposits, or stored figures not the filing's, a problem |
 | `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error; one unit in a full-amount filing too (BRAM H1 2026 24,367,847 / 24,367,846 USD, BMBL FY2022), two units (BMBL FY2023) a problem; MGLV FY2024: ending cash 3 rupiah above the balance sheet's 7,783,983,677, under a billionth of it - a note; INDO FY2022's 20,000,000 stays an error |
 | `IngestionToolsSegmentsTest` (unit, mocked repository) | a comparative breakdown of a restated revenue is kept out (BMHS FY2024's 1,488,197,483,371 for FY2023's 1,287,690,839,110), one of the same revenue in millions is saved (INPP FY2025's 1,309,662 million for 1,309,661,867,481); the period's own filing removes a stored breakdown of another revenue (BHIT FY2024) and keeps one of its revenue |
+| `IngestionAgentFastPathTest` (Docker Postgres, rolled back) | the fast path: HRTA H1 2026 maps cleanly and is stored and verified without a model call; a company without segments gets them named by one call (stage `SEGMENT_NAMES`) and nothing else is asked; BUDI FY2025 and BMBL FY2023 (failed checks) and BTEL FY2024 (by nature) are not for it; the model's names apply to new segments only, OTHER only in the residual slot |
+| `DerivedDataRefreshTest.theRefreshOfOneCompanyLeavesWhatTheScriptComputes` (Docker Postgres) | the per-company refresh after an upload leaves every derived row of all 361 companies as V1.0.6 computes it (and the script changes nothing it left), under a second per company |
+| `PacedHttpClientAheadTest` (local HTTP server) | a request made `ahead` (an upload's share counts) is sent right after the one in flight, before three waiting background requests |
+| `WebShareCountsTest.aCompanysAnswerIsReusedForItsNextFilingAndAFailureIsNot` (unit) | Yahoo's share counts are fetched once per company (a 429 is not kept) |
+| `JobWorkersConfigurationTest.theUploadQueueHasItsOwnNumberOfWorkers` (unit) | `upload-workers` 50 beside `workers` 5; unset: as `workers` |
+| `MarketInstrumentSequenceTest` (Docker Postgres) | running V1.0.26 again draws no `instrument_id` (the SMALLSERIAL ran out at 32,767 and no start succeeded) |
 | `BmblBoatSharesTest` (Docker Postgres) | V1.0.43: BMBL 1,030,080,995 (share capital at par Rp 40, H1 2026 EPS -1.05), BOAT 3,501,680,000 from its IPO of 2024-11-12; market cap = price x count |
 | `ShareCountCorrectionsTest` (Docker Postgres) | V1.0.44: MSIN 60,676,178,205 and its H1 2026 EPS 4.69, SMGA 7,000,000,000 / 8,750,000,000, RMKE 21,875,000,000 with its split of 2026-07-17 recorded, WIFI, INET and PACK after their share issues |
 | `FilingMapperAdmrArtoBrmsTest` (unit) | the error log of 2026-10-18: ADMR lines filed with decimals outside the investing total (-322,409,000); ARTO's syirkah funds from their lines (526,059 / 110,361 million); BRMS's EPS filed per 1,000 shares (0.00035 per share with Yahoo's 141,784,040,338 shares; counts that fit neither way change nothing) |
@@ -955,6 +962,33 @@ seconds is retried twice); an upload that passes both is stopped and `FAILED`. W
 | `model-call-timeout`                        | `150s`  | one of its model calls (one long JSON answer)              |
 | `max-chars`                                 | `120000`| most workbook text sent to the model; the statement sheets always fit, notes sheets are left out first |
 | `rounds`                                    | `3`     | answers of the model: the first, then its own corrections; the last one is stored |
+
+### Speed and 50 uploads at once (2026-10-31)
+
+Measured on the 991 uploads of 2026-10-29 - 31 (5 workers): an upload that the standard extraction stored ran about
+60 s - 11.7 model calls took 41 s, the rest mostly the derived-data refresh: `V1.0.6` over every company (10.8 s with
+361 companies and 1.06 million prices, one run at a time for all uploads) - and waited 615 s on average in the queue;
+30% went to the full-text extraction (by design for the by-nature, Financing and Insurance templates; the rest
+filings that fail a check, mostly the workbooks' own errors - `ingestion_error`).
+
+| Change | Where | Effect |
+|---|---|---|
+| **Fast path**: a filing whose every column maps without a failed check or an unclassified income line, in a template the rule-based extraction reads, is stored without the agent - the default plan's steps through the agent's own tools (`DeterministicFinisher`), one model call for the English names of the company's new revenue segments (`Prompts.SEGMENT_NAMER`, stage `SEGMENT_NAMES`). The deterministic verification decides; anything open goes to the agent, then the full-text extraction, as before | `IngestionAgent.fastPath` / `mapsCleanly`, `neracalab.ingestion.fast-path` | 85% of the 1,766 workbooks qualify; such an upload takes about 2 s alone (16.7 s median with 29 at once) and no planner / executor / reviewer call |
+| **Derived data of the uploaded company only**: `IngestionRepository.refreshDerivedData(companyId)` = the share scripts, then `ValuationRepository.refreshAfterFiling` (V1.0.6 for one company: market and valuation snapshots, cleared trailing ratios, fundamental and valuation metrics); the whole script still runs at start | `IngestionTools`, `IngestionAgent`, `FullTextExtractor`, `IngestionService` | 0.36 s per company instead of 10.8 s, beside other companies' refreshes. `DerivedDataRefreshTest.theRefreshOfOneCompanyLeavesWhatTheScriptComputes` compares every derived row of all 361 companies with the script's |
+| **History revalued**: V1.0.6 also revalues the existing valuation dates (each day's latest-trading-day row stays) | `V1.0.6__data_metrics_valuation.sql` | the test above found MSIN's valuations of 2026-10-09 .. 23 still on the 6,067,620,000 shares V1.0.44 corrected, GOTO's and DYAN's on an EBITDA since cleared |
+| **Upload workers of their own**: `neracalab.jobs.upload-workers` 50 (the price, RAG and screening queues keep `workers` 5); connection pool 40 (5 idle), PostgreSQL `max_connections` 200, heap 4 GB | `JobProperties.uploads()`, `application.yaml`, `docker-compose.yaml` | no queue wait |
+| **Yahoo Finance share counts**: kept per company for 6 h, and asked `PacedHttpClient.ahead` of the waiting price requests (still one request at a time with the 1 - 2 s pause) | `WebShareCounts`, `PacedHttpClient` | 40% of the uploads asked Yahoo (three filings per company); in the first 50-upload test they waited up to 53 s behind the price jobs the uploads queue |
+
+Load tests on the live backend (FY2025 workbooks of 50 different companies, every one already stored, so the stored
+data must not change): 50 of 50 SUCCEEDED in 105 s (40 fast path, median 2.0 s; 9 full-text by design, 1 agent);
+then 49 of 49 in 129 s (41 fast path, 8 full-text; 29 running at once, 18 database connections; 67 model calls, none
+failed) with ANJT's USD filing refused (422) as intended. The fast path's current-period statements were written
+with no difference from the stored ones (120 of 120); the comparative columns kept the stored figures as the rules
+require. With 5 workers and the agent the same 50 would have taken about 10 minutes plus the queue.
+
+`ingest.py upload --parallel` (skill `fix-xlsx-ingestion-api`) submits with 16 threads, one company's files in order
+by one thread, reports a refused file and goes on, and prints a summary (wall time, run median / max, fast path /
+full-text, model calls).
 
 ### The error log `ingestion_error`
 

@@ -63,6 +63,14 @@ final class Prompts {
             When the plan is done and verifyStoredData shows nothing pending and no problems, reply with a \
             short summary of what was stored, without calling a tool.""";
 
+    /** The fast path's naming of a company's new revenue segments ({@code IngestionAgent.segmentNames}). */
+    static final String SEGMENT_NAMER = """
+            You name the revenue segments of an Indonesian listed company, as filed in its IDX XBRL workbook. For \
+            every line return segmentName exactly as given, a concise, literal English segmentNameEn (e.g. \
+            "Penjualan perhiasan" -> "Jewellery sales"; keep proper names and brands), and segmentType = the line's \
+            filingType, except that a line with residualSlot true may be OTHER when it is not revenue from customers \
+            (e.g. fair-value adjustments). Answer only with the JSON object.""";
+
     /** Reflection: an independent review of the executor's work against the deterministic verification. */
     static final String REVIEWER = """
             You are the REVIEWER of an agent that loads an IDX XBRL financial statement workbook into a \

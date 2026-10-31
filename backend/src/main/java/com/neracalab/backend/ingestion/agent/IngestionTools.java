@@ -515,7 +515,7 @@ public class IngestionTools {
     public RefreshResult refreshDerivedData() {
         return locked(() -> {
             CompanyRow company = requireCompany();
-            repository.refreshDerivedData();
+            repository.refreshDerivedData(company.companyId());
             session.derivedRefreshed();
             return new RefreshResult(true, repository.derivedCounts(company.companyId()));
         });

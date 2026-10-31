@@ -54,6 +54,9 @@ public class IngestionRepository {
     private final ValuationRepository valuations;
     /** One {@link #refreshDerivedData} at a time. */
     private final ReentrantLock derivedDataLock = new ReentrantLock();
+    /** The share scripts of {@link #refreshDerivedData(long)} one at a time (milliseconds; their rows may overlap). */
+    private final ReentrantLock shareScriptsLock = new ReentrantLock();
+    private final AtomicLong companyRefreshes = new AtomicLong();
     /** Orders the requests for a refresh and the starts of its runs. */
     private final AtomicLong derivedDataClock = new AtomicLong();
     /** When the last completed run started ({@link #derivedDataClock}); read and written under the lock. */
@@ -924,6 +927,32 @@ public class IngestionRepository {
         } finally {
             derivedDataLock.unlock();
         }
+    }
+
+    /**
+     * The derived data of the company a filing was stored for: the share scripts (counts no filing states, corrected
+     * after every upload), then {@link ValuationRepository#refreshAfterFiling} - V1.0.6 restricted to the company. A
+     * filing changes only its own company's statements and share counts, so the run of the whole script for every
+     * company (10.8 s on 2026-10-31, one at a time for all uploads) is not needed after an upload: with 50 uploads at
+     * once they queued behind it. Refreshes of different companies run side by side (their rows are disjoint); the
+     * caller holds the company's write lock, so two refreshes of one company never overlap.
+     */
+    public void refreshDerivedData(long companyId) {
+        shareScriptsLock.lock();
+        try {
+            ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
+            SHARE_SCRIPTS.forEach(s -> populator.addScript(new ClassPathResource(s)));
+            populator.execute(dataSource);
+        } finally {
+            shareScriptsLock.unlock();
+        }
+        valuations.refreshAfterFiling(companyId);
+        companyRefreshes.incrementAndGet();
+    }
+
+    /** How often {@link #refreshDerivedData(long)} ran. */
+    public long companyRefreshes() {
+        return companyRefreshes.get();
     }
 
     /** How often the derived data was recalculated (a request served by another run does not count). */

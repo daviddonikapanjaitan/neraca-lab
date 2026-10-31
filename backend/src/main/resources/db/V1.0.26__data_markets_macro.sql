@@ -61,8 +61,17 @@
 -- Runs on every start. Idempotent: a row is inserted or brought back to this definition.
 -- =====================================================================
 
-INSERT INTO market_instrument (instrument_code, market, name, source, source_symbol, quote_currency, unit, frequency,
-                               tick_size, max_spike, history_from, sort_order, description)
+-- instrument_id is a SMALLSERIAL: an INSERT ... ON CONFLICT draws a sequence value for every listed row, also for the
+-- rows that exist, so the 35 instruments used 35 values at every start (test contexts included) until the sequence ran
+-- out at 32,767 on 2026-10-31 and every start failed ("nextval: reached maximum value"). The sequence is set back to the
+-- highest id in use, the existing rows are updated where their definition changed, and only missing ones are inserted
+-- (a value is drawn only for them).
+SELECT setval(pg_get_serial_sequence('market_instrument', 'instrument_id'),
+              (SELECT COALESCE(MAX(instrument_id), 1) FROM market_instrument),
+              (SELECT COUNT(*) > 0 FROM market_instrument));
+
+WITH v (instrument_code, market, name, source, source_symbol, quote_currency, unit, frequency,
+        tick_size, max_spike, history_from, sort_order, description) AS (
 VALUES
     ('USDIDR',   'FOREX',     'USD/IDR',             'yahoo',     'IDR=X',            'IDR', 'IDR per USD',          'DAILY',   1,     0.03, DATE '2001-01-01', 10,
      'US dollar in Indonesian rupiah (Yahoo Finance IDR=X, London close)'),
@@ -138,12 +147,29 @@ VALUES
      'Diammonium phosphate fertilizer: monthly average of the World Bank Pink Sheet (no free daily source)'),
     ('POTASH',       'COMMODITY', 'Potash (Potassium Chloride)', 'worldbank', 'Potassium chloride', 'USD', 'USD per metric ton', 'MONTHLY', 0.01, NULL, DATE '1980-01-01', 210,
      'Potassium chloride (muriate of potash) fertilizer: monthly average of the World Bank Pink Sheet (no free daily source)')
-ON CONFLICT (instrument_code) DO UPDATE SET
-    market = EXCLUDED.market, name = EXCLUDED.name, source = EXCLUDED.source, source_symbol = EXCLUDED.source_symbol,
-    quote_currency = EXCLUDED.quote_currency, unit = EXCLUDED.unit, frequency = EXCLUDED.frequency,
-    tick_size = EXCLUDED.tick_size, max_spike = EXCLUDED.max_spike, history_from = EXCLUDED.history_from,
-    sort_order = EXCLUDED.sort_order,
-    description = EXCLUDED.description;
+),
+updated AS (
+    UPDATE market_instrument m SET
+        market = v.market, name = v.name, source = v.source, source_symbol = v.source_symbol,
+        quote_currency = v.quote_currency, unit = v.unit, frequency = v.frequency,
+        tick_size = v.tick_size, max_spike = v.max_spike, history_from = v.history_from,
+        sort_order = v.sort_order,
+        description = v.description
+    FROM v
+    WHERE m.instrument_code = v.instrument_code
+      AND (m.market, m.name, m.source, m.source_symbol, m.quote_currency, m.unit, m.frequency, m.tick_size,
+           m.max_spike, m.history_from, m.sort_order, m.description)
+          IS DISTINCT FROM
+          (v.market, v.name, v.source, v.source_symbol, v.quote_currency, v.unit, v.frequency, v.tick_size,
+           v.max_spike, v.history_from, v.sort_order, v.description)
+    RETURNING m.instrument_code
+)
+INSERT INTO market_instrument (instrument_code, market, name, source, source_symbol, quote_currency, unit, frequency,
+                               tick_size, max_spike, history_from, sort_order, description)
+SELECT v.instrument_code, v.market, v.name, v.source, v.source_symbol, v.quote_currency, v.unit, v.frequency,
+       v.tick_size, v.max_spike, v.history_from, v.sort_order, v.description
+FROM v
+WHERE NOT EXISTS (SELECT 1 FROM market_instrument m WHERE m.instrument_code = v.instrument_code);
 
 INSERT INTO macro_series_def (series_code, name, country, category, unit, frequency, source, source_ref, source_url,
                               release_lag_days, priority, used_by, min_value, max_value, max_change, history_from,

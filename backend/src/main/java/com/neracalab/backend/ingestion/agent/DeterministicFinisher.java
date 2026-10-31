@@ -28,6 +28,16 @@ final class DeterministicFinisher {
     /** Runs the remaining steps; returns what was done (and what could not be), for the job notes. */
     static List<String> finish(IngestionTools tools, IngestionSession session, IngestionRepository repository,
                                JobDeadline deadline) {
+        return finish(tools, session, repository, deadline, Map.of());
+    }
+
+    /**
+     * As {@link #finish(IngestionTools, IngestionSession, IngestionRepository, JobDeadline)}, with the English names
+     * (and the type of a residual-slot line) the model gave the company's new segments ({@link IngestionAgent}'s fast
+     * path); a segment it did not name keeps the rules of {@link #namings(SegmentExtraction, List)}.
+     */
+    static List<String> finish(IngestionTools tools, IngestionSession session, IngestionRepository repository,
+                               JobDeadline deadline, Map<String, IngestionTools.SegmentNaming> named) {
         List<String> log = new ArrayList<>();
         if (session.company().isEmpty()) {
             boolean found = step(log, deadline, "findCompany", () -> tools.findCompany().found());
@@ -65,7 +75,7 @@ final class DeterministicFinisher {
                 log.add("saveRevenueSegments(" + column + ") left open: segments do not reconcile");
                 continue;
             }
-            List<IngestionTools.SegmentNaming> namings = namings(segments.get(), repository.segments(companyId));
+            List<IngestionTools.SegmentNaming> namings = namings(segments.get(), repository.segments(companyId), named);
             step(log, deadline, "saveRevenueSegments(" + column + ")", () -> tools.saveRevenueSegments(column, namings));
         }
         if (session.shareCapital().resolved() && !session.isSharesSaved()) {
@@ -79,11 +89,30 @@ final class DeterministicFinisher {
 
     /** Each segment under its filed name and slot type; the English name of an existing segment of the same name, else the filed name. */
     static List<IngestionTools.SegmentNaming> namings(SegmentExtraction extraction, List<SegmentRow> existing) {
+        return namings(extraction, existing, Map.of());
+    }
+
+    /**
+     * As {@link #namings(SegmentExtraction, List)}, but a segment the company does not have yet takes the model's
+     * English name from {@code named}, and its type where the filing allows it (the slot's type, or OTHER for a
+     * residual-slot line - what saveRevenueSegments accepts).
+     */
+    static List<IngestionTools.SegmentNaming> namings(SegmentExtraction extraction, List<SegmentRow> existing,
+                                                      Map<String, IngestionTools.SegmentNaming> named) {
         Map<String, String> english = existing.stream()
                 .collect(Collectors.toMap(SegmentRow::segmentName, SegmentRow::segmentNameEn, (a, b) -> a));
         return extraction.lines().stream()
-                .map(l -> new IngestionTools.SegmentNaming(l.name(), english.getOrDefault(l.name(), l.name()),
-                        IngestionTools.SegmentType.valueOf(l.filingType())))
+                .map(l -> {
+                    IngestionTools.SegmentType filed = IngestionTools.SegmentType.valueOf(l.filingType());
+                    IngestionTools.SegmentNaming model = english.containsKey(l.name()) ? null : named.get(l.name());
+                    if (model == null || model.segmentNameEn() == null || model.segmentNameEn().isBlank()) {
+                        return new IngestionTools.SegmentNaming(l.name(), english.getOrDefault(l.name(), l.name()), filed);
+                    }
+                    boolean allowed = model.segmentType() == filed
+                            || (l.residualSlot() && model.segmentType() == IngestionTools.SegmentType.OTHER);
+                    return new IngestionTools.SegmentNaming(l.name(), model.segmentNameEn().trim(),
+                            allowed ? model.segmentType() : filed);
+                })
                 .toList();
     }
 

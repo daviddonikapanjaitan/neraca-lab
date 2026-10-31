@@ -30,6 +30,14 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/neracalab}
     username: ${DB_USERNAME:neracalab}
     password: ${DB_PASSWORD:neracalab}
+    hikari:
+      # 50 upload workers (neracalab.jobs.upload-workers) besides the price, RAG and screening queues and the API: up
+      # to 40 connections under load, few when idle (PostgreSQL allows 200: docker-compose.yaml; the test suite keeps
+      # pools of 5 per context, src/test/resources/application.properties)
+      maximum-pool-size: ${DB_POOL_SIZE:40}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      idle-timeout: 60000          # ms
+      connection-timeout: 60000    # ms: a worker waits this long for a free connection
   data:
     redis:
       # Redis of backend/docker-compose.yaml (the backend container sets SPRING_DATA_REDIS_HOST=redis); the Macro page's
@@ -125,9 +133,17 @@ neracalab:
     # The requests to Yahoo Finance and to each news site stay paced one at a time (more workers do not send
     # requests faster).
     workers: ${INGESTION_WORKERS:5}
+    # Worker threads of the financial statement upload queue (0: as many as `workers`). An upload mostly waits on model
+    # calls; its database work is short and refreshes only its own company's derived data, so 50 run side by side
+    # (needs the connection pool below and a heap of 4 GB: JAVA_OPTS in docker-compose.yaml).
+    upload-workers: ${INGESTION_UPLOAD_WORKERS:50}
 
   # AI ingestion agent (POST /api/v1/financial-statements/upload)
   ingestion:
+    # A filing whose every column maps without a failed check or an unclassified income line is stored without the
+    # agent (the same tools in the default plan's order, one model call for the English names of new revenue segments);
+    # the deterministic verification decides, and anything open goes to the agent and the full-text extraction as before.
+    fast-path: ${INGESTION_FAST_PATH:true}
     max-iterations: 30      # model turns per execution round
     reflection-rounds: 2    # extra rounds the reviewer may request
     temperature: 0.0

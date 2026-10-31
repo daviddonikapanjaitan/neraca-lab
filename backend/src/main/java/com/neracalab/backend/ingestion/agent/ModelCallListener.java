@@ -14,6 +14,8 @@ public interface ModelCallListener {
     String EXECUTE = "EXECUTE";
     String REVIEW = "REVIEW";
     String FULL_TEXT = "FULL_TEXT";
+    /** The fast path's one call: English names of a company's new revenue segments. */
+    String SEGMENT_NAMES = "SEGMENT_NAMES";
 
     /** No recording (an ingestion outside an upload job, tests). */
     ModelCallListener NONE = (stage, model, response, durationMs, error) -> { };

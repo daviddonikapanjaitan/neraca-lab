@@ -50,7 +50,7 @@ import com.neracalab.backend.price.PricesAfterUpload;
  * A filing holds no prices, and a company without prices has no valuation: when a filing was stored, the
  * company's daily prices are queued too ({@link PricesAfterUpload}), unless they are already up to date.
  * <p>
- * Several workers ({@code neracalab.jobs.workers}, 5): that many filings are stored at the same time.
+ * Several workers ({@code neracalab.jobs.upload-workers}, 50): that many filings are stored at the same time.
  * <p>
  * With {@code neracalab.ingestion.same-company-in-order=true} (the default) filings of the SAME company are
  * stored one after the other in upload order (other companies still beside them): only the first waiting
@@ -121,7 +121,7 @@ public class FinancialStatementQueue implements SmartLifecycle {
         this.pricesAfterUpload = pricesAfterUpload;
         this.jobTimeout = jobTimeout;
         this.sameCompanyInOrder = sameCompanyInOrder;
-        this.workers = new WorkerThreads("financial-statement-ingestion", properties.workers(), this::work);
+        this.workers = new WorkerThreads("financial-statement-ingestion", properties.uploads(), this::work);
     }
 
     /** Without the prices of a stored filing's company (tests). */
