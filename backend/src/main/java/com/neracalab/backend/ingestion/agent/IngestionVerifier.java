@@ -183,13 +183,17 @@ public class IngestionVerifier {
      * A filing in thousands or millions whose cash flow cell carries more digits than its rounding unit (UNTR FY2022:
      * ending cash 38281513.468848 million, the balance sheet 38281513), or whose two cells are one unit apart because
      * each is rounded on its own (BATA H1 2026: 26,809,539 thousand beside 26,809,538; BBLD FY2023, FY2024, H1 2026:
-     * one million; errors 1414 - 1418): at most one unit, which the mapper's own check accepts. Stored as filed;
-     * {@code null} when the difference is more than a unit.
+     * one million; errors 1414 - 1418): at most one unit, which the mapper's own check accepts. Alike in a filing of
+     * full amounts, whose unit is one rupiah or dollar (BRAM H1 2026, full USD: the cash flow rolls forward 21,668,146
+     * + 2,721,874 - 22,173 = 24,367,847 beside a balance-sheet cash of 24,367,846; BMBL FY2022, full rupiah: 355,711,311
+     * + 123,852,944 = 479,564,255 beside 479,564,254; errors 1472, 1482): a balance too small for the billionth of
+     * {@link #immaterialExplanation}, one filed unit as the mapper's full-amount roll-forward accepts (ALMI). Stored as
+     * filed; {@code null} when the difference is more than a unit (BMBL FY2023: 2 rupiah, carried from FY2022).
      */
     static String roundingExplanation(IngestionSession session, StoredPeriod p) {
         BigDecimal unit = session.mapper().unit();
         BigDecimal difference = p.endingCash().subtract(p.balanceSheetCash()).abs();
-        if (unit.compareTo(BigDecimal.ONE) <= 0 || difference.compareTo(unit) > 0) {
+        if (difference.compareTo(unit) > 0) {
             return null;
         }
         return "cash-flow ending cash " + p.endingCash().toPlainString() + " and balance-sheet cash "

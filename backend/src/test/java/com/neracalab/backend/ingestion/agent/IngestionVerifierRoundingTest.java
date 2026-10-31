@@ -52,6 +52,24 @@ class IngestionVerifierRoundingTest {
     }
 
     /**
+     * A filing of full amounts has a unit of one rupiah or dollar, and one unit apart is the same rounding (changed
+     * 2026-10-31: before, only thousands / millions were judged so). BRAM H1 2026 (full USD, error 1472): balance-sheet
+     * cash 24,367,846, the cash flow 21,668,146 + 2,721,874 - 22,173 = 24,367,847; BMBL FY2022 (full rupiah, error
+     * 1482): 479,564,254 beside 355,711,311 + 123,852,944 = 479,564,255. BMBL FY2023's 2 rupiah (403,185,896 beside
+     * 403,185,898) stays a problem.
+     */
+    @Test
+    void endingCashOneUnitApartInAFullAmountFilingIsANote() throws Exception {
+        assertThat(IngestionVerifier.roundingExplanation(session("BRAM", "2026-II"),
+                stored(new BigDecimal("24367846"), new BigDecimal("24367847"))))
+                .contains("differ by 1").contains("rounding unit 1");
+        assertThat(IngestionVerifier.roundingExplanation(session("BMBL", "2022-Tahunan"),
+                stored(new BigDecimal("479564254"), new BigDecimal("479564255")))).contains("differ by 1");
+        assertThat(IngestionVerifier.roundingExplanation(session("BMBL", "2023-Tahunan"),
+                stored(new BigDecimal("403185896"), new BigDecimal("403185898")))).isNull();
+    }
+
+    /**
      * MGLV FY2024 (full rupiah, error 1067): the cash flow rolls forward to 7,783,983,680, the balance sheet shows
      * 7,783,983,677 (its FY2025 filing repeats both as comparatives). Three rupiah of 7.8 billion, under a billionth of
      * the cash: a note. A larger gap stays a problem: INDO FY2022's 20,000,000 of 305,326,998,864 (error 959), MGLV

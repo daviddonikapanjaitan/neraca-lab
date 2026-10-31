@@ -46,7 +46,8 @@ public class IngestionRepository {
     /** Share counts from outside the filings; they need the company, which an upload may just have created. */
     private static final List<String> SHARE_SCRIPTS = List.of(
             "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql",
-            "db/V1.0.24__data_BACH_shares.sql", "db/V1.0.31__data_BNBR_shares.sql", "db/V1.0.42__data_BBHI_shares.sql");
+            "db/V1.0.24__data_BACH_shares.sql", "db/V1.0.31__data_BNBR_shares.sql", "db/V1.0.42__data_BBHI_shares.sql",
+            "db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql");
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
@@ -832,6 +833,22 @@ public class IngestionRepository {
                 .param("p", periodId).param("keep", keep).query(String.class).list();
         jdbc.sql("DELETE FROM segment_financial WHERE period_id = :p AND segment_id NOT IN (:keep)")
                 .param("p", periodId).param("keep", keep).update();
+        return removed;
+    }
+
+    /**
+     * Deletes the period's whole revenue breakdown: one that is not a breakdown of the period's revenue
+     * ({@code IngestionTools.removeBreakdownOfAnotherRevenue}).
+     *
+     * @return the names of the removed segments
+     */
+    @Transactional
+    public List<String> removeSegmentRevenue(long periodId) {
+        List<String> removed = jdbc.sql("""
+                        SELECT s.segment_name FROM segment_financial sf JOIN segment s ON s.segment_id = sf.segment_id
+                        WHERE sf.period_id = :p ORDER BY s.segment_name""")
+                .param("p", periodId).query(String.class).list();
+        jdbc.sql("DELETE FROM segment_financial WHERE period_id = :p").param("p", periodId).update();
         return removed;
     }
 

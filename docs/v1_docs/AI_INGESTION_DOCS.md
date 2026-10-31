@@ -704,7 +704,10 @@ years of statements and share counts and an empty valuation history. Switch off 
 | `FilingMapperCashRoundingTest` (unit) | the review of 2026-10-31: a full-amount roll-forward one rupiah off is the filing's rounding (ALMI FY2024 27,338 / 27,337, ARTI FY2023, ASHA FY2025: a warning, the filed ending cash stored); AMMS H1 2026's investing section whose only line is 0 counts as 0 |
 | `FilingMapperAmortizationTest` (unit) | no amortization from the intangibles roll when the goodwill halved (PTRO H1 2026: 134,250 + 4,050 - 60,088 = 78,212 against the note's 6,075; CUAN H1 2026); ARKO, without goodwill, keeps the roll |
 | `IngestionVerifierInsurerDepositsTest` (unit) | AMAG FY2025, an insurer: ending cash 485,425,155 thousand = cash 64,021,213 + 421,403,942 within time deposits 651,473,868 is a note; beyond the deposits, or stored figures not the filing's, a problem |
-| `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error; MGLV FY2024: ending cash 3 rupiah above the balance sheet's 7,783,983,677, under a billionth of it - a note; INDO FY2022's 20,000,000 stays an error |
+| `IngestionVerifierRoundingTest` (unit) | UNTR FY2022: ending cash filed with decimals (38,281,513.468848 million) differs from the balance sheet by less than the filing's unit - a note, not an error; one unit in a full-amount filing too (BRAM H1 2026 24,367,847 / 24,367,846 USD, BMBL FY2022), two units (BMBL FY2023) a problem; MGLV FY2024: ending cash 3 rupiah above the balance sheet's 7,783,983,677, under a billionth of it - a note; INDO FY2022's 20,000,000 stays an error |
+| `IngestionToolsSegmentsTest` (unit, mocked repository) | a comparative breakdown of a restated revenue is kept out (BMHS FY2024's 1,488,197,483,371 for FY2023's 1,287,690,839,110), one of the same revenue in millions is saved (INPP FY2025's 1,309,662 million for 1,309,661,867,481); the period's own filing removes a stored breakdown of another revenue (BHIT FY2024) and keeps one of its revenue |
+| `BmblBoatSharesTest` (Docker Postgres) | V1.0.43: BMBL 1,030,080,995 (share capital at par Rp 40, H1 2026 EPS -1.05), BOAT 3,501,680,000 from its IPO of 2024-11-12; market cap = price x count |
+| `ShareCountCorrectionsTest` (Docker Postgres) | V1.0.44: MSIN 60,676,178,205 and its H1 2026 EPS 4.69, SMGA 7,000,000,000 / 8,750,000,000, RMKE 21,875,000,000 with its split of 2026-07-17 recorded, WIFI, INET and PACK after their share issues |
 | `FilingMapperAdmrArtoBrmsTest` (unit) | the error log of 2026-10-18: ADMR lines filed with decimals outside the investing total (-322,409,000); ARTO's syirkah funds from their lines (526,059 / 110,361 million); BRMS's EPS filed per 1,000 shares (0.00035 per share with Yahoo's 141,784,040,338 shares; counts that fit neither way change nothing) |
 | `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
@@ -985,6 +988,33 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-10-31 (2) (errors 1468 - 1512): restated breakdowns, one unit in full amounts, share counts
+
+Hermes' B-tickers (BHIT, BOSS, BRAM, BMBL, BKSW, BOLA, BELL, BSIM, BUDI, BMHS, BUAH): 16 rows, nine INCOMPLETE. Every
+file was uploaded again on the backend of the morning's fixes first (rows 1496 - 1512), then the affected ones after
+the fixes below. 34 rows closed, none open.
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A later filing's restated breakdown beside the period's own revenue.** BHIT's FY2025 filing restates FY2024 revenue 15,226,314 million as 15,139,665 and splits the restated figure into ten lines; BMHS's FY2024 filing restates FY2023 1,287,690,839,110 as 1,488,197,483,371 (cost alike, gross profit unchanged). Uploaded before the earlier filing (Hermes uploads newest first), the comparative filled the empty breakdown and stayed beside the own filing's revenue (segment revenue != revenue). | 1471, 1480, 1496, 1505, 1506 | `IngestionTools.saveRevenueSegments`: a comparative breakdown that does not add up to the stored revenue (within `BREAKDOWN_SLACK` 2,000,000: a breakdown in millions beside a full-rupiah revenue, INPP FY2024 1,309,662 million vs 1,309,661,867,481, stays) is kept out (`KEPT_OUT`); `saveStatements` of a period's own filing removes a stored breakdown of another revenue (`removeBreakdownOfAnotherRevenue`, `IngestionRepository.removeSegmentRevenue`). Only these two periods in the database. Test `IngestionToolsSegmentsTest`. |
+| **Ending cash one filed unit from the balance sheet in a full-amount filing** (BRAM H1 2026, full USD: 21,668,146 + 2,721,874 - 22,173 = 24,367,847 beside 24,367,846; BMBL FY2022, full rupiah: 479,564,255 beside 479,564,254). Too small a balance for the billionth of `immaterialExplanation`. | 1472, 1482, 1497, 1498 | `IngestionVerifier.roundingExplanation`: one unit is rounding in every filing (before: only thousands / millions), as the mapper's full-amount roll-forward accepts (ALMI). Two units stay a problem (BMBL FY2023 / FY2024, MGLV FY2023, WINE FY2023). |
+| **The filings'** (dev_context, tag `xlsx-error`, 151 - 159): BOLA FY2022 cash flow without the 47,750,000,000 'other increase' its FY2023 filing restates (151); BELL FY2023 without -2,231,893,807 (152); BMBL's 2-rupiah carried slip and a FY2023 face row missing (153); BHIT's and BKSW's restated FY2024 investing sections (154, 155); BSIM's 9M 2025 collateral recovery counted twice (156); BUDI's FY2024 1,052 million on two rows (157); BUAH FY2023 'Other gains (losses)' with the wrong sign (158); BOLA 9M 2026 profit before tax cell empty (159). | the rest | Not changed: the full-text extraction stored the filed figures (an amount repeated on two rows is the workbook's, not bent into `doubleReportedLines`). BOSS FY2024 has no revenue (the company). |
+
+Valuations (`valuation_check.py`, 84 flags): BMBL and BOAT had prices but no share count (`V1.0.43__data_BMBL_BOAT_shares.sql`:
+BMBL 1,030,080,995 = share capital Rp 41,203,239,800 at par Rp 40, not added to `STANDARD_PAR_VALUES` because Rp 40 makes
+DEFI FY2025's Rp 50 ambiguous; BOAT 3,501,680,000 from its IPO of 2024-11-12). Wrong or missing counts
+(`V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql`, in `IngestionRepository.SHARE_SCRIPTS`): MSIN's H1 2026 filing
+files its EPS ten times too large, so the par inference took Rp 100 (6,067,620,000 for 60,676,178,205; P/E 0.63 -> 6.26);
+SMGA's par value Rp 20 (8,750,000,000; the inference took Rp 10 and stored twice the count); RMKE's split 1:5 of
+2026-07-17 (21,875,000,000, earlier counts and EPS split-adjusted like the prices); the counts after the share issues of
+WIFI (5,308,549,015), INET (22,374,111,088) and PACK (32,379,253,695, its 2026 rights issue of convertible bonds - not a
+split) from their share capital at the par value of their earlier filings. Real, not errors: treasury shares (MNCN,
+DSSA, UNTR, DGIK, GOTO ...), KRAS's P/E 0.39 (FY2025 profit USD 325 million), BHAT's 43,388 (FY2024 profit Rp 204 million).
+Open: FORU (rights issue of September 2026, final count not published), GMFI (rights issue II, counts disagree), BIMA
+(KSEI 608.2 million vs EPS 578.6 / 289.4 million), BNBR's P/E basis (a decision). EBITDA not derivable: ARKO, BINO, BMBL
+(intangibles), BATA (no right-of-use depreciation), BAPI (no D&A). Income: BSML's FY2025 workbook missing; BTEL files by
+nature with an empty cost of sales note.
 
 ### The review of 2026-10-31 (errors 1354 - 1423): filings of one company at once, rounding units, insurers' deposits
 
