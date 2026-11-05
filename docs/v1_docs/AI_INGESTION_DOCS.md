@@ -1061,6 +1061,21 @@ After the uploads: 47 of 48 SUCCEEDED (IMJS FY2024 INCOMPLETE on its 300 million
 2023-12-31 before its likely split). `DerivedDataRefreshTest`: the whole V1.0.6 takes 17.6 s with 625 companies (10.8 s at ~360), its limit is 30 s; the
 per-company refresh needed a `VACUUM ANALYZE` after the day's uploads (2.3 s -> under 1 s a company).
 
+**2026-11-03: the derived-data refresh, faster.** With 2.43 million prices (1.06 million on 2026-10-31) the whole
+V1.0.6 took 45 s and the per-company refresh 1.2 - 4.9 s (every price job and every upload runs one). Causes and fixes,
+each proven to give the same rows (all 939 companies' valuation rows by md5, the 8,406 valuation snapshots and the
+2,426,272 market snapshots by count and hash, and every statement writing 0 rows on unchanged data):
+
+| Cause | Fix | Time |
+|---|---|---|
+| PostgreSQL's JIT: the planner estimates these statements far above `jit_optimize_above_cost` (1.09 million for one company), so each call compiled 177 functions with LLVM (3.0 s of a company's 3.6 s; 13 s of the script) | JIT off for the refresh only: `ValuationRepository` runs `refresh` / `refreshAfterFiling` in one transaction (the caller's when there is one) starting with `SET LOCAL jit = off`; V1.0.6 starts with `SET jit = off` and ends with `RESET jit` | company 4.9 s -> 1.2 s |
+| per-company valuation snapshots: the views per valuation date (the share-count subplan ran 23,400 times, for every company's periods) | `fundamentals AS MATERIALIZED`, filtered to the company, as V1.0.6 | 1.1 s -> 0.1 s (TLKM) |
+| V1.0.6 valuation snapshots: the `fundamentals` CTE (no index) scanned once per date (9,302 x 0.46 ms) and the full-year EBITDA lateral (1.2 s) | `dated` (DISTINCT ON over the join) and `fy_ebitda` (one row per company and fiscal year) | 6.3 s -> 0.6 s |
+| V1.0.6 market snapshots: one share-count index lookup per price row (5.9 s) | `sr`: the share counts by range, as the balance sheets (`bs`) | 11.3 s -> 6.0 s |
+| V1.0.6 metrics and valuation snapshots: every row checked for its conflict and rewritten each run (`financial_metric`: 262 million updates for 313,000 rows) | only the missing or changed rows are written (anti-join with the stored rows, `IS DISTINCT FROM` guards) | 8.4 s -> 0.8 s, 2.9 s -> 0.8 s |
+
+The whole V1.0.6: 45 s -> 8.9 s; a company: about 0.2 s.
+
 ### The review of 2026-10-31 (2) (errors 1468 - 1512): restated breakdowns, one unit in full amounts, share counts
 
 Hermes' B-tickers (BHIT, BOSS, BRAM, BMBL, BKSW, BOLA, BELL, BSIM, BUDI, BMHS, BUAH): 16 rows, nine INCOMPLETE. Every

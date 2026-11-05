@@ -464,7 +464,8 @@ Constraints: `uq_price_daily UNIQUE (company_id, trading_date)`, `ck_price_daily
 
 Filled by the seed scripts (HRTA) and by the price ingestion
 (`POST /api/v1/prices/ingestions`, [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md)): trading days
-only, no holiday placeholders, no unfinished intraday bar; prices rounded to 4 decimals.
+only, no holiday placeholders, no unfinished intraday bar; prices rounded to 4 decimals. A latest session Yahoo
+sends without a close yet has the quote's close (`YahooSessionClose`, PRICE_INGESTION_DOCS.md).
 
 ### 4.4 `share_snapshot`
 
@@ -1091,7 +1092,7 @@ Write rules of the upload endpoint (the SQL scripts follow the same rules):
 | Fiscal year end        | `company.fiscal_year_end` advances to the latest fiscal year end seen                                                                                                                                                               |
 | Segments               | matched by name; an existing segment keeps its type; the type follows the filing's slot (`OTHER` only for residual "Other ..." lines); a filing that leaves sheets 1617000 / 1618000 blank (e.g. INDF) stores no segments |
 | Share counts           | `share_snapshot` at every date of the statements of changes in equity; known values are never replaced by NULL                                                                                                                      |
-| Derived data           | `refreshDerivedData` recalculates the uploaded company's derived data after the last save (`ValuationRepository.refreshAfterFiling`: V1.0.6 for one company, about 0.4 s); the whole script runs at start                                                                                                                                               |
+| Derived data           | `refreshDerivedData` recalculates the uploaded company's derived data after the last save (`ValuationRepository.refreshAfterFiling`: V1.0.6 for one company, about 0.2 s, JIT off); the whole script runs at start (8.9 s with 2.4 million prices, AI_INGESTION_DOCS.md)                                                                                                                                               |
 
 Uploading the six HRTA filings into an empty database (in any order) reproduces the data of
 `V1.0.4__data_HRTA_financials.sql` and the share counts of `V1.0.5__data_HRTA_market.sql`

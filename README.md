@@ -579,11 +579,18 @@ the frontend only reads the database. Per job:
    history when nothing is stored or `full=true`. No request when the last completed trading day is
    already stored. Today's bar counts only after 17:00 exchange time (`session-close-cutoff`).
 2. One request; holiday placeholders, zero-volume rows that repeat the previous close and invalid rows
-   are dropped. If the overlap day's close or adjusted close changed (dividend / split after it), the
-   full history is fetched once more and every stored day corrected.
+   are dropped. A latest session Yahoo still sends without a close (hours after the close, 2026-11-02:
+   every IDX listing and IHSG) takes the quote's `regularMarketPrice` when its `regularMarketTime` is on
+   that day and the price lies within the day's high / low (`YahooSessionClose`; IHSG / LQ45 too, not
+   forex, commodities or macro). If the overlap day's close or adjusted close changed (dividend / split
+   after it, or Yahoo's own close differs from the quote's), the full history is fetched once more and
+   every stored day corrected.
 3. One transaction: upsert `price_daily`, then recalculate the company's `market_snapshot`,
    `valuation_snapshot` (period ends, every earlier valuation date, the new latest day) and VALUATION
-   rows of `financial_metric`, with the formulas of `V1.0.6`.
+   rows of `financial_metric`, with the formulas of `V1.0.6`. The recalculation runs with PostgreSQL's JIT
+   compilation off (`SET LOCAL jit = off`; it cost 3 of 3.6 s a company), and V1.0.6 writes only rows that
+   changed: the whole script takes 8.9 s with 2.4 million prices (was 45 s), a company about 0.2 s
+   (see `docs/v1_docs/AI_INGESTION_DOCS.md`, "the derived-data refresh, faster").
 
 `price_daily` is in the company's reporting currency. A listing quoted in another currency (INDY:
 IDR on IDX, reports in USD) is converted before it is stored: each day / the ECB USD/IDR reference
@@ -1017,7 +1024,7 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 902 tests
+(cd backend && ./mvnw test)                      # 909 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
@@ -1070,7 +1077,8 @@ HRTA filings through the endpoint into an empty database reproduces the seed dat
 `docs/v1_docs/AI_INGESTION_DOCS.md`, section 5). `PriceIngestionServiceTest` ingests stubbed prices
 into HRTA (rolled back) and checks the new rows and valuation, the re-adjustment re-fetch, the
 intraday cutoff and that the company-scoped valuation SQL matches `V1.0.6`; `PriceIngestionQueueTest`
-covers the 429 back-off, `YahooPriceProviderTest` parses a real Yahoo response.
+covers the 429 back-off, `YahooPriceProviderTest` parses a real Yahoo response, `YahooSessionCloseTest` the
+session close taken from the quote (real TLKM.JK / `^JKSE` responses of 2026-11-03 without a close).
 `AuthControllerTest`, `AccessControlTest` and `EndpointAccessRulesTest` cover login, sessions and
 the permission of every API; `AdminUserControllerTest`, `AdminRoleControllerTest` and
 `ProfileControllerTest` the user, role and profile rules (see `docs/v1_docs/AUTH_DOCS.md`).

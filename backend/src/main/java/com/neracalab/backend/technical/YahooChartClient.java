@@ -10,7 +10,10 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.price.PriceProperties;
@@ -18,6 +21,7 @@ import com.neracalab.backend.price.provider.PacedHttpClient;
 import com.neracalab.backend.price.provider.PriceProviderException;
 import com.neracalab.backend.price.provider.RateLimitedException;
 import com.neracalab.backend.price.provider.SymbolNotFoundException;
+import com.neracalab.backend.price.provider.YahooSessionClose;
 import com.neracalab.backend.technical.TechnicalRepository.Event;
 import com.neracalab.backend.technical.engine.Candle;
 
@@ -37,6 +41,8 @@ public class YahooChartClient {
 
     static final String SOURCE = "yahoo";
 
+    private static final Logger log = LoggerFactory.getLogger(YahooChartClient.class);
+
     private final PacedHttpClient http;
     private final JsonMapper json;
     private final String baseUrl;
@@ -50,6 +56,16 @@ public class YahooChartClient {
 
     /** Daily bars of {@code symbol} from {@code from} to {@code to} (inclusive), oldest first, without empty days. */
     public List<Candle> dailyBars(String symbol, ZoneId zone, LocalDate from, LocalDate to) {
+        return dailyBars(symbol, zone, from, to, false);
+    }
+
+    /**
+     * Daily bars as {@link #dailyBars(String, ZoneId, LocalDate, LocalDate)}; with {@code sessionClose} a last bar
+     * Yahoo has not given its close yet takes the session's close of the quote ({@link YahooSessionClose}) instead of
+     * being dropped. Only for a caller that drops the bars after the last completed trading day itself (the index
+     * ingestion), since the quote of a session still trading is its current price.
+     */
+    public List<Candle> dailyBars(String symbol, ZoneId zone, LocalDate from, LocalDate to, boolean sessionClose) {
         JsonNode result = chart(symbol, from.atStartOfDay(zone).toEpochSecond(),
                 to.plusDays(1).atStartOfDay(zone).toEpochSecond(), "1d", "");
         ZoneId z = zone(result, zone);
@@ -57,15 +73,27 @@ public class YahooChartClient {
         JsonNode quote = result.path("indicators").path("quote").path(0);
         List<Candle> bars = new ArrayList<>();
         for (int i = 0; i < timestamps.size(); i++) {
+            LocalDate date = Instant.ofEpochSecond(timestamps.get(i).asLong()).atZone(z).toLocalDate();
             Double close = number(quote.path("close").path(i));
+            Double volume = number(quote.path("volume").path(i));
+            if (close == null && sessionClose && i == timestamps.size() - 1) {
+                Optional<YahooSessionClose.Close> session = YahooSessionClose.of(result.path("meta"), z, date,
+                        decimal(quote.path("high").path(i)), decimal(quote.path("low").path(i)));
+                if (session.isPresent()) {
+                    close = session.get().price().doubleValue();
+                    if (volume == null && session.get().volume() != null) {
+                        volume = session.get().volume().doubleValue();
+                    }
+                    log.info("{} {}: daily bar without a close, the session's close {} taken from the quote", symbol,
+                            date, session.get().price().toPlainString());
+                }
+            }
             if (close == null || close <= 0) {
                 continue;   // holiday placeholder
             }
             double open = orElse(number(quote.path("open").path(i)), close);
             double high = Math.max(orElse(number(quote.path("high").path(i)), close), Math.max(open, close));
             double low = Math.min(orElse(number(quote.path("low").path(i)), close), Math.min(open, close));
-            Double volume = number(quote.path("volume").path(i));
-            LocalDate date = Instant.ofEpochSecond(timestamps.get(i).asLong()).atZone(z).toLocalDate();
             bars.add(Candle.daily(date, round4(open), round4(high), round4(low), round4(close), round4(close),
                     volume == null ? 0 : volume));
         }
@@ -151,6 +179,12 @@ public class YahooChartClient {
 
     private static Double number(JsonNode node) {
         return node != null && node.isNumber() ? node.doubleValue() : null;
+    }
+
+    private static BigDecimal decimal(JsonNode node) {
+        return node != null && node.isNumber()
+                ? node.decimalValue().setScale(YahooSessionClose.PRICE_SCALE, RoundingMode.HALF_UP)
+                : null;
     }
 
     private static double orElse(Double value, double fallback) {

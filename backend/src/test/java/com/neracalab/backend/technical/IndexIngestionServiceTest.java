@@ -2,6 +2,7 @@ package com.neracalab.backend.technical;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -57,7 +58,7 @@ class IndexIngestionServiceTest {
         IndexIngestionService service = service("18:00");
         when(repository.latestIndexDate("IHSG")).thenReturn(Optional.of(LocalDate.of(2026, 10, 9)),
                 Optional.of(LocalDate.of(2026, 10, 15)));
-        when(yahoo.dailyBars(eq("^JKSE"), any(), eq(LocalDate.of(2026, 10, 9)), eq(LocalDate.of(2026, 10, 15))))
+        when(yahoo.dailyBars(eq("^JKSE"), any(), eq(LocalDate.of(2026, 10, 9)), eq(LocalDate.of(2026, 10, 15)), eq(true)))
                 .thenReturn(List.of(bar("2026-10-09", 7000), bar("2026-10-12", 7010), bar("2026-10-13", 7020),
                         bar("2026-10-14", 7030), bar("2026-10-15", 7040)));
         when(repository.indexDates(eq("IHSG"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 9)));
@@ -79,7 +80,7 @@ class IndexIngestionServiceTest {
     void beforeTheCutoffTodaysBarIsNotStored() {
         IndexIngestionService service = service("10:30");
         when(repository.latestIndexDate("IHSG")).thenReturn(Optional.of(LocalDate.of(2026, 10, 13)));
-        when(yahoo.dailyBars(eq("^JKSE"), any(), any(), any()))
+        when(yahoo.dailyBars(eq("^JKSE"), any(), any(), any(), eq(true)))
                 .thenReturn(List.of(bar("2026-10-13", 7020), bar("2026-10-14", 7030), bar("2026-10-15", 7035)));
         when(repository.indexDates(eq("IHSG"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 13)));
         when(repository.upsertIndexBars(eq("IHSG"), eq("IDX"), eq("yahoo"), anyList())).thenAnswer(inv -> {
@@ -104,14 +105,14 @@ class IndexIngestionServiceTest {
 
         assertThat(result.requests()).isZero();
         assertThat(result.latestTradingDate()).isEqualTo(LocalDate.of(2026, 10, 14));
-        verify(yahoo, never()).dailyBars(any(), any(), any(), any());
+        verify(yahoo, never()).dailyBars(any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
     void theFirstRunAndFullFetchTheWholeHistory() {
         IndexIngestionService service = service("18:00");
         when(repository.latestIndexDate("IHSG")).thenReturn(Optional.empty());
-        when(yahoo.dailyBars(eq("^JKSE"), any(), eq(LocalDate.of(1990, 1, 1)), any())).thenReturn(List.of());
+        when(yahoo.dailyBars(eq("^JKSE"), any(), eq(LocalDate.of(1990, 1, 1)), any(), eq(true))).thenReturn(List.of());
 
         Result first = service.ingest(ihsg(service), false);
         assertThat(first.fullHistory()).isTrue();
@@ -132,7 +133,7 @@ class IndexIngestionServiceTest {
         IndexIngestionService service = service("18:00");
         when(repository.latestIndexDate("IHSG")).thenReturn(Optional.of(LocalDate.of(2026, 10, 15)));
         when(repository.latestIndexDate("LQ45")).thenReturn(Optional.of(LocalDate.of(2026, 10, 13)));
-        when(yahoo.dailyBars(eq("^JKLQ45"), any(), eq(LocalDate.of(2026, 10, 13)), eq(LocalDate.of(2026, 10, 15))))
+        when(yahoo.dailyBars(eq("^JKLQ45"), any(), eq(LocalDate.of(2026, 10, 13)), eq(LocalDate.of(2026, 10, 15)), eq(true)))
                 .thenReturn(List.of(bar("2026-10-13", 600), bar("2026-10-14", 590), bar("2026-10-15", 585)));
         when(repository.indexDates(eq("LQ45"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 13)));
         when(repository.upsertIndexBars(eq("LQ45"), eq("IDX"), eq("yahoo"), anyList())).thenReturn(2);
@@ -143,7 +144,7 @@ class IndexIngestionServiceTest {
         verify(repository).upsertIndexBars(eq("LQ45"), eq("IDX"), eq("yahoo"), anyList());
 
         when(repository.latestIndexDate("LQ45")).thenReturn(Optional.empty());
-        when(yahoo.dailyBars(eq("^JKLQ45"), any(), eq(LocalDate.of(1997, 1, 1)), any()))
+        when(yahoo.dailyBars(eq("^JKLQ45"), any(), eq(LocalDate.of(1997, 1, 1)), any(), eq(true)))
                 .thenThrow(new com.neracalab.backend.price.provider.PriceProviderException("HTTP 500"));
         assertThat(service.ingest(ihsg(service), false).latestTradingDate()).isEqualTo(LocalDate.of(2026, 10, 15));
     }

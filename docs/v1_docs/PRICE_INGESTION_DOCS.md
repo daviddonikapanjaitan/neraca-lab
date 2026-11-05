@@ -18,7 +18,7 @@ Code: `backend/src/main/java/com/neracalab/backend/price/`
 | `PriceIngestionJob`        | job state and its JSON view                                                                              |
 | `PriceIngestionService`    | one ingestion: date range, provider request, cleaning, re-adjustment check, write + valuation refresh   |
 | `PriceDailyRepository`     | company lookup, latest stored day, `price_daily` upsert                                                  |
-| `ValuationRepository`      | company-scoped recalculation with the formulas of `V1.0.6__data_metrics_valuation.sql`                   |
+| `ValuationRepository`      | company-scoped recalculation with the formulas of `V1.0.6__data_metrics_valuation.sql`, in one transaction with PostgreSQL's JIT off (it cost 3 of 3.6 s a company) |
 | `PriceIngestionSchedule`   | optional evening run (off by default): `PriceUpdateService.updateAll` - the companies behind and IHSG   |
 | `PricesAfterUpload`        | queues the prices of a company whose financial statement filing was just stored                          |
 | `PriceProperties`          | configuration `neracalab.prices.*`                                                                       |
@@ -320,6 +320,19 @@ values in older days, or after switching the provider. Both send one request per
    - zero-volume rows with open = high = low = close (holiday rows repeating the previous close),
    - rows the `price_daily` checks would reject (close <= 0, high < low, volume < 0);
    one bar per date (the last one wins).
+   **Session close from the quote (Yahoo).** Hours after the close Yahoo can still send the latest
+   session's daily bar with open, high, low and volume but `close = null` (2026-11-02: every IDX
+   listing and `^JKSE` until the next morning, so every company stayed "Behind"), while
+   `meta.regularMarketPrice` already holds the session's close (`regularMarketTime` 16:14 WIB, after
+   the post-trading session that trades at the closing price). `YahooSessionClose` gives that bar the
+   quote's price as close and adjusted close (no dividend or split can lie after the latest session),
+   and the quote's day high / low / volume where the bar has none - only for the **last** bar of the
+   response, only when `regularMarketTime` falls on the bar's date (exchange time zone) and the price
+   is positive and within the bar's high / low and the quote's day high / low. Otherwise the bar is
+   dropped as before. The cutoff above still keeps an unfinished session out, and when Yahoo later
+   writes a different close the overlap check (3.) corrects the stored day. The IHSG / LQ45 ingestion
+   does the same (`YahooChartClient.dailyBars(..., sessionClose = true)`); forex, commodities and macro
+   series do not.
    **Currency.** `price_daily` is in `company.currency`. A listing that trades in another currency
    than the company reports in is converted (see "Listings quoted in another currency" below); the
    listing currency is the provider's (`meta.currency` of Yahoo), or the exchange's when the provider
@@ -503,6 +516,7 @@ exchange and IHSG; Forex and Commodities are updated from the page.
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
 | `PricesAfterUploadTest`       | prices of a stored filing's company: queued when missing or behind, for the uploader, never `full`; the active job is reused; nothing when up to date, for an unknown company or when switched off (`PriceIngestionServiceTest`: up to date only when the last completed trading day is stored) |
 | `YahooPriceProviderTest`      | parsing of a real Yahoo response (HRTA.JK around the Rp40 dividend and a holiday), symbol mapping, `Retry-After`                              |
+| `YahooSessionCloseTest`       | the real TLKM.JK and `^JKSE` responses of 2026-11-03 03:30 WIB (2026-11-02 without a close): the last bar takes the quote's close (TLKM 1,960, IHSG 5,096.83), stored only once its session is completed; a quote of another day, outside the bar's or the quote's range, without price or time gives none; a holiday inside the history still dropped; forex / commodities / macro not filled |
 
 Run with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432).
 

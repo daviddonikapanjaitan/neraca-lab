@@ -25,7 +25,11 @@
 --                      including ev_op = enterprise value / TTM operating profit.
 --
 -- Ratios are fractions (0.25 = 25%), multiples are "x". NULL results are not stored.
+--
+-- JIT compilation is off for this script (reset at its end): the planner's estimates of these statements are far
+-- above jit_optimize_above_cost, and compiling them took 13 of 45 s on 2026-11-03 for queries that do not profit.
 -- =====================================================================
+SET jit = off;
 
 -- ---------------------------------------------------------------------
 -- market_snapshot
@@ -49,6 +53,14 @@ WITH bs AS MATERIALIZED (
         ORDER BY km.company_id, km.period_end, km.period_id
     ) d
 ),
+-- the share counts by range (snapshot_date <= day < next snapshot_date), read once like the balance sheets: the
+-- latest count on or before each day without an index lookup per price row (5.9 s of 11.3 s for 2.4 million prices)
+sr AS MATERIALIZED (
+    SELECT ss.company_id, ss.snapshot_date, ss.shares_outstanding,
+           LEAD(ss.snapshot_date) OVER (PARTITION BY ss.company_id ORDER BY ss.snapshot_date) AS next_snapshot_date
+    FROM share_snapshot ss
+    WHERE ss.shares_outstanding IS NOT NULL
+),
 calc AS (
 SELECT
     pd.company_id,
@@ -59,15 +71,9 @@ SELECT
     ROUND(pd.close_price * sh.shares_outstanding + bs.net_debt
           + COALESCE(bs.non_controlling_interest, 0), 4) AS enterprise_value
 FROM price_daily pd
-LEFT JOIN LATERAL (
-    SELECT ss.shares_outstanding
-    FROM share_snapshot ss
-    WHERE ss.company_id = pd.company_id
-      AND ss.snapshot_date <= pd.trading_date
-      AND ss.shares_outstanding IS NOT NULL
-    ORDER BY ss.snapshot_date DESC
-    LIMIT 1
-) sh ON TRUE
+LEFT JOIN sr sh ON sh.company_id = pd.company_id
+                AND sh.snapshot_date <= pd.trading_date
+                AND (sh.next_snapshot_date IS NULL OR sh.next_snapshot_date > pd.trading_date)
 LEFT JOIN bs ON bs.company_id = pd.company_id
             AND bs.period_end <= pd.trading_date
             AND (bs.next_period_end IS NULL OR bs.next_period_end > pd.trading_date)
@@ -125,6 +131,30 @@ fundamentals AS MATERIALIZED (
     JOIN v_key_metrics km ON km.period_id = t.period_id
     WHERE km.total_assets IS NOT NULL
 ),
+-- fundamentals of each valuation date: the latest period on or before the date with TTM revenue and a balance sheet;
+-- without any (newly listed company, no prior fiscal year stored) the latest balance sheet: no TTM figures. One join
+-- with DISTINCT ON, not a lateral scan of the whole CTE per date (4.3 s for 9,300 dates on 2026-11-03)
+dated AS (
+    SELECT DISTINCT ON (d.company_id, d.valuation_date)
+           d.company_id, d.valuation_date,
+           t.period_id, t.fiscal_year, t.period_type, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
+           t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
+           t.net_debt, t.non_controlling_interest, t.shares, t.shareholders_equity
+    FROM valuation_dates d
+    JOIN fundamentals t ON t.company_id = d.company_id
+                       AND t.period_end <= d.valuation_date
+    ORDER BY d.company_id, d.valuation_date, t.revenue_ttm IS NULL, t.period_end DESC
+),
+-- the EBITDA of each full year (the latest period end of a fiscal year, as the lateral it replaces)
+fy_ebitda AS (
+    SELECT DISTINCT ON (rp.company_id, rp.fiscal_year)
+           rp.company_id, rp.fiscal_year, i.ebitda
+    FROM reporting_period rp
+    JOIN income_statement i ON i.period_id = rp.period_id
+    WHERE rp.period_type = 'FY'
+      AND i.ebitda IS NOT NULL
+    ORDER BY rp.company_id, rp.fiscal_year, rp.period_end DESC
+),
 valued AS (
     SELECT
         d.company_id,
@@ -144,30 +174,14 @@ valued AS (
         f.free_cash_flow_ttm                             AS fcf_ttm,
         f.shareholders_equity                            AS book_value
     FROM valuation_dates d
-    -- fundamentals: latest period on or before the date with TTM revenue and a balance sheet; without any
-    -- (newly listed company, no prior fiscal year stored) the latest balance sheet: no TTM figures
-    JOIN LATERAL (
-        SELECT t.period_id, t.fiscal_year, t.period_type, t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm,
-               t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
-               t.net_debt, t.non_controlling_interest, t.shares, t.shareholders_equity
-        FROM fundamentals t
-        WHERE t.company_id = d.company_id
-          AND t.period_end <= d.valuation_date
-        ORDER BY t.revenue_ttm IS NULL, t.period_end DESC
-        LIMIT 1
-    ) f ON TRUE
+    -- fundamentals of the date (see dated)
+    JOIN dated f ON f.company_id = d.company_id
+                AND f.valuation_date = d.valuation_date
     -- an interim period without TTM EBITDA: the EBITDA of the full year inside its trailing window
-    LEFT JOIN LATERAL (
-        SELECT i.ebitda, rp.fiscal_year
-        FROM reporting_period rp
-        JOIN income_statement i ON i.period_id = rp.period_id
-        WHERE rp.company_id = d.company_id
-          AND rp.period_type = 'FY'
-          AND rp.fiscal_year = f.fiscal_year - 1
-          AND i.ebitda IS NOT NULL
-        ORDER BY rp.period_end DESC
-        LIMIT 1
-    ) lfy ON f.ebitda_ttm IS NULL AND f.period_type <> 'FY'
+    LEFT JOIN fy_ebitda lfy ON lfy.company_id = d.company_id
+                           AND lfy.fiscal_year = f.fiscal_year - 1
+                           AND f.ebitda_ttm IS NULL
+                           AND f.period_type <> 'FY'
     -- price: last close on or before the date
     JOIN LATERAL (
         SELECT pd.close_price
@@ -225,7 +239,29 @@ ON CONFLICT ON CONSTRAINT uq_valuation_snapshot DO UPDATE SET
     ev_op                = EXCLUDED.ev_op,
     fcf_yield            = EXCLUDED.fcf_yield,
     earnings_yield       = EXCLUDED.earnings_yield,
-    ebitda_basis         = EXCLUDED.ebitda_basis;
+    ebitda_basis         = EXCLUDED.ebitda_basis
+-- only a valuation that changed is written (every run rewrote all ~8,400), as ValuationRepository does
+WHERE (valuation_snapshot.period_id, valuation_snapshot.share_price,
+       valuation_snapshot.market_cap, valuation_snapshot.enterprise_value,
+       valuation_snapshot.eps_ttm, valuation_snapshot.revenue_ttm,
+       valuation_snapshot.ebitda_ttm, valuation_snapshot.operating_income_ttm,
+       valuation_snapshot.fcf_ttm, valuation_snapshot.book_value,
+       valuation_snapshot.pe_ratio, valuation_snapshot.ps_ratio,
+       valuation_snapshot.pb_ratio, valuation_snapshot.ev_ebitda,
+       valuation_snapshot.ev_sales, valuation_snapshot.ev_op,
+       valuation_snapshot.fcf_yield, valuation_snapshot.earnings_yield,
+       valuation_snapshot.ebitda_basis)
+      IS DISTINCT FROM
+      (EXCLUDED.period_id, EXCLUDED.share_price,
+       EXCLUDED.market_cap, EXCLUDED.enterprise_value,
+       EXCLUDED.eps_ttm, EXCLUDED.revenue_ttm,
+       EXCLUDED.ebitda_ttm, EXCLUDED.operating_income_ttm,
+       EXCLUDED.fcf_ttm, EXCLUDED.book_value,
+       EXCLUDED.pe_ratio, EXCLUDED.ps_ratio,
+       EXCLUDED.pb_ratio, EXCLUDED.ev_ebitda,
+       EXCLUDED.ev_sales, EXCLUDED.ev_op,
+       EXCLUDED.fcf_yield, EXCLUDED.earnings_yield,
+       EXCLUDED.ebitda_basis);
 
 -- A valuation on a period end whose trailing twelve months no longer exist (the periods behind them were removed or
 -- replaced: ANJT's FY2025 in USD, deleted 2026-10-31, left the 2026-06-30 / 2026-09-30 rows with a P/E of 12.0 and an
@@ -250,12 +286,13 @@ WHERE (vs.eps_ttm IS NOT NULL OR vs.revenue_ttm IS NOT NULL OR vs.ebitda_ttm IS 
 INSERT INTO financial_metric (
     company_id, period_id, metric_date, metric_name, metric_category,
     metric_value, unit, calculation_formula, source)
-SELECT km.company_id, km.period_id, km.period_end,
-       m.metric_name, m.metric_category, m.metric_value,
+WITH calc AS (
+SELECT km.company_id, km.period_id, km.period_end AS metric_date,
+       m.metric_name, m.metric_category, m.metric_value::NUMERIC(28, 10) AS metric_value,
        CASE m.unit WHEN 'CUR' THEN km.currency
                    WHEN 'CUR/share' THEN km.currency || '/share'
-                   ELSE m.unit END,
-       m.calculation_formula, 'v_key_metrics'
+                   ELSE m.unit END AS unit,
+       m.calculation_formula, 'v_key_metrics' AS source
 FROM v_key_metrics km
 CROSS JOIN LATERAL (VALUES
     -- profitability
@@ -303,12 +340,31 @@ CROSS JOIN LATERAL (VALUES
     ('fcf_per_share',              'PER_SHARE',     km.fcf_per_share,              'CUR/share', 'free_cash_flow / shares')
 ) AS m (metric_name, metric_category, metric_value, unit, calculation_formula)
 WHERE m.metric_value IS NOT NULL
+)
+-- only the metrics that are missing or differ from the stored row are written, as for market_snapshot: the upsert of
+-- every metric (~300,000) checked each one for its conflict and rewrote it (262 million updates by 2026-11-03)
+SELECT x.company_id, x.period_id, x.metric_date, x.metric_name, x.metric_category,
+       x.metric_value, x.unit, x.calculation_formula, x.source
+FROM calc x
+LEFT JOIN financial_metric fm ON fm.company_id = x.company_id
+                             AND fm.metric_date = x.metric_date
+                             AND fm.metric_name = x.metric_name
+                             AND fm.period_id IS NOT DISTINCT FROM x.period_id
+WHERE fm.metric_id IS NULL
+   OR (fm.metric_category, fm.metric_value, fm.unit, fm.calculation_formula, fm.source)
+      IS DISTINCT FROM
+      (x.metric_category, x.metric_value, x.unit, x.calculation_formula, x.source)
 ON CONFLICT ON CONSTRAINT uq_financial_metric DO UPDATE SET
     metric_category     = EXCLUDED.metric_category,
     metric_value        = EXCLUDED.metric_value,
     unit                = EXCLUDED.unit,
     calculation_formula = EXCLUDED.calculation_formula,
-    source              = EXCLUDED.source;
+    source              = EXCLUDED.source
+WHERE (financial_metric.metric_category, financial_metric.metric_value,
+       financial_metric.unit, financial_metric.calculation_formula, financial_metric.source)
+      IS DISTINCT FROM
+      (EXCLUDED.metric_category, EXCLUDED.metric_value,
+       EXCLUDED.unit, EXCLUDED.calculation_formula, EXCLUDED.source);
 
 -- ---------------------------------------------------------------------
 -- financial_metric : valuation metrics per valuation date (incl. EV/OP)
@@ -316,12 +372,13 @@ ON CONFLICT ON CONSTRAINT uq_financial_metric DO UPDATE SET
 INSERT INTO financial_metric (
     company_id, period_id, metric_date, metric_name, metric_category,
     metric_value, unit, calculation_formula, source)
-SELECT vs.company_id, vs.period_id, vs.valuation_date,
-       m.metric_name, 'VALUATION', m.metric_value,
+WITH calc AS (
+SELECT vs.company_id, vs.period_id, vs.valuation_date AS metric_date,
+       m.metric_name, 'VALUATION' AS metric_category, m.metric_value::NUMERIC(28, 10) AS metric_value,
        CASE m.unit WHEN 'CUR' THEN c.currency
                    WHEN 'CUR/share' THEN c.currency || '/share'
-                   ELSE m.unit END,
-       m.calculation_formula, 'valuation_snapshot'
+                   ELSE m.unit END AS unit,
+       m.calculation_formula, 'valuation_snapshot' AS source
 FROM valuation_snapshot vs
 JOIN company c ON c.company_id = vs.company_id
 CROSS JOIN LATERAL (VALUES
@@ -338,9 +395,30 @@ CROSS JOIN LATERAL (VALUES
     ('earnings_yield',   vs.earnings_yield,   'ratio',     'eps_ttm / share_price')
 ) AS m (metric_name, metric_value, unit, calculation_formula)
 WHERE m.metric_value IS NOT NULL
+)
+-- only the metrics that are missing or differ from the stored row are written, as for market_snapshot: the upsert of
+-- every metric (~300,000) checked each one for its conflict and rewrote it (262 million updates by 2026-11-03)
+SELECT x.company_id, x.period_id, x.metric_date, x.metric_name, x.metric_category,
+       x.metric_value, x.unit, x.calculation_formula, x.source
+FROM calc x
+LEFT JOIN financial_metric fm ON fm.company_id = x.company_id
+                             AND fm.metric_date = x.metric_date
+                             AND fm.metric_name = x.metric_name
+                             AND fm.period_id IS NOT DISTINCT FROM x.period_id
+WHERE fm.metric_id IS NULL
+   OR (fm.metric_category, fm.metric_value, fm.unit, fm.calculation_formula, fm.source)
+      IS DISTINCT FROM
+      (x.metric_category, x.metric_value, x.unit, x.calculation_formula, x.source)
 ON CONFLICT ON CONSTRAINT uq_financial_metric DO UPDATE SET
     metric_category     = EXCLUDED.metric_category,
     metric_value        = EXCLUDED.metric_value,
     unit                = EXCLUDED.unit,
     calculation_formula = EXCLUDED.calculation_formula,
-    source              = EXCLUDED.source;
+    source              = EXCLUDED.source
+WHERE (financial_metric.metric_category, financial_metric.metric_value,
+       financial_metric.unit, financial_metric.calculation_formula, financial_metric.source)
+      IS DISTINCT FROM
+      (EXCLUDED.metric_category, EXCLUDED.metric_value,
+       EXCLUDED.unit, EXCLUDED.calculation_formula, EXCLUDED.source);
+
+RESET jit;

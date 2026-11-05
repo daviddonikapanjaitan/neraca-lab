@@ -135,7 +135,7 @@ public class IndexIngestionService implements IndexIngestion {
         }
         boolean fullHistory = full || latest.isEmpty();
         LocalDate from = fullHistory ? historyFrom : latest.get();
-        List<Candle> received = yahoo.dailyBars(index.symbol(), index.exchange().zone(), from, today);
+        List<Candle> received = yahoo.dailyBars(index.symbol(), index.exchange().zone(), from, today, true);
         List<Candle> bars = received.stream()
                 .filter(b -> !b.date().isBefore(from) && !b.date().isAfter(lastCompleted))
                 .toList();
