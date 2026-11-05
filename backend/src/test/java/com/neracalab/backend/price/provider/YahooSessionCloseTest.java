@@ -137,6 +137,43 @@ class YahooSessionCloseTest {
                 .containsExactly(LocalDate.of(2026, 10, 29), LocalDate.of(2026, 10, 30));
     }
 
+    /**
+     * Yahoo's IDR=X of 2026-10-14 - 2026-11-05 as served on 2026-11-06: 2026-11-03 closes at 17,472.20 under its low of
+     * 17,786.60, 2026-11-04 at 17,536.10 under 17,957.60 (ECB: 18,137 / 18,129). They are dropped and reported; the bar
+     * of 15 Oct London time (stamped 2026-10-14 23:00 UTC: 17,823.70, 0.18 % under its low 17,856.40) and 29 Oct (0.13 %
+     * under) stay - within the 1 % a Forex close may lie outside its day's range.
+     */
+    @Test
+    void aForexCloseOutsideItsDaysRangeIsDropped() throws IOException {
+        YahooChartClient.Bars bars = client(IDRX).dailyBarsChecked("IDR=X", ZoneId.of("Europe/London"),
+                LocalDate.of(2026, 10, 14), LocalDate.of(2026, 11, 5));
+
+        assertThat(bars.inconsistent()).containsExactly(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 11, 4));
+        assertThat(bars.bars()).extracting(Candle::date)
+                .doesNotContain(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 11, 4))
+                .contains(LocalDate.of(2026, 10, 15), LocalDate.of(2026, 10, 29), LocalDate.of(2026, 11, 2),
+                        LocalDate.of(2026, 11, 5));
+        // the unchecked bars keep every day, as the index and macro series read them
+        assertThat(client(IDRX).dailyBars("IDR=X", ZoneId.of("Europe/London"), LocalDate.of(2026, 10, 14),
+                LocalDate.of(2026, 11, 5))).extracting(Candle::date).contains(LocalDate.of(2026, 11, 3));
+    }
+
+    /**
+     * Yahoo's IDR=X of late June / early July 2006 sends open, high and low of 9.0 beside closes of 9,241, 9,266, 8,964,
+     * 9,020 after 9,300: the range is broken there, not the close - no bar is dropped (the wick cleaning of
+     * {@code BarCleaner} cuts the range).
+     */
+    @Test
+    void aBrokenRangeKeepsItsClose() throws IOException {
+        YahooChartClient.Bars bars = client(IDRX_2006).dailyBarsChecked("IDR=X", ZoneId.of("Europe/London"),
+                LocalDate.of(2006, 6, 23), LocalDate.of(2006, 7, 6));
+
+        assertThat(bars.inconsistent()).isEmpty();
+        assertThat(bars.bars()).extracting(Candle::close).contains(9241.0, 9266.0, 8964.0, 9020.0);
+    }
+
+    private static final String IDRX_2006 = "/price/yahoo_IDRX_2006-06-23_2006-07-06_bad_range.json";
+    private static final String IDRX = "/price/yahoo_IDRX_2026-10-14_2026-11-05_inconsistent.json";
     private static final String TLKM = "/price/yahoo_TLKM.JK_2026-10-29_2026-11-02_no_close.json";
     private static final String JKSE = "/price/yahoo_JKSE_2026-10-29_2026-11-02_no_close.json";
 

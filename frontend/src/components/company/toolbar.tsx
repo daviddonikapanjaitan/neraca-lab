@@ -87,3 +87,31 @@ export function ScaleToggle({
     />
   )
 }
+
+/**
+ * USD | IDR: the amounts as reported, or converted into the exchange's currency at the Forex pair's rates (a company
+ * reporting in USD on IDX: INDY, SMDR, ...).
+ */
+export function CurrencyToggle({
+  value,
+  from,
+  to,
+  onChange,
+}: {
+  value: string
+  from: string
+  to: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <Segmented
+      label="Currency"
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: from, label: from, title: `Amounts as reported, in ${from}` },
+        { value: to, label: to, title: `Converted into ${to} at the ${from}/${to} rate of each period (Forex)` },
+      ]}
+    />
+  )
+}

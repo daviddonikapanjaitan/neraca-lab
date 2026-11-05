@@ -123,6 +123,17 @@ Statement tables:
   period reports are hidden.
 - Period-type filter (All / FY / Q1 / H1 / 9M ...) and amount scale (billions / millions / full);
   EPS and share counts are never scaled.
+- **USD | IDR** (a company reporting in USD on IDX: INDY, SMDR, ...; shown only when the API gives `conversion`):
+  the amounts as reported, or converted into IDR at the Forex pair USD/IDR (Ingestion › Price Ingestion, Forex) -
+  the balance sheet at the close of each period end, the income statement, cash flow, segments and EPS at the
+  average of the period's daily closes (IAS 21), share counts never. A last row shows the rate of each period (its
+  tooltip: the close's date or the number of closes averaged); a period without a stored rate shows no amounts,
+  never unconverted ones. The card text names the currency, the rate basis and the source. Also on the Segments tab.
+  Also on the **Valuation** tab: every amount of a row (price, market cap, EV, revenue TTM, EPS TTM, forward EPS,
+  BVPS) at the USD/IDR close on or before its valuation date - one rate per row, so P/E, P/B, P/S, EV/EBITDA,
+  EV/Sales, EV/OP and the yields are the same in either currency; a last column shows the rate, and the quoted price
+  stays the exchange's own (SMDR 2026-11-05: USD 0.01809256 x 18,113.90 = Rp 327.73, quoted Rp 328). The Overview and
+  Metrics tabs stay in the reporting currency (`lib/currency.ts`, `CurrencyToggle`).
 - Negative amounts in parentheses and red (database sign convention: cash outflows negative).
 - A statement that is not stored for a period (e.g. no balance sheet for a 2024 interim
   comparative) is left out of that table instead of showing zeros.

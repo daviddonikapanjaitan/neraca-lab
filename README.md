@@ -518,7 +518,7 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA        # everyt
 |---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `GET /api/v1/exchanges`                     | supported exchanges: `code`, `name`, `country` (e.g. for an exchange filter)                                                                                                                                                                                                                      |
 | `GET /api/v1/companies?exchange=IDX`        | companies of the exchange, ordered by ticker: master data plus number of periods, first / latest period and latest price date. `exchange` defaults to `IDX`                                                                                                                                       |
-| `GET /api/v1/companies/{exchange}/{ticker}` | `company`, `coverage` (row counts and date ranges per table), `periods` (most recent first, each with income statement, balance sheet, cash flow, segment figures and fundamental metrics), `segments`, `shareSnapshots`, `latestPrice`, `latestMarketSnapshot`, `valuations`, `corporateActions` |
+| `GET /api/v1/companies/{exchange}/{ticker}` | `company`, `coverage` (row counts and date ranges per table), `periods` (most recent first, each with income statement, balance sheet, cash flow, segment figures and fundamental metrics), `segments`, `shareSnapshots`, `latestPrice`, `latestMarketSnapshot`, `valuations`, `corporateActions`, `conversion` (a USD reporter: the USD/IDR closing and average rate of every period and the rate of every valuation date, for the page's USD \| IDR toggle) |
 
 Exchange and ticker are case-insensitive (`idx/hrta` works). Amounts are full currency units with the
 database sign conventions; a statement that is not stored for a period is `null`. The detail is
@@ -573,7 +573,9 @@ they are the **World Bank Pink Sheet monthly average**; cobalt is the **IMF Prim
 Bauxite has no free source and is not included. Palm oil in ringgit is `CPO=F` x `MYR=X` of
 the same day: an approximation of Bursa Malaysia FCPO, which has no free source. Bad prints of the Yahoo history (USD/IDR
 888.11 between 8,923 and 8,906 on 2010-11-01) are dropped: a close that jumps more than the instrument's threshold away
-and straight back. Details: [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 1b.
+and straight back. A currency pair's close more than 1% outside that day's own high-low range (USD/IDR 2026-11-03:
+17,472.20 under its low of 17,786.60) is not stored; the day gets the ECB reference rate instead (`source = 'ecb'`,
+18,137), and stays empty only when the ECB has none. Details: [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md), section 1b.
 
 Background workers (5 companies at the same time, `neracalab.jobs.workers`) fetch the
 [Yahoo Finance chart API](https://query1.finance.yahoo.com/v8/finance/chart/HRTA.JK) (`HRTA.JK` for IDX) and never inside a web request;
@@ -638,6 +640,14 @@ job and its progress is also recorded in `ingestion_job` and listed by `GET /api
 `full=true` re-fetches the whole history instead of starting at the latest stored day; a first
 ingestion and a re-adjusted history switch to it automatically. Details, job fields and known
 limitations: [`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md).
+
+
+**Speed (2026-11-05).** "Update all companies" runs 50 price jobs at the same time (`INGESTION_PRICE_WORKERS`) and
+asks Yahoo Finance up to 8 requests at once, 150 ms apart (`PRICE_CONCURRENT_REQUESTS`, `PRICE_REQUEST_SPACING`):
+875 IDX companies in 2 min 31 s, where one request at a time with a 1 - 2 s pause took 27 - 62 minutes. Yahoo's HTTP
+429 is respected, not worked around: the client falls back to one request at a time (1 - 2 s apart) for 30 minutes.
+Symbols Yahoo has no data for (delisted or suspended) are skipped for 7 days. Details:
+[`docs/v1_docs/PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) section 3.
 
 ## RAG vector store (PDF documents, news and macro documents)
 
@@ -989,7 +999,7 @@ npm run dev                   # http://localhost:3000
 | `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
-| `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation (incl. forward EPS: the period's profit to the parent made a year, Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, and BVPS), market & shares, filings |
+| `/companies/{exchange}/{ticker}` | company detail in tabs: overview (KPIs, charts, data coverage), income statement, balance sheet, cash flow, segments, metrics, valuation (incl. forward EPS: the period's profit to the parent made a year, Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, and BVPS), market & shares, filings; a company reporting in USD gets a **USD \| IDR** toggle (statements and segments at the period's closing / average USD/IDR rate, valuation rows at the close of their date, share counts never converted) |
 | `/screening`                     | Screening dropdown (like Ingestion), Fundamental (All): exchange, market cap, top N, investor agents (multi-select); saved screenings |
 | `/screening/selected`            | Fundamental (Selected): stocks chosen from the companies table (search, multi-select), top N, investor agents; saved screenings of selected stocks |
 | `/screening/selected/{id}`       | report of a screening of selected stocks (same content; the selected stocks and their flags shown) |
@@ -1028,13 +1038,13 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 923 tests
+(cd backend && ./mvnw test)                      # 939 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
-The full backend suite takes about 14 minutes (2026-11-05: 923 tests in 169 classes, 14 min 17 s; the slowest are
-`DerivedDataRefreshTest` 3 min 22 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
-91 s, `TechnicalControllerTest` 48 s). Run it while the backend is quiet (no upload or price job: the tests share the
+The full backend suite takes about 13 minutes (2026-11-06: 939 tests in 169 classes, 13 min 8 s; the slowest are
+`DerivedDataRefreshTest` 3 min 23 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
+84 s, `TechnicalControllerTest` 38 s). Run it while the backend is quiet (no upload or price job: the tests share the
 live database) and one run at a time; a run past 30 minutes or with no test class finishing for 5 minutes is stuck -
 look at the running test with `jstack <surefire pid>`. Before a new run make sure no Maven / surefire `java` process of an
 earlier, interrupted run is still alive (2026-11-05: an orphaned fork held 2.5 GB and the `target` folder).
@@ -1068,7 +1078,7 @@ cash roll-forward leaves out (RISE) and SMBR's comparative that counts investing
 breakdown of a period already stored as a note; `FilingMapperAsgrTest` the ASGR and SIMP filings (full amounts under an "In Million" label, an amount reported twice,
 EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparatives only fill empty fields; `ShareSplitTest` the split adjustment in both upload orders (EPS, balance sheet shares, share snapshots); `FilingMapperBbriTest` BRI's repeated comparative lines; `FilingMapperTinsTest` the TINS filings (residual lines outside the filing's totals, a workbook without current-year figures, a loss per share without its sign); `FullTextExtractorTest`, `IngestionServiceFallbackTest` and `FullTextExtractionDatabaseTest` the full-text extraction (row references only, checks and corrections, when it takes over, stored with the standard steps, its own model and reasoning effort (Sonnet 5.5 refuses reasoning switched off), a row of a notes sheet leaves the field empty, no gross profit for a profit or loss by nature - NSSS, profit from operations asked for again when left empty - MSIN) and the error log (with the failed model calls); `IngestionUsageRecorderTest` and `IngestionJobCostTest` the model cost of an upload (every call recorded with its stage, model, tokens and reported cost; a failed attempt and its retry; the sums per job and per stage and model); `FilingMapperWebSharesTest` also a published share count checked against the EPS of a profit or loss by nature; `FilingMapperMikaTest` a segment line the breakdown's own total leaves out (MIKA); `FilingMapperAuditedTickersTest` the MAPA, ULTJ and BBCA findings (split on two bases, treasury stock, lines filed as 0); `JobWorkerPoolTest`, `JobWorkersConfigurationTest`, `FinancialStatementQueueWorkersTest` and `CompanyWriteLockTest` the ingestion workers (five jobs at the same time, `neracalab.jobs.workers`, filings of one company together with their write steps one at a time); `FilingMapperCekaTest` the five CEKA filings; `FilingMapperEpsTest` the EPS checks and the MYOR, NCKL, PTSN filings;
 `PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism; a currency pair read through its own trend; no macro data); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
-`InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories and those the thresholds of the seven pairs of 2026-10-23 were set on, the 9 currency pairs in order, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API);
+`InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories and those the thresholds of the seven pairs of 2026-10-23 were set on, the 9 currency pairs in order, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API, a Forex close outside its own range dropped and filled with the ECB rate - an ECB failure never fails the job); `PacedHttpClientPaceTest`, `PacedHttpClientAheadTest` and `PricePropertiesBindingTest` the Yahoo pace (8 at once, 150 ms apart, one at a time after a 429; the throughput settings bind); `CompanyCurrencyConversionTest` the USD \| IDR rates of a USD reporter (SMDR);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
 `MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
 `MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools and a search in the macro documents published by the as-of date, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the document search's refs and limits, the validator's rules, the blend and the action; the commodities board for Indonesia, the yuan, the dollar and risk appetite, the rupiah against its Asian peers; a pair's code as the model writes it);

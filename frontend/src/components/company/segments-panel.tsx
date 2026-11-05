@@ -21,11 +21,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { converted, type Conversion } from "@/lib/currency"
 import { EMPTY, formatCompact, formatDate, formatPercent, formatScaled, type AmountScale } from "@/lib/format"
 import type { CompanyDetail } from "@/lib/types"
 
-export function SegmentsPanel({ detail, scale }: { detail: CompanyDetail; scale: AmountScale }) {
-  const currency = detail.company.currency
+/**
+ * The revenue breakdown of a period. With `conversion` (USD | IDR toggle) the amounts are shown in its currency at the
+ * period's average rate, like the income statement.
+ */
+export function SegmentsPanel({
+  detail,
+  scale,
+  conversion = null,
+}: {
+  detail: CompanyDetail
+  scale: AmountScale
+  conversion?: Conversion | null
+}) {
+  const currency = conversion ? conversion.currency : detail.company.currency
   const periodsWithSegments = useMemo(
     () => detail.periods.filter((p) => p.segments.length > 0),
     [detail.periods]
@@ -47,8 +60,10 @@ export function SegmentsPanel({ detail, scale }: { detail: CompanyDetail; scale:
     )
   }
 
-  const total = period.segments.reduce((sum, s) => sum + (s.revenue ?? 0), 0)
-  const reportedRevenue = period.incomeStatement?.revenue ?? null
+  const rate = conversion ? conversion.rate(period) : 1
+  const segments = period.segments.map((s) => ({ ...s, revenue: converted(s.revenue, period, conversion) }))
+  const total = rate === null ? null : segments.reduce((sum, s) => sum + (s.revenue ?? 0), 0)
+  const reportedRevenue = converted(period.incomeStatement?.revenue ?? null, period, conversion)
   const items = periodsWithSegments.map((p) => ({
     value: String(p.periodId),
     label: `${p.period} · ${formatDate(p.periodEnd)}`,
@@ -64,6 +79,10 @@ export function SegmentsPanel({ detail, scale }: { detail: CompanyDetail; scale:
               <CardDescription>
                 {period.segments.length} segments in {period.period}; total {formatCompact(total, currency)}
                 {reportedRevenue !== null && ` (income statement revenue ${formatCompact(reportedRevenue, currency)})`}
+                {conversion &&
+                  (rate === null
+                    ? `. No ${conversion.pair} rate is stored for ${period.period}.`
+                    : `. Converted at the ${conversion.pair} average of ${period.period}: ${rate.toLocaleString("en-US", { maximumFractionDigits: 2 })} (${conversion.describe(period)}).`)}
               </CardDescription>
             </div>
             <Select items={items} value={String(period.periodId)} onValueChange={(v) => v && setPeriodId(v)}>
@@ -92,7 +111,7 @@ export function SegmentsPanel({ detail, scale }: { detail: CompanyDetail; scale:
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {period.segments.map((s) => {
+                {segments.map((s) => {
                   const share = total && s.revenue !== null ? s.revenue / total : null
                   return (
                     <TableRow key={s.segmentId}>
@@ -129,7 +148,7 @@ export function SegmentsPanel({ detail, scale }: { detail: CompanyDetail; scale:
                   <TableCell className="hidden sm:table-cell" />
                   <TableCell className="text-right font-semibold tabular-nums">{formatScaled(total, scale)}</TableCell>
                   <TableCell className="pr-4 text-xs text-muted-foreground">
-                    {reportedRevenue !== null && Math.abs(reportedRevenue - total) < 1
+                    {reportedRevenue !== null && total !== null && Math.abs(reportedRevenue - total) < Math.max(1, rate ?? 1)
                       ? "Matches reported revenue"
                       : reportedRevenue !== null
                         ? `Reported revenue ${formatScaled(reportedRevenue, scale)}`

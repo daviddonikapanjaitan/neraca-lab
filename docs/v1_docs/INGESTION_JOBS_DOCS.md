@@ -207,6 +207,12 @@ that many of its jobs run at the same time and the others wait as QUEUED. To run
 `workers: 6` under `neracalab.jobs` in `application.yaml` (or `INGESTION_WORKERS=6` in `backend/.env`)
 and restart the backend.
 
+The price queue has its own number too, `neracalab.jobs.price-workers` (env `INGESTION_PRICE_WORKERS`, **50** since
+2026-11-05; 0 = as `workers`): a price job waits on its Yahoo request, which `PacedHttpClient` lets up to 8 run at once
+(starts 150 ms apart; one at a time with a 1 - 2 s pause after an HTTP 429), then writes one company's prices and
+valuation in a short transaction. "Update all companies" of 875 IDX companies: 2 min 31 s (it took 27 - 62 minutes one
+request at a time), see [PRICE_INGESTION_DOCS.md](PRICE_INGESTION_DOCS.md) section 3.
+
 The financial statement upload queue has its own number, `neracalab.jobs.upload-workers` (env
 `INGESTION_UPLOAD_WORKERS`, **50** since 2026-10-31; 0 = as `workers`). An upload mostly waits on model calls, and
 since 2026-10-31 its database work is short: a filing that maps cleanly is stored without the agent (the fast path,
@@ -224,13 +230,13 @@ whole `V1.0.6` script for every company (10.8 s, one at a time for all uploads).
 | `INGESTION_FAST_PATH` | `true` | a cleanly mapped filing needs no agent (`false`: always the agent) |
 
 The share counts an upload asks Yahoo Finance for (when its filing states none) are kept per company for 6 hours
-(`WebShareCounts`): Yahoo is asked one request at a time with a 1 - 2 s pause, shared with the price ingestion, and a
-company's filings arrive together.
+(`WebShareCounts`): Yahoo is asked through the client the price ingestion uses (its pace, its requests ahead of the
+waiting price requests), and a company's filings arrive together.
 
 | Queue (job type)                              | Runs at the same time                     | Still one after the other                                                                 |
 |-----------------------------------------------|-------------------------------------------|-------------------------------------------------------------------------------------------|
 | Financial statement uploads (`FINANCIAL_STATEMENT`) | any filings (`upload-workers`, 50), one company's in upload order | the write steps of filings of one company (never two at the same moment); the share scripts after each upload (milliseconds); the requests to Yahoo Finance for share counts |
-| Prices (`PRICE`)                              | different companies (one job per company) | the requests to the provider: one at a time with the 1-2 s pause; an HTTP 429 pauses every worker |
+| Prices (`PRICE`)                              | different companies (`price-workers`, 50; one job per company) | the requests to the provider: at most 8 in flight, starts 150 ms apart (one at a time with the 1 - 2 s pause after an HTTP 429); an HTTP 429 pauses every worker |
 | RAG (`RAG_PDF`, `RAG_NEWS`)                   | different documents / companies           | the requests to one news site                                                             |
 | Screening data (`FUNDAMENTALS`)               | different exchanges (one run per exchange) | the requests to Yahoo Finance                                                            |
 

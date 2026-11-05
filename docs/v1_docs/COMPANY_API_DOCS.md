@@ -106,6 +106,7 @@ upper-cased like at ingestion (`Tickers.normalize`).
 | `latestMarketSnapshot`                                             | last market cap / enterprise value; `null` without prices                            | `market_snapshot`                                                            |
 | `valuations[]`                                                     | valuation snapshots, most recent first, with the `period` whose TTM figures they use; `forwardEps` (the period's profit to the parent made a year: Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, / shares) and `bookValuePerShare` (equity attributable to the parent / shares), both of that period, with its share count, as EPS TTM | `valuation_snapshot`, `v_key_metrics` (`net_income_to_parent_annualized`, `book_value_per_share`) |
 | `corporateActions[]`                                               | most recent first                                                                    | `corporate_action`                                                           |
+| `conversion`                                                       | for a company reporting in another currency than its exchange's (USD on IDX: INDY, SMDR, ... about 100): `from` (USD), `to` (IDR), `instrument` (USDIDR), `source`, `firstRateDate`, `lastRateDate` and `rates[]` per period: `closingRate` / `closingRateDate` (the pair's last close on or before the period end, at most 10 days before) and `averageRate` / `averageDays` (the mean of its closes from period start to end), and `valuationRates[]` per valuation date: `date`, `rate`, `rateDate` (the close on or before it); `null` for a company reporting in its exchange's currency | `instrument_daily` (Forex pair `USDIDR`, Yahoo Finance `IDR=X`) |
 
 Shortened example:
 
@@ -131,7 +132,7 @@ Shortened example:
     }
   ],
   "segments": [], "shareSnapshots": [], "latestPrice": {}, "latestMarketSnapshot": {},
-  "valuations": [], "corporateActions": []
+  "valuations": [], "corporateActions": [], "conversion": null
 }
 ```
 
@@ -154,6 +155,13 @@ Conventions (same as the database):
   unrounded 539.9999). `null` for a company that reports in the listing currency. The company page shows the quote
   as the price, with the reporting-currency figure and the rate beside it; Technicals rounds converted bars the
   same way.
+
+- `conversion` (USD | IDR toggle of the company page): the Forex pair of Ingestion › Price Ingestion, not the ECB rates
+  of the price conversion above. As IAS 21 translates statements, the page converts balance-sheet amounts at the
+  closing rate and income-statement, cash-flow and segment amounts (and EPS) at the period's average rate; share
+  counts never; a valuation row (price, market cap, EV, TTM figures, per-share values) at the close of its date - one
+  rate per row, so its ratios and yields stay the same in either currency. SMDR FY2025: closing 16,709 (2025-12-31), average 16,455.07 of 257 closes - revenue USD 801,694,731 =
+  Rp 13.19 trillion, total assets USD 1,426,303,962 = Rp 23.83 trillion. The amounts in the response stay as reported.
 
 All queries of one response run in one read-only REPEATABLE READ transaction, so the response is
 a consistent snapshot even while an upload writes the same company.
@@ -201,6 +209,7 @@ Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 3.1, [AI_INGESTION_DOCS.
 | `CompanyControllerTest` | all three endpoints over MockMvc against the HRTA seed data: ordering, figures, `null` statements, coverage, 400 / 404 |
 | `CompanyUniquenessTest` | duplicate, lower-case, padded and exchange-less rows rejected; ingestion upsert keeps one row                          |
 | `CompanyCodesTest`      | ticker and exchange normalisation                                                                                      |
+| `CompanyCurrencyConversionTest` | SMDR's `conversion`: every period's closing and average USD/IDR rate equal the stored closes (FY2025 16,709 / 16,455.07 of 257), every valuation date's rate the close on or before it; none for BBCA (IDR) |
 
 Like `BackendApplicationTests`, they need the Postgres on localhost:5432 (the full stack from the
 start scripts, or `docker compose up -d postgres redis` in `backend/`).

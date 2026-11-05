@@ -9,11 +9,12 @@ import { MetricsTable } from "@/components/company/metrics-table"
 import { Overview } from "@/components/company/overview"
 import { SegmentsPanel } from "@/components/company/segments-panel"
 import { StatementTable } from "@/components/company/statement-table"
-import { ALL_PERIOD_TYPES, PeriodTypeFilter, ScaleToggle } from "@/components/company/toolbar"
+import { ALL_PERIOD_TYPES, CurrencyToggle, PeriodTypeFilter, ScaleToggle } from "@/components/company/toolbar"
 import { ValuationsTable } from "@/components/company/valuations-table"
 import { EmptyState } from "@/components/empty-state"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { conversionFor, dateConversionFor, type Conversion, type RateBasis } from "@/lib/currency"
 import type { AmountScale } from "@/lib/format"
 import {
   BALANCE_SHEET,
@@ -35,7 +36,20 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
   const [tab, setTab] = useState<DetailTab>(initialTab)
   const [periodType, setPeriodType] = useState<string>(ALL_PERIOD_TYPES)
   const [scale, setScale] = useState<AmountScale>("billions")
-  const currency = detail.company.currency
+  const reporting = detail.company.currency
+  const fx = detail.conversion ?? null
+  // USD | IDR (a company reporting in another currency than its exchange's): the currency the amounts are shown in
+  const [shown, setShown] = useState<string | null>(reporting)
+  const converting = fx !== null && shown === fx.to
+  const currency = converting ? fx.to : reporting
+  const conversion = useMemo(() => {
+    if (!fx || !converting) return null
+    return {
+      closing: conversionFor(fx, "closing"),
+      average: conversionFor(fx, "average"),
+      byDate: dateConversionFor(fx),
+    }
+  }, [fx, converting])
 
   // period types present, in a fixed order (FY, Q1, H1, 9M, ...)
   const periodTypes = useMemo(() => {
@@ -61,12 +75,25 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
     window.history.replaceState(null, "", url.pathname + url.search + url.hash)
   }
 
+  const currencyToggle = fx && reporting ? (
+    <CurrencyToggle value={shown ?? reporting} from={fx.from} to={fx.to} onChange={setShown} />
+  ) : null
+
   const toolbar = (withScale: boolean) => (
     <div className="flex flex-wrap items-center gap-2">
       <PeriodTypeFilter value={periodType} types={periodTypes} onChange={setPeriodType} />
+      {withScale && currencyToggle}
       {withScale && <ScaleToggle value={scale} currency={currency} onChange={setScale} />}
     </div>
   )
+
+  /** "Converted from USD at the USD/IDR average of each period (Forex, yahoo)." */
+  function conversionNote(c: Conversion | null): string | null {
+    if (!c || !fx) return null
+    return ` Converted from ${fx.from} at the ${c.pair} ${
+      c.basis === "closing" ? "close of each period end" : "average of each period's daily closes"
+    } (Forex ${fx.instrument}${fx.source ? `, ${fx.source}` : ""}).`
+  }
 
   function statementCard<T>(
     key: "income" | "balance" | "cashflow",
@@ -75,6 +102,9 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
     pick: (p: Period) => T | null
   ) {
     const periods = byType.filter((p) => pick(p) !== null)
+    // IAS 21: the balance sheet at the period-end rate, flows at the period's average rate
+    const basis: RateBasis = key === "balance" ? "closing" : "average"
+    const tableConversion = conversion ? conversion[basis] : null
     return (
       <Card>
         <CardHeader>
@@ -84,6 +114,7 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
               <CardDescription>
                 {currency ?? "Company currency"}
                 {scale !== "full" && ` ${scale}`} · {STATEMENT_NOTES[key]}
+                {conversionNote(tableConversion)}
               </CardDescription>
             </div>
             {toolbar(true)}
@@ -97,7 +128,7 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
               description="No period of the selected type has this statement."
             />
           ) : (
-            <StatementTable items={items} periods={periods} pick={pick} scale={scale} />
+            <StatementTable items={items} periods={periods} pick={pick} scale={scale} conversion={tableConversion} />
           )}
         </CardContent>
       </Card>
@@ -137,10 +168,11 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
 
         <TabsContent value="segments" className="pt-2">
           <div className="flex flex-col gap-3">
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              {currencyToggle}
               <ScaleToggle value={scale} currency={currency} onChange={setScale} />
             </div>
-            <SegmentsPanel detail={detail} scale={scale} />
+            <SegmentsPanel detail={detail} scale={scale} conversion={conversion?.average ?? null} />
           </div>
         </TabsContent>
 
@@ -166,13 +198,22 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
         <TabsContent value="valuation" className="pt-2">
           <Card>
             <CardHeader>
-              <CardTitle>Valuation history</CardTitle>
-              <CardDescription>
-                Last close against trailing-twelve-month figures of the latest period ended on or before each date.
-              </CardDescription>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="space-y-1">
+                  <CardTitle>Valuation history</CardTitle>
+                  <CardDescription>
+                    Last close against trailing-twelve-month figures of the latest period ended on or before each date.
+                  </CardDescription>
+                </div>
+                {currencyToggle}
+              </div>
             </CardHeader>
             <CardContent className="px-0">
-              <ValuationsTable valuations={detail.valuations} currency={currency} />
+              <ValuationsTable
+                valuations={detail.valuations}
+                currency={reporting}
+                conversion={conversion?.byDate ?? null}
+              />
             </CardContent>
           </Card>
         </TabsContent>

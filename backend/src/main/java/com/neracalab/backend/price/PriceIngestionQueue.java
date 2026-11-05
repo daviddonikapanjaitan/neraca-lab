@@ -28,9 +28,9 @@ import com.neracalab.backend.price.PriceDailyRepository.CompanyRef;
 import com.neracalab.backend.price.provider.RateLimitedException;
 
 /**
- * In-memory queue of price ingestions with several worker threads ({@code neracalab.jobs.workers}, 5):
- * that many companies are ingested at the same time. The provider still sees one request at a time,
- * with the pause between two requests: {@code PacedHttpClient} is shared by all workers.
+ * In-memory queue of price ingestions with several worker threads ({@code neracalab.jobs.price-workers}, 50):
+ * that many companies are ingested at the same time. The provider sees the pace of {@code PacedHttpClient}
+ * (at most {@code neracalab.prices.throughput.concurrent-requests} requests in flight), shared by all workers.
  * <p>
  * HTTP 429: the whole queue (every worker) pauses for the next wait of {@code neracalab.prices.backoff}
  * (15m, 30m, 60m; longer when Retry-After asks for it), then the job is retried, which starts again
@@ -91,7 +91,7 @@ public class PriceIngestionQueue implements SmartLifecycle {
     public PriceIngestionQueue(PriceIngestionService service, IndexIngestion indexIngestion,
                                InstrumentIngestion instrumentIngestion, PriceProperties properties, Listener listener,
                                JobProperties jobProperties) {
-        this(service, indexIngestion, instrumentIngestion, properties, listener, jobProperties.workers());
+        this(service, indexIngestion, instrumentIngestion, properties, listener, jobProperties.prices());
     }
 
     /** One worker, no listener, no index (tests). */

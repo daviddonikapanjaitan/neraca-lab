@@ -286,6 +286,42 @@ export interface CompanyDetail {
   latestMarketSnapshot: MarketSnapshot | null
   valuations: Valuation[]
   corporateActions: CorporateAction[]
+  /** rates to show the amounts in the exchange's currency (USD -> IDR); null: reports in it, or no rate stored */
+  conversion?: CurrencyConversion | null
+}
+
+/** USD/IDR rates per period, from the Forex pair (instrument_daily USDIDR, Yahoo Finance IDR=X) */
+export interface CurrencyConversion {
+  /** the reporting currency (USD) */
+  from: string
+  /** the exchange's currency (IDR) */
+  to: string
+  /** "USDIDR" */
+  instrument: string
+  source: string | null
+  firstRateDate: string | null
+  lastRateDate: string | null
+  rates: PeriodRate[]
+  /** per valuation date: the close on or before it (every amount of that valuation row, so its ratios stay) */
+  valuationRates: DateRate[]
+}
+
+export interface DateRate {
+  /** a valuation date */
+  date: string
+  rate: number
+  /** the close's trading day */
+  rateDate: string
+}
+
+export interface PeriodRate {
+  periodId: number
+  /** last close on or before the period end: balance-sheet amounts */
+  closingRate: number | null
+  closingRateDate: string | null
+  /** mean of the daily closes from period start to end: income, cash flow, segments, EPS */
+  averageRate: number | null
+  averageDays: number
 }
 
 // Ingestion jobs (docs/v1_docs/INGESTION_JOBS_DOCS.md)
@@ -619,6 +655,8 @@ export interface PriceUpdate {
   upToDate: number
   /** of the queued, companies without prices (their whole history) */
   withoutPrices: number
+  /** skipped: the provider had no data for the symbol within 7 days (delisted / suspended) */
+  noProviderData: number
   index: { code: string; outcome: "QUEUED" | "ALREADY_ACTIVE" | "UP_TO_DATE"; job: IngestionJob | null } | null
   /** the first job queued, for the jobs table to follow */
   firstJob: IngestionJob | null

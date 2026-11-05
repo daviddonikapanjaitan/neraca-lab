@@ -119,8 +119,8 @@ N, assessments without model answer, synthesis fallback, Yahoo rate limit; the r
 ## 3. Data: the daily ETL
 
 `screening/data`: `YahooFundamentalsClient`, `FundamentalEtlService`, `FundamentalsQueue`,
-`FundamentalsEtlSchedule`. Requests go through the shared `PacedHttpClient` (1-2 s apart, together
-with the price ingestion).
+`FundamentalsEtlSchedule`. Requests go through the shared `PacedHttpClient` (together with the price ingestion:
+at most 8 in flight, starts 150 ms apart; one at a time, 1 - 2 s apart, after an HTTP 429).
 
 | Step         | Yahoo API                                                   | Requests                   |
 |--------------|-------------------------------------------------------------|----------------------------|

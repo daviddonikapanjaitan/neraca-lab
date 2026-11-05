@@ -66,6 +66,37 @@ public class YahooChartClient {
      * ingestion), since the quote of a session still trading is its current price.
      */
     public List<Candle> dailyBars(String symbol, ZoneId zone, LocalDate from, LocalDate to, boolean sessionClose) {
+        return dailyBars(symbol, zone, from, to, sessionClose, false).bars();
+    }
+
+    /**
+     * Daily bars without the ones Yahoo sends inconsistent: a close more than {@value #INCONSISTENT_CLOSE} (a fraction)
+     * outside the day's own high-low range as sent (both present). Yahoo's USD/IDR (IDR=X) of 2026-11-03 closed at
+     * 17,472.20 under its low of 17,786.60, of 2026-11-04 at 17,536.10 under its low of 17,957.60, while the ECB rate
+     * stayed at 18,137 / 18,129 and the next day closed at 18,049: a rupiah 3.5 % stronger for two days that never
+     * was, which the spike rule ({@code market.BarCleaner}, 3 %) did not catch (the two days do not return within half
+     * of it). Such a bar is dropped - its close is not known - and its date reported, so a stored copy can be deleted.
+     * Only judged when the range lies on the scale of the previous close (a range of 9.0 - 9.0 after a close of 9,300 is
+     * the range's error, not the close's) - so never the first bar of a response.
+     * For the Forex pairs only ({@code InstrumentIngestionService}): over the whole Yahoo history (2001 - 2026) a close
+     * more than 1 % outside its range is rare for currency pairs (IDR=X 43 of 6,404 days, PHP=X 26, INR=X 4, CNY=X /
+     * KRW=X / EURUSD=X 1, JPY=X / MYR=X / AUDJPY=X 0), but common for futures, whose settlement lies outside the
+     * electronic session's range (ZW=F 380, ZM=F 248, ZC=F 279 of ~6,450) - there it is no error.
+     */
+    public Bars dailyBarsChecked(String symbol, ZoneId zone, LocalDate from, LocalDate to) {
+        return dailyBars(symbol, zone, from, to, false, true);
+    }
+
+    /** A close more than this fraction under the day's low or over its high is not a close of that day. */
+    static final double INCONSISTENT_CLOSE = 0.01;
+
+    /** Daily bars, and the dates of the bars dropped as inconsistent ({@link #dailyBarsChecked}). */
+    public record Bars(List<Candle> bars, List<LocalDate> inconsistent) {
+    }
+
+    private Bars dailyBars(String symbol, ZoneId zone, LocalDate from, LocalDate to, boolean sessionClose,
+                           boolean dropInconsistent) {
+        List<LocalDate> inconsistent = new ArrayList<>();
         JsonNode result = chart(symbol, from.atStartOfDay(zone).toEpochSecond(),
                 to.plusDays(1).atStartOfDay(zone).toEpochSecond(), "1d", "");
         ZoneId z = zone(result, zone);
@@ -91,6 +122,21 @@ public class YahooChartClient {
             if (close == null || close <= 0) {
                 continue;   // holiday placeholder
             }
+            Double sentHigh = number(quote.path("high").path(i));
+            Double sentLow = number(quote.path("low").path(i));
+            // judged only when the range itself is on the scale of the previous close (within half to double): IDR=X of
+            // 2006-06-27 sends open, high and low of 9.0 beside a close of 9,241 after 9,300 - the range is wrong there,
+            // not the close
+            Double previous = bars.isEmpty() ? null : bars.getLast().close();
+            boolean plausibleRange = previous != null && sentLow != null && sentHigh != null
+                    && sentLow >= previous * 0.5 && sentHigh <= previous * 2;
+            if (dropInconsistent && plausibleRange && sentLow > 0
+                    && (close < sentLow * (1 - INCONSISTENT_CLOSE) || close > sentHigh * (1 + INCONSISTENT_CLOSE))) {
+                log.warn("{} {}: close {} outside the day's range {} - {}: dropped", symbol, date, close, sentLow,
+                        sentHigh);
+                inconsistent.add(date);
+                continue;
+            }
             double open = orElse(number(quote.path("open").path(i)), close);
             double high = Math.max(orElse(number(quote.path("high").path(i)), close), Math.max(open, close));
             double low = Math.min(orElse(number(quote.path("low").path(i)), close), Math.min(open, close));
@@ -106,7 +152,9 @@ public class YahooChartClient {
                 unique.add(bar);
             }
         }
-        return unique;
+        // a date dropped once and sent again consistently (Yahoo's intraday row of today) is a bar, not a bad one
+        List<LocalDate> kept = unique.stream().map(Candle::date).toList();
+        return new Bars(unique, inconsistent.stream().filter(d -> !kept.contains(d)).distinct().toList());
     }
 
     /** Every dividend and split Yahoo reports for {@code symbol}, oldest first. */
