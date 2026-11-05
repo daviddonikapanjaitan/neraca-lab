@@ -40,7 +40,7 @@ class PriceUpdateServiceTest {
     private final IndexIngestion index = mock(IndexIngestion.class, org.mockito.Mockito.withSettings()
             .defaultAnswer(invocation -> invocation.getMethod().isDefault() ? invocation.callRealMethod()
                     : org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation)));
-    private final PriceUpdateService updates = new PriceUpdateService(queue, service, prices, index);
+    private final PriceUpdateService updates = new PriceUpdateService(queue, service, prices, index, java.time.Duration.ofDays(7));
 
     private final CompanyRef antm = company(1, "ANTM");
     private final CompanyRef bbca = company(2, "BBCA");
@@ -88,6 +88,23 @@ class PriceUpdateServiceTest {
         assertThat(update.index().outcome()).isEqualTo("QUEUED");
         assertThat(update.index().job().index()).isTrue();
         assertThat(update.index().job().ticker()).isEqualTo("IHSG");
+    }
+
+    /**
+     * A symbol the provider had no data for within 7 days (delisted / suspended: "Yahoo Finance has no data for
+     * OCAP.JK", asked again in every run until 2026-11-05) is skipped, and counted.
+     */
+    @Test
+    void aSymbolWithoutProviderDataIsSkipped() {
+        when(index.stored(IHSG)).thenReturn(new IndexIngestion.Stored(8891, LocalDate.of(1990, 4, 6), LAST));
+        when(prices.tickersWithoutProviderData(Exchange.IDX, java.time.Duration.ofDays(7)))
+                .thenReturn(java.util.Set.of("ANTM"));
+
+        PriceUpdateService.Update update = updates.updateAll(Exchange.IDX, false, null);
+
+        assertThat(update.noProviderData()).isEqualTo(1);
+        assertThat(update.queued()).isEqualTo(1);           // BACH only
+        verify(queue, never()).submit(eq(antm), anyBoolean(), any());
     }
 
     @Test

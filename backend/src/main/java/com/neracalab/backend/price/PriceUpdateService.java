@@ -18,7 +18,9 @@ import com.neracalab.backend.price.PriceIngestionQueue.Submission;
  * Brings the prices of a whole exchange up to date (Ingestion › Price Ingestion, "Update all companies"; the evening
  * schedule): every active company whose latest stored day is before the last completed trading day is queued, and
  * only the days from its latest stored day to that day are fetched (a company without prices gets its whole history).
- * Companies already up to date are not queued. The exchange's index (IHSG) can be brought up to date with them.
+ * Companies already up to date are not queued, nor a company whose last price job found no data at the provider within
+ * {@code neracalab.prices.throughput.no-data-retry-after} (7 days: a delisted or suspended symbol, asked again in every
+ * run until 2026-11-05). The exchange's index (IHSG) can be brought up to date with them.
  */
 @Service
 public class PriceUpdateService {
@@ -66,11 +68,13 @@ public class PriceUpdateService {
      * @param alreadyActive companies that already had a queued or running job (it is kept)
      * @param upToDate      companies skipped: their prices reach the last completed trading day
      * @param withoutPrices of the queued, companies without prices (their whole history is fetched)
+     * @param noProviderData companies skipped: the provider had no data for their symbol within
+     *                      {@code no-data-retry-after} (delisted / suspended); a single-company ingestion still asks
      * @param index         the index's outcome ({@code null}: not requested or none configured)
      * @param firstJob      the first job queued ({@code null}: none), for the jobs table to follow
      */
     public record Update(String exchange, LocalDate lastCompletedTradingDay, int companies, int queued,
-                         int alreadyActive, int upToDate, int withoutPrices, IndexUpdate index,
+                         int alreadyActive, int upToDate, int withoutPrices, int noProviderData, IndexUpdate index,
                          PriceIngestionJob.View firstJob) {
     }
 
@@ -89,13 +93,22 @@ public class PriceUpdateService {
     private final PriceIngestionService service;
     private final PriceDailyRepository prices;
     private final IndexIngestion indexIngestion;
+    /** {@code neracalab.prices.throughput.no-data-retry-after}; zero: never skipped */
+    private final java.time.Duration noDataRetryAfter;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public PriceUpdateService(PriceIngestionQueue queue, PriceIngestionService service, PriceDailyRepository prices,
-                              IndexIngestion indexIngestion) {
+                              IndexIngestion indexIngestion, PriceProperties properties) {
+        this(queue, service, prices, indexIngestion, properties.throughput().noDataRetryAfter());
+    }
+
+    PriceUpdateService(PriceIngestionQueue queue, PriceIngestionService service, PriceDailyRepository prices,
+                       IndexIngestion indexIngestion, java.time.Duration noDataRetryAfter) {
         this.queue = queue;
         this.service = service;
         this.prices = prices;
         this.indexIngestion = indexIngestion;
+        this.noDataRetryAfter = noDataRetryAfter;
     }
 
     public Status status(Exchange exchange) {
@@ -151,11 +164,18 @@ public class PriceUpdateService {
         int active = 0;
         int upToDate = 0;
         int without = 0;
+        int noData = 0;
+        java.util.Set<String> withoutProviderData = noDataRetryAfter.isZero() ? java.util.Set.of()
+                : prices.tickersWithoutProviderData(exchange, noDataRetryAfter);
         PriceIngestionJob.View first = null;
         for (CompanyLatest c : companies) {
             LocalDate latest = c.latestTradingDate();
             if (latest != null && !latest.isBefore(lastCompleted)) {
                 upToDate++;
+                continue;
+            }
+            if (withoutProviderData.contains(c.company().ticker())) {
+                noData++;
                 continue;
             }
             Submission submission = queue.submit(c.company(), false, requestedBy);
@@ -182,10 +202,11 @@ public class PriceUpdateService {
             }
         }
         log.info("Price update of {} up to {}: {} companies, {} queued ({} without prices), {} already active, "
-                        + "{} up to date; index {}", exchange.code(), lastCompleted, companies.size(), queued, without,
-                active, upToDate, index == null ? "not requested" : index.outcome());
-        return new Update(exchange.code(), lastCompleted, companies.size(), queued, active, upToDate, without, index,
-                first);
+                        + "{} up to date, {} without provider data; index {}", exchange.code(), lastCompleted,
+                companies.size(), queued, without, active, upToDate, noData,
+                index == null ? "not requested" : index.outcome());
+        return new Update(exchange.code(), lastCompleted, companies.size(), queued, active, upToDate, without, noData,
+                index, first);
     }
 
     private IndexUpdate updateIndex(IndexRef index, LocalDate lastCompleted, Requester requestedBy) {

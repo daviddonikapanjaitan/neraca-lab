@@ -15,6 +15,8 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.neracalab.backend.price.PriceProperties;
@@ -25,18 +27,26 @@ import com.neracalab.backend.price.PriceProperties;
  *   <li>one {@link HttpClient} with a cookie store for the whole application, so cookies a
  *       provider sets are sent back on later requests</li>
  *   <li>a normal browser User-Agent on every request</li>
- *   <li>one request at a time, and between two requests a random pause of
- *       {@code neracalab.prices.min-delay}..{@code max-delay} (default 1-2 s)</li>
- *   <li>a request made {@link #ahead} (an upload waiting for a company's share counts) is sent before the
- *       background requests waiting at that moment (the price jobs the uploads queue), still with the pause: 50
+ *   <li><b>normal pace</b>: at most {@code neracalab.prices.throughput.concurrent-requests} (8) requests in flight, their
+ *       starts at least {@code request-spacing} (150 ms) apart - at most ~6.7 requests a second. Until 2026-11-05 every
+ *       request waited for the previous one plus a 1 - 2 s pause: "Update all companies" of ~940 IDX companies took
+ *       27 - 62 minutes, the pause alone ~1.5 s a company, while Yahoo answered no HTTP 429 in five days of runs</li>
+ *   <li><b>throttled pace</b> after an HTTP 429 (for {@code throttled-for}, 30 min), and always when concurrent-requests
+ *       is 1: one request at a time and a random pause of {@code neracalab.prices.min-delay}..{@code max-delay}
+ *       (1 - 2 s) after each - the pace Yahoo accepted for months. The provider's 429 is never worked around: the
+ *       client slows down, and {@code PriceIngestionQueue} still pauses the queue as before</li>
+ *   <li>a request made {@link #ahead} (an upload waiting for a company's share counts) starts before the
+ *       background requests waiting at that moment (the price jobs the uploads queue), still within the pace: 50
  *       uploads at once waited up to 53 s behind them on 2026-10-31</li>
  * </ul>
  * The screening data ETL (Yahoo Finance screener and fundamentals) uses the same client, so price
- * ingestion and ETL together never exceed the pacing towards Yahoo.
+ * ingestion and ETL together never exceed the pace towards Yahoo.
  * Error messages name host and path only, never the query string (it may carry an API token).
  */
 @Component
 public class PacedHttpClient {
+
+    private static final Logger log = LoggerFactory.getLogger(PacedHttpClient.class);
 
     /** Status, body and Retry-After of a response. */
     public record Response(int status, String body, Duration retryAfter) {
@@ -47,13 +57,18 @@ public class PacedHttpClient {
 
     private final HttpClient http;
     private final PriceProperties properties;
-    /** One request at a time, waiting threads in order of arrival. */
+    /** Guards the pace state below; waiting threads take their turn in order of arrival as far as the pace allows. */
     private final ReentrantLock turn = new ReentrantLock(true);
-    /** Signalled when a request is done: a background request that stepped aside tries again. */
-    private final Condition done = turn.newCondition();
-    /** Requests made {@link #ahead} that wait for their turn or are being sent. */
+    /** Signalled when a request starts or ends: waiting requests check their turn again. */
+    private final Condition changed = turn.newCondition();
+    /** Requests made {@link #ahead} that wait for their turn. */
     private final AtomicInteger aheadWaiting = new AtomicInteger();
+    /** Requests in flight; guarded by {@code turn}. */
+    private int inFlight;
+    /** No request starts before this instant; guarded by {@code turn}. */
     private Instant nextRequestAt = Instant.MIN;
+    /** The throttled pace lasts until this instant after an HTTP 429; guarded by {@code turn}. */
+    private Instant throttledUntil = Instant.MIN;
 
     public PacedHttpClient(PriceProperties properties) {
         this.properties = properties;
@@ -65,7 +80,7 @@ public class PacedHttpClient {
     }
 
     /**
-     * GET {@code uri} once, after the pause since the previous request has elapsed.
+     * GET {@code uri} once, when the pace allows it.
      *
      * @throws PriceProviderException on a network error or when the thread is interrupted
      *                                (the interrupt flag is restored)
@@ -84,9 +99,9 @@ public class PacedHttpClient {
     }
 
     /**
-     * Runs {@code requests} with every request of this client it makes on this thread sent before the background
+     * Runs {@code requests} with every request of this client it makes on this thread started before the background
      * requests that wait at that moment - for a caller someone is waiting on (an upload asking for a company's share
-     * counts). The pause between two requests stays: the provider sees the same pace.
+     * counts). The pace stays: the provider sees the same rate.
      */
     public static <T> T ahead(Supplier<T> requests) {
         Boolean before = AHEAD.get();
@@ -102,6 +117,16 @@ public class PacedHttpClient {
         }
     }
 
+    /** Whether the client is in the throttled pace now (after an HTTP 429, or configured one at a time). */
+    public boolean throttled() {
+        turn.lock();
+        try {
+            return throttled(Instant.now());
+        } finally {
+            turn.unlock();
+        }
+    }
+
     private HttpRequest.Builder builder(URI uri) {
         return HttpRequest.newBuilder(uri)
                 .timeout(properties.requestTimeout())
@@ -112,25 +137,11 @@ public class PacedHttpClient {
 
     private Response send(HttpRequest request) {
         URI uri = request.uri();
-        boolean ahead = Boolean.TRUE.equals(AHEAD.get());
-        if (ahead) {
-            aheadWaiting.incrementAndGet();
-        }
+        boolean throttledStart = acquire(uri, Boolean.TRUE.equals(AHEAD.get()));
+        Integer status = null;
         try {
-            turn.lockInterruptibly();
-        } catch (InterruptedException e) {
-            if (ahead) {
-                aheadWaiting.decrementAndGet();
-            }
-            Thread.currentThread().interrupt();
-            throw new PriceProviderException("Interrupted while requesting " + describe(uri), e);
-        }
-        try {
-            while (!ahead && aheadWaiting.get() > 0) {
-                done.await();           // a request someone waits on goes first
-            }
-            waitForTurn();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            status = response.statusCode();
             return new Response(response.statusCode(), response.body(),
                     retryAfter(response.headers().firstValue("Retry-After").orElse(null)));
         } catch (IOException e) {
@@ -139,20 +150,98 @@ public class PacedHttpClient {
             Thread.currentThread().interrupt();
             throw new PriceProviderException("Interrupted while requesting " + describe(uri), e);
         } finally {
-            nextRequestAt = Instant.now().plus(randomPause());
-            if (ahead) {
-                aheadWaiting.decrementAndGet();
+            release(uri, throttledStart, status);
+        }
+    }
+
+    /**
+     * Waits until this request may start: a free place within the pace's limit of requests in flight, the start
+     * instant reached, and no request made {@link #ahead} waiting (unless this is one). Returns whether it starts in
+     * the throttled pace.
+     */
+    private boolean acquire(URI uri, boolean ahead) {
+        if (ahead) {
+            aheadWaiting.incrementAndGet();
+        }
+        boolean waitingAhead = ahead;
+        try {
+            turn.lockInterruptibly();
+            try {
+                while (true) {
+                    Instant now = Instant.now();
+                    boolean throttled = throttled(now);
+                    int limit = throttled ? 1 : properties.throughput().concurrentRequests();
+                    if ((!ahead && aheadWaiting.get() > 0) || inFlight >= limit) {
+                        changed.await();        // a request someone waits on goes first / no free place
+                        continue;
+                    }
+                    Duration wait = Duration.between(now, nextRequestAt);
+                    if (wait.isPositive()) {
+                        changed.awaitNanos(wait.toNanos());
+                        continue;
+                    }
+                    inFlight++;
+                    if (waitingAhead) {
+                        aheadWaiting.decrementAndGet();
+                        waitingAhead = false;
+                    }
+                    if (!throttled) {
+                        nextRequestAt = now.plus(properties.throughput().requestSpacing());
+                    }
+                    changed.signalAll();
+                    return throttled;
+                }
+            } finally {
+                turn.unlock();
             }
-            done.signalAll();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PriceProviderException("Interrupted while requesting " + describe(uri), e);
+        } finally {
+            if (waitingAhead) {             // interrupted while waiting: let the background requests go on
+                aheadWaiting.decrementAndGet();
+                turn.lock();
+                try {
+                    changed.signalAll();
+                } finally {
+                    turn.unlock();
+                }
+            }
+        }
+    }
+
+    /**
+     * Ends a request: in the throttled pace the next one waits a random min..max pause from now; an HTTP 429 switches
+     * to the throttled pace for {@code throttled-for}.
+     */
+    private void release(URI uri, boolean throttledStart, Integer status) {
+        turn.lock();
+        try {
+            inFlight--;
+            Instant now = Instant.now();
+            if (status != null && status == 429) {
+                if (!throttled(now)) {
+                    log.warn("{} answered HTTP 429: throttled pace (one request at a time, {} - {} apart) for {}",
+                            describe(uri), properties.minDelay(), properties.maxDelay(),
+                            properties.throughput().throttledFor());
+                }
+                throttledUntil = now.plus(properties.throughput().throttledFor());
+            }
+            if (throttledStart || throttled(now)) {
+                Instant afterPause = now.plus(randomPause());
+                if (afterPause.isAfter(nextRequestAt)) {
+                    nextRequestAt = afterPause;
+                }
+            }
+            changed.signalAll();
+        } finally {
             turn.unlock();
         }
     }
 
-    private void waitForTurn() throws InterruptedException {
-        Duration wait = Duration.between(Instant.now(), nextRequestAt);
-        if (wait.isPositive()) {
-            Thread.sleep(wait);
-        }
+    /** Whether the throttled pace applies at {@code now}: after an HTTP 429, or always with one request at a time. */
+    private boolean throttled(Instant now) {
+        return properties.throughput().concurrentRequests() == 1 || now.isBefore(throttledUntil);
     }
 
     private Duration randomPause() {

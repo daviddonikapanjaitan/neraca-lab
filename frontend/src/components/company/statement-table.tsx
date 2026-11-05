@@ -9,7 +9,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { formatDate, formatPrice, formatScaled, type AmountScale } from "@/lib/format"
+import { converted, type Conversion } from "@/lib/currency"
+import { EMPTY, formatDate, formatNumber, formatPrice, formatScaled, type AmountScale } from "@/lib/format"
 import type { LineItem } from "@/lib/statements"
 import type { Period } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -38,18 +39,22 @@ export function AuditBadge({ audited }: { audited: boolean | null }) {
 
 /**
  * One statement as line items x periods. `pick` returns the statement of a period; periods
- * without it are not passed in. Amounts follow the database sign convention.
+ * without it are not passed in. Amounts follow the database sign convention. With `conversion` every amount (EPS too,
+ * share counts not) is shown in its currency at the period's rate - a period without a rate shows no amount, never an
+ * unconverted one - and a last row gives the rate used.
  */
 export function StatementTable<T>({
   items,
   periods,
   pick,
   scale,
+  conversion = null,
 }: {
   items: LineItem<T>[]
   periods: Period[]
   pick: (period: Period) => T | null
   scale: AmountScale
+  conversion?: Conversion | null
 }) {
   // hide line items that no shown period reports (e.g. R&D for most IDX companies)
   const visible = items.filter((item) =>
@@ -83,7 +88,8 @@ export function StatementTable<T>({
                 {item.label}
               </TableCell>
               {periods.map((p) => {
-                const value = pick(p)?.[item.key] as number | null | undefined
+                const raw = pick(p)?.[item.key] as number | null | undefined
+                const value = item.shares ? raw : converted(raw, p, conversion)
                 return (
                   <TableCell
                     key={p.periodId}
@@ -98,6 +104,21 @@ export function StatementTable<T>({
               })}
             </TableRow>
           ))}
+          {conversion && (
+            <TableRow className="text-xs text-muted-foreground">
+              <TableCell className="sticky left-0 z-10 bg-card pl-4">
+                {conversion.pair} rate ({conversion.basis === "closing" ? "period-end close" : "period average"})
+              </TableCell>
+              {periods.map((p) => {
+                const rate = conversion.rate(p)
+                return (
+                  <TableCell key={p.periodId} className="text-right tabular-nums last:pr-4" title={conversion.describe(p) ?? "no rate stored"}>
+                    {rate === null ? EMPTY : formatNumber(rate, 2)}
+                  </TableCell>
+                )
+              })}
+            </TableRow>
+          )}
         </TableBody>
       </Table>
     </div>

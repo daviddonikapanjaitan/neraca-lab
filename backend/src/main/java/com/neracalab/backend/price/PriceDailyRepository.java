@@ -96,6 +96,29 @@ public class PriceDailyRepository {
                 .list();
     }
 
+    /**
+     * Tickers of an exchange whose latest price job within {@code within} failed because the provider has no data for
+     * the symbol ({@code SymbolNotFoundException}: "Yahoo Finance has no data for OCAP.JK: No data found, symbol may be
+     * delisted"), with no successful price job after it. "Update all companies" asked Yahoo for the same ~20 delisted /
+     * suspended symbols in every run (OCAP 19 times, 2026-10-30 - 2026-11-05).
+     */
+    public java.util.Set<String> tickersWithoutProviderData(Exchange exchange, java.time.Duration within) {
+        return new java.util.HashSet<>(jdbc.sql("""
+                        SELECT j.ticker
+                        FROM ingestion_job j
+                        WHERE j.job_type = 'PRICE' AND j.exchange = :exchange AND j.status = 'FAILED'
+                          AND j.message LIKE '% has no data for %'
+                          AND j.requested_at > now() - make_interval(secs => :seconds)
+                          AND NOT EXISTS (SELECT 1 FROM ingestion_job s
+                                          WHERE s.job_type = 'PRICE' AND s.exchange = j.exchange
+                                            AND s.ticker = j.ticker AND s.status = 'SUCCEEDED'
+                                            AND s.requested_at > j.requested_at)
+                        GROUP BY j.ticker""")
+                .param("exchange", exchange.code())
+                .param("seconds", (double) within.toSeconds())
+                .query(String.class).list());
+    }
+
     /** Empty when no price is stored (a max() aggregate would return one NULL row, which single() rejects). */
     public Optional<LocalDate> latestTradingDate(long companyId) {
         return jdbc.sql("""

@@ -111,8 +111,11 @@ Optional, also in `backend/.env` (details: [PRICE_INGESTION_DOCS.md](PRICE_INGES
 | `PRICE_PROVIDER`         | `yahoo` | `yahoo` (no key) or `eodhd`                                          |
 | `EODHD_API_TOKEN`        | -       | required for `eodhd`                                                 |
 | `PRICE_SCHEDULE_ENABLED` | `false` | `true`: queue every active IDX company at 17:30 WIB, Monday-Friday   |
-| `INGESTION_WORKERS`      | `5`     | jobs each ingestion queue (prices, RAG, screening data) runs at the same time ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
+| `INGESTION_WORKERS`      | `5`     | jobs each ingestion queue (RAG, screening data) runs at the same time ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md), section 4) |
 | `INGESTION_UPLOAD_WORKERS` | `50`  | financial statement uploads stored at the same time (0 = as `INGESTION_WORKERS`) |
+| `INGESTION_PRICE_WORKERS` | `50`   | price jobs at the same time, "Update all companies" (0 = as `INGESTION_WORKERS`) |
+| `PRICE_CONCURRENT_REQUESTS` | `8`  | Yahoo requests in flight (1 = one at a time with a 1 - 2 s pause, as before 2026-11-05) |
+| `PRICE_REQUEST_SPACING`   | `150ms` | minimum interval between two Yahoo request starts |
 | `INGESTION_FAST_PATH`    | `true`  | a filing whose every column maps cleanly is stored without the agent ([AI_INGESTION_DOCS.md](AI_INGESTION_DOCS.md), section 6) |
 | `INGESTION_RAG_AFTER_UPLOAD` | `true` | every uploaded workbook's text goes into the RAG vector store at the end of its job ([RAG_DOCS.md](RAG_DOCS.md), section 2b) |
 | `DB_POOL_SIZE`, `DB_POOL_MIN_IDLE` | `40`, `5` | the backend's database connections under load / kept when idle |

@@ -47,7 +47,8 @@ public class IngestionRepository {
     private static final List<String> SHARE_SCRIPTS = List.of(
             "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql",
             "db/V1.0.24__data_BACH_shares.sql", "db/V1.0.31__data_BNBR_shares.sql", "db/V1.0.42__data_BBHI_shares.sql",
-            "db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql", "db/V1.0.45__data_KOIN_HILL_shares.sql");
+            "db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql", "db/V1.0.45__data_KOIN_HILL_shares.sql",
+            "db/V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql");
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
@@ -273,11 +274,15 @@ public class IngestionRepository {
             // stored EPS is its own (BMRI FY2022: a post-split count beside the pre-split EPS gave EPS x shares =
             // twice the profit)
             boolean perShareConsistent = split.isEmpty() && samePerShareBasis(stored, values);
-            List<String> gaps = values.keySet().stream()
+            List<String> candidates = values.keySet().stream()
                     .filter(c -> values.get(c) != null && stored.get(c) == null)
                     .filter(c -> !PER_SHARE.contains(c) || perShareConsistent).toList();
+            List<String> keptOut = table.equals("balance_sheet") ? breakingTheBalance(stored, values, candidates) : List.of();
+            List<String> gaps = candidates.stream().filter(c -> !keptOut.contains(c)).toList();
             if (gaps.isEmpty()) {
                 List<String> notes = new ArrayList<>(split);
+                keptOut.forEach(c -> notes.add(c + ": not filled with " + values.get(c).toPlainString()
+                        + " (the stored total assets = liabilities + temporary syirkah funds + equity holds without it)"));
                 notes.addAll(differences(stored, values));
                 return new WriteResult(table, statement.period().key(),
                         split.isEmpty() ? WriteOutcome.KEPT_EXISTING : WriteOutcome.SPLIT_ADJUSTED, notes);
@@ -292,17 +297,23 @@ public class IngestionRepository {
             fill.update();
             List<String> notes = new ArrayList<>(split);
             gaps.stream().map(c -> c + ": filled " + values.get(c).toPlainString()).forEach(notes::add);
+            keptOut.forEach(c -> notes.add(c + ": not filled with " + values.get(c).toPlainString()
+                    + " (the stored total assets = liabilities + temporary syirkah funds + equity holds without it)"));
             differences(stored, values).stream()
                     .filter(d -> gaps.stream().noneMatch(g -> d.startsWith(g + ":")))
                     .forEach(notes::add);
             return new WriteResult(table, statement.period().key(),
                     split.isEmpty() ? WriteOutcome.FILLED_GAPS : WriteOutcome.SPLIT_ADJUSTED, notes);
         }
-        List<String> columns = new ArrayList<>(values.keySet());
+        Map<String, BigDecimal> written = new LinkedHashMap<>(values);
+        List<String> cleared = table.equals("balance_sheet") && existing.isPresent()
+                ? staleBalanceParts(existing.get(), values) : List.of();
+        cleared.forEach(c -> written.put(c, null));
+        List<String> columns = new ArrayList<>(written.keySet());
         String insertCols = String.join(", ", columns);
         String params = String.join(", ", columns.stream().map(c -> ":" + c).toList());
         String updates = String.join(",\n    ", columns.stream()
-                .map(c -> statement.rejected().contains(c) ? c + " = EXCLUDED." + c
+                .map(c -> statement.rejected().contains(c) || cleared.contains(c) ? c + " = EXCLUDED." + c
                         : c + " = COALESCE(EXCLUDED." + c + ", " + table + "." + c + ")").toList());
         String constraint = "uq_" + table;
         var spec = jdbc.sql("INSERT INTO " + table + " (company_id, period_id, " + insertCols + ")\n"
@@ -310,7 +321,7 @@ public class IngestionRepository {
                         + "ON CONFLICT ON CONSTRAINT " + constraint + " DO UPDATE SET\n    " + updates)
                 .param("company_id", companyId).param("period_id", periodId);
         for (String c : columns) {
-            spec = spec.param(c, values.get(c), java.sql.Types.NUMERIC);
+            spec = spec.param(c, written.get(c), java.sql.Types.NUMERIC);
         }
         spec.update();
         BigDecimal restated = existing.isPresent() && table.equals("income_statement")
@@ -319,9 +330,65 @@ public class IngestionRepository {
             return new WriteResult(table, statement.period().key(), WriteOutcome.SPLIT_ADJUSTED,
                     keepRestatedPerShare(companyId, periodId, existing.get(), values, restated));
         }
-        List<String> diffs = existing.map(e -> differences(e, values)).orElse(List.of());
+        List<String> diffs = new ArrayList<>(existing.map(e -> differences(e, values)).orElse(List.of()));
+        cleared.forEach(c -> diffs.add(c + ": cleared " + plain(decimal(existing.get().get(c)))
+                + " (another filing's figure; this filing's total assets = liabilities + equity holds without it)"));
         return new WriteResult(table, statement.period().key(),
                 existing.isPresent() ? WriteOutcome.UPDATED : WriteOutcome.INSERTED, diffs);
+    }
+
+    private static final List<String> BALANCE_PARTS = List.of("total_liabilities", "temporary_syirkah_funds", "total_equity");
+
+    /**
+     * The empty parts of a stored balance sheet a comparative may not fill: the stored total assets = total
+     * liabilities + temporary syirkah funds + total equity holds, and would not hold with the comparative's part.
+     * PNBN's FY2022 filing states total liabilities 161,715,787 million with its syirkah funds inside (no syirkah row);
+     * its FY2023 filing restates FY2022 as liabilities 151,844,644 + syirkah 9,871,143: filling the empty syirkah beside
+     * the stored liabilities counted 9,871,143 million twice (212,431,881 assets vs 222,303,024).
+     */
+    static List<String> breakingTheBalance(Map<String, Object> stored, Map<String, BigDecimal> comparative,
+                                           List<String> candidates) {
+        List<String> parts = candidates.stream().filter(BALANCE_PARTS::contains).toList();
+        if (parts.isEmpty() || !balanced(decimal(stored.get("total_assets")), decimal(stored.get("total_liabilities")),
+                decimal(stored.get("temporary_syirkah_funds")), decimal(stored.get("total_equity")))) {
+            return List.of();
+        }
+        List<String> keptOut = new ArrayList<>();
+        for (String part : parts) {
+            Map<String, BigDecimal> filled = new LinkedHashMap<>();
+            BALANCE_PARTS.forEach(p -> filled.put(p, decimal(stored.get(p))));
+            filled.put(part, comparative.get(part));
+            if (!balanced(decimal(stored.get("total_assets")), filled.get("total_liabilities"),
+                    filled.get("temporary_syirkah_funds"), filled.get("total_equity"))) {
+                keptOut.add(part);
+            }
+        }
+        return keptOut;
+    }
+
+    /**
+     * The parts of a stored balance sheet the period's own filing replaces with nothing: its own total assets = total
+     * liabilities + equity holds without temporary syirkah funds, so a syirkah figure another filing's comparative
+     * stored (PNBN FY2022, uploaded after its FY2023 filing) is a part of its liabilities and is cleared.
+     */
+    static List<String> staleBalanceParts(Map<String, Object> stored, Map<String, BigDecimal> own) {
+        BigDecimal assets = own.get("total_assets");
+        BigDecimal liabilities = own.get("total_liabilities");
+        BigDecimal equity = own.get("total_equity");
+        if (own.get("temporary_syirkah_funds") != null || stored.get("temporary_syirkah_funds") == null
+                || !balanced(assets, liabilities, null, equity)) {
+            return List.of();
+        }
+        return List.of("temporary_syirkah_funds");
+    }
+
+    /** total assets = liabilities + syirkah funds + equity, all three totals known, within a millionth of the assets. */
+    private static boolean balanced(BigDecimal assets, BigDecimal liabilities, BigDecimal syirkah, BigDecimal equity) {
+        if (assets == null || liabilities == null || equity == null) {
+            return false;
+        }
+        BigDecimal gap = assets.subtract(liabilities).subtract(syirkah == null ? BigDecimal.ZERO : syirkah).subtract(equity);
+        return gap.abs().compareTo(assets.abs().movePointLeft(6).max(BigDecimal.ONE)) <= 0;
     }
 
     /**

@@ -8,6 +8,7 @@ import java.time.ZonedDateTime;
 import java.util.List;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
@@ -15,7 +16,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param provider          price source: {@code yahoo} (default) or {@code eodhd}; switching needs only this property
  *                          (plus {@code eodhd.api-token})
- * @param minDelay          minimum pause between two provider requests
+ * @param minDelay          minimum pause between two provider requests in the <em>throttled</em> pace (one request at a
+ *                          time; also the pace of every request when {@code throughput.concurrent-requests} is 1)
  * @param maxDelay          maximum pause; each pause is a random value between minDelay and maxDelay
  * @param backoff           waits after consecutive HTTP 429 responses (15m, 30m, 60m); a 429 after the last
  *                          wait stops the run
@@ -27,6 +29,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param connectTimeout    HTTP connect timeout
  * @param requestTimeout    HTTP timeout of one request
  * @param jobHistory        finished jobs kept in memory for {@code GET /api/v1/prices/ingestions}
+ * @param throughput        how many provider requests may be in flight, and when the client falls back to the
+ *                          throttled pace ({@link Throughput})
  */
 @ConfigurationProperties("neracalab.prices")
 public record PriceProperties(
@@ -44,8 +48,18 @@ public record PriceProperties(
         @DefaultValue Yahoo yahoo,
         @DefaultValue Eodhd eodhd,
         @DefaultValue Fx fx,
-        @DefaultValue Schedule schedule) {
+        @DefaultValue Schedule schedule,
+        @DefaultValue Throughput throughput) {
 
+    /** The properties without {@code throughput}: its defaults (tests and older callers). */
+    public PriceProperties(String provider, Duration minDelay, Duration maxDelay, List<Duration> backoff,
+                           String sessionCloseCutoff, String fullHistoryFrom, String userAgent, Duration connectTimeout,
+                           Duration requestTimeout, int jobHistory, Yahoo yahoo, Eodhd eodhd, Fx fx, Schedule schedule) {
+        this(provider, minDelay, maxDelay, backoff, sessionCloseCutoff, fullHistoryFrom, userAgent, connectTimeout,
+                requestTimeout, jobHistory, yahoo, eodhd, fx, schedule, Throughput.DEFAULTS);
+    }
+
+    @ConstructorBinding
     public PriceProperties {
         if (minDelay.isNegative() || maxDelay.compareTo(minDelay) < 0) {
             throw new IllegalArgumentException("neracalab.prices: need 0 <= min-delay <= max-delay");
@@ -106,5 +120,36 @@ public record PriceProperties(
                            @DefaultValue("0 30 17 * * MON-FRI") String cron,
                            @DefaultValue("Asia/Jakarta") String zone,
                            @DefaultValue("IDX") String exchange) {
+    }
+
+    /**
+     * The pace towards the price provider (Yahoo Finance; the screening ETL shares the client).
+     *
+     * @param concurrentRequests requests in flight at the same time in the normal pace (8); 1 = the old one-at-a-time
+     *                           pace with the {@code min-delay}..{@code max-delay} pause after every request
+     * @param requestSpacing     minimum interval between the starts of two requests in the normal pace (150 ms: at most
+     *                           ~6.7 requests a second; 2026-11-05 runs of ~940 companies took 27 - 62 min one at a time)
+     * @param throttledFor       after an HTTP 429 the client falls back to the throttled pace (one request at a time,
+     *                           the min..max pause) for this long, then returns to the normal pace
+     * @param noDataRetryAfter   "Update all companies" skips a company whose last price job found no data at the provider
+     *                           (delisted / suspended symbol: "No data found, symbol may be delisted") within this time;
+     *                           a single-company ingestion still asks
+     */
+    public record Throughput(@DefaultValue("8") int concurrentRequests,
+                             @DefaultValue("150ms") Duration requestSpacing,
+                             @DefaultValue("30m") Duration throttledFor,
+                             @DefaultValue("7d") Duration noDataRetryAfter) {
+
+        public static final Throughput DEFAULTS = new Throughput(8, Duration.ofMillis(150), Duration.ofMinutes(30),
+                Duration.ofDays(7));
+
+        public Throughput {
+            if (concurrentRequests < 1) {
+                throw new IllegalArgumentException("neracalab.prices.throughput.concurrent-requests must be at least 1");
+            }
+            if (requestSpacing.isNegative() || throttledFor.isNegative() || noDataRetryAfter.isNegative()) {
+                throw new IllegalArgumentException("neracalab.prices.throughput: durations must not be negative");
+            }
+        }
     }
 }

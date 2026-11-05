@@ -17,6 +17,9 @@ import com.neracalab.backend.company.CompanyDetailResponse.CashFlowStatement;
 import com.neracalab.backend.company.CompanyDetailResponse.Company;
 import com.neracalab.backend.company.CompanyDetailResponse.CorporateAction;
 import com.neracalab.backend.company.CompanyDetailResponse.Coverage;
+import com.neracalab.backend.company.CompanyDetailResponse.CurrencyConversion;
+import com.neracalab.backend.company.CompanyDetailResponse.DateRate;
+import com.neracalab.backend.company.CompanyDetailResponse.PeriodRate;
 import com.neracalab.backend.company.CompanyDetailResponse.IncomeStatement;
 import com.neracalab.backend.company.CompanyDetailResponse.MarketSnapshot;
 import com.neracalab.backend.company.CompanyDetailResponse.Metric;
@@ -285,6 +288,61 @@ public class CompanyQueryRepository {
     /** A converted price as quoted on the exchange, rounded to its 2 decimals (the conversion keeps 8 in USD). */
     private static BigDecimal quoted(BigDecimal price, BigDecimal rate) {
         return price == null || rate == null ? null : price.multiply(rate).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * The rates that convert a company's amounts from its reporting currency {@code from} into {@code to}, from the Forex
+     * pair {@code <from><to>} ({@code instrument_daily}: USDIDR): per period the closing rate (last close on or before
+     * the period end, at most 10 days before) and the average of the closes from period start to end. Empty when the
+     * pair has no stored close.
+     */
+    public Optional<CurrencyConversion> currencyConversion(long companyId, String from, String to) {
+        String code = from + to;
+        Optional<Object[]> series = jdbc.sql("""
+                        SELECT min(trading_date) AS first_date, max(trading_date) AS last_date, max(source) AS source
+                        FROM instrument_daily WHERE instrument_code = :code HAVING count(*) > 0""")
+                .param("code", code)
+                .query((rs, i) -> new Object[] {date(rs, "first_date"), date(rs, "last_date"), rs.getString("source")})
+                .optional();
+        if (series.isEmpty()) {
+            return Optional.empty();
+        }
+        List<PeriodRate> rates = jdbc.sql("""
+                        SELECT rp.period_id, cl.close_price AS closing_rate, cl.trading_date AS closing_date,
+                               av.average_rate, av.days
+                        FROM reporting_period rp
+                        LEFT JOIN LATERAL (
+                            SELECT d.close_price, d.trading_date FROM instrument_daily d
+                            WHERE d.instrument_code = :code AND d.trading_date <= rp.period_end
+                              AND d.trading_date > rp.period_end - 10
+                            ORDER BY d.trading_date DESC LIMIT 1) cl ON true
+                        LEFT JOIN LATERAL (
+                            SELECT round(avg(d.close_price), 8) AS average_rate, count(*) AS days FROM instrument_daily d
+                            WHERE d.instrument_code = :code AND d.trading_date BETWEEN rp.period_start AND rp.period_end
+                            ) av ON true
+                        WHERE rp.company_id = :c AND (cl.close_price IS NOT NULL OR av.days > 0)
+                        ORDER BY rp.period_end DESC""")
+                .param("code", code).param("c", companyId)
+                .query((rs, i) -> new PeriodRate(rs.getLong("period_id"), rs.getBigDecimal("closing_rate"),
+                        date(rs, "closing_date"), rs.getInt("days") > 0 ? rs.getBigDecimal("average_rate") : null,
+                        rs.getInt("days")))
+                .list();
+        List<DateRate> valuationRates = jdbc.sql("""
+                        SELECT vs.valuation_date, cl.close_price, cl.trading_date
+                        FROM (SELECT DISTINCT valuation_date FROM valuation_snapshot WHERE company_id = :c) vs
+                        JOIN LATERAL (
+                            SELECT d.close_price, d.trading_date FROM instrument_daily d
+                            WHERE d.instrument_code = :code AND d.trading_date <= vs.valuation_date
+                              AND d.trading_date > vs.valuation_date - 10
+                            ORDER BY d.trading_date DESC LIMIT 1) cl ON true
+                        ORDER BY vs.valuation_date DESC""")
+                .param("code", code).param("c", companyId)
+                .query((rs, i) -> new DateRate(date(rs, "valuation_date"), rs.getBigDecimal("close_price"),
+                        date(rs, "trading_date")))
+                .list();
+        Object[] s = series.get();
+        return Optional.of(new CurrencyConversion(from, to, code, (String) s[2], (LocalDate) s[0], (LocalDate) s[1],
+                rates, valuationRates));
     }
 
     /** @param listing the currency the company's listing trades in (its exchange's) */

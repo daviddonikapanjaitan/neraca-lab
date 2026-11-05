@@ -1,7 +1,10 @@
 package com.neracalab.backend.price;
 
+import java.util.function.Supplier;
+
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Recalculates the price-dependent data of ONE company after new prices: market_snapshot,
@@ -18,6 +21,11 @@ import org.springframework.stereotype.Repository;
  * </ul>
  * EV / EBITDA of an interim period whose TTM EBITDA is not derivable takes the full year inside the trailing window
  * (FY2025 for H1 2026; {@code ebitda_basis} 'FY 2025', else 'TTM'), as V1.0.6.
+ * <p>
+ * A refresh runs in one transaction (the caller's when there is one) with PostgreSQL's JIT compilation off: the
+ * planner estimates the valuation snapshot statement far above {@code jit_optimize_above_cost} (1.09 million on
+ * 2026-11-03), so every call compiled 177 functions with LLVM - 3.0 s of its 3.6 s - for a query that runs in well
+ * under a second; every price job and every upload paid it.
  */
 @Repository
 public class ValuationRepository {
@@ -44,18 +52,33 @@ public class ValuationRepository {
     }
 
     private final JdbcClient jdbc;
+    private final TransactionTemplate transaction;
 
-    public ValuationRepository(JdbcClient jdbc) {
+    public ValuationRepository(JdbcClient jdbc, TransactionTemplate transaction) {
         this.jdbc = jdbc;
+        this.transaction = transaction;
     }
 
     /** Market snapshots, then valuation snapshots, then valuation metrics (each step reads the previous). */
     public Refreshed refresh(long companyId) {
-        int market = refreshMarketSnapshots(companyId);
-        int valuations = refreshValuationSnapshots(companyId);
-        int metrics = refreshValuationMetrics(companyId);
-        int deleted = deleteStaleValuationMetrics(companyId);
-        return new Refreshed(market, valuations, metrics, deleted);
+        return withoutJit(() -> {
+            int market = refreshMarketSnapshots(companyId);
+            int valuations = refreshValuationSnapshots(companyId);
+            int metrics = refreshValuationMetrics(companyId);
+            int deleted = deleteStaleValuationMetrics(companyId);
+            return new Refreshed(market, valuations, metrics, deleted);
+        });
+    }
+
+    /**
+     * Runs {@code work} in the caller's transaction, or in a new one, with JIT compilation off until that transaction
+     * ends ({@code SET LOCAL}: the pooled connection keeps its setting afterwards).
+     */
+    private <T> T withoutJit(Supplier<T> work) {
+        return transaction.execute(status -> {
+            jdbc.sql("SET LOCAL jit = off").update();
+            return work.get();
+        });
     }
 
     /**
@@ -67,12 +90,14 @@ public class ValuationRepository {
      * and runs beside the refreshes of other companies, whose rows it never touches).
      */
     public Refreshed refreshAfterFiling(long companyId) {
-        int market = refreshMarketSnapshots(companyId);
-        int valuations = refreshValuationSnapshots(companyId) + clearStaleTrailingRatios(companyId);
-        refreshFundamentalMetrics(companyId);
-        int metrics = refreshValuationMetrics(companyId);
-        int deleted = deleteStaleValuationMetrics(companyId);
-        return new Refreshed(market, valuations, metrics, deleted);
+        return withoutJit(() -> {
+            int market = refreshMarketSnapshots(companyId);
+            int valuations = refreshValuationSnapshots(companyId) + clearStaleTrailingRatios(companyId);
+            refreshFundamentalMetrics(companyId);
+            int metrics = refreshValuationMetrics(companyId);
+            int deleted = deleteStaleValuationMetrics(companyId);
+            return new Refreshed(market, valuations, metrics, deleted);
+        });
     }
 
     /**
@@ -252,6 +277,20 @@ public class ValuationRepository {
                             FROM valuation_snapshot vs
                             WHERE vs.company_id = :c
                         ),
+                        -- the company's periods with TTM figures and a balance sheet, computed once (as V1.0.6): read
+                        -- per valuation date inside the lateral below, the views were evaluated for every company's
+                        -- periods at each date (1.1 s for TLKM's 18 dates, 0.1 s like this; same rows for every company)
+                        fundamentals AS MATERIALIZED (
+                            SELECT t.company_id, t.period_end, t.period_id, t.fiscal_year, t.period_type,
+                                   t.revenue_ttm, t.ebitda_ttm, t.operating_income_ttm, t.net_income_to_parent_ttm,
+                                   t.free_cash_flow_ttm, km.net_debt, km.non_controlling_interest, km.shares,
+                                   km.shareholders_equity
+                            FROM v_ttm_financials t
+                            JOIN v_key_metrics km ON km.period_id = t.period_id
+                            WHERE t.company_id = :c
+                              AND km.company_id = :c
+                              AND km.total_assets IS NOT NULL
+                        ),
                         valued AS (
                             SELECT
                                 d.company_id,
@@ -276,12 +315,10 @@ public class ValuationRepository {
                             JOIN LATERAL (
                                 SELECT t.period_id, t.fiscal_year, t.period_type, t.revenue_ttm, t.ebitda_ttm,
                                        t.operating_income_ttm, t.net_income_to_parent_ttm, t.free_cash_flow_ttm,
-                                       km.net_debt, km.non_controlling_interest, km.shares, km.shareholders_equity
-                                FROM v_ttm_financials t
-                                JOIN v_key_metrics km ON km.period_id = t.period_id
+                                       t.net_debt, t.non_controlling_interest, t.shares, t.shareholders_equity
+                                FROM fundamentals t
                                 WHERE t.company_id = d.company_id
                                   AND t.period_end <= d.valuation_date
-                                  AND km.total_assets IS NOT NULL
                                 ORDER BY t.revenue_ttm IS NULL, t.period_end DESC
                                 LIMIT 1
                             ) f ON TRUE

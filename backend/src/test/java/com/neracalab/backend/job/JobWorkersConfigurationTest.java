@@ -74,6 +74,25 @@ class JobWorkersConfigurationTest {
         assertThat(workerThreads("financial-statement-ingestion", before)).hasSize(7);
     }
 
+    /**
+     * The price queue has its own number too ({@code neracalab.jobs.price-workers}, 50 in application.yaml since
+     * 2026-11-05: "Update all companies" of ~940 IDX companies); unset or 0 it is {@code workers}.
+     */
+    @Test
+    void thePriceQueueHasItsOwnNumberOfWorkers() {
+        JobProperties fifty = bind(Map.of("neracalab.jobs.workers", "5", "neracalab.jobs.price-workers", "50"));
+        assertThat(fifty.prices()).isEqualTo(50);
+        assertThat(fifty.workers()).isEqualTo(5);
+        assertThat(bind(Map.of("neracalab.jobs.workers", "6")).prices()).as("unset: as workers").isEqualTo(6);
+        assertThatThrownBy(() -> new JobProperties(5, 0, -1)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("price-workers");
+
+        Set<Thread> before = Thread.getAllStackTraces().keySet();
+        start(new PriceIngestionQueue(null, null, null, TestPriceProperties.defaults(), job -> { },
+                bind(Map.of("neracalab.jobs.workers", "2", "neracalab.jobs.price-workers", "9"))));
+        assertThat(workerThreads("price-ingestion", before)).hasSize(9);
+    }
+
     @Test
     void atLeastOneWorkerIsNeeded() {
         assertThatThrownBy(() -> new JobProperties(0)).isInstanceOf(IllegalArgumentException.class)

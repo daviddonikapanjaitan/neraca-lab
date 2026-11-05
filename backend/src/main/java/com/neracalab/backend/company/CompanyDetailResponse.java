@@ -19,6 +19,8 @@ import java.util.Map;
  * @param periods    reporting periods, most recent first, each with its statements, segment figures and metrics
  * @param segments   the company's segments / revenue lines
  * @param valuations valuation snapshots, most recent first
+ * @param conversion rates to show the amounts in the exchange's currency (USD -> IDR for INDY, SMDR, ...): {@code null}
+ *                   when the company reports in its exchange's currency or no rate is stored
  */
 public record CompanyDetailResponse(
         Company company,
@@ -29,7 +31,56 @@ public record CompanyDetailResponse(
         Price latestPrice,
         MarketSnapshot latestMarketSnapshot,
         List<Valuation> valuations,
-        List<CorporateAction> corporateActions) {
+        List<CorporateAction> corporateActions,
+        CurrencyConversion conversion) {
+
+    /** Without a currency conversion (a company reporting in its exchange's currency; tests). */
+    public CompanyDetailResponse(Company company, Coverage coverage, List<Period> periods, List<Segment> segments,
+                                 List<ShareSnapshot> shareSnapshots, Price latestPrice,
+                                 MarketSnapshot latestMarketSnapshot, List<Valuation> valuations,
+                                 List<CorporateAction> corporateActions) {
+        this(company, coverage, periods, segments, shareSnapshots, latestPrice, latestMarketSnapshot, valuations,
+                corporateActions, null);
+    }
+
+    /**
+     * Rates to show a USD reporter's amounts in IDR (Companies > Fundamentals, the USD | IDR toggle), from the Forex
+     * pair of Ingestion > Price Ingestion ({@code instrument_daily}, USD/IDR: Yahoo Finance {@code IDR=X}, daily close).
+     * As IAS 21 translates: balance-sheet amounts at the closing rate of the period end; income-statement, cash-flow and
+     * segment amounts (and EPS) at the average rate of the period (H1 / 9M year-to-date, like the figures).
+     *
+     * @param from       the company's reporting currency (USD)
+     * @param to         its exchange's currency (IDR)
+     * @param instrument the Forex pair (USDIDR)
+     * @param rates      one per period of {@link CompanyDetailResponse#periods()} with a rate
+     * @param valuationRates one per valuation date of {@link CompanyDetailResponse#valuations()} with a rate: every
+     *                   amount of a valuation (price, market cap, EV, TTM figures, per-share values) at the close of its
+     *                   date, so its ratios (P/E, P/B, EV/EBITDA, yields) stay the same in either currency
+     */
+    public record CurrencyConversion(String from, String to, String instrument, String source,
+                                     LocalDate firstRateDate, LocalDate lastRateDate, List<PeriodRate> rates,
+                                     List<DateRate> valuationRates) {
+    }
+
+    /**
+     * @param date     a valuation date
+     * @param rate     the pair's last close on or before it (at most 10 days before)
+     * @param rateDate that close's trading day
+     */
+    public record DateRate(LocalDate date, BigDecimal rate, LocalDate rateDate) {
+    }
+
+    /**
+     * @param closingRate     the pair's last close on or before the period end (at most 10 days before: a gap in the
+     *                        series leaves it {@code null}), for balance-sheet amounts
+     * @param closingRateDate its trading day
+     * @param averageRate     the mean of the pair's daily closes from period start to period end, for the period's
+     *                        income-statement, cash-flow and segment amounts; {@code null} without a close in it
+     * @param averageDays     the closes averaged
+     */
+    public record PeriodRate(long periodId, BigDecimal closingRate, LocalDate closingRateDate, BigDecimal averageRate,
+                             int averageDays) {
+    }
 
     public record Company(long companyId, String ticker, String exchange, String exchangeName, String cik,
                           String companyName, String legalName, String sector, String industry, String country,

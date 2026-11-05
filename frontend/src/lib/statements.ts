@@ -9,6 +9,8 @@ export interface LineItem<T> {
   indent?: boolean
   /** not an amount in the company currency (EPS, share counts): never scaled */
   unscaled?: boolean
+  /** a share count: never converted into another currency (EPS is: it is an amount per share) */
+  shares?: boolean
 }
 
 export const INCOME_STATEMENT: LineItem<IncomeStatement>[] = [
@@ -31,8 +33,8 @@ export const INCOME_STATEMENT: LineItem<IncomeStatement>[] = [
   { key: "netIncomeToParent", label: "Attributable to owners of the parent", indent: true },
   { key: "basicEps", label: "Basic EPS", unscaled: true },
   { key: "dilutedEps", label: "Diluted EPS", unscaled: true },
-  { key: "basicShares", label: "Weighted shares (basic)", unscaled: true },
-  { key: "dilutedShares", label: "Weighted shares (diluted)", unscaled: true },
+  { key: "basicShares", shares: true, label: "Weighted shares (basic)", unscaled: true },
+  { key: "dilutedShares", shares: true, label: "Weighted shares (diluted)", unscaled: true },
 ]
 
 export const BALANCE_SHEET: LineItem<BalanceSheet>[] = [
@@ -56,7 +58,7 @@ export const BALANCE_SHEET: LineItem<BalanceSheet>[] = [
   { key: "shareholdersEquity", label: "Equity attributable to the parent" },
   { key: "nonControllingInterest", label: "Non-controlling interest" },
   { key: "totalEquity", label: "Total equity", total: true },
-  { key: "sharesOutstanding", label: "Shares outstanding", unscaled: true },
+  { key: "sharesOutstanding", shares: true, label: "Shares outstanding", unscaled: true },
 ]
 
 export const CASH_FLOW_STATEMENT: LineItem<CashFlowStatement>[] = [

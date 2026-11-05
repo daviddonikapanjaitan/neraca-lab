@@ -35,7 +35,7 @@ never call an outside service. The tables are filled beforehand by two jobs:
 | Job | Fetches | Into | How to run |
 |---|---|---|---|
 | Price ingestion (existing) | daily prices of a listing from the Yahoo Finance chart API (`/v8/finance/chart/HRTA.JK`; EODHD as an alternative provider) and USD/IDR from the ECB (Frankfurter API) | `price_daily`, `fx_rate_daily` | Ingestion › Price Ingestion (one company, or "Update all companies to today"), automatically after a filing upload, nightly when `PRICE_SCHEDULE_ENABLED=true` |
-| IHSG ingestion (new, in the price queue) | IHSG (`^JKSE`) from the same Yahoo Finance chart API: from the latest stored day to the last completed trading day, or the whole history | `index_daily` | Ingestion › Price Ingestion (IHSG card, or with "Update all companies"), the price schedule, and the technical refresh |
+| IHSG ingestion (new, in the price queue) | IHSG (`^JKSE`) from the same Yahoo Finance chart API: from the latest stored day to the last completed trading day, or the whole history; a latest session without a close yet takes the quote's close (`YahooSessionClose`, PRICE_INGESTION_DOCS.md) | `index_daily` | Ingestion › Price Ingestion (IHSG card, or with "Update all companies"), the price schedule, and the technical refresh |
 | Technical refresh (new) | IHSG (through the IHSG ingestion) and the dividends / splits of every listing from the same Yahoo Finance chart API | `index_daily`, `corporate_event` | nightly 19:00 WIB, or `POST /api/v1/technical/refresh` (INGESTION) |
 
 Both call Yahoo Finance's web API directly from Java (the endpoint the Python `yfinance` package also uses; that

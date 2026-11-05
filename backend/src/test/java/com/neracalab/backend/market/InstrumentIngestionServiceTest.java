@@ -44,7 +44,9 @@ class InstrumentIngestionServiceTest {
     private final FredSource fred = mock(FredSource.class);
     /** Friday 2026-10-16, 08:00 UTC: 09:00 in London, 04:00 in New York */
     private final Clock clock = Clock.fixed(Instant.parse("2026-10-16T08:00:00Z"), ZoneOffset.UTC);
-    private final InstrumentIngestionService service = new InstrumentIngestionService(repository, yahoo, worldBank, imf, fred, clock);
+    private final com.neracalab.backend.price.provider.FxRateProvider fx =
+            mock(com.neracalab.backend.price.provider.FxRateProvider.class);
+    private final InstrumentIngestionService service = new InstrumentIngestionService(repository, yahoo, worldBank, imf, fred, fx, clock);
 
     private static Instrument usdIdr(LocalDate last) {
         return new Instrument("USDIDR", 1, Market.FOREX, "USD/IDR", "yahoo", "IDR=X", "IDR", "IDR per USD", "DAILY",
@@ -84,6 +86,7 @@ class InstrumentIngestionServiceTest {
         Result result = service.ingest(InstrumentIngestionService.ref(usdIdr(null)), false);
         assertThat(result.requests()).isZero();
         verify(yahoo, never()).dailyBars(any(), any(), any(), any());
+        verify(yahoo, never()).dailyBarsChecked(any(), any(), any(), any());
     }
 
     @Test
@@ -92,9 +95,10 @@ class InstrumentIngestionServiceTest {
         when(repository.latestDate("USDIDR")).thenReturn(Optional.of(LocalDate.of(2026, 10, 12)),
                 Optional.of(LocalDate.of(2026, 10, 15)));
         LocalDate from = LocalDate.of(2026, 9, 28);   // 14 days before the latest stored day
-        when(yahoo.dailyBars(eq("IDR=X"), eq(Market.FOREX.zone()), eq(from), eq(LocalDate.of(2026, 10, 16))))
-                .thenReturn(List.of(bar("2026-10-09", 17900), bar("2026-10-12", 17910), bar("2026-10-13", 15069.4),
-                        bar("2026-10-14", 17920), bar("2026-10-15", 17930), bar("2026-10-16", 17950)));
+        when(yahoo.dailyBarsChecked(eq("IDR=X"), eq(Market.FOREX.zone()), eq(from), eq(LocalDate.of(2026, 10, 16))))
+                .thenReturn(new YahooChartClient.Bars(List.of(bar("2026-10-09", 17900), bar("2026-10-12", 17910),
+                        bar("2026-10-13", 15069.4), bar("2026-10-14", 17920), bar("2026-10-15", 17930),
+                        bar("2026-10-16", 17950)), List.of()));
         when(repository.dates(eq("USDIDR"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 9),
                 LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 13)));
         when(repository.delete("USDIDR", List.of(LocalDate.of(2026, 10, 13)))).thenReturn(1);
@@ -220,12 +224,90 @@ class InstrumentIngestionServiceTest {
     void theFirstRunLoadsTheWholeHistory() {
         when(repository.instrument(Market.FOREX, "USDIDR")).thenReturn(Optional.of(usdIdr(null)));
         when(repository.latestDate("USDIDR")).thenReturn(Optional.empty(), Optional.of(LocalDate.of(2026, 10, 15)));
-        when(yahoo.dailyBars(eq("IDR=X"), any(), eq(LocalDate.of(2001, 1, 1)), any())).thenReturn(List.of(
-                bar("2026-10-14", 17920), bar("2026-10-15", 17930)));
+        when(yahoo.dailyBarsChecked(eq("IDR=X"), any(), eq(LocalDate.of(2001, 1, 1)), any()))
+                .thenReturn(new YahooChartClient.Bars(List.of(bar("2026-10-14", 17920), bar("2026-10-15", 17930)),
+                        List.of()));
         when(repository.dates(eq("USDIDR"), any(), any())).thenReturn(Set.of());
         when(repository.upsert(eq("USDIDR"), eq("yahoo"), anyList())).thenReturn(2);
         Result result = service.ingest(InstrumentIngestionService.ref(usdIdr(null)), false);
         assertThat(result.fullHistory()).isTrue();
         assertThat(result.inserted()).isEqualTo(2);
+    }
+
+    /**
+     * A currency pair's bar Yahoo sent with a close outside its own range (USD/IDR 2026-11-03: 17,472.20 under its low of
+     * 17,786.60; 2026-11-04: 17,536.10 under 17,957.60) is not stored, and the stored copy is deleted.
+     */
+    @Test
+    void aBarWithItsCloseOutsideItsRangeIsDeleted() {
+        // the clock's 2026-10-16: the same two days moved into its window (13 and 14 Oct stored, then sent inconsistent)
+        when(repository.instrument(Market.FOREX, "USDIDR")).thenReturn(Optional.of(usdIdr(LocalDate.of(2026, 10, 14))));
+        when(repository.latestDate("USDIDR")).thenReturn(Optional.of(LocalDate.of(2026, 10, 14)),
+                Optional.of(LocalDate.of(2026, 10, 15)));
+        when(yahoo.dailyBarsChecked(eq("IDR=X"), eq(Market.FOREX.zone()), any(), any())).thenReturn(new YahooChartClient.Bars(
+                List.of(bar("2026-10-12", 18113.9), bar("2026-10-15", 18049)),
+                List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14))));
+        when(repository.delete("USDIDR", List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14)))).thenReturn(2);
+        when(repository.dates(eq("USDIDR"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 12)));
+        when(repository.upsert(eq("USDIDR"), eq("yahoo"), anyList())).thenReturn(1);
+
+        Result result = service.ingest(InstrumentIngestionService.ref(usdIdr(null)), false);
+
+        verify(repository).delete("USDIDR", List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14)));
+        assertThat(result.updated()).isEqualTo(2);      // the two deleted bars
+    }
+
+    /**
+     * A currency pair's day Yahoo sent inconsistent gets the ECB reference rate of that day (USD/IDR 2026-11-03 / 04:
+     * 18,137 / 18,129), stored as one-value bars with source 'ecb' instead of being deleted; a day the ECB has no rate
+     * for is still deleted.
+     */
+    @Test
+    void anInconsistentForexDayIsFilledWithTheEcbRate() {
+        when(fx.name()).thenReturn("ecb");
+        when(repository.instrument(Market.FOREX, "USDIDR")).thenReturn(Optional.of(usdIdr(LocalDate.of(2026, 10, 12))));
+        when(repository.latestDate("USDIDR")).thenReturn(Optional.of(LocalDate.of(2026, 10, 12)),
+                Optional.of(LocalDate.of(2026, 10, 15)));
+        when(yahoo.dailyBarsChecked(eq("IDR=X"), eq(Market.FOREX.zone()), any(), any())).thenReturn(new YahooChartClient.Bars(
+                List.of(bar("2026-10-12", 18113.9), bar("2026-10-15", 18049)),
+                List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14))));
+        when(fx.fetch("USD", "IDR", LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14))).thenReturn(List.of(
+                new com.neracalab.backend.price.provider.FxRateProvider.FxRate(LocalDate.of(2026, 10, 13),
+                        new java.math.BigDecimal("18137"))));
+        when(repository.delete("USDIDR", List.of(LocalDate.of(2026, 10, 14)))).thenReturn(1);
+        when(repository.dates(eq("USDIDR"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 12)));
+        when(repository.upsert(eq("USDIDR"), eq("yahoo"), anyList())).thenReturn(1);
+        when(repository.upsert(eq("USDIDR"), eq("ecb"), anyList())).thenReturn(1);
+
+        Result result = service.ingest(InstrumentIngestionService.ref(usdIdr(null)), false);
+
+        verify(repository).upsert("USDIDR", "ecb",
+                List.of(Candle.daily(LocalDate.of(2026, 10, 13), 18137, 18137, 18137, 18137, 18137, 0)));
+        verify(repository).delete("USDIDR", List.of(LocalDate.of(2026, 10, 14)));   // no ECB rate: deleted
+        verify(repository, never()).delete("USDIDR", List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14)));
+        assertThat(result.inserted()).isEqualTo(2);     // Yahoo's 15 Oct and the ECB's 13 Oct
+        assertThat(result.updated()).isEqualTo(1);      // the deleted 14 Oct
+    }
+
+    /** The ECB not answering never fails the ingestion: the inconsistent days are deleted as before. */
+    @Test
+    void anEcbFailureLeavesTheInconsistentDaysEmpty() {
+        when(fx.name()).thenReturn("ecb");
+        when(repository.instrument(Market.FOREX, "USDIDR")).thenReturn(Optional.of(usdIdr(LocalDate.of(2026, 10, 14))));
+        when(repository.latestDate("USDIDR")).thenReturn(Optional.of(LocalDate.of(2026, 10, 14)),
+                Optional.of(LocalDate.of(2026, 10, 15)));
+        when(yahoo.dailyBarsChecked(eq("IDR=X"), eq(Market.FOREX.zone()), any(), any())).thenReturn(new YahooChartClient.Bars(
+                List.of(bar("2026-10-12", 18113.9), bar("2026-10-15", 18049)),
+                List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14))));
+        when(fx.fetch(any(), any(), any(), any())).thenThrow(new IllegalStateException("HTTP 522"));
+        when(repository.delete("USDIDR", List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14)))).thenReturn(2);
+        when(repository.dates(eq("USDIDR"), any(), any())).thenReturn(Set.of(LocalDate.of(2026, 10, 12)));
+        when(repository.upsert(eq("USDIDR"), eq("yahoo"), anyList())).thenReturn(1);
+
+        Result result = service.ingest(InstrumentIngestionService.ref(usdIdr(null)), false);
+
+        verify(repository).delete("USDIDR", List.of(LocalDate.of(2026, 10, 13), LocalDate.of(2026, 10, 14)));
+        verify(repository, never()).upsert(eq("USDIDR"), eq("ecb"), anyList());
+        assertThat(result.updated()).isEqualTo(2);
     }
 }

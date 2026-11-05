@@ -12,18 +12,18 @@ Code: `backend/src/main/java/com/neracalab/backend/price/`
 |----------------------------|----------------------------------------------------------------------------------------------------------|
 | `PriceIngestionController` | `/api/v1/prices/ingestions` endpoints and error responses (ProblemDetail)                                |
 | `PriceUpdateController`    | `/api/v1/prices/status`, `/updates` (every company of an exchange to today), `/index-ingestions` (IHSG)    |
-| `PriceUpdateService`       | status of an exchange against the last completed trading day; queues the companies behind (and the index) |
+| `PriceUpdateService`       | status of an exchange against the last completed trading day; queues the companies behind (and the index), skips symbols the provider had no data for within 7 days |
 | `IndexIngestion`           | the exchange's index (IHSG) in the price queue; implemented by `technical.IndexIngestionService` (`index_daily`) |
-| `PriceIngestionQueue`      | in-memory job queue with 5 worker threads (`neracalab.jobs.workers`); HTTP 429 back-off; one active job per company (per index) |
+| `PriceIngestionQueue`      | in-memory job queue with 50 worker threads (`neracalab.jobs.price-workers`); HTTP 429 back-off; one active job per company (per index) |
 | `PriceIngestionJob`        | job state and its JSON view                                                                              |
 | `PriceIngestionService`    | one ingestion: date range, provider request, cleaning, re-adjustment check, write + valuation refresh   |
 | `PriceDailyRepository`     | company lookup, latest stored day, `price_daily` upsert                                                  |
-| `ValuationRepository`      | company-scoped recalculation with the formulas of `V1.0.6__data_metrics_valuation.sql`                   |
+| `ValuationRepository`      | company-scoped recalculation with the formulas of `V1.0.6__data_metrics_valuation.sql`, in one transaction with PostgreSQL's JIT off (it cost 3 of 3.6 s a company) |
 | `PriceIngestionSchedule`   | optional evening run (off by default): `PriceUpdateService.updateAll` - the companies behind and IHSG   |
 | `PricesAfterUpload`        | queues the prices of a company whose financial statement filing was just stored                          |
 | `PriceProperties`          | configuration `neracalab.prices.*`                                                                       |
 | `provider/PriceProvider`   | provider interface; `YahooPriceProvider` / `EodhdPriceProvider`, one active by configuration             |
-| `provider/PacedHttpClient` | the one HTTP client of the providers: cookie store, browser User-Agent, one request at a time, pause     |
+| `provider/PacedHttpClient` | the one HTTP client of the providers: cookie store, browser User-Agent; up to 8 requests in flight, starts 150 ms apart; one at a time with a 1 - 2 s pause after an HTTP 429 |
 | `InstrumentIngestion`      | a Forex pair / commodity in the price queue; implemented by `market.InstrumentIngestionService` (`instrument_daily`) |
 | `market.MarketController`, `MarketService` | `/api/v1/markets`: the markets with their instruments, one instrument, "Update all" of a market |
 | `market.BarCleaner`        | drops the bad prints of the Yahoo currency / futures history (a close that jumps away and straight back) |
@@ -86,8 +86,11 @@ the last completed trading day, so a missing LQ45 queues the job. `index.indexes
 "Update all companies" (Ingestion › Price Ingestion, right-hand card) queues every active company whose latest stored
 day is before the last completed trading day as an ordinary `full=false` job: only the missing days are fetched, from
 the company's latest stored day (re-fetched as the overlap check) to that day - ANTM stored up to 9 Oct is fetched from
-9 Oct to 15 Oct. A company without prices gets its whole history; a company already up to date is not queued. The jobs
-run in the same queue (5 workers, one paced request at a time) and appear one by one in the jobs table. Exchanges other
+9 Oct to 15 Oct. A company without prices gets its whole history; a company already up to date is not queued, nor a
+company whose last price job found no data at the provider within 7 days (a delisted or suspended symbol: "Yahoo Finance
+has no data for OCAP.JK", asked in every run until 2026-11-05; the outcome counts them as `noProviderData`, and a
+single-company ingestion still asks). The jobs run in the same queue (50 workers, the paced requests of section 3) and
+appear one by one in the jobs table. Exchanges other
 than IDX are added as `Exchange` constants; the card lists them.
 
 The **IHSG ingestion** (`IndexIngestion`, Yahoo Finance `^JKSE` into `index_daily`) runs in the same queue as an index
@@ -320,6 +323,19 @@ values in older days, or after switching the provider. Both send one request per
    - zero-volume rows with open = high = low = close (holiday rows repeating the previous close),
    - rows the `price_daily` checks would reject (close <= 0, high < low, volume < 0);
    one bar per date (the last one wins).
+   **Session close from the quote (Yahoo).** Hours after the close Yahoo can still send the latest
+   session's daily bar with open, high, low and volume but `close = null` (2026-11-02: every IDX
+   listing and `^JKSE` until the next morning, so every company stayed "Behind"), while
+   `meta.regularMarketPrice` already holds the session's close (`regularMarketTime` 16:14 WIB, after
+   the post-trading session that trades at the closing price). `YahooSessionClose` gives that bar the
+   quote's price as close and adjusted close (no dividend or split can lie after the latest session),
+   and the quote's day high / low / volume where the bar has none - only for the **last** bar of the
+   response, only when `regularMarketTime` falls on the bar's date (exchange time zone) and the price
+   is positive and within the bar's high / low and the quote's day high / low. Otherwise the bar is
+   dropped as before. The cutoff above still keeps an unfinished session out, and when Yahoo later
+   writes a different close the overlap check (3.) corrects the stored day. The IHSG / LQ45 ingestion
+   does the same (`YahooChartClient.dailyBars(..., sessionClose = true)`); forex, commodities and macro
+   series do not.
    **Currency.** `price_daily` is in `company.currency`. A listing that trades in another currency
    than the company reports in is converted (see "Listings quoted in another currency" below); the
    listing currency is the provider's (`meta.currency` of Yahoo), or the exchange's when the provider
@@ -398,8 +414,8 @@ billion, P/B 2.21), see [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 4.6.
 
 | Rule                                   | Implementation                                                                                                           |
 |----------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| Slowly, one request at a time          | `PacedHttpClient.get` is synchronized and waits a random `min-delay`..`max-delay` (1-2 s) between requests; all workers share it, so more workers do not send requests faster |
-| Never re-request what is stored        | range starts at `MAX(trading_date)`; no request when up to date; never called from a web request                        |
+| A steady pace, and slower when asked   | `PacedHttpClient`: at most `throughput.concurrent-requests` (8) requests in flight, their starts `request-spacing` (150 ms) apart - at most ~6.7 requests a second; all workers share it, so more workers do not send requests faster. After an HTTP 429 the client falls back to one request at a time with a random `min-delay`..`max-delay` (1 - 2 s) pause for `throttled-for` (30 min) |
+| Never re-request what is stored        | range starts at `MAX(trading_date)`; no request when up to date; never called from a web request; "Update all companies" skips a symbol the provider had no data for within 7 days |
 | Back off on HTTP 429                   | queue (every worker) paused 15, 30, then 60 minutes (`backoff`, longer when `Retry-After` asks), then the same job is retried |
 | Normal browser, persistent cookies     | browser `User-Agent` on every request; one `java.net.http.HttpClient` with a `CookieManager` for the application        |
 | Fallback provider                      | `PriceProvider` interface; `neracalab.prices.provider=eodhd` switches to EODHD                                           |
@@ -411,17 +427,47 @@ the job, the jobs answered 429 beside it and every queued job fail ("Run stopped
 later and each ticker continues from its latest stored day. Other failures (unknown symbol, network
 error, currency mismatch) fail only their own job.
 
-**Workers.** `neracalab.jobs.workers` (default 5, env `INGESTION_WORKERS`) companies are ingested at
-the same time: their database work (upsert, valuation refresh) runs side by side, their provider
-requests still go out one at a time. A job waiting for a free worker is `QUEUED`.
+**Workers.** `neracalab.jobs.price-workers` (default 50, env `INGESTION_PRICE_WORKERS`; 0 = as `workers`)
+companies are ingested at the same time: their database work (upsert, valuation refresh) runs side by side, their
+provider requests go out at the pace above. A job waiting for a free worker is `QUEUED`.
 
-**Throughput.** One request per ticker and day: about 900 requests for the whole IDX, i.e. 15-30
-minutes with the 1-2 s pause. Yahoo publishes no limits; a server in a cloud data centre is
+**Throughput.** One request per ticker and day (two when the provider re-adjusted its history): about 900 requests
+for the whole IDX. Until 2026-11-05 they went out one at a time with a 1 - 2 s pause: "Update all companies" took 27 -
+62 minutes (2026-11-02 - 11-04), while Yahoo answered no HTTP 429 in five days of such runs. Since then (50 workers, 8
+requests in flight, 150 ms apart): 875 companies in **2 min 31 s** on 2026-11-05 (16:45:26 - 16:47:57 UTC), 0 failed,
+no HTTP 429; 831 stored their 5 Nov bar (the others had no trade that day: TMPO, STTP, ARKO's zero-volume bars are
+dropped, or are suspended), the stored closes equal Yahoo's (BBCA 5,125 / 166,336,900 shares). Yahoo publishes no
+limits: the client never works around a 429 - it slows down by itself (throttled pace) and the queue still pauses as
+described above; `PRICE_CONCURRENT_REQUESTS=1` restores the old pace for good. A server in a cloud data centre is
 blocked much sooner than a home connection, which is when EODHD is the fallback.
 
 The queue lives in memory: a restart loses queued jobs (re-submit; nothing is fetched twice).
 Every job is also recorded in `ingestion_job`, so the history survives restarts; jobs that were
 still active are marked `FAILED` (Interrupted) at the next start ([INGESTION_JOBS_DOCS.md](INGESTION_JOBS_DOCS.md)).
+
+**Forex closes outside their own range (2026-11-06).** Yahoo sometimes sends a currency pair's daily close outside
+that day's own high-low range: USD/IDR (`IDR=X`) of 2026-11-03 closed at 17,472.20 under its low of 17,786.60, of
+2026-11-04 at 17,536.10 under 17,957.60, while the ECB rate stayed at 18,137 / 18,129 and the next day closed at
+18,049 - a rupiah 3.5% stronger for two days that never was, which the spike rule (`BarCleaner`, 3%) did not catch.
+`YahooChartClient.dailyBarsChecked` (used by `InstrumentIngestionService` for the Forex market only) drops a bar whose
+close lies more than 1% outside its range, when that range is on the scale of the previous close (within half to
+double - a range of 9.0 - 9.0 after a close of 9,300, IDR=X 2006, is the range's error, and the close is kept), and
+deletes a stored copy. A full re-ingestion of the nine pairs on 2026-11-06 dropped USD/IDR 39 of 6,404 days (2011 -
+2026, e.g. 892.0 on 2012-02-07, the stale 9,612.45 of 2013, 15,801 on 2025-06-17), USD/PHP 26, USD/INR 4, USD/CNY,
+USD/KRW and EUR/USD 1 each. Futures are not checked: their close is the settlement, which often lies outside the
+electronic session's range (wheat 380 of ~6,450 days by more than 1%).
+
+**A dropped Forex day gets the ECB reference rate (2026-11-06).** Instead of leaving the day empty,
+`InstrumentIngestionService.referenceBars` asks the `FxRateProvider` (ECB through Frankfurter, the source of
+`fx_rate_daily`) for the rates of exactly the dropped days (one request per ingestion) and stores each as a one-value bar
+(open = high = low = close, volume 0) with `source = 'ecb'`. A day the ECB has no rate for is deleted as before; an ECB
+failure (e.g. HTTP 522) is logged and never fails the job. A later consistent Yahoo bar of that day replaces the ECB row
+(upsert). USD/IDR 2026-11-03 / 04 = 18,137 / 18,129. The full re-ingestion of the nine pairs filled every dropped day:
+USD/IDR 39, USD/PHP 26, USD/INR 4, USD/CNY, USD/KRW and EUR/USD 1 each, 0 deleted. Each value equals Frankfurter's rate
+for that day. Most are within 2.5% of the day before. USD/IDR 2013-09-05 (11,605) and 2013-10-14 (10,921) are about 5%
+off their neighbours: those are the ECB's own rates in the volatile rupiah of 2013. 2020-03-23 (16,575) is the real
+March 2020 crash. Tests: `InstrumentIngestionServiceTest.anInconsistentForexDayIsFilledWithTheEcbRate`,
+`anEcbFailureLeavesTheInconsistentDaysEmpty`.
 
 ## 4. Providers
 
@@ -444,7 +490,11 @@ variables from `backend/.env` (see [DOCKER_DOCS.md](DOCKER_DOCS.md)).
 |------------------------------|-----------------------------|----------------------------------------------------------------------------|
 | `provider` (`PRICE_PROVIDER`) | `yahoo`                    | `yahoo` or `eodhd`                                                         |
 | `eodhd.api-token` (`EODHD_API_TOKEN`) | empty              | required for `eodhd`; the backend does not start without it               |
-| `min-delay`, `max-delay`     | `1s`, `2s`                  | random pause between two provider requests                                |
+| `min-delay`, `max-delay`     | `1s`, `2s`                  | throttled pace (after an HTTP 429, or `concurrent-requests` 1): random pause after each request |
+| `throughput.concurrent-requests` (`PRICE_CONCURRENT_REQUESTS`) | `8` | normal pace: requests in flight at the same time |
+| `throughput.request-spacing` (`PRICE_REQUEST_SPACING`) | `150ms` | normal pace: minimum interval between two request starts |
+| `throughput.throttled-for`   | `30m`                       | how long the throttled pace lasts after an HTTP 429                       |
+| `throughput.no-data-retry-after` | `7d`                    | "Update all companies" skips a symbol the provider had no data for within this time |
 | `backoff`                    | `[15m, 30m, 60m]`           | waits after consecutive HTTP 429; a 429 after the last one stops the run  |
 | `session-close-cutoff`       | `17:00`                     | exchange-local time from which today's bar is final                       |
 | `full-history-from`          | `1990-01-01`                | start of a full-history fetch                                             |
@@ -503,6 +553,12 @@ exchange and IHSG; Forex and Commodities are updated from the page.
 | `PriceIngestionRulesTest`     | cleaning rules, numeric price comparison, last completed trading day (cutoff, weekends)                                                       |
 | `PricesAfterUploadTest`       | prices of a stored filing's company: queued when missing or behind, for the uploader, never `full`; the active job is reused; nothing when up to date, for an unknown company or when switched off (`PriceIngestionServiceTest`: up to date only when the last completed trading day is stored) |
 | `YahooPriceProviderTest`      | parsing of a real Yahoo response (HRTA.JK around the Rp40 dividend and a holiday), symbol mapping, `Retry-After`                              |
+| `YahooSessionCloseTest`       | the real TLKM.JK and `^JKSE` responses of 2026-11-03 03:30 WIB (2026-11-02 without a close): the last bar takes the quote's close (TLKM 1,960, IHSG 5,096.83), stored only once its session is completed; a quote of another day, outside the bar's or the quote's range, without price or time gives none; a holiday inside the history still dropped; forex / commodities / macro not filled |
+| `PacedHttpClientPaceTest`     | the Yahoo pace: up to `concurrent-requests` in flight, starts `request-spacing` apart, one at a time with the min..max pause for `throttled-for` after an HTTP 429 |
+| `PacedHttpClientAheadTest`    | an `ahead` request (share counts) starts before the waiting price requests, at the same pace |
+| `PricePropertiesBindingTest`  | `neracalab.prices.throughput` binds from the configuration and its defaults (the record's `@ConstructorBinding`) |
+| `YahooSessionCloseTest` (Forex) | the real IDR=X response of 2026-11-06: 3 and 4 Nov dropped as closes outside their range, 14 / 29 Oct (within 1%) kept; the 2006 range of 9.0 - 9.0 keeps its close |
+| `InstrumentIngestionServiceTest` (Forex) | a dropped day filled with the ECB rate (`source = 'ecb'`), a day without one deleted, an ECB failure leaves the days empty and the job succeeds |
 
 Run with `cd backend && ./mvnw test` (needs the Postgres on localhost:5432).
 

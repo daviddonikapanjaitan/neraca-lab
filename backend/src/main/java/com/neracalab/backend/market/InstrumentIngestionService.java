@@ -19,6 +19,7 @@ import com.neracalab.backend.macro.source.FredSource;
 import com.neracalab.backend.market.InstrumentRepository.Instrument;
 import com.neracalab.backend.price.InstrumentIngestion;
 import com.neracalab.backend.price.PriceIngestionService.Result;
+import com.neracalab.backend.price.provider.FxRateProvider;
 import com.neracalab.backend.technical.YahooChartClient;
 import com.neracalab.backend.technical.engine.Candle;
 
@@ -59,21 +60,25 @@ public class InstrumentIngestionService implements InstrumentIngestion {
     private final WorldBankPinkSheetClient worldBank;
     private final ImfPcpsClient imf;
     private final FredSource fred;
+    /** ECB reference rates (Frankfurter): a Forex day Yahoo sends inconsistent is filled with them */
+    private final FxRateProvider fx;
     private final Clock clock;
 
     @Autowired
     public InstrumentIngestionService(InstrumentRepository repository, YahooChartClient yahoo,
-                                      WorldBankPinkSheetClient worldBank, ImfPcpsClient imf, FredSource fred) {
-        this(repository, yahoo, worldBank, imf, fred, Clock.systemUTC());
+                                      WorldBankPinkSheetClient worldBank, ImfPcpsClient imf, FredSource fred,
+                                      FxRateProvider fx) {
+        this(repository, yahoo, worldBank, imf, fred, fx, Clock.systemUTC());
     }
 
     InstrumentIngestionService(InstrumentRepository repository, YahooChartClient yahoo, WorldBankPinkSheetClient worldBank,
-                               ImfPcpsClient imf, FredSource fred, Clock clock) {
+                               ImfPcpsClient imf, FredSource fred, FxRateProvider fx, Clock clock) {
         this.repository = repository;
         this.yahoo = yahoo;
         this.worldBank = worldBank;
         this.imf = imf;
         this.fred = fred;
+        this.fx = fx;
         this.clock = clock;
     }
 
@@ -122,9 +127,22 @@ public class InstrumentIngestionService implements InstrumentIngestion {
         boolean fullHistory = full || latest.isEmpty();
         LocalDate from = fullHistory ? instrument.historyFrom()
                 : instrument.monthly() ? latest.get() : latest.get().minusDays(OVERLAP_DAYS);
+        // a currency pair's bars Yahoo sent with a close outside their own high-low range
+        // (YahooChartClient.dailyBarsChecked): not stored, and a stored copy deleted (USD/IDR 2026-11-03 / 04);
+        // a future's close (the settlement) may lie outside its session's range: not checked
+        List<LocalDate> inconsistent = new ArrayList<>();
         List<Candle> received = switch (instrument.source()) {
-            case "yahoo" -> instrument.symbol().contains(PRODUCT) ? product(instrument.symbol(), market.zone(), from, today)
-                    : yahoo.dailyBars(instrument.symbol(), market.zone(), from, today);
+            case "yahoo" -> {
+                if (instrument.symbol().contains(PRODUCT)) {
+                    yield product(instrument.symbol(), market.zone(), from, today);
+                }
+                if (market != Market.FOREX) {
+                    yield yahoo.dailyBars(instrument.symbol(), market.zone(), from, today);
+                }
+                YahooChartClient.Bars checked = yahoo.dailyBarsChecked(instrument.symbol(), market.zone(), from, today);
+                inconsistent.addAll(checked.inconsistent());
+                yield checked.bars();
+            }
             case WorldBankPinkSheetClient.SOURCE -> monthlyBars(worldBank.monthly(instrument.symbol()));
             case ImfPcpsClient.SOURCE -> monthlyBars(imf.monthly(instrument.symbol()));
             // a monthly FRED series is dated on the 1st of its month
@@ -140,11 +158,23 @@ public class InstrumentIngestionService implements InstrumentIngestion {
                 .filter(b -> !b.date().isBefore(keepFrom) && !b.date().isAfter(lastCompleted))
                 .toList();
         List<Candle> bars = window;
-        int deleted = 0;
+        // the days Yahoo sent inconsistent, within the window, get the ECB reference rate of the day instead (stored
+        // as source 'ecb'); a day without one is deleted - no close is known for it
+        List<LocalDate> unusable = inconsistent.stream()
+                .filter(d -> !d.isBefore(keepFrom) && !d.isAfter(lastCompleted)).toList();
+        List<Candle> referenceBars = referenceBars(instrument, unusable);
+        List<LocalDate> filled = referenceBars.stream().map(Candle::date).toList();
+        List<LocalDate> unfilled = unusable.stream().filter(d -> !filled.contains(d)).toList();
+        int deleted = unfilled.isEmpty() ? 0 : repository.delete(instrument.code(), unfilled);
+        if (!inconsistent.isEmpty()) {
+            log.info("{} {}: {} bar(s) with a close outside their range dropped {}; {} filled with the {} reference "
+                            + "rate {}, {} stored without one deleted", market, instrument.code(), inconsistent.size(),
+                    inconsistent, filled.size(), fx.name(), filled, deleted);
+        }
         if (instrument.maxSpike() != null && !instrument.monthly()) {
             BarCleaner.Cleaned cleaned = BarCleaner.clean(window, instrument.maxSpike().doubleValue());
             bars = cleaned.bars();
-            deleted = repository.delete(instrument.code(), cleaned.dropped());
+            deleted += repository.delete(instrument.code(), cleaned.dropped());
             if (!cleaned.dropped().isEmpty() || cleaned.wicksCut() > 0) {
                 log.info("{} {}: {} bad print(s) dropped {} ({} stored, deleted), {} wick(s) cut", market,
                         instrument.code(), cleaned.dropped().size(), cleaned.dropped(), deleted, cleaned.wicksCut());
@@ -157,13 +187,49 @@ public class InstrumentIngestionService implements InstrumentIngestion {
             inserted = (int) bars.stream().filter(b -> !stored.contains(b.date())).count();
             changed = repository.upsert(instrument.code(), instrument.source(), bars);
         }
+        if (!referenceBars.isEmpty()) {
+            Set<LocalDate> stored = repository.dates(instrument.code(), referenceBars.getFirst().date(),
+                    referenceBars.getLast().date());
+            inserted += (int) referenceBars.stream().filter(b -> !stored.contains(b.date())).count();
+            changed += repository.upsert(instrument.code(), fx.name(), referenceBars);
+        }
         LocalDate after = repository.latestDate(instrument.code()).orElse(null);
         // updated: changed bars and deleted bad prints
         Result result = new Result(instrument.source(), 1, from, instrument.monthly() ? lastCompleted : today, fullHistory,
                 false, received.size(), received.size() - bars.size(), inserted, changed - inserted + deleted,
-                bars.size() - changed, after, null, null);
+                bars.size() + referenceBars.size() - changed, after, null, null);
         log.info("{} {}: {}", market, instrument.code(), result);
         return result;
+    }
+
+    /**
+     * The ECB reference rate (FxRateProvider, Frankfurter) of the days a currency pair's Yahoo bar was unusable, as one-
+     * value bars (open = high = low = close, as the monthly series), oldest first. USD/IDR 2026-11-03 / 04: Yahoo's closes
+     * 17,472.20 / 17,536.10 lie under their own lows; the ECB fixed 18,137 / 18,129. Only rates of exactly those days
+     * (the ECB fixes at about 16:00 CET, Yahoo's close is London's end of day: a reference of the same day, not the
+     * same minute). Empty for a code that is no currency pair of six letters, and when the ECB has no rate or does not
+     * answer - the day then stays empty (never a failed ingestion).
+     */
+    List<Candle> referenceBars(Instrument instrument, List<LocalDate> days) {
+        String code = instrument.code();
+        if (days.isEmpty() || instrument.market() != Market.FOREX || code.length() != 6) {
+            return List.of();
+        }
+        List<LocalDate> sorted = days.stream().sorted().toList();
+        try {
+            Set<LocalDate> wanted = Set.copyOf(sorted);
+            return fx.fetch(code.substring(0, 3), code.substring(3), sorted.getFirst(), sorted.getLast()).stream()
+                    .filter(r -> r.date() != null && wanted.contains(r.date()) && r.rate() != null && r.rate().signum() > 0)
+                    .map(r -> {
+                        double rate = r.rate().doubleValue();
+                        return Candle.daily(r.date(), rate, rate, rate, rate, rate, 0);
+                    })
+                    .sorted(java.util.Comparator.comparing(Candle::date))
+                    .toList();
+        } catch (RuntimeException e) {
+            log.warn("{}: no {} reference rate for {}: {}", code, fx.name(), sorted, e.getMessage());
+            return List.of();
+        }
     }
 
     /**

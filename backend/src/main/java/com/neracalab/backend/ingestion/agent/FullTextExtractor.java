@@ -1002,10 +1002,14 @@ public class FullTextExtractor {
         if (target.kind() == Kind.INCOME && !bank) {
             derive(values, how, statedDa(mapper, target.column()));
         }
-        if (target.kind() == Kind.INCOME && (mapper.insurance() || mapper.taxonomy() == com.neracalab.backend.ingestion.xlsx.IdxTaxonomy.FINANCING)
+        if (target.kind() == Kind.INCOME && (mapper.insurance()
+                || mapper.taxonomy() == com.neracalab.backend.ingestion.xlsx.IdxTaxonomy.FINANCING
+                || mapper.taxonomy() == com.neracalab.backend.ingestion.xlsx.IdxTaxonomy.SECURITIES)
                 && values.get("gross_profit") == null && values.get("revenue") != null) {
-            // an insurer's or financing company's gross profit is revenue - cost of revenue by the field's definition;
-            // the model left it empty in some answers (TUGU FY2024 4,050.8 - 2,047.7 billion, PNLF H1 2025, FUJI FY2023)
+            // an insurer's, financing company's or broker's gross profit is revenue - cost of revenue by the field's
+            // definition; the model left it empty in some answers (TUGU FY2024 4,050.8 - 2,047.7 billion, PNLF H1 2025,
+            // FUJI FY2023) and in every answer for a broker, whose profit or loss has no cost of revenue (PADI FY2025:
+            // brokerage, underwriting, trading and fair value gains and dividends 61,741,015,871, then expenses)
             BigDecimal cost = values.get("cost_of_revenue");
             values.put("gross_profit", plainScale(cost == null ? values.get("revenue") : values.get("revenue").subtract(cost)));
             how.put("gross_profit", cost == null ? "revenue (no cost of revenue)" : "revenue - cost of revenue");

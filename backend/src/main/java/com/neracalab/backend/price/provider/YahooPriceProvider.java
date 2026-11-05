@@ -12,6 +12,8 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -30,7 +32,8 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code timestamp} per bar (session open, epoch seconds) and the parallel arrays
  * {@code indicators.quote[0].open/high/low/close/volume} and {@code indicators.adjclose[0].adjclose}.
  * Holiday placeholders have {@code null} in every array. {@code close} is split-adjusted,
- * {@code adjclose} split- and dividend-adjusted.
+ * {@code adjclose} split- and dividend-adjusted. A last bar Yahoo has not given its close yet takes the session's
+ * close of the quote ({@link YahooSessionClose}).
  * <p>
  * Prices are rounded to 4 decimals (Yahoo sends binary floats such as 2033.51953125).
  */
@@ -38,7 +41,9 @@ import tools.jackson.databind.json.JsonMapper;
 @ConditionalOnProperty(prefix = "neracalab.prices", name = "provider", havingValue = "yahoo", matchIfMissing = true)
 public class YahooPriceProvider implements PriceProvider {
 
-    static final int PRICE_SCALE = 4;
+    static final int PRICE_SCALE = YahooSessionClose.PRICE_SCALE;
+
+    private static final Logger log = LoggerFactory.getLogger(YahooPriceProvider.class);
 
     private final PacedHttpClient http;
     private final JsonMapper json;
@@ -112,7 +117,29 @@ public class YahooPriceProvider implements PriceProvider {
                     price(quote.path("low").path(i)), price(quote.path("close").path(i)),
                     price(adjclose.path(i)), volume(quote.path("volume").path(i))));
         }
+        if (!bars.isEmpty() && bars.getLast().close() == null) {
+            DailyBar last = bars.getLast();
+            YahooSessionClose.of(meta, zone, last.date(), last.high(), last.low()).ifPresent(close -> {
+                bars.set(bars.size() - 1, withSessionClose(last, close));
+                log.info("{} {}: daily bar without a close, the session's close {} taken from the quote", symbol,
+                        last.date(), close.price().toPlainString());
+            });
+        }
         return new PriceHistory(symbol, currency, bars);
+    }
+
+    /**
+     * The bar with the session's close of {@link YahooSessionClose}: the close, an adjusted close equal to it (no
+     * dividend or split can lie after the latest session), and the high, low and volume of the quote where the bar
+     * has none. A missing open stays missing.
+     */
+    static DailyBar withSessionClose(DailyBar bar, YahooSessionClose.Close close) {
+        return new DailyBar(bar.date(), bar.open(),
+                bar.high() != null ? bar.high() : close.dayHigh(),
+                bar.low() != null ? bar.low() : close.dayLow(),
+                close.price(),
+                bar.adjustedClose() != null ? bar.adjustedClose() : close.price(),
+                bar.volume() != null ? bar.volume() : close.volume());
     }
 
     private JsonNode parse(PacedHttpClient.Response response, String symbol) {

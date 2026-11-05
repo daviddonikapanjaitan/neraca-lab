@@ -21,4 +21,13 @@ public final class TestPriceProperties {
     public static PriceProperties defaults() {
         return withBackoff(Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(60));
     }
+
+    /** The defaults with another pace: requests in flight, the interval between their starts, the throttled time. */
+    public static PriceProperties withThroughput(int concurrentRequests, Duration requestSpacing, Duration throttledFor) {
+        PriceProperties d = defaults();
+        return new PriceProperties(d.provider(), d.minDelay(), d.maxDelay(), d.backoff(), d.sessionCloseCutoff(),
+                d.fullHistoryFrom(), d.userAgent(), d.connectTimeout(), d.requestTimeout(), d.jobHistory(), d.yahoo(),
+                d.eodhd(), d.fx(), d.schedule(),
+                new PriceProperties.Throughput(concurrentRequests, requestSpacing, throttledFor, Duration.ofDays(7)));
+    }
 }

@@ -63,7 +63,10 @@ public class CompanyService {
                 repository.segments(companyId), repository.shareSnapshots(companyId),
                 repository.latestPrice(companyId, exchange.currency()).orElse(null),
                 repository.latestMarketSnapshot(companyId, exchange.currency()).orElse(null),
-                repository.valuations(companyId, exchange.currency()), repository.corporateActions(companyId));
+                repository.valuations(companyId, exchange.currency()), repository.corporateActions(companyId),
+                company.currency() == null || company.currency().equalsIgnoreCase(exchange.currency()) ? null
+                        : repository.currencyConversion(companyId, company.currency().toUpperCase(java.util.Locale.ROOT),
+                                exchange.currency()).orElse(null));
     }
 
     private static Period period(PeriodRow p, List<SegmentFigures> segments, Map<String, Metric> metrics) {

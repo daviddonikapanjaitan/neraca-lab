@@ -174,8 +174,10 @@ class PriceUpdateControllerTest {
                 .andExpect(jsonPath("$.exchange").value("IDX"))
                 .andReturn().getResponse().getContentAsString();
         JsonNode update = json.readTree(body);
-        assertThat(update.get("queued").asInt() + update.get("alreadyActive").asInt() + update.get("upToDate").asInt())
-                .isEqualTo(update.get("companies").asInt());
+        // every company is counted once: queued, already active, up to date, or skipped because Yahoo Finance had no
+        // data for its symbol in the last 7 days (noProviderData, 2026-11-06: 19 of 938)
+        assertThat(update.get("queued").asInt() + update.get("alreadyActive").asInt() + update.get("upToDate").asInt()
+                + update.get("noProviderData").asInt()).isEqualTo(update.get("companies").asInt());
         // the mocked index is stored up to 2026-10-15: queued only when that is before the last completed day
         assertThat(update.get("index").get("outcome").asString()).isIn("QUEUED", "UP_TO_DATE", "ALREADY_ACTIVE");
         awaitIdle();

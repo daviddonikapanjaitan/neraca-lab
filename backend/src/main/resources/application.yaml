@@ -99,6 +99,10 @@ spring:
         - classpath:db/V1.0.43__data_BMBL_BOAT_shares.sql # share counts from the share capital, KSEI and the listing records
         - classpath:db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql # wrong par / split / share issues
         - classpath:db/V1.0.45__data_KOIN_HILL_shares.sql # wrong par values, KOIN's false reverse split
+        - classpath:db/V1.0.47__data_VIVA_balance.sql     # FY2022 liabilities / NCI filed a thousand times too small
+        - classpath:db/V1.0.48__data_KSEI_share_capital_shares.sql # counts from the share capital / par and KSEI (23 companies)
+        - classpath:db/V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql # counts filed at par Rp 1 (x10 / x100 of KSEI)
+        - classpath:db/V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql # PBSA split 1:2 of 2026-10-13, share issues of 2026
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false
@@ -131,10 +135,13 @@ neracalab:
 
   # Background jobs of the ingestion APIs: financial statement uploads, prices, RAG PDF / news, screening data
   jobs:
-    # Worker threads of EACH ingestion queue: that many of its jobs run at the same time, the rest wait their turn.
-    # The requests to Yahoo Finance and to each news site stay paced one at a time (more workers do not send
-    # requests faster).
+    # Worker threads of EACH ingestion queue without its own number below (RAG, screening data): that many of its jobs
+    # run at the same time, the rest wait their turn. The requests to each news site stay paced one at a time.
     workers: ${INGESTION_WORKERS:5}
+    # Worker threads of the price queue (Ingestion > Price Ingestion, "Update all companies"; 0: as many as `workers`).
+    # A price job waits on its Yahoo request - at most neracalab.prices.throughput.concurrent-requests in flight - then
+    # writes one company's prices and valuation in a short transaction.
+    price-workers: ${INGESTION_PRICE_WORKERS:50}
     # Worker threads of the financial statement upload queue (0: as many as `workers`). An upload mostly waits on model
     # calls; its database work is short and refreshes only its own company's derived data, so 50 run side by side
     # (needs the connection pool below and a heap of 4 GB: JAVA_OPTS in docker-compose.yaml).
@@ -192,8 +199,13 @@ neracalab:
   # Daily price ingestion (POST /api/v1/prices/ingestions?exchange=IDX&ticker=HRTA)
   prices:
     provider: ${PRICE_PROVIDER:yahoo}   # yahoo | eodhd (eodhd needs EODHD_API_TOKEN)
-    min-delay: 1s                       # random pause of min..max between two provider requests
-    max-delay: 2s
+    min-delay: 1s                       # throttled pace (after an HTTP 429): one request at a time and a random
+    max-delay: 2s                       # pause of min..max after each
+    throughput:
+      concurrent-requests: ${PRICE_CONCURRENT_REQUESTS:8}   # normal pace: requests in flight (1 = always the throttled pace)
+      request-spacing: ${PRICE_REQUEST_SPACING:150ms}       # minimum interval between two request starts (~6.7 a second)
+      throttled-for: 30m                # after an HTTP 429 the throttled pace lasts this long, then the normal pace again
+      no-data-retry-after: 7d           # "Update all companies" skips a symbol the provider had no data for (delisted)
     backoff: [15m, 30m, 60m]            # waits after consecutive HTTP 429; a 429 after the last one stops the run
     session-close-cutoff: "17:00"       # exchange-local time from which today's bar is final
     full-history-from: "1990-01-01"     # start of a full-history fetch

@@ -22,7 +22,8 @@ import com.sun.net.httpserver.HttpServer;
 /**
  * An upload waiting for a company's share counts asks Yahoo {@link PacedHttpClient#ahead} of the background price
  * requests waiting in the same one-at-a-time line (50 uploads at once waited up to 53 s behind them, 2026-10-31): it is
- * sent next, the others after it, one at a time. Against a local HTTP server (no network, no pause).
+ * sent next, the others after it, one at a time. Against a local HTTP server (no network, no pause), in the
+ * one-at-a-time pace ({@code concurrent-requests} 1; the normal pace runs several at once, {@link PacedHttpClientPaceTest}).
  */
 class PacedHttpClientAheadTest {
 
@@ -51,7 +52,8 @@ class PacedHttpClientAheadTest {
         server.start();
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
-            PacedHttpClient client = new PacedHttpClient(TestPriceProperties.defaults());
+            PacedHttpClient client = new PacedHttpClient(
+                    TestPriceProperties.withThroughput(1, java.time.Duration.ZERO, java.time.Duration.ofMinutes(30)));
             String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
             List<Future<?>> calls = new ArrayList<>();
             calls.add(pool.submit(() -> client.get(URI.create(base + "first"))));

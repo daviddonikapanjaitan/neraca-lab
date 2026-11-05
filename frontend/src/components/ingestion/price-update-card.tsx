@@ -69,6 +69,10 @@ export function PriceUpdateCard({
     ]
     if (body.upToDate > 0) parts.push(`${plural(body.upToDate, "company")} already up to date.`)
     if (body.alreadyActive > 0) parts.push(`${plural(body.alreadyActive, "company")} already queued or running.`)
+    if (body.noProviderData > 0)
+      parts.push(
+        `${plural(body.noProviderData, "company")} skipped: Yahoo Finance had no data for the symbol in the last 7 days (delisted or suspended).`
+      )
     if (body.index) {
       // the index job stores IHSG and LQ45 together
       const names = status?.index ? indexNames(status.index) : body.index.code

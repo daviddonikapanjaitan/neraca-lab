@@ -70,8 +70,10 @@ services:
       # 4 GB heap: up to 50 workbooks (INGESTION_UPLOAD_WORKERS) and several PDFs are read at the same time (29 uploads at
       # once grew the heap to 3 GB on 2026-10-31)
       JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx4g}
-      # jobs each ingestion queue (prices, RAG, screening data) runs at the same time
+      # jobs each ingestion queue (RAG, screening data) runs at the same time
       INGESTION_WORKERS: ${INGESTION_WORKERS:-5}
+      # price jobs at the same time ("Update all companies"; 0: as INGESTION_WORKERS)
+      INGESTION_PRICE_WORKERS: ${INGESTION_PRICE_WORKERS:-50}
       # financial statement uploads stored at the same time (their own number; 0: as INGESTION_WORKERS)
       INGESTION_UPLOAD_WORKERS: ${INGESTION_UPLOAD_WORKERS:-50}
       # database connections of the backend (PostgreSQL allows POSTGRES_MAX_CONNECTIONS)
@@ -102,6 +104,9 @@ services:
       PRICE_PROVIDER: ${PRICE_PROVIDER:-yahoo}
       EODHD_API_TOKEN: ${EODHD_API_TOKEN:-}
       PRICE_SCHEDULE_ENABLED: ${PRICE_SCHEDULE_ENABLED:-false}
+      # Yahoo requests in flight and the interval between their starts (after an HTTP 429: one at a time, 1 - 2 s)
+      PRICE_CONCURRENT_REQUESTS: ${PRICE_CONCURRENT_REQUESTS:-8}
+      PRICE_REQUEST_SPACING: ${PRICE_REQUEST_SPACING:-150ms}
       # AI stock screening: Tavily news search, cost cap per run, daily screening data ETL
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       SCREENING_BUDGET_USD: ${SCREENING_BUDGET_USD:-0.45}
