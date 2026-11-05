@@ -28,6 +28,16 @@ public enum IdxTaxonomy {
      */
     INSURANCE('6'),
     /**
+     * "Securities" taxonomy (securities companies / brokers, e.g. PADI, PANS, RELI, TRIM, YULE): the General
+     * Industry roles under 5xxxxxx - balance sheet by order of liquidity (5220000), profit or loss (5311000 /
+     * 5321000) with its own line items (income from brokerage, underwriting, gains on securities), changes in
+     * equity (5410000), cash flow (5510000), notes (5611000 PP&amp;E, ...). Its statements are decided by the
+     * full-text extraction; the sheets are read under the General Industry codes for the share capital ('Common
+     * stocks'), the basic EPS and the notes. Until 2026-11-05 the reader did not know it: no sheet was read, so these
+     * companies had no share count and no valuation (ingestion errors 1707 - 1816).
+     */
+    SECURITIES('5'),
+    /**
      * "Financing Industry" (multifinance companies, e.g. BFIN): balance sheet by order of liquidity (8220000),
      * profit or loss by nature (8312000 / 8322000), cash flow (8510000). Its line items (income from finance
      * lease, consumer financing, murabahah, ...) are not mapped by the rule-based extraction: the statements of

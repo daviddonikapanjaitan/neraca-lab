@@ -1500,4 +1500,37 @@ public class FullTextExtractorTest {
         assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("5416776000000");
         assertThat(income.values().get("net_income")).isEqualByComparingTo("96825000000");
     }
+
+    /**
+     * A broker (PADI FY2025, IDX Securities taxonomy, 5311000) files no cost of revenue: its revenue is brokerage
+     * 10,835,045,613 + underwriting 1,150,000,000 + realised trading gains 21,638,152,348 + fair value gains
+     * 27,758,567,134 + dividends 359,250,776 = 61,741,015,871, then selling and G&amp;A expenses. The model names no gross
+     * profit: revenue, by the field's definition, as for insurers and financing companies.
+     */
+    @Test
+    void aBrokersGrossProfitIsItsRevenue() throws Exception {
+        IngestionSession session = session("PADI", "2025-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "5311000";
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Income from brokerage activity",
+                        "+Income from underwriting activities and selling fees",
+                        "+Realised gains (losses) on trading of marketable securities",
+                        "+Gains (losses) on changes in fair value of marketable securities", "+Dividends income")),
+                Map.entry("operating_expenses", terms(text, sheet, "+General and administrative expenses", "+Selling expenses")),
+                Map.entry("pretax_income", terms(text, sheet, "+Total profit (loss) before tax")),
+                Map.entry("income_tax", terms(text, sheet, "-Tax benefit (expenses)")),
+                Map.entry("net_income", terms(text, sheet, "+Total profit (loss)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Profit (loss) attributable to parent entity")));
+        answers("{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}");
+
+        extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "Unsupported filing", new AgentTrace());
+
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("revenue")).isEqualByComparingTo("61741015871");
+        assertThat(income.values().get("cost_of_revenue")).isNull();
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("61741015871");
+        assertThat(income.derivations().get("gross_profit")).isEqualTo("revenue (no cost of revenue)");
+        assertThat(income.values().get("net_income")).isEqualByComparingTo("1812542233");
+    }
 }

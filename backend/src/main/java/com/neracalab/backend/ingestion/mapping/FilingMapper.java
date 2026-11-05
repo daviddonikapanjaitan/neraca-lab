@@ -177,8 +177,10 @@ public final class FilingMapper {
         this.info = FilingInfo.from(workbook);
         this.taxonomy = workbook.taxonomy();
         // the Financing and the Insurance Industry taxonomies have the Financial one's sheets (by order of
-        // liquidity, by nature)
-        this.financial = taxonomy == IdxTaxonomy.FINANCIAL || modelTaxonomy();
+        // liquidity, by nature); the Securities one has the General sheets with a balance sheet by order of
+        // liquidity (as CNMA: balanceByLiquidity)
+        this.financial = taxonomy == IdxTaxonomy.FINANCIAL || taxonomy == IdxTaxonomy.FINANCING
+                || taxonomy == IdxTaxonomy.INSURANCE;
         if (financial) {
             this.balanceSheet = data(IdxSheets.BALANCE_SHEET_LIQUIDITY).orElse(null);
             this.income = data(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX).or(() -> data(IdxSheets.INCOME_BY_NATURE)).orElse(null);
@@ -217,9 +219,10 @@ public final class FilingMapper {
                     + code(IdxSheets.CASH_FLOW_INDIRECT) + ")");
         }
         if (modelTaxonomy()) {
-            // its line items are not the bank template's: no rule here decides them
+            // its line items are not the bank / general template's: no rule here decides them
             templateProblems.add("The line items of the " + taxonomyName() + " taxonomy (" + code(IdxSheets.BALANCE_SHEET_LIQUIDITY)
-                    + ", " + code(IdxSheets.INCOME_BY_NATURE_BEFORE_TAX) + ", " + code(IdxSheets.CASH_FLOW_DIRECT)
+                    + ", " + code(financial ? IdxSheets.INCOME_BY_NATURE_BEFORE_TAX : IdxSheets.INCOME_BY_FUNCTION)
+                    + ", " + code(IdxSheets.CASH_FLOW_DIRECT)
                     + ") are not mapped by the rule-based extraction; the model decides them from the text of the workbook");
         }
     }
@@ -285,12 +288,14 @@ public final class FilingMapper {
     }
 
     /**
-     * A taxonomy whose line items the rule-based extraction does not map: Financing Industry (multifinance, BFIN) and
-     * Insurance Industry (insurers, TUGU). Its sheets are read under the General codes (share capital, per-share unit,
+     * A taxonomy whose line items the rule-based extraction does not map: Financing Industry (multifinance, BFIN),
+     * Insurance Industry (insurers, TUGU) and Securities (brokers, PADI: its balance sheet by order of liquidity is
+     * also {@link #balanceByLiquidity}). Its sheets are read under the General codes (share capital, per-share unit,
      * notes); its statements are the full-text extraction's.
      */
     private boolean modelTaxonomy() {
-        return taxonomy == IdxTaxonomy.FINANCING || taxonomy == IdxTaxonomy.INSURANCE;
+        return taxonomy == IdxTaxonomy.FINANCING || taxonomy == IdxTaxonomy.INSURANCE
+                || taxonomy == IdxTaxonomy.SECURITIES;
     }
 
     /** Whether the workbook uses the Insurance Industry taxonomy (an insurer). */
@@ -3923,6 +3928,7 @@ public final class FilingMapper {
             case FINANCIAL -> "Financial and Sharia Industry";
             case FINANCING -> "Financing Industry";
             case INSURANCE -> "Insurance Industry";
+            case SECURITIES -> "Securities";
         };
     }
 

@@ -46,7 +46,9 @@ public record FilingInfo(
             }
         }
         List<String> warnings = new ArrayList<>();
-        String ticker = ticker(required(info, "Entity code"));
+        String entityCode = required(info, "Entity code");
+        String ticker = entityCode.chars().anyMatch(Character::isLetter) ? ticker(entityCode)
+                : tickerOfFileName(workbook.fileName(), entityCode, warnings);
         String submission = required(info, "Period of financial statements submissions");
         LocalDate start = date(info, "Current period start date");
         LocalDate end = date(info, "Current period end date");
@@ -109,6 +111,26 @@ public record FilingInfo(
         } catch (Tickers.InvalidTickerException e) {
             throw new IdxWorkbookException("General information 'Entity code' is not a ticker: " + e.getMessage());
         }
+    }
+
+    private static final java.util.regex.Pattern IDX_FILE_NAME =
+            java.util.regex.Pattern.compile("FinancialStatement-\\d{4}-[A-Za-z]+-([A-Za-z][A-Za-z0-9]*)\\.xlsx");
+
+    /**
+     * The ticker of a workbook whose 'Entity code' holds a number: IDX tickers always contain letters. TIRA's FY2025
+     * workbook files 7362110449 there (its other filings 'TIRA', the same entity identification number AA167): the
+     * upload created a company '7362110449' and stored TIRA's FY2025 under it. The IDX file name
+     * (FinancialStatement-2025-Tahunan-TIRA.xlsx) gives the ticker; another name is refused as before.
+     */
+    static String tickerOfFileName(String fileName, String entityCode, List<String> warnings) {
+        java.util.regex.Matcher m = IDX_FILE_NAME.matcher(fileName == null ? "" : fileName.trim());
+        if (!m.matches()) {
+            throw new IdxWorkbookException("General information 'Entity code' is not a ticker: '" + entityCode
+                    + "' (no letter), and the file name '" + fileName + "' does not give one");
+        }
+        String ticker = ticker(m.group(1));
+        warnings.add("'Entity code' " + entityCode + " is not a ticker: " + ticker + " taken from the file name");
+        return ticker;
     }
 
     /** "Diaudit / Audited" -> true, "Tidak Diaudit / Unaudit" -> false. */

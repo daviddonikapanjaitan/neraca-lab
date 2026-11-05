@@ -99,6 +99,10 @@ spring:
         - classpath:db/V1.0.43__data_BMBL_BOAT_shares.sql # share counts from the share capital, KSEI and the listing records
         - classpath:db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql # wrong par / split / share issues
         - classpath:db/V1.0.45__data_KOIN_HILL_shares.sql # wrong par values, KOIN's false reverse split
+        - classpath:db/V1.0.47__data_VIVA_balance.sql     # FY2022 liabilities / NCI filed a thousand times too small
+        - classpath:db/V1.0.48__data_KSEI_share_capital_shares.sql # counts from the share capital / par and KSEI (23 companies)
+        - classpath:db/V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql # counts filed at par Rp 1 (x10 / x100 of KSEI)
+        - classpath:db/V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql # PBSA split 1:2 of 2026-10-13, share issues of 2026
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false

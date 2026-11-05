@@ -676,6 +676,12 @@ changes the upload's status. Switch off with `neracalab.ingestion.rag-after-uplo
 
 ## 5. Tests
 
+The full backend suite (2026-11-05): 923 tests in 169 classes, 14 min 17 s, all passing; `DerivedDataRefreshTest`
+(every company's derived data, ~940 companies) takes 3 min 22 s. A run is watched while it runs (finished test classes
+in `target/surefire-reports`, `jstack` of the surefire fork): past 30 minutes or 5 minutes without a finished class it
+is stuck. An interrupted run can leave its Maven / surefire `java` processes alive (2.5 GB, the same `target`): stop
+them before the next run.
+
 | Test                             | What it proves                                                                                                                                                                                                                                       |
 |----------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `FilingMapperHrtaTest` (unit)    | the six HRTA filings in `data/IDX_XBRL/HRTA/xlsx` map to exactly the values validated for `V1.0.4__data_HRTA_financials.sql` (`src/test/resources/ingestion/hrta_expected.json`): every field of every column, segments, share counts, par value, audit flags |
@@ -734,6 +740,10 @@ changes the upload's status. Switch off with `neracalab.ingestion.rag-after-uplo
 | `FilingMapperTabarruTest` (unit) | CASA FY2025's tabarru funds balance the balance sheet with the syirkah funds; ARTO FY2022's syirkah total on that row is not counted twice |
 | `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
+| `FilingMapperSecuritiesTest` (unit) | a broker read in the Securities taxonomy (PADI FY2025: 5220000 by liquidity, decided by the model) with 11,307,246,524 shares at par Rp 25; TRIM FY2025 in thousands 7,109,300,000 at Rp 50 |
+| `FilingInfoTickerTest` (unit) | TIRA FY2025's numeric 'Entity code' 7362110449: the ticker from the IDX file name; another file name refused |
+| `BalanceSheetPartsTest` (unit) | PNBN FY2022: a comparative's syirkah funds not filled beside liabilities that already hold them; the own filing clears such a figure |
+| `VivaBalanceTest`, `ShareCapitalCountsTest` (database) | V1.0.47 VIVA FY2022 balances; V1.0.48 - V1.0.50 counts (DOSS, PSDN, LPKR, WIKA, VICO, MKTR, WAPO, PBSA split, MORA) |
 | `FilingMapperTuguMoliCnmaTest` (unit) | the filings behind the error rows of 2026-10-14: TUGU read in the Insurance Industry taxonomy with 3,555,575,600 shares at par 50 (EPS in millions in FY2024, an unrestated split in FY2023), MOLI's EPS in thousands (H1 2026) and its contradicting FY2025 columns (no par 1), CNMA's depreciation with its balance sheet by order of liquidity |
 | `FilingMapperKetrLppfTest` (unit) | the filings behind the error rows of 2026-10-22: KETR's FY2024 comparative in its FY2025 filing reconciles with 'Finance income' 3,820,523,591 counted once, 'Other income' without it (11,241,254,994, operating income 181,136,399,270 as in the FY2024 filing); LPPF FY2023, rows missing on the face of its balance sheet: inventory, short-term debt, goodwill and intangibles are left empty, not 0, while the FY2024 comparative has inventory 792,781 and bank loans 550,003 million |
 | `FilingMapperItmgMdkaMedcHrumTest` (unit) | the filings behind the error rows of 2026-10-21: ITMG FY2023 read as full amounts (total assets 2,187,847,000 USD; FY2024 stays in thousands); ITMG and MDKA H1 2025 reconcile with 'Other gains (losses)' counted once (operating income 123,254 thousand / 83,182,117); with Yahoo Finance's counts ITMG's H1 2025 EPS 0.00008 is read as 0.08 and MDKA's H1 2026 EPS 0.00042 as 0.0042, and no column is corrected without published evidence or on counts of another basis; MEDC's and HRUM's discontinued EPS rows that are no such EPS are left out (MEDC FY2022 0.021503, FY2025 0.00408), UNVR's, EMTK's, MPMX's and KRAS's are kept |
@@ -1038,6 +1048,49 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-11-05 (errors 1704 - 1920): the Securities taxonomy, a comparative that broke the balance, share counts
+
+Hermes' batches of 2026-10-31 - 2026-11-02 left 118 open rows (1704 - 1821). Every open row's file (111, without the
+refused ones) was uploaded again on the new backend (111 jobs: 87 SUCCEEDED, 24 INCOMPLETE on the filings' cash gaps;
+1,266 model calls, 0 failed); the re-uploads added rows 1843 - 1920. All 196 rows closed (dev_context 232 - 251).
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **Securities companies** (brokers PADI, PANS, RELI, TRIM, YULE) file in the IDX Securities taxonomy (5220000 balance sheet by liquidity, 5311000 / 5321000 profit or loss, 5410000, 5510000), which the reader did not know: no sheet was read, so not even the share capital - the five had no share count and no valuation, and every workbook went to the full-text extraction as "No balance sheet data (1210000)". | 30 (1707 - 1816) | `IdxTaxonomy.SECURITIES` (digit 5, read under the General codes; `financial` false, balance sheet by liquidity as CNMA; `decidedByModel`), `FilingMapperSecuritiesTest`, `IdxWorkbookReaderTest`. Counts now from the filings: PADI 11,307,246,524 (Rp 25), RELI 1,800,000,000, TRIM 7,109,300,000, PANS 711,428,800 + 8,571,200 treasury, YULE 1,587,286,800. Gross profit = revenue (no cost of revenue), as for insurers and financing companies (`FullTextExtractorTest.aBrokersGrossProfitIsItsRevenue`). |
+| **A comparative filled a part of a balanced balance sheet** (PNBN FY2022: own liabilities 161,715,787 million with the syirkah funds inside; the FY2023 filing's comparative 151,844,644 + syirkah 9,871,143 filled the empty syirkah field: counted twice, assets 212,431,881 vs 222,303,024). | 1767 | `IngestionRepository.writeStatement`: `breakingTheBalance` (a comparative does not fill total liabilities / syirkah / equity when the stored balance holds and would not after), `staleBalanceParts` (the own filing, written after such a comparative, clears a syirkah figure its own balance holds without). `BalanceSheetPartsTest`. Only VIVA and PNBN FY2022 broke the identity in the whole database. |
+| **Cells filed a thousand times too small** (VIVA FY2022: total liabilities 10,457,577.261, NCI 607,150.53 thousand; its own totals and the FY2023 comparative prove 10,457,577,261 and 607,150,530). | 1818 | The filing's; `V1.0.47__data_VIVA_balance.sql` (guarded on the exact values), `VivaBalanceTest`. |
+| **The filings' cash gaps**: MITI (15,350,211,250 in every period, no row holds it), PPRI (time deposits in the balance-sheet cash but investing in the cash flow; the short-term loan netted), WOMF / TRUS (financing: no exact combination of cash and bank rows), SKLT (overdrafts), slips with an exact roll-forward (STTP 4,000,000,000; NASA 10,000,000; PTDU 10,000; MTSM 2,198,894; PPRO 5,119,293,760; UCID 1,231 million), UANG FY2023 (no cash flow sheet). PANS 9M 2026's ending cash cell (10,023,702,737 vs beginning + net change 10,023,102,737 = the balance sheet) is a slip `correctEndingCash` would fix, but the full-text extraction, which decides a broker's statements, does not apply it. | 50 | Not changed (dev_context 235). |
+| **No revenue filed** (MTPS FY2025 - 9M 2026, OCAP, TGRA FY2024 - H1 2026, UANG FY2022), **EPS cells** (MENN: the profit; MSJA, PUDP, WIKA: another scale), **workbooks without statements** (PRAY, STRK, TRUE, TARA, RAAM 2023; PTPP FY2024 empty column; SOUL FY2024 notes only), TRON FY2023 without a parent-equity row. | 56 | Not changed (dev_context 236). |
+| **Checks the filing fails** (restated comparatives, sections not adding up, an empty profit-before-tax cell, slips): the full-text extraction stored the filed figures and verified them. VICO's insurance lines in the bank template are the agent's by design (`IncomeLineCategory.FINANCIAL_KNOWN`); with them its profit from operation reconciles exactly (dev_context 237). | 55 | Not changed. |
+| **A numeric 'Entity code' made a new company** (TIRA FY2025 files 7362110449 where its other filings say TIRA: company '7362110449' held TIRA's FY2025, which showed no income statement). | (income check) | `FilingInfo.tickerOfFileName`: a code without a letter takes the ticker of the IDX file name; the company deleted, FY2025 uploaded again. `FilingInfoTickerTest`. |
+| **Refused by design**: SMMT's IDR filings beside its USD statements, ANJT's USD filings beside IDR, SOUL FY2024 not a statement workbook. | 7 | Not changed. |
+
+### Valuation gaps and share counts of 2026-11-05
+
+939 companies had filings; 77 had no valuation at all. Most had prices but no share count: the par value could not be
+inferred (a par outside `STANDARD_PAR_VALUES` or a weighted-average EPS) and Yahoo had none. A count is now proven by
+two sources: the share capital ('Common stocks') divided by a par that divides it exactly lands inside the issued count of
+KSEI's 1% list of 2026-10-30 (every holder's shares / percent, intersected), with the filed EPS where it confirms.
+Companies without a valuation: 77 -> 49 (dev_context 239, 240).
+
+| Script | What |
+|---|---|
+| `V1.0.48__data_KSEI_share_capital_shares.sql` | 18 companies (MENN, PTDU, COAL, PPGL, DOSS, EMMI, ESTI, HAJJ, IDEA, KLAS, MINE, PLAN, PSDN, RGAS, UFOE, VERN, WBSA, YOII) and, by the user's decision, treasury holders whose EPS shows treasury under 2% (LPKR, PTPP, WIKA, DPUM, MCAS; dev_context 238). `ShareCapitalCountsTest`. |
+| `V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql` | counts stored at par Rp 1 (x10 / x100 of KSEI) corrected to the share capital at Rp 10 / 10 / 100 / 100; in `IngestionRepository.SHARE_SCRIPTS`. |
+| `V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql` | PBSA's split 1:2 of 2026-10-13 (price x0.515, KSEI x2; earlier counts split-adjusted), MORA / WGSH / PRDL share issues of 2026. |
+
+Left open (dev_context 240, 241, 243, 245): USD filers and capitals fitting no single par (listing records needed),
+treasury of 3 - 25%, COAL / PTDU's EPS on fewer shares, share issues after the latest filing (BAJA, AHAP, BUVA, VKTR, ...),
+and a KSEI check of the par inference at upload (proposal). `valuation_check.py`: SHARE_GAP 36 -> 29, the x10 / x100
+counts gone; the SNAPSHOT_JUMP flags are share issues KSEI confirms (dev_context 249).
+
+### Revenue, gross profit and net income of every company (2026-11-05)
+
+53 companies with a gap. New: the brokers' gross profit (the Securities fix above; their workbooks uploaded again);
+NATO FY2022 from the FY2023 note's prior column (uploaded again); NIRO, ROCK, TARA and NATO FY2021 by nature with an
+empty cost of sales note (dev_context 250); FY2025 annual workbooks missing for NPGF, TRUS (and FY2024), WBSA, PRDL and
+RAAM FY2022 (dev_context 214); TIRA FY2025 was stored under a company '7362110449' (fixed, above). The rest are known (dev_context 118 - 120, 165 - 169, 214).
 
 ### The review of 2026-10-31 (3) (errors 1553 - 1627): units and share counts proven by the stored data, comparative breakdowns
 
