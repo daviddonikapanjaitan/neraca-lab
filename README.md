@@ -154,6 +154,7 @@ neraca_lab/
 │               ├── V1.0.48__data_KSEI_share_capital_shares.sql  (23 companies' counts from share capital / par and KSEI)
 │               ├── V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql  (counts stored at par Rp 1 corrected)
 │               ├── V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql  (PBSA split 1:2, 2026 share issues)
+│               ├── V1.0.51__data_SOUL_shares.sql  (SOUL IPO of 2023-01-06)
 │               ├── V1.0.40__schema_dev_context.sql  (dev_context: the development context of Claude Code, with embeddings)
 │               ├── V1.0.46__schema_rag_xbrl.sql  (source type XBRL: the uploaded IDX XBRL workbooks in the RAG vector store)
 │               ├── V1.0.6__data_metrics_valuation.sql
@@ -406,7 +407,9 @@ SELECT error_id, file_name, ticker, period, error_type, message FROM ingestion_e
 
 A workbook the model decides by design - the Financing or Insurance Industry taxonomy, a profit or loss presented by
 nature (NSSS, MSIN), a General Industry balance sheet by order of liquidity (CNMA) - that is stored and verified is not
-an error and leaves no row. A row of the error log names the model of the full-text extraction and every model call of the job that
+an error and leaves no row. The FY2021 template differs from later ones: short-term borrowings on one row 'Short-term
+loans' (counted as short-term debt since 2026-11-08) and no cost of sales note - a by-nature FY2021 filing keeps the cost
+and gross profit a later filing's note stored for that year (upload the FY2022 filing first). A row of the error log names the model of the full-text extraction and every model call of the job that
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Development context (`dev_context`).** What Claude Code learns while fixing ingestion errors and data gaps - a
@@ -1038,13 +1041,13 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 939 tests
+(cd backend && ./mvnw test)                      # 956 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
-The full backend suite takes about 13 minutes (2026-11-06: 939 tests in 169 classes, 13 min 8 s; the slowest are
-`DerivedDataRefreshTest` 3 min 23 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
-84 s, `TechnicalControllerTest` 38 s). Run it while the backend is quiet (no upload or price job: the tests share the
+The full backend suite takes about 15 minutes (2026-11-08: 956 tests in 175 classes, 15 min 29 s; the slowest are
+`DerivedDataRefreshTest` 4 min 20 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
+102 s, `TechnicalControllerTest` 43 s). Run it while the backend is quiet (no upload or price job: the tests share the
 live database) and one run at a time; a run past 30 minutes or with no test class finishing for 5 minutes is stuck -
 look at the running test with `jstack <surefire pid>`. Before a new run make sure no Maven / surefire `java` process of an
 earlier, interrupted run is still alive (2026-11-05: an orphaned fork held 2.5 GB and the `target` folder).
@@ -1085,6 +1088,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API; a currency pair's `tickSize` in the bars' header);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
+`IngestionVerifierOverdraftTest.theFy2021ShortTermLoansRowIsDebtAndExplainsTheOverdrafts` the FY2021 template's 'Short-term loans' as short-term debt (BAUT, SKLT, CLPI); `FilingMapperRightOfUseTest` right-of-use assets presented within PP&E (SGRO, KING, OBAT, UDNG, JPFA FY2025; HELI, IATA, FISH not disclosed); `FullTextExtractorTest.withoutANoteTheCostALaterFilingsNoteStoredIsKept` a FY2021 by-nature filing keeps the cost a later filing's note stored (SSMS); `IngestionVerifierRoundingTest.aBreakdownThatIsTheRevenueRoundedToAMillionIsANote` (TRST FY2021); `SoulSharesTest` V1.0.51 (SOUL after its IPO);
 `IngestionServiceUnitTest` a workbook's unit proven by the stored prior year end (IMJS FY2024) and par-derived share counts contradicting the stored count of the same date dropped (IPCC 9M 2026); `KoinHillSharesTest` V1.0.45 (KOIN, HILL, FLMC from share capital and KSEI); `FilingMapperSecuritiesTest` brokers read in the IDX Securities taxonomy (PADI, TRIM share counts); `FilingInfoTickerTest` a numeric 'Entity code' takes the ticker of the IDX file name (TIRA FY2025); `BalanceSheetPartsTest` a comparative's part never breaks a balanced balance sheet (PNBN FY2022); `VivaBalanceTest` V1.0.47; `ShareCapitalCountsTest` V1.0.48 - V1.0.50 (share capital / par = KSEI, par Rp 1 counts corrected, PBSA's split); `FilingMapperEpsCellTest`, `FilingMapperTabarruTest`, `IngestionVerifierOverdraftTest`; `IngestionAgentFastPathTest` a cleanly mapped filing stored without the agent (HRTA H1 2026: no model call; new segments named by one call), filings with a failed check or by nature not for it; `DerivedDataRefreshTest.theRefreshOfOneCompanyLeavesWhatTheScriptComputes` the per-company refresh equal to V1.0.6 for every derived row of every company; `PacedHttpClientAheadTest` an upload's Yahoo request before the waiting price requests; `MarketInstrumentSequenceTest` V1.0.26 draws no sequence value on a restart (the SMALLSERIAL had run out);
 `IngestionToolsSegmentsTest` a later filing's breakdown of a restated revenue never stored beside the period's own revenue (BMHS FY2023, BHIT FY2024; INPP's breakdown in millions kept); `BmblBoatSharesTest` and `ShareCountCorrectionsTest` the share counts of V1.0.43 / V1.0.44 (BMBL, BOAT, MSIN, SMGA, RMKE's split, WIFI, INET, PACK);
 `FilingMapperCashRoundingTest` a cash roll-forward one rupiah off (ALMI, ARTI, ASHA) and a cash flow section whose only line is 0 (AMMS); `FilingMapperAmortizationTest` no amortization from the intangibles roll when the goodwill halved (PTRO, CUAN); `IngestionVerifierInsurerDepositsTest` an insurer's time deposits counted as cash (AMAG); `IngestionVerifierRoundingTest.endingCashOneUnitApartIsANote` one rounding unit between ending cash and balance-sheet cash (BATA, BBLD);
@@ -1189,6 +1193,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.48__data_KSEI_share_capital_shares.sql` | Share counts for 23 companies that had none: share capital / a par inside KSEI's issued count (and, by the user's decision, the issued count of treasury holders whose EPS shows treasury under 2%) |
 | `V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql` | Counts stored at par Rp 1 (x10 / x100 of KSEI) corrected. In `SHARE_SCRIPTS`: runs after every upload |
 | `V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql` | PBSA's stock split 1:2 of 2026-10-13 and the 2026 share issues of MORA, WGSH, PRDL |
+| `V1.0.51__data_SOUL_shares.sql` | SOUL's count after its IPO of 2023-01-06 (812.5 m -> 1,082.5 m shares) |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |

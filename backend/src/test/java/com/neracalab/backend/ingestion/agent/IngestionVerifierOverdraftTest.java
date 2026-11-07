@@ -97,6 +97,39 @@ class IngestionVerifierOverdraftTest {
                 .isNull();
     }
 
+    /**
+     * The FY2021 template files short-term borrowings on one row, "Short-term loans" (later: "Short term bank loans" and
+     * "Short-term non-bank loans"). BAUT FY2021: the cash flow's -11,707,986,630 is the balance sheet's 241,086,275 less
+     * the loans of 11,949,072,905 exactly; SKLT FY2021: 127,460,249,506 - 100,255,079,540 = 27,205,169,966; CLPI within
+     * its loans of 124,328,312,016 (errors 1973, 2045, 1995).
+     */
+    @ParameterizedTest
+    @CsvSource({
+            "BAUT, 241086275, -11707986630, 12286039664",   // loans 11,949,072,905 + current bank loans 257,854,988 + consumer financing 79,111,771
+            "SKLT, 127460249506, 27205169966, ",
+            "CLPI, 191559102091, 171543788955, "})
+    void theFy2021ShortTermLoansRowIsDebtAndExplainsTheOverdrafts(String ticker, String balanceSheetCash, String endingCash,
+                                                                  String shortTermDebt) throws Exception {
+        Path file = Path.of("..", "data", "IDX_XBRL", ticker, "xlsx", "FinancialStatement-2021-Tahunan-" + ticker + ".xlsx");
+        assumeTrue(Files.exists(file), ticker + " source data not available: " + file);
+        IngestionSession session;
+        try (InputStream in = Files.newInputStream(file)) {
+            session = new IngestionSession(new FilingMapper(new IdxWorkbookReader().read(in, file.getFileName().toString())));
+        }
+        MappedStatement balance = session.statements(CURRENT).stream()
+                .filter(s -> s.table().equals("balance_sheet")).findFirst().orElseThrow();
+        BigDecimal debt = balance.values().get("short_term_debt");
+        assertThat(balance.derivations().get("short_term_debt")).contains("Short-term loans");
+        if (shortTermDebt != null) {
+            assertThat(debt).isEqualByComparingTo(shortTermDebt);
+        }
+        BigDecimal cash = new BigDecimal(balanceSheetCash);
+        BigDecimal ending = new BigDecimal(endingCash);
+        assertThat(debt).isGreaterThanOrEqualTo(cash.subtract(ending));
+        assertThat(IngestionVerifier.overdraftExplanation(session, CURRENT, stored(cash, ending)))
+                .contains("bank overdrafts netted against cash");
+    }
+
     private static StoredPeriod stored(BigDecimal balanceSheetCash, BigDecimal endingCash) {
         return new StoredPeriod("FY", true, true, true, 0, BigDecimal.ZERO, null, null, null,
                 balanceSheetCash, endingCash, null);

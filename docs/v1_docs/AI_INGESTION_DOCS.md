@@ -741,6 +741,12 @@ them before the next run.
 | `IngestionServiceCurrencyTest` (unit) | CUAN's IDR FY2023 filing is refused (422) when the company's stored data are in USD, older or newer than the latest stored period; the same currency, a new company or one without stored periods are accepted |
 | `FilingMapperErrorLogTest` (unit) | the filings behind the error rows of 2026-10-11: IMPC FY2024's comparative with 'Proforma equity' (non-controlling 352,479,399,434 = 214,434,701,176 + 138,044,698,258, total 2,625,694,521,530, no failed check), WIIM H1 2026's comparative with 5,797,003,720 on two lines (counted once, profit before tax 196,550,613,747), MSIN's EPS unit per filing (1 for FY2022, 1,000,000 from FY2023) and a published count that fits it, by nature = decided by the model by design, and every filing of AUTO, DKFT, DMAS, IMPC, PTBA, RAJA, SMSM and WIIM without a failed check or an unclassified line |
 | `FilingMapperSecuritiesTest` (unit) | a broker read in the Securities taxonomy (PADI FY2025: 5220000 by liquidity, decided by the model) with 11,307,246,524 shares at par Rp 25; TRIM FY2025 in thousands 7,109,300,000 at Rp 50 |
+| `FilingMapperFy2021TemplateTest` (unit) | the FY2021 template's 'Finance costs' is interest expense: BAUT, SIDO, CPIN FY2021 map without unclassified lines or failed checks (fast path) |
+| `FilingMapperRightOfUseTest` (unit) | right-of-use assets within PP&E: SGRO, KING, OBAT, UDNG, JPFA FY2025 depreciation from the PP&E roll-forward; HELI, IATA FY2024, FISH stay not disclosed |
+| `IngestionVerifierOverdraftTest.theFy2021ShortTermLoansRowIsDebtAndExplainsTheOverdrafts` (unit) | the FY2021 'Short-term loans' row is short-term debt (BAUT 12,286,039,664) and explains the overdrafts (BAUT, SKLT, CLPI) |
+| `IngestionVerifierRoundingTest.aBreakdownThatIsTheRevenueRoundedToAMillionIsANote` (unit) | TRST FY2021: a breakdown equal to the revenue rounded to a million is a note |
+| `FullTextExtractorTest.withoutANoteTheCostALaterFilingsNoteStoredIsKept` (unit, scripted model) | SSMS FY2021 (no cost of sales note) keeps the cost a later filing's note stored: gross profit 2,205,246,583 thousand, operating expenses without the cost; beside another revenue it stays cleared |
+| `SoulSharesTest` (Postgres) | V1.0.51: SOUL 1,082,500,000 shares from its IPO of 2023-01-06, market cap = price x that count |
 | `FilingInfoTickerTest` (unit) | TIRA FY2025's numeric 'Entity code' 7362110449: the ticker from the IDX file name; another file name refused |
 | `BalanceSheetPartsTest` (unit) | PNBN FY2022: a comparative's syirkah funds not filled beside liabilities that already hold them; the own filing clears such a figure |
 | `VivaBalanceTest`, `ShareCapitalCountsTest` (database) | V1.0.47 VIVA FY2022 balances; V1.0.48 - V1.0.50 counts (DOSS, PSDN, LPKR, WIKA, VICO, MKTR, WAPO, PBSA split, MORA) |
@@ -1048,6 +1054,49 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-11-08 (errors 1966 - 2131): the FY2021 template, right-of-use assets within PP&E
+
+Hermes' run of 2026-11-07 - 2026-11-08 (938 companies x FY2021 - 9M 2026, 1,020 new workbooks, most of them FY2021
+annuals) left 94 open rows. Every open row's file and the 391 FY2021 workbooks with 'Short-term loans' were uploaded
+again on the new backend (436 jobs: 422 SUCCEEDED, 14 INCOMPLETE on the filings' cash gaps, 5 refused by design); the
+re-uploads added rows 2060 - 2131. All 144 rows closed (dev_context 266 - 285). Full suite 956 / 956 on a quiet backend (15 min 29 s).
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **The FY2021 template files short-term borrowings on one row 'Short-term loans'** (later: 'Short term bank loans' + 'Short-term non-bank loans'). Not in `SHORT_TERM_DEBT`: FY2021 / FY2020 short-term debt and EV left the loans out, and the cash flow's cash net of overdrafts looked like a mismatch (BAUT -11,707,986,630 = 241,086,275 - 11,949,072,905). | 13 | `FilingMapper.SHORT_TERM_DEBT` + 'Short-term loans' (391 FY2021 workbooks, never beside the later labels); `IngestionVerifierOverdraftTest`. BAUT short-term debt 336,966,759 -> 12,286,039,664. |
+| **The FY2021 template names the finance cost 'Finance costs'** (later 'Interest and finance costs'): unclassified, profit before tax failed by its amount and every FY2021 filing went to the agent (12 of 436 on the fast path, 4,396 model calls). | (speed) | `IncomeLineCategory.KNOWN` + 'Finance costs'; `FilingMapperFy2021TemplateTest`. Load test of 50 FY2021 workbooks: fast path 40, 96 s, 52 model calls, figures unchanged. |
+| **By-nature FY2021 filings cleared a cost a later filing states**: the FY2021 template has no cost of sales note; uploaded after FY2022 (whose note's prior column stored FY2021's cost) it wrote 'not reported' over cost and gross profit and put the cost back into the operating expenses (SSMS 2,997,853,995 thousand). | (income check) | `FullTextExtractor.costOfALaterNote` + `FilingMapper.hasCostOfSalesNote`; `FullTextExtractorTest.withoutANoteTheCostALaterFilingsNoteStoredIsKept`. FY2022 then FY2021 uploaded again for 16 companies. |
+| **A breakdown that is the revenue rounded to a million** (TRST FY2021 3,652,442,192,823 vs the FY2022 filing's 3,652,442 million). | 1 | `IngestionVerifier.segmentRoundingExplanation`; `IngestionVerifierRoundingTest`. |
+| **The filings' cash gaps** (CBRE 9M 2026: the statements contradict each other; BRPT a placement counted as cash; BPII, IMJS, INDO, UCID, CYBR, ASBI, WOMF, SMMA; TUGU / BBLD two units). | 32 | Not changed (dev_context 266). |
+| **Checks the filing fails** (FOOD's net change with the wrong sign, RMKE 100,000, BCIP, MAYA, BEKS; ASGR without PBT and tax; GJTL's finance cost filed twice; TPIA, BBSI, BSDE, PANI, ULTJ, PALM comparatives; IRSX, SDRA known): the full-text extraction stored and verified the filed figures. CASA / VICO insurance lines by design (dev_context 237). | 38 | Not changed (dev_context 267). |
+| **No revenue filed** (BOSS, LAPD, TGRA, OCAP, PEGE, MENN H1 2026, GTBO H1 2026), **EPS cells** (FLMC, LFLO, NICL, MENN: a profit figure; MORA; DLTA in thousands; MSIN 9M 2026 x10 - the stored count is right). | 25 | Not changed (dev_context 200, 268, 274). |
+| **Slow extraction**: ~200 FY2021 workbooks submitted at once; uploaded again on a quieter backend without it. ULTJ: the OpenCode Go key had expired (401). | 26 | Load / configuration; uploaded again: SUCCEEDED. |
+| **Refused by design**: USD / IDR workbooks beside the company's other currency; BKSL, SOUL FY2024 not the IDX template. | 25 | Not changed. |
+
+Not fixed, for the user's decision (dev_context 279): the full-text extraction can override a rule-based cash flow that
+passed every check (TLKM / MLIA FY2021 capex without the advances for PP&E, TARA with land for development, MLIA's sale of
+treasury stock as a buyback); uploaded again the model adopted the rule's capex, MLIA's +1,279,373,000 set to 0 by SQL.
+
+### Valuation gaps and share counts of 2026-11-08
+
+938 companies with filings; 47 without any valuation (12 of them without any price: delisted or suspended, dev_context
+240). **Right-of-use assets within PP&E** (the first year of that presentation keeps the former balance-sheet line in the
+prior column only, the right-of-use note empty): depreciation was 'not disclosed', so EBITDA and EV/EBITDA empty.
+`FilingMapper.rightOfUseWithinPpe` (`FilingMapperRightOfUseTest`; 18 of 5,836 workbook columns reached, IATA FY2024
+excluded): FY2025 EV/EBITDA now GTSI 8.98, JPFA 4.62, KING 52.17, OBAT 3.49, SAPX 12.31, UDNG 595.08 (BEKS' FCF yield too);
+SGRO stays empty (amortization not derivable), HELI / FISH / KBLV / IATA not disclosed (dev_context 269).
+`V1.0.51__data_SOUL_shares.sql`: SOUL's count after its IPO of 2023-01-06 (812,500,000 -> 1,082,500,000; `SoulSharesTest`).
+`valuation_check.py`: a treasury Yahoo stored as 0 at an interim date is replaced by the last stated one where that lands
+closer to KSEI (MNCN, YULE were false SHARE_GAPs). SHARE_GAP 28 -> 25; the SNAPSHOT_JUMPs are share issues KSEI
+confirms (dev_context 249); 209 IMPLAUSIBLE spot-checked real (AIMS equity 43,340,149; MNCN P/E 0.93).
+
+### Revenue, gross profit and net income of every company (2026-11-08)
+
+62 companies with a gap (as before, now mostly FY2020). FY2021 gross profit filled for 15 by-nature companies from their
+FY2022 notes (above); FY2020 has no source (dev_context 285); NATO FY2022 refilled from its FY2023 note (uploaded after
+FY2022); MENN / GTBO H1 2026 without revenue filed (dev_context 268). The rest are known (dev_context 118 - 120, 165 -
+169, 214, 250).
 
 ### The review of 2026-11-05 (errors 1704 - 1920): the Securities taxonomy, a comparative that broke the balance, share counts
 

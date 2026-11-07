@@ -253,11 +253,25 @@ public class IngestionVerifier {
      * the two differ by less than one unit, which the mapper's own check accepts. Stored as filed; {@code null} when the
      * difference is a unit or more. Alike in a full-amount filing whose revenue carries a fraction of a rupiah (RAFI
      * FY2022: revenue 375,886,948,578.9396 beside a breakdown of 375,886,948,579; errors 1149, 1150).
+     * <p>
+     * Also a breakdown that is exactly the revenue rounded to a thousand or a million: a later filing in that unit
+     * restated the period with the same revenue and its breakdown filled the period (TRST FY2021: revenue
+     * 3,652,442,192,823 in its full-amount filing, the FY2022 filing's breakdown of 3,652,442 million; LPKR FY2022
+     * 14,808,570,477,532 beside 14,808,570 million; INPP FY2024; error 2056).
      */
     static String segmentRoundingExplanation(IngestionSession session, StoredPeriod p) {
         BigDecimal unit = session.mapper().precision().max(BigDecimal.ONE);
         BigDecimal difference = p.segmentRevenue().subtract(p.revenue()).abs();
         if (difference.compareTo(unit) >= 0) {
+            for (int digits : new int[] {3, 6}) {
+                BigDecimal coarser = BigDecimal.TEN.pow(digits);
+                if (unit.compareTo(coarser) < 0
+                        && p.segmentRevenue().compareTo(p.revenue().setScale(-digits, java.math.RoundingMode.HALF_UP)) == 0) {
+                    return "segment revenue " + p.segmentRevenue().toPlainString() + " is revenue "
+                            + p.revenue().toPlainString() + " rounded to " + coarser.toPlainString()
+                            + " (a breakdown filed in a coarser unit by another filing of the same revenue): stored as filed";
+                }
+            }
             return null;
         }
         return "segment revenue " + p.segmentRevenue().toPlainString() + " and revenue " + p.revenue().toPlainString()

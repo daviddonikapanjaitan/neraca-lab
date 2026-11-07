@@ -103,6 +103,7 @@ spring:
         - classpath:db/V1.0.48__data_KSEI_share_capital_shares.sql # counts from the share capital / par and KSEI (23 companies)
         - classpath:db/V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql # counts filed at par Rp 1 (x10 / x100 of KSEI)
         - classpath:db/V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql # PBSA split 1:2 of 2026-10-13, share issues of 2026
+        - classpath:db/V1.0.51__data_SOUL_shares.sql      # SOUL IPO of 2023-01-06 (812.5 m -> 1,082.5 m shares)
         - classpath:db/V1.0.6__data_metrics_valuation.sql
         - classpath:db/V1.0.26__data_markets_macro.sql    # catalog of the Forex pairs, commodities and macro series
       continue-on-error: false

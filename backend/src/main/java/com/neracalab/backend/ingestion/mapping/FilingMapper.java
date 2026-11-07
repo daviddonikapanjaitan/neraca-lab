@@ -57,8 +57,16 @@ public final class FilingMapper {
 
     // labels of the General and the Infrastructure Industry taxonomy (the latter: "Short-term non-bank loans",
     // "... property and equipment" instead of "... property, plant and equipment")
+    /**
+     * Short-term borrowings. "Short-term loans" is the FY2021 template's single row for what later templates split into
+     * "Short term bank loans" and "Short-term non-bank loans": 391 FY2021 workbooks file it, never beside those two
+     * (scan of 2026-11-08). Without it their short-term debt left the loans out (BAUT FY2021 336,966,759 instead of
+     * 12,286,039,664 with loans of 11,949,072,905), so EV fell short and the cash flow's cash net of overdrafts (BAUT
+     * -11,707,986,630 = 241,086,275 - 11,949,072,905) looked like a cash mismatch (errors 1973, 1981, 1984, 1995, 1996,
+     * 1999, 2001, 2002, 2024, 2025, 2038, 2045, 2058).
+     */
     private static final List<String> SHORT_TERM_DEBT = List.of(
-            "Short term bank loans", "Short-term non-bank loans", "Trust receipts payables",
+            "Short term bank loans", "Short-term non-bank loans", "Short-term loans", "Trust receipts payables",
             "Current maturities of bank loans", "Current maturities of non-bank financial insitutions loan",
             "Current maturities of secured loans", "Current maturities of unsecured loans",
             "Current maturities of step loans", "Current maturities of loans from government of the republic of indonesia",
@@ -2695,6 +2703,14 @@ public final class FilingMapper {
         return table(IdxSheets.COST_OF_SALES).map(t -> amount(t.value(COST_OF_SALES_TOTAL, ctx))).orElse(null);
     }
 
+    /**
+     * Whether the workbook has a cost of sales note (sheet x670000) at all: the FY2021 template has none, so a profit or
+     * loss by nature of that year says nothing about its cost of sales (a later filing's note may).
+     */
+    public boolean hasCostOfSalesNote() {
+        return table(IdxSheets.COST_OF_SALES).isPresent();
+    }
+
     /** The line of a profit or loss by nature that states the period's depreciation and amortisation. */
     public static final String STATED_DEPRECIATION_AND_AMORTISATION = "Depreciation and amortisation expenses";
 
@@ -2747,10 +2763,63 @@ public final class FilingMapper {
         }
         BigDecimal ppe = rollForwardAdditions(ppeSheet, "Property, plant, and equipment");
         BigDecimal rou = rollForwardAdditions(rouSheet, "Right of use assets");
-        if (rou == null && !hasRightOfUseAssets(column)) {
+        if (rou == null && (!hasRightOfUseAssets(column) || rightOfUseWithinPpe(column, ppeSheet, rouSheet))) {
             rou = ZERO;
         }
         return ppe == null || rou == null ? null : ppe.add(rou);
+    }
+
+    /**
+     * Right-of-use assets presented within property, plant and equipment: the right-of-use note holds nothing, the
+     * balance sheet has no right-of-use assets at the column's date, and the PP&E roll-forward carries right-of-use rows
+     * with amounts - their depreciation is in the PP&E additions. The first year of that presentation keeps the former
+     * separate line in the prior column only (SGRO FY2025: 'Right of use assets' 43,359 million at 2024-12-31 only, the
+     * PP&E note's 'Building, right of use assets' 74,868 -> 54,107; also KING, OBAT, SAPX, GTSI, UDNG FY2025: depreciation
+     * was empty, so EBITDA and EV/EBITDA too). A right-of-use line that ends without either note (HELI FY2025: 65,209,595,831
+     * at 2024-12-31) stays not disclosed, and so does a right-of-use note with any amount (IATA FY2024: a building
+     * right-of-use asset of 129,704 disposed in the year, no accumulated depreciation filed: its depreciation is not stated).
+     */
+    private boolean rightOfUseWithinPpe(StatementColumn column, String ppeSheet, String rouSheet) {
+        StatementTable balance = balanceSheetAsFiled();
+        if (balance == null) {
+            return false;
+        }
+        int ctx = instantIndex(column) < 0 ? 0 : instantIndex(column);
+        BigDecimal closing = balance.value("Right of use assets", ctx);
+        if (closing != null && closing.signum() != 0) {
+            return false;
+        }
+        RawSheet rouNote = workbook.sheet(rouSheet).orElse(null);
+        if (rouNote != null) {
+            for (int r = 0; r < rouNote.rowCount(); r++) {
+                for (int c = 0; c < rouNote.width(r); c++) {
+                    if (rouNote.cell(r, c) instanceof BigDecimal) {
+                        return false;
+                    }
+                }
+            }
+        }
+        RawSheet sheet = workbook.sheet(ppeSheet).orElse(null);
+        if (sheet == null) {
+            return false;
+        }
+        for (int r = 0; r < sheet.rowCount(); r++) {
+            boolean rightOfUse = false;
+            boolean amount = false;
+            for (int c = 0; c < sheet.width(r); c++) {
+                Object v = sheet.cell(r, c);
+                if (v instanceof String t) {
+                    String l = t.toLowerCase(Locale.ROOT);
+                    rightOfUse |= l.contains("right of use assets") || l.contains("rights of use assets");
+                } else if (v instanceof BigDecimal) {
+                    amount = true;
+                }
+            }
+            if (rightOfUse && amount) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean hasRightOfUseAssets(StatementColumn column) {

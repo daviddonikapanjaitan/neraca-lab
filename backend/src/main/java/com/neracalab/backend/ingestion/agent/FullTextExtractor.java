@@ -1193,8 +1193,20 @@ public class FullTextExtractor {
         BigDecimal modelCost = counted.getOrDefault("cost_of_revenue", List.of()).stream()
                 .filter(c -> !inExpenses.contains(c.term().row().ref()))
                 .map(Counted::amount).reduce(BigDecimal::add).orElse(null);
+        BigDecimal noteCost = null;
+        String noteOrigin = null;
+        if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
+            noteCost = mapper.costOfSales(target.column());
+            noteOrigin = "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
+                    + FilingMapper.COST_OF_SALES_TOTAL + "')";
+            if (noteCost == null && !mapper.hasCostOfSalesNote()) {
+                noteCost = costOfALaterNote(session, target, values.get("revenue"));
+                noteOrigin = "the cost of sales note of a later filing, stored for this period (this workbook has no "
+                        + "cost of sales note)";
+            }
+        }
         if (target.kind() == Kind.INCOME && mapper.incomeByNature()
-                && costOfSalesFromTheNote(mapper, target, values, how, checks, positiveExpenses, modelCost)) {
+                && costOfSalesFromTheNote(mapper, target, values, how, checks, positiveExpenses, modelCost, noteCost, noteOrigin)) {
             // the filing's own cost of sales note gives the cost of revenue and the gross profit
         } else if (target.kind() == Kind.INCOME && mapper.incomeByNature()) {
             for (String field : BY_FUNCTION_ONLY) {
@@ -1229,12 +1241,14 @@ public class FullTextExtractor {
      *
      * @param positiveExpenses the positive rows of the model's operating expenses, full units; {@code null}: none named
      * @param modelCost        the rows the model named as cost of revenue, full units; {@code null}: none named
+     * @param cost             the note's cost of sales of the column, full units ({@link FilingMapper#costOfSales}, or
+     *                         {@link #costOfALaterNote}); {@code null}: none
+     * @param origin           where the cost comes from, for the derivation text
      * @return whether the fields were set
      */
     private static boolean costOfSalesFromTheNote(FilingMapper mapper, Target target, Map<String, BigDecimal> values,
                                                   Map<String, String> how, List<Check> checks, BigDecimal positiveExpenses,
-                                                  BigDecimal modelCost) {
-        BigDecimal cost = mapper.costOfSales(target.column());
+                                                  BigDecimal modelCost, BigDecimal cost, String origin) {
         BigDecimal revenue = values.get("revenue");
         BigDecimal expenses = values.get("operating_expenses");
         // a cost less than a filed unit above the expenses is the same amount (RAFI FY2021: 89,901,586,207 in the
@@ -1243,14 +1257,13 @@ public class FullTextExtractor {
         if (cost != null && cost.signum() > 0 && expenses != null && modelCost != null
                 && modelCost.subtract(cost).abs().compareTo(slack) < 0) {
             values.put("cost_of_revenue", cost);
-            how.put("cost_of_revenue", "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
-                    + FilingMapper.COST_OF_SALES_TOTAL + "'), the rows the model named as cost of revenue");
+            how.put("cost_of_revenue", origin + ", the rows the model named as cost of revenue");
             if (revenue != null) {
                 values.put("gross_profit", plainScale(revenue.subtract(cost)));
                 how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");
             }
             checks.add(Check.ok("gross_profit", "Profit or loss by nature: cost of revenue " + cost.toPlainString()
-                    + " from the filing's cost of sales note, the rows the model named; the operating expenses as mapped"));
+                    + " from " + origin + ", the rows the model named; the operating expenses as mapped"));
             return true;
         }
         BigDecimal held = expenses == null ? null : positiveExpenses == null ? expenses : positiveExpenses.max(expenses);
@@ -1263,8 +1276,7 @@ public class FullTextExtractor {
         }
         values.put("cost_of_revenue", cost);
         values.put("operating_expenses", plainScale(remaining));
-        how.put("cost_of_revenue", "the cost of sales note (" + mapper.sheetCode(IdxSheets.COST_OF_SALES) + ", '"
-                + FilingMapper.COST_OF_SALES_TOTAL + "'): the profit or loss by nature shows no cost of sales on its face");
+        how.put("cost_of_revenue", origin + ": the profit or loss by nature shows no cost of sales on its face");
         if (revenue != null) {
             values.put("gross_profit", plainScale(revenue.subtract(cost)));
             how.put("gross_profit", "revenue - cost of revenue (from the cost of sales note)");
@@ -1276,8 +1288,42 @@ public class FullTextExtractor {
         how.put("operating_expenses", how.getOrDefault("operating_expenses", "") + "; less the cost of revenue of the "
                 + "cost of sales note (" + cost.toPlainString() + ")");
         checks.add(Check.ok("gross_profit", "Profit or loss by nature: cost of revenue " + cost.toPlainString()
-                + " from the filing's cost of sales note, gross profit = revenue - cost, the operating expenses without it"));
+                + " from " + origin + ", gross profit = revenue - cost, the operating expenses without it"));
         return true;
+    }
+
+    /**
+     * The cost of revenue a later filing's cost of sales note stored for the target's period, when this workbook's
+     * template has no cost of sales note at all (the FY2021 template: no sheet x670000). Hermes uploads newest first:
+     * SSMS's FY2022 filing stored FY2021's cost 2,997,853,995 thousand from its note's prior column, then the FY2021
+     * filing (by nature, no note) cleared it with the gross profit as 'not reported', so FY2021 lost a cost and gross
+     * profit the next filing states (SSMS, BEEF, BIPI, BUKA, ICON, NICL, SOTS, MKPI, RODA ... FY2021, 2026-11-07). Only
+     * when the stored revenue is this filing's revenue (the cost belongs to the same figure) and the cost is positive;
+     * {@code null} otherwise.
+     */
+    private BigDecimal costOfALaterNote(IngestionSession session, Target target, BigDecimal revenue) {
+        if (revenue == null || repository == null) {
+            return null;
+        }
+        // an unsupported workbook goes to the full-text extraction before any lookup of its company
+        Optional<IngestionRepository.CompanyRow> company = session.company()
+                .or(() -> repository.findCompany(session.info().ticker()));
+        if (company.isEmpty()) {
+            return null;
+        }
+        long companyId = company.get().companyId();
+        Map<String, Object> row = repository.periodId(companyId, session.mapper().period(target.column()))
+                .flatMap(id -> repository.readStatement("income_statement", id)).orElse(null);
+        if (row == null || row.get("cost_of_revenue") == null || row.get("revenue") == null) {
+            return null;
+        }
+        BigDecimal cost = new BigDecimal(row.get("cost_of_revenue").toString());
+        BigDecimal storedRevenue = new BigDecimal(row.get("revenue").toString());
+        if (cost.signum() <= 0 || storedRevenue.compareTo(revenue.setScale(Math.max(storedRevenue.scale(), revenue.scale()),
+                java.math.RoundingMode.HALF_UP)) != 0) {
+            return null;
+        }
+        return cost.stripTrailingZeros();
     }
 
     /**

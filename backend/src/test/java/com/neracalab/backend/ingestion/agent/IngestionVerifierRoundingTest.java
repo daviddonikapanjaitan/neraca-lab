@@ -130,6 +130,24 @@ class IngestionVerifierRoundingTest {
     }
 
     /**
+     * TRST FY2021 (full rupiah, error 2056): revenue 3,652,442,192,823; the breakdown came from its FY2022 filing in
+     * millions, 3,652,442 million of the same revenue. Exactly the revenue rounded to a million: a note. A breakdown a
+     * million off that rounding stays a problem.
+     */
+    @Test
+    void aBreakdownThatIsTheRevenueRoundedToAMillionIsANote() throws Exception {
+        BigDecimal revenue = new BigDecimal("3652442192823");
+        StoredPeriod rounded = new StoredPeriod("FY", true, true, true, 3, new BigDecimal("3652442000000"), revenue,
+                null, null, null, null, null);
+        StoredPeriod other = new StoredPeriod("FY", true, true, true, 3, new BigDecimal("3652441000000"), revenue,
+                null, null, null, null, null);
+        IngestionSession trst = session("TRST", "2021-Tahunan");
+        assertThat(IngestionVerifier.segmentRoundingExplanation(trst, rounded))
+                .contains("rounded to 1000000").contains("stored as filed");
+        assertThat(IngestionVerifier.segmentRoundingExplanation(trst, other)).isNull();
+    }
+
+    /**
      * MEDC FY2022 (full USD amounts) files common stocks 121,798,945.72: liabilities + equity 6,931,905,825.7 beside total
      * assets 6,931,905,826 (errors 711, 712). Less than one unit apart: a note, in its own filing and its FY2023 one.
      */
