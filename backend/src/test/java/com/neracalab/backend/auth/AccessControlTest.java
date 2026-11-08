@@ -52,6 +52,10 @@ class AccessControlTest {
         RULES.put("/api/v1/registrations", Set.of(Permission.COMPANIES));
         RULES.put("/api/v1/registrations/companies", Set.of(Permission.COMPANIES));
         RULES.put("/api/v1/macro/analyses/options", Set.of(Permission.COMPANIES));
+        RULES.put("/api/v1/macro/data/series", Set.of(Permission.COMPANIES));
+        RULES.put("/api/v1/macro/data/series/US_10Y?range=1Y", Set.of(Permission.COMPANIES));
+        RULES.put("/api/v1/macro/series", Set.of(Permission.INGESTION));
+        RULES.put("/api/v1/companies/quant-scores?exchange=IDX", Set.of(Permission.COMPANIES));
         RULES.put("/api/v1/fundamentals/status?exchange=IDX", Set.of(Permission.INGESTION, Permission.SCREENING));
     }
 

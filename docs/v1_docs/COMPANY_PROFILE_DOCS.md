@@ -126,6 +126,21 @@ writes rule-based strengths (>= 80% of a criterion's points), concerns (<= 20%) 
 The scores can differ from the quantitative part of Screening › Analysis, which uses Yahoo's snapshot alone; this tab
 prefers the filings.
 
+### 3a. The company list's Quant Score column (`QuantScoreBoard`)
+
+`GET /api/v1/companies/quant-scores?exchange=IDX` (permission COMPANIES): `exchange`, `computedAt`, `millis`, `cached`,
+`companies`, `scored`, `minCoverage`, `riskWeight` and per company `ticker`, `overall`, `verdict`, `financial`,
+`agentsCounted`. Each score comes from `ScorecardService.compute`, the code of the Quant Score tab, on the same data, so
+the list and the tab never differ (`QuantScoreBoardTest` compares HRTA, BBCA, GOTO, AADI, TLKM).
+
+- All 938 IDX companies, 8 at a time: about 2 - 3 s (2026-11-09; 10 s before the scorecard queries named the company in
+  their reads of `financial_metric` and the statements, whose unique indexes lead with `company_id`).
+- Kept in memory per exchange, computed again when `ScorecardRepository.fingerprint()` changes (about 20 ms: periods,
+  valuation snapshots, companies, screening snapshot dates, exchange rates) or after
+  `neracalab.companies.quant-score-ttl` (default 10 minutes: daily prices and metrics rewritten in place are not in
+  the fingerprint). Requests of one exchange wait for one computation. A company whose computation fails has an
+  unknown score (logged), never a failed list.
+
 ## 4. APIs
 
 | Method | Path | Permission | |
@@ -134,6 +149,7 @@ prefers the filings.
 | GET | `/api/v1/companies/profiles/status?exchange=IDX` | INGESTION | counts, the last upload, the first 50 companies without a listing date |
 | GET | `/api/v1/companies/{exchange}/{ticker}/profile` | COMPANIES | the Profile tab |
 | GET | `/api/v1/companies/{exchange}/{ticker}/scorecards` | COMPANIES | the Quant Score tab |
+| GET | `/api/v1/companies/quant-scores?exchange=IDX` | COMPANIES | the overall of every company (the company list) |
 
 Frontend route handlers: `POST /api/companies/profiles/upload`, `GET /api/companies/profiles/status`. The company page
 loads the profile and the scorecards on the server beside the detail; when either fails, only its tab shows the error.
@@ -145,10 +161,10 @@ loads the profile and the scorecards on the server beside the detail; when eithe
 | `IdxProfileParserTest` | list, detail and collector shapes, board codes, date forms, both number notations, repeated / bonus rows, rejection |
 | `DividendHistoryTest` | cum-date close, split basis, IDX + Yahoo match, USD reporter conversion, no rate = unknown, cash / declared / trailing payout |
 | `CombinedProfileTest` | filings first and Yahoo for the gaps, prices without a snapshot, a missing year in the CAGR, bank criteria, card bounds = `QuantScorer.criteria` |
+| `QuantScoreBoardTest` | every IDX company listed, each overall / verdict / financial / agents counted equal to its Quant Score tab, the second request from memory, the API and an unknown exchange (400) |
 | `CompanyProfileControllerTest` | against the Docker Postgres, rolled back: upload writes / unknown ticker / conflict / same file / partial file, Profile tab, status, 404, the Quant Score of HRTA (overall = `QuantScorer.overall`), BBCA as a bank, AADI's rupiah yields |
 
-Full suite 2026-11-08 with these: 982 tests in 179 classes, all passing (`PacedHttpClientPaceTest` failed once on timing
-in the full run and passed three times alone).
+Full suite 2026-11-09 with these and `QuantScoreBoardTest`: 996 tests in 182 classes, all passing (13 min 36 s).
 
 ## 6. Refresh
 

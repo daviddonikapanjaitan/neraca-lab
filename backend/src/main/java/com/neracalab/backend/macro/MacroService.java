@@ -140,8 +140,20 @@ public class MacroService {
             points.add(List.of(r.obsDate().toString(), r.value(),
                     r.releaseDate() == null ? r.obsDate().toString() : r.releaseDate().toString()));
         }
-        SeriesStatus status = status(s, repository.stats(s.code()), repository.lastJobs().get(s.code()), ingestion.today());
-        return new History(status, points);
+        return new History(seriesStatus(s), points);
+    }
+
+    /**
+     * One series with what is stored of it (Macro › Data).
+     *
+     * @throws SeriesNotFoundException no active series of that code
+     */
+    public SeriesStatus seriesStatus(String code) {
+        return seriesStatus(series(code));
+    }
+
+    private SeriesStatus seriesStatus(MacroSeries s) {
+        return status(s, repository.stats(s.code()), repository.lastJobs().get(s.code()), ingestion.today());
     }
 
     /** Queues one series (also when it is up to date: the source is asked again). */

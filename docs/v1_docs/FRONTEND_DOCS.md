@@ -95,7 +95,8 @@ ProblemDetail through; unreachable backend = 503):
 | Exchange filter | the exchanges from `GET /api/v1/exchanges`; changing it navigates to `?exchange=` (shareable URL)                                    |
 | Search          | ticker, name, legal name, sector, industry (client side)                                                                             |
 | Sector filter   | the sectors of the listed companies                                                                                                  |
-| Table           | company, sector / industry, periods, latest period, latest price date, currency; sortable columns; a row (or "Details") opens page 2 |
+| Table           | company, sector / industry, **Quant Score**, periods, latest period, latest price date, currency; sortable columns; a row (or "Details") opens page 2 |
+| Quant Score     | the overall of the six fundamental agents, the same number as the company's Quant Score tab (coloured >= 65 / >= 45 / below, the verdict under it; the cell opens `?tab=quant`). Loaded after the list from `/api/companies/quant-scores?exchange=` (`GET /api/v1/companies/quant-scores`; a few seconds when the backend has not kept them, then from memory), a skeleton meanwhile; sorting by it starts with the best score, unknown scores last; the card says how many are scored and when they were computed ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md) section 3a) |
 | Empty states    | "no matching results" with "Clear filters", or "no companies yet" for an empty exchange                                              |
 | Errors          | unsupported exchange (400), backend unreachable                                                                                      |
 
@@ -234,6 +235,14 @@ unknown country or index in the URL shows Indonesia / IHSG.
 | Other | notes (series without data, an index not stored yet) and the disclaimer |
 
 Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6a.
+
+### 3.2b' Macro › Data - `/macro/data?series=US_10Y&range=5Y` (`COMPANIES`)
+
+Every series of Ingestion › Macro as one large chart: a series dropdown grouped by country, the ranges, the chart (a
+line; net foreign buying as bars; average line, zoom brush), the changes 1M - 5Y, the range's statistics, about the
+series and its 12 latest observations. Server page `app/(dashboard)/macro/data/page.tsx` (`GET /api/v1/macro/data/series`
+and `/series/{code}`), client `components/macro/macro-data-client.tsx` reloading through `/api/macro/data/series/[code]`
+and keeping the choice in the URL. Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6b.
 
 ### 3.2c Macro › AI Analysis - `/macro/analysis`, `/macro/analysis/[id]` (`COMPANIES`)
 

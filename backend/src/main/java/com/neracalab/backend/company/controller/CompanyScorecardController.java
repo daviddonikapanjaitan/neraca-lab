@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.neracalab.backend.auth.Permission;
@@ -14,21 +15,35 @@ import com.neracalab.backend.auth.RequiresPermission;
 import com.neracalab.backend.company.CompanyService.CompanyNotFoundException;
 import com.neracalab.backend.company.Exchange.UnsupportedExchangeException;
 import com.neracalab.backend.company.Tickers.InvalidTickerException;
+import com.neracalab.backend.company.score.QuantScoreBoard;
 import com.neracalab.backend.company.score.ScorecardService;
 import com.neracalab.backend.company.score.ScorecardService.Scorecards;
 
 /**
- * {@code GET /api/v1/companies/{exchange}/{ticker}/scorecards} - the Quant Score tab of a company: the six
- * fundamental agents' scorecards from preset rules on the stored data (no model call, nothing stored). COMPANIES.
+ * The Quant Score (permission COMPANIES; preset rules on the stored data, no model call, nothing stored):
+ * <ul>
+ *   <li>{@code GET /api/v1/companies/{exchange}/{ticker}/scorecards} - the Quant Score tab of a company: the six
+ *       fundamental agents' scorecards</li>
+ *   <li>{@code GET /api/v1/companies/quant-scores?exchange=IDX} - the overall score of every company of the exchange
+ *       (the sortable column of the company list; {@link QuantScoreBoard}, kept in memory)</li>
+ * </ul>
  */
 @RestController
 @RequestMapping(path = "/api/v1/companies", produces = MediaType.APPLICATION_JSON_VALUE)
 public class CompanyScorecardController {
 
     private final ScorecardService service;
+    private final QuantScoreBoard board;
 
-    public CompanyScorecardController(ScorecardService service) {
+    public CompanyScorecardController(ScorecardService service, QuantScoreBoard board) {
         this.service = service;
+        this.board = board;
+    }
+
+    @RequiresPermission(Permission.COMPANIES)
+    @GetMapping("/quant-scores")
+    public QuantScoreBoard.Board quantScores(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange) {
+        return board.board(exchange);
     }
 
     @RequiresPermission(Permission.COMPANIES)

@@ -90,16 +90,35 @@ public class ScorecardService {
     public record MetricView(String key, Double value, String unit, String source, String basis) {
     }
 
+    /** Share of a scorecard's weight that must be known for it to count in the overall. */
+    public double minCoverage() {
+        return screening.minFundamentalsCoverage();
+    }
+
+    /** Weight of the Risk agent in the overall. */
+    public double riskWeight() {
+        return screening.riskWeight();
+    }
+
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Scorecards scorecards(String exchangeCode, String tickerCode) {
         Exchange exchange = Exchange.of(exchangeCode);
         String ticker = Tickers.normalize(tickerCode);
         ScorecardRepository.CompanyRow company = repository.company(exchange.code(), ticker)
                 .orElseThrow(() -> new CompanyNotFoundException(exchange.code(), ticker));
-        String currency = company.currency() == null ? exchange.currency()
-                : company.currency().toUpperCase(Locale.ROOT);
         StockSnapshot snapshot = fundamentals.latestSnapshots(exchange, List.of(ticker)).stream().findFirst()
                 .orElse(null);
+        return compute(exchange, company, snapshot);
+    }
+
+    /**
+     * The scorecards of a company with its latest screening snapshot ({@code null}: not in the screening data). The
+     * Quant Score tab and the overall column of the company list ({@link QuantScoreBoard}) both come from here.
+     */
+    Scorecards compute(Exchange exchange, ScorecardRepository.CompanyRow company, StockSnapshot snapshot) {
+        String ticker = company.ticker();
+        String currency = company.currency() == null ? exchange.currency()
+                : company.currency().toUpperCase(Locale.ROOT);
         CombinedProfile.Own own = repository.own(company.companyId(), currency, exchange.currency());
         CombinedProfile.Result combined = CombinedProfile.of(snapshot, own, company.sector(), company.industry(),
                 company.idxSector());

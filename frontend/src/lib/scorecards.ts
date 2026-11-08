@@ -55,6 +55,34 @@ export type Scorecards = {
   notes: string[]
 }
 
+/** One company of GET /api/v1/companies/quant-scores (the company list's column; backend QuantScoreBoard). */
+export type QuantScore = {
+  ticker: string
+  /** the overall of the Quant Score tab; null when no agent has enough of its scorecard known */
+  overall: number | null
+  verdict: Verdict | null
+  financial: boolean
+  /** agents in the overall (of 6) */
+  agentsCounted: number
+}
+
+/** GET /api/v1/companies/quant-scores?exchange= */
+export type QuantScoreBoard = {
+  exchange: string
+  computedAt: string
+  millis: number
+  cached: boolean
+  companies: number
+  scored: number
+  minCoverage: number
+  riskWeight: number
+  scores: QuantScore[]
+}
+
+export function quantScoresUrl(exchange: string): string {
+  return `/api/companies/quant-scores?${new URLSearchParams({ exchange })}`
+}
+
 export const VERDICT_LABELS: Record<Verdict, string> = {
   STRONG_FIT: "Strong fit",
   FIT: "Fit",

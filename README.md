@@ -47,7 +47,7 @@ start), then change its password in Admin Center > User Management.
 | [`DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md)             | start / stop scripts, containers, compose files, options, troubleshooting |
 | [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
 | [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
-| [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Quant Score tab (six rule-based agent scorecards) |
+| [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Quant Score tab (six rule-based agent scorecards) and the sortable overall Quant Score column of the company list |
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
@@ -60,7 +60,7 @@ start), then change its password in Admin Center > User Management.
 | [`OWNERSHIP_ONE_PERCENT_DOCS.md`](docs/v1_docs/OWNERSHIP_ONE_PERCENT_DOCS.md) | Companies › Ownership (>=1%): KSEI's monthly lists of the shareholders of more than 1%, investor types, the same investor listed twice, totals that do not add up, matching month to month (same name, renamed, moved block), out-of-order months, the vector store and the AI analysis, API, tests |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
 | [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
-| [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes |
+| [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes; the Macro › Outlook and Macro › Data pages |
 | [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex, indexes and the macro documents (RAG), the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
 | [`DEV_CONTEXT_DOCS.md`](docs/v1_docs/DEV_CONTEXT_DOCS.md)   | development context of Claude Code (`dev_context`, RAG): issues, data gaps of tickers, fixes, decisions and procedures saved and searched by meaning and keywords, API `/api/v1/dev-context` |
 | [`TECHNICAL_SCREENING_DOCS.md`](docs/v1_docs/TECHNICAL_SCREENING_DOCS.md) | AI technical screening (Screening › Technicals (All) / (Selected)): the price history of every listing, Stage 1 rules, the Gill / Murphy / Tudor Jones / Druckenmiller agents, Reflection, trade plans (buy, sell, stop loss), synthesis, cost, API, tables |
@@ -519,6 +519,7 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/companies?exchange=IDX"   # compan
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/profile        # IDX profile, dividends, payout
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/scorecards     # Quant Score: six agents, no AI
+curl -H "$AUTH" "http://localhost:8080/api/v1/companies/quant-scores?exchange=IDX" # overall Quant Score of every company
 ```
 
 | Endpoint                                    | Returns                                                                                                                                                                                                                                                                                           |
@@ -960,7 +961,16 @@ panels are technical only.
 
 ```bash
 curl -H "$AUTH" "http://localhost:8080/api/v1/macro/outlook?country=ID&index=LQ45&range=1Y"
+curl -H "$AUTH"  http://localhost:8080/api/v1/macro/data/series                    # Macro › Data: the series
+curl -H "$AUTH" "http://localhost:8080/api/v1/macro/data/series/US_10Y?range=5Y"   # one series' chart and statistics
 ```
+
+**Macro › Data** (sidebar › Macro › Data, permission COMPANIES) shows every series of Ingestion › Macro as one large
+chart chosen from a dropdown (grouped by country) over the same ranges: a line (net foreign buying on IDX as green / red
+bars), the range's average, a zoom brush, the changes 1M - 5Y (rates in points, levels in percent, flows as sums), the
+range's high, low, average and change, what the series is and where it comes from, and its 12 latest observations. A range
+ends at the series' latest observation; more than 2,000 observations are drawn weekly. Details:
+[`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6b.
 
 The outlook is cached in Redis (about 10 - 30 ms instead of 0.5 s; header `X-Cache`), cleared whenever index, macro,
 commodity or currency data are stored and on every backend start (`neracalab.macro.outlook-cache`).
@@ -1045,13 +1055,13 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 982 tests
+(cd backend && ./mvnw test)                      # 996 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
-The full backend suite takes about 15 minutes (2026-11-08: 982 tests in 179 classes, about 16 min; the slowest are
-`DerivedDataRefreshTest` 4 min 10 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
-97 s, `AnalysisControllerTest` and `TechnicalControllerTest` 43 s). `PacedHttpClientPaceTest` measures request
+The full backend suite takes about 15 minutes (2026-11-09: 996 tests in 182 classes, 13 min 36 s, all passing; the
+slowest are `DerivedDataRefreshTest` 3 min 36 s - the refresh of every company, ~940 with filings -
+`OnePercentRepositoryTest` 82 s, `AnalysisControllerTest` 49 s, `TechnicalControllerTest` 34 s). `PacedHttpClientPaceTest` measures request
 starts in milliseconds and can fail once under a busy machine (2026-11-08: one gap of 64 ms against 85); run it again
 alone before looking further. Run it while the backend is quiet (no upload or price job: the tests share the
 live database) and one run at a time; a run past 30 minutes or with no test class finishing for 5 minutes is stuck -
@@ -1089,7 +1099,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `PresetSummariesTest` the preset summaries (valid IDX prices, stop < buy < sell, the trend rules, determinism; a currency pair read through its own trend; no macro data); `IndexIngestionServiceTest`, `PriceUpdateServiceTest` and `PriceUpdateControllerTest` the IHSG ingestion and the update of every company to today;
 `InstrumentIngestionServiceTest`, `BarCleanerTest`, `WorldBankPinkSheetClientTest`, `ImfPcpsClientTest` and `MarketControllerTest` the Forex and commodity prices (the last completed day by the market's zone, the bad prints of the real USD/IDR and USD/JPY histories and those the thresholds of the seven pairs of 2026-10-23 were set on, the 9 currency pairs in order, coal monthly from the World Bank workbook - downloaded once for every monthly commodity of an update, palm oil in ringgit as CPO=F x MYR=X, the markets API, a Forex close outside its own range dropped and filled with the ECB rate - an ECB failure never fails the job); `PacedHttpClientPaceTest`, `PacedHttpClientAheadTest` and `PricePropertiesBindingTest` the Yahoo pace (8 at once, 150 ms apart, one at a time after a 429; the throughput settings bind); `CompanyCurrencyConversionTest` the USD \| IDR rates of a USD reporter (SMDR);
 `MacroSourceParsersTest`, `MacroSeriesTest`, `MacroIngestionServiceTest`, `MacroSignalsTest` and `MacroControllerTest` the macro data (FRED, CNBC, CFTC, the Bank Indonesia form and export, a SEKI table; release dates; the checks before storing; revisions; point in time; the regimes; the CSV upload);
-`MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `IndexIngestionServiceTest` also LQ45 with IHSG;
+`MacroOutlookTest` and `MacroOutlookControllerTest` the Macro page (the rules: not investable / investable / accumulate below the 200-day average, the panels' tones, derived series, point in time, missing data; the API and its refusals); `MacroSeriesChartTest` and `MacroDataControllerTest` Macro › Data (window, kinds, flow sums, weekly drawing, the stored series); `IndexIngestionServiceTest` also LQ45 with IHSG;
 `MacroAnalysisControllerTest`, `MacroAnalysisRulesTest` and `MarketBoardTest` the AI macro analysis (end to end with a scripted model: research with tools and a search in the macro documents published by the as-of date, four agents, synthesis, scores, PDF; an active analysis not queued twice; point in time, flows summed per month, stored highs and lows, the document search's refs and limits, the validator's rules, the blend and the action; the commodities board for Indonesia, the yuan, the dollar and risk appetite, the rupiah against its Asian peers; a pair's code as the model writes it);
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API; a currency pair's `tickSize` in the bars' header);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
@@ -1132,7 +1142,8 @@ embeddings, validation, the United States and China not available yet, permissio
 Company profiles and Quant Score: `IdxProfileParserTest` (the IDX list, detail and collector files, boards, dates, both number
 notations), `DividendHistoryTest` (yield on the cum-date close, split basis, IDX + Yahoo as one row, USD reporters in
 rupiah, cash / declared / trailing payout), `CombinedProfileTest` (filings first, Yahoo for the gaps) and
-`CompanyProfileControllerTest` (upload, Profile tab, status, scorecards of HRTA, BBCA and AADI, rolled back); see
+`CompanyProfileControllerTest` (upload, Profile tab, status, scorecards of HRTA, BBCA and AADI, rolled back) and
+`QuantScoreBoardTest` (the company list's column: every company's overall equal to its Quant Score tab, kept in memory); see
 `docs/v1_docs/COMPANY_PROFILE_DOCS.md`, section 5.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and

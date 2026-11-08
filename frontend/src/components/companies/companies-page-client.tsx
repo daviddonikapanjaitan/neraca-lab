@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -8,6 +8,7 @@ import {
   CalendarCheckIcon,
   ChevronRightIcon,
   FileSpreadsheetIcon,
+  GaugeIcon,
   LineChartIcon,
   LoaderIcon,
   SearchIcon,
@@ -27,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -35,16 +37,40 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { EMPTY, formatDate } from "@/lib/format"
+import { RequestError, requestJson } from "@/lib/client-api"
+import { EMPTY, formatDate, formatNumber, formatTimestamp } from "@/lib/format"
 import { companiesHref, companyHref } from "@/lib/links"
+import { quantScoresUrl, scoreTone, VERDICT_LABELS, type QuantScore, type QuantScoreBoard } from "@/lib/scorecards"
 import type { CompanyListResponse, CompanySummary, Exchange } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-type SortKey = "ticker" | "companyName" | "sector" | "periodCount" | "latestPeriodEnd" | "latestPriceDate"
+type SortKey =
+  | "ticker"
+  | "companyName"
+  | "sector"
+  | "quantScore"
+  | "periodCount"
+  | "latestPeriodEnd"
+  | "latestPriceDate"
 
 const ALL_SECTORS = "__all__"
 
-function compare(a: CompanySummary, b: CompanySummary, key: SortKey): number {
+const TONE_TEXT = {
+  good: "text-emerald-600 dark:text-emerald-400",
+  mid: "text-amber-600 dark:text-amber-400",
+  poor: "text-rose-600 dark:text-rose-400",
+  none: "text-muted-foreground",
+} as const
+
+type Scores =
+  | { state: "loading"; exchange: string }
+  | { state: "ready"; exchange: string; board: QuantScoreBoard; byTicker: Map<string, QuantScore> }
+  | { state: "error"; exchange: string; message: string }
+
+/** A company of the list with its overall Quant Score (null: unknown or not loaded yet). */
+type Row = CompanySummary & { quantScore: number | null }
+
+function compare(a: Row, b: Row, key: SortKey): number {
   const va = a[key]
   const vb = b[key]
   // missing values always last, whatever the direction
@@ -67,8 +93,40 @@ export function CompaniesPageClient({
   const [sector, setSector] = useState(ALL_SECTORS)
   const [sortKey, setSortKey] = useState<SortKey>("ticker")
   const [sortDir, setSortDir] = useState<SortDir>("asc")
+  const [scores, setScores] = useState<Scores>({ state: "loading", exchange: list.exchange })
 
-  const companies = list.companies
+  // the overall Quant Score of every company, loaded after the list (a few seconds when the backend has not kept them)
+  useEffect(() => {
+    const abort = new AbortController()
+    requestJson<QuantScoreBoard>(quantScoresUrl(list.exchange), { signal: abort.signal })
+      .then(({ body }) => {
+        if (abort.signal.aborted) return
+        setScores({
+          state: "ready",
+          exchange: list.exchange,
+          board: body,
+          byTicker: new Map(body.scores.map((s) => [s.ticker, s])),
+        })
+      })
+      .catch((e: unknown) => {
+        if (abort.signal.aborted) return
+        setScores({
+          state: "error",
+          exchange: list.exchange,
+          message: e instanceof RequestError ? e.message : "The Quant Scores could not be loaded.",
+        })
+      })
+    return () => abort.abort()
+  }, [list.exchange])
+
+  // the scores of another exchange (the list changed, its scores are loading) are not shown
+  const current: Scores = scores.exchange === list.exchange ? scores : { state: "loading", exchange: list.exchange }
+  const byTicker = current.state === "ready" ? current.byTicker : null
+
+  const companies = useMemo<Row[]>(
+    () => list.companies.map((c) => ({ ...c, quantScore: byTicker?.get(c.ticker)?.overall ?? null })),
+    [list.companies, byTicker]
+  )
 
   const sectors = useMemo(
     () => Array.from(new Set(companies.map((c) => c.sector).filter((s): s is string => !!s))).sort(),
@@ -104,7 +162,8 @@ export function CompaniesPageClient({
       setSortDir(sortDir === "asc" ? "desc" : "asc")
     } else {
       setSortKey(key)
-      setSortDir("asc")
+      // the best score first
+      setSortDir(key === "quantScore" ? "desc" : "asc")
     }
   }
 
@@ -218,6 +277,18 @@ export function CompaniesPageClient({
               ? `${filtered.length} of ${list.count} companies match the filters`
               : `${list.count} ${list.count === 1 ? "company" : "companies"}`}
             . Select a company to see everything stored for it.
+            <span className="mt-1 flex items-start gap-1.5">
+              <GaugeIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                Quant Score: the overall of the six fundamental agents of the Quant Score tab (preset rules, no AI)
+                {current.state === "ready" &&
+                  ` · ${current.board.scored} of ${current.board.companies} scored, computed ${formatTimestamp(current.board.computedAt)}`}
+                {current.state === "loading" && " · computing…"}
+                {current.state === "error" && (
+                  <span className="text-rose-600 dark:text-rose-400"> · not available: {current.message}</span>
+                )}
+              </span>
+            </span>
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0">
@@ -245,6 +316,7 @@ export function CompaniesPageClient({
                   <TableRow>
                     {header("ticker", "Company", "pl-4")}
                     {header("sector", "Sector / industry", "hidden md:table-cell")}
+                    {header("quantScore", "Quant Score", "text-right")}
                     {header("periodCount", "Periods", "text-right")}
                     {header("latestPeriodEnd", "Latest period", "hidden sm:table-cell")}
                     {header("latestPriceDate", "Latest price", "hidden lg:table-cell")}
@@ -292,6 +364,13 @@ export function CompaniesPageClient({
                             <div className="truncate text-xs text-muted-foreground">{c.industry ?? EMPTY}</div>
                           </div>
                         </TableCell>
+                        <TableCell className="text-right">
+                          <QuantScoreCell
+                            scores={current}
+                            score={byTicker?.get(c.ticker) ?? null}
+                            href={`${href}?tab=quant`}
+                          />
+                        </TableCell>
                         <TableCell className="text-right tabular-nums">{c.periodCount}</TableCell>
                         <TableCell className="hidden sm:table-cell">
                           {c.latestPeriod ? (
@@ -330,5 +409,29 @@ export function CompaniesPageClient({
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+/** The overall Quant Score of a company with its verdict; opens the company's Quant Score tab. */
+function QuantScoreCell({ scores, score, href }: { scores: Scores; score: QuantScore | null; href: string }) {
+  if (scores.state === "loading") {
+    return <Skeleton className="ml-auto h-4 w-10" aria-label="Computing the Quant Score" />
+  }
+  if (scores.state === "error" || !score || score.overall === null) {
+    return <span className="text-muted-foreground">{EMPTY}</span>
+  }
+  const tone = scoreTone(score.overall)
+  return (
+    <Link
+      href={href}
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex flex-col items-end hover:underline"
+      title={`${score.agentsCounted} of 6 agents in the overall${score.financial ? " · scored as a financial company" : ""}`}
+    >
+      <span className={cn("font-mono font-semibold tabular-nums", TONE_TEXT[tone])}>
+        {formatNumber(score.overall, 1)}
+      </span>
+      {score.verdict && <span className="text-xs text-muted-foreground">{VERDICT_LABELS[score.verdict]}</span>}
+    </Link>
   )
 }

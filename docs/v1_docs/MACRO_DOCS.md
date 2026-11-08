@@ -329,6 +329,37 @@ exchange's; the outlook is as of today); a cached request takes about 10 - 30 ms
 - Tests: `MacroOutlookCacheTest` (a hit equal to the computed outlook, cleared after a commit only, refusals not
   cached).
 
+## 6b. Macro › Data (sidebar › Macro › Data, permission COMPANIES)
+
+`/macro/data?series=US_10Y&range=5Y`: every series of Ingestion › Macro (section 1) as one large chart, chosen from a
+dropdown grouped by country (Indonesia, United States, Global, China; a series without data is disabled), with the
+Outlook's ranges (6M, 1Y, 3Y, 5Y, 10Y, MAX). Read only: fetches and uploads stay on Ingestion › Macro (INGESTION).
+
+- **Window.** A range ends at the series' **latest observation**, not today, so a series published late (a monthly
+  figure, a manual CSV such as the CDS) still shows its range; the page names that date and the series' state (up to
+  date, behind, manual ...). An unknown `series` in the URL shows the first series with data.
+- **Kind** (`MacroSeriesChart.kind`): **RATE** (unit `%`, `bps`, `points`: changes in points), **LEVEL** (an index or
+  amount: changes in percent and units), **FLOW** (`ID_FOREIGN_NET_BUY`, one session's net buying: a period is the
+  **sum** of its observations, drawn as green / red bars; its window leaves out the first day, so the net over 1Y equals
+  the 1Y change).
+- **Chart**: 460 px, grid, axes, a tooltip with the publication date, the range's average as a dashed line, a step line
+  for the BI Rate (set at board meetings), a brush to zoom when there are more than 60 points. More than 2,000
+  observations in the window are **drawn weekly** (the last of each week; a flow: the week's sum); the statistics always
+  read every observation.
+- **Changes** to the latest observation: 1M, 3M, 6M, YTD, 1Y, 3Y, 5Y (from the last observation on or before the start; a
+  period the series does not reach back to is left out). **In this range**: observations, high and low with their
+  dates, average, change (a flow: largest inflow / outflow, average, net). **About the series**: description, source
+  with its link, frequency, unit, stored rows and dates, last publication, the presets that read it. **Latest
+  observations**: the 12 newest with their change and publication date.
+
+| Endpoint (permission COMPANIES) | Returns |
+|---|---|
+| `GET /api/v1/macro/data/series` | `today` and `series`: code, name, country, category, unit, frequency, source label and URL, description, `usedBy`, rows, first / last date, last value, last release, `state`, `kind` (no job messages) |
+| `GET /api/v1/macro/data/series/{code}?range=1Y` | `series` (as above) and `chart`: `range`, `kind`, `from` (null: MAX), `to`, `sampled` (`WEEKLY` or null), `points` (`date`, `value`, `released`), `stats` (`observations`, `first`, `last`, `high`, `low`, `average`, `change`, `changePct` for a level), `changes` (`period`, `from`, `change`, `pct`), `recent` (12, newest first). 404 unknown series, 400 unknown range |
+
+Code: `macro.outlook.MacroDataController`, `MacroSeriesChart` (pure); frontend `app/(dashboard)/macro/data/page.tsx`,
+`components/macro/macro-data-client.tsx`, route handlers `/api/macro/data/series` and `/api/macro/data/series/[code]`.
+
 ## 7. Limitations
 
 - **No vintages**: a revision replaces the value, so an earlier as-of date sees the revised figure.
@@ -349,6 +380,8 @@ exchange's; the outlook is as of today); a cached request takes about 10 - 30 ms
 |---|---|
 | `MacroSourceParsersTest` | FRED CSV, CNBC bars, CFTC rows, the BI form (both date-field namings) and its `.xlsx` export, a SEKI `.xls` (years across columns, a total column, a wrong year label failing), Indonesian months. |
 | `MacroSeriesTest` | Period end, release date, "up to date" for every frequency. |
+| `MacroSeriesChartTest` | Macro › Data: the kind by unit and flow series, the window ending at the latest observation, level changes in percent and rate changes in points, a flow's sums (net over the range = the period's change), weekly drawing above 2,000 observations with the statistics in full, the latest observations, an empty series and an unknown range. |
+| `MacroDataControllerTest` | Against the stored series: every active series in catalog order with its kind and without job messages, US_10Y over 1Y (window, points, statistics), the net foreign flow's whole history drawn weekly, 404 / 400. |
 | `MacroIngestionServiceTest` | Overlap window, the first full run, revisions, out of range / twice / future storing nothing, warnings, a manual series not fetched. |
 | `MacroSignalsTest` | A tightening, risk-off set of series; point in time (September CPI unknown on 14 October); stale series; the BI rate held between decisions; the real rate. |
 | `MacroControllerTest` | The catalog and states, the history, a manual series refused, the CSV upload checked then stored (release date by the lag, a MACRO job). |
