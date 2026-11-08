@@ -47,6 +47,7 @@ start), then change its password in Admin Center > User Management.
 | [`DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md)             | start / stop scripts, containers, compose files, options, troubleshooting |
 | [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
 | [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
+| [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Quant Score tab (six rule-based agent scorecards) |
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
@@ -154,6 +155,7 @@ neraca_lab/
 │               ├── V1.0.48__data_KSEI_share_capital_shares.sql  (23 companies' counts from share capital / par and KSEI)
 │               ├── V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql  (counts stored at par Rp 1 corrected)
 │               ├── V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql  (PBSA split 1:2, 2026 share issues)
+│               ├── V1.0.51__data_SOUL_shares.sql  (SOUL IPO of 2023-01-06)
 │               ├── V1.0.40__schema_dev_context.sql  (dev_context: the development context of Claude Code, with embeddings)
 │               ├── V1.0.46__schema_rag_xbrl.sql  (source type XBRL: the uploaded IDX XBRL workbooks in the RAG vector store)
 │               ├── V1.0.6__data_metrics_valuation.sql
@@ -319,6 +321,7 @@ and upload them on the Ingestion page (or with the APIs below):
 | [Keterbukaan Informasi](https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi)                             | information disclosures of listed companies (company announcements and reports filed with IDX)           | `data/IDX_OWNERSHIP/<TICKER>/` (registration reports) | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
 | [Data Kepemilikan Saham](https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/)                           | share ownership data of listed companies                                                                 | `data/IDX_OWNERSHIP/<TICKER>/`             | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
 | [Pengumuman](https://www.idx.co.id/id/berita/pengumuman/) (KSEI: Kepemilikan Efek Diatas 5%)                              | KSEI's daily list of the shareholders of more than 5% of every listed company, by investor (`peng-<date>-<no>-lima-persen.xlsx`) | `data/IDX_OWNERSHIP_FIVE_PERCENTAGE/` | `POST /api/v1/rag/xlsx` with `documentType=OWNERSHIP_5_PERCENT` |
+| [Profil Perusahaan Tercatat](https://www.idx.co.id/id/perusahaan-tercatat/profil-perusahaan-tercatat/) | every listed company's profile (listing date, board, IDX-IC sector, business activity) and its dividend history: run the collector script of the "IDX company profiles" card in the browser's console of a www.idx.co.id tab, it saves `company-profiles-<date>.json` | anywhere (not stored) | Ingestion › Screening Data IDX › Upload profiles (`POST /api/v1/companies/profiles/upload`) |
 | [Pengumuman](https://www.idx.co.id/id/berita/pengumuman/) (KSEI: pemegang saham di atas 1%) | KSEI's monthly list of the shareholders of more than 1% of every listed company at the month end (`peng-<yyyy>-<mm>-<no>-satu-persen.xlsx`) | `data/IDX_OWNERSHIP_ONE_PERCENTAGE/` | `POST /api/v1/rag/xlsx` with `documentType=OWNERSHIP_1_PERCENT` |
 
 The monthly registration reports of securities holders (registrasi / LBRE PDFs) are what the
@@ -406,7 +409,9 @@ SELECT error_id, file_name, ticker, period, error_type, message FROM ingestion_e
 
 A workbook the model decides by design - the Financing or Insurance Industry taxonomy, a profit or loss presented by
 nature (NSSS, MSIN), a General Industry balance sheet by order of liquidity (CNMA) - that is stored and verified is not
-an error and leaves no row. A row of the error log names the model of the full-text extraction and every model call of the job that
+an error and leaves no row. The FY2021 template differs from later ones: short-term borrowings on one row 'Short-term
+loans' (counted as short-term debt since 2026-11-08) and no cost of sales note - a by-nature FY2021 filing keeps the cost
+and gross profit a later filing's note stored for that year (upload the FY2022 filing first). A row of the error log names the model of the full-text extraction and every model call of the job that
 failed, with what the provider said (`details.failedModelCalls`).
 
 **Development context (`dev_context`).** What Claude Code learns while fixing ingestion errors and data gaps - a
@@ -512,6 +517,8 @@ second row.
 curl -H "$AUTH"  http://localhost:8080/api/v1/exchanges                 # supported exchanges
 curl -H "$AUTH" "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
+curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/profile        # IDX profile, dividends, payout
+curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/scorecards     # Quant Score: six agents, no AI
 ```
 
 | Endpoint                                    | Returns                                                                                                                                                                                                                                                                                           |
@@ -1038,13 +1045,15 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 939 tests
+(cd backend && ./mvnw test)                      # 982 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
-The full backend suite takes about 13 minutes (2026-11-06: 939 tests in 169 classes, 13 min 8 s; the slowest are
-`DerivedDataRefreshTest` 3 min 23 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
-84 s, `TechnicalControllerTest` 38 s). Run it while the backend is quiet (no upload or price job: the tests share the
+The full backend suite takes about 15 minutes (2026-11-08: 982 tests in 179 classes, about 16 min; the slowest are
+`DerivedDataRefreshTest` 4 min 10 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
+97 s, `AnalysisControllerTest` and `TechnicalControllerTest` 43 s). `PacedHttpClientPaceTest` measures request
+starts in milliseconds and can fail once under a busy machine (2026-11-08: one gap of 64 ms against 85); run it again
+alone before looking further. Run it while the backend is quiet (no upload or price job: the tests share the
 live database) and one run at a time; a run past 30 minutes or with no test class finishing for 5 minutes is stuck -
 look at the running test with `jstack <surefire pid>`. Before a new run make sure no Maven / surefire `java` process of an
 earlier, interrupted run is still alive (2026-11-05: an orphaned fork held 2.5 GB and the `target` folder).
@@ -1085,6 +1094,7 @@ EPS filed in millions, revenue not tagged); `StatementGapFillTest` that comparat
 `IdxRulesTest`, `IndicatorEngineTest`, `StructureTest`, `SnapshotCalculatorTest` and `TechnicalControllerTest` the technical analysis (IDX tick sizes and auto rejection, indicators against reference formulas, pivots / zones / retracements / volume profile / base, the snapshot schema on 300 real days of HRTA, SMSM and MYOR, every API; a currency pair's `tickSize` in the bars' header);
 `JobDeadlineTest` and `UploadJobTimeoutTest` the 5-minute job limit; `ModelSpeedSettingsTest` reasoning off on the
 wire and the per-call timeout; `DeterministicFinisherTest` a run finished without the model;
+`IngestionVerifierOverdraftTest.theFy2021ShortTermLoansRowIsDebtAndExplainsTheOverdrafts` the FY2021 template's 'Short-term loans' as short-term debt (BAUT, SKLT, CLPI); `FilingMapperRightOfUseTest` right-of-use assets presented within PP&E (SGRO, KING, OBAT, UDNG, JPFA FY2025; HELI, IATA, FISH not disclosed); `FullTextExtractorTest.withoutANoteTheCostALaterFilingsNoteStoredIsKept` a FY2021 by-nature filing keeps the cost a later filing's note stored (SSMS); `IngestionVerifierRoundingTest.aBreakdownThatIsTheRevenueRoundedToAMillionIsANote` (TRST FY2021); `SoulSharesTest` V1.0.51 (SOUL after its IPO);
 `IngestionServiceUnitTest` a workbook's unit proven by the stored prior year end (IMJS FY2024) and par-derived share counts contradicting the stored count of the same date dropped (IPCC 9M 2026); `KoinHillSharesTest` V1.0.45 (KOIN, HILL, FLMC from share capital and KSEI); `FilingMapperSecuritiesTest` brokers read in the IDX Securities taxonomy (PADI, TRIM share counts); `FilingInfoTickerTest` a numeric 'Entity code' takes the ticker of the IDX file name (TIRA FY2025); `BalanceSheetPartsTest` a comparative's part never breaks a balanced balance sheet (PNBN FY2022); `VivaBalanceTest` V1.0.47; `ShareCapitalCountsTest` V1.0.48 - V1.0.50 (share capital / par = KSEI, par Rp 1 counts corrected, PBSA's split); `FilingMapperEpsCellTest`, `FilingMapperTabarruTest`, `IngestionVerifierOverdraftTest`; `IngestionAgentFastPathTest` a cleanly mapped filing stored without the agent (HRTA H1 2026: no model call; new segments named by one call), filings with a failed check or by nature not for it; `DerivedDataRefreshTest.theRefreshOfOneCompanyLeavesWhatTheScriptComputes` the per-company refresh equal to V1.0.6 for every derived row of every company; `PacedHttpClientAheadTest` an upload's Yahoo request before the waiting price requests; `MarketInstrumentSequenceTest` V1.0.26 draws no sequence value on a restart (the SMALLSERIAL had run out);
 `IngestionToolsSegmentsTest` a later filing's breakdown of a restated revenue never stored beside the period's own revenue (BMHS FY2023, BHIT FY2024; INPP's breakdown in millions kept); `BmblBoatSharesTest` and `ShareCountCorrectionsTest` the share counts of V1.0.43 / V1.0.44 (BMBL, BOAT, MSIN, SMGA, RMKE's split, WIFI, INET, PACK);
 `FilingMapperCashRoundingTest` a cash roll-forward one rupiah off (ALMI, ARTI, ASHA) and a cash flow section whose only line is 0 (AMMS); `FilingMapperAmortizationTest` no amortization from the intangibles roll when the goodwill halved (PTRO, CUAN); `IngestionVerifierInsurerDepositsTest` an insurer's time deposits counted as cash (AMAG); `IngestionVerifierRoundingTest.endingCashOneUnitApartIsANote` one rounding unit between ending cash and balance-sheet cash (BATA, BBLD);
@@ -1118,6 +1128,12 @@ RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PD
 (date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, macro documents of a country by publication date, rolled back)
 and `RagControllerTest` (a company PDF and a macro PDF of Indonesia through the worker into the store with stub
 embeddings, validation, the United States and China not available yet, permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; `XbrlDocumentTextTest`, `XbrlRagServiceTest` and `FinancialStatementQueueWorkersTest` the uploaded workbooks in the vector store (HRTA FY2025's sheets, headings, rows and chunks; stored as an XBRL financial statement, listed and searched apart from the ownership documents, not embedded twice, nothing stored for an unknown company or a failing provider; the upload job's outcome never changed by it); see `docs/v1_docs/RAG_DOCS.md`, section 7.
+
+Company profiles and Quant Score: `IdxProfileParserTest` (the IDX list, detail and collector files, boards, dates, both number
+notations), `DividendHistoryTest` (yield on the cum-date close, split basis, IDX + Yahoo as one row, USD reporters in
+rupiah, cash / declared / trailing payout), `CombinedProfileTest` (filings first, Yahoo for the gaps) and
+`CompanyProfileControllerTest` (upload, Profile tab, status, scorecards of HRTA, BBCA and AADI, rolled back); see
+`docs/v1_docs/COMPANY_PROFILE_DOCS.md`, section 5.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
@@ -1189,6 +1205,7 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.48__data_KSEI_share_capital_shares.sql` | Share counts for 23 companies that had none: share capital / a par inside KSEI's issued count (and, by the user's decision, the issued count of treasury holders whose EPS shows treasury under 2%) |
 | `V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql` | Counts stored at par Rp 1 (x10 / x100 of KSEI) corrected. In `SHARE_SCRIPTS`: runs after every upload |
 | `V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql` | PBSA's stock split 1:2 of 2026-10-13 and the 2026 share issues of MORA, WGSH, PRDL |
+| `V1.0.51__data_SOUL_shares.sql` | SOUL's count after its IPO of 2023-01-06 (812.5 m -> 1,082.5 m shares) |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |
@@ -1219,6 +1236,7 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
+| `company_profile_upload`, `company_dividend` | IDX company profile uploads (SHA-256, result) and IDX's cash dividends (fiscal year, per share, cum / ex / payment dates); the profile itself in `company` (`ipo_date`, `listing_board`, `idx_sector` ...) |
 | `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series` | technical analysis inputs: IHSG daily bars, dividends / splits (Yahoo), macro observations (with release dates) |
 | `market_instrument`, `instrument_daily` | Forex pairs and commodities and their bars (daily; the World Bank, IMF and FRED series monthly) |
 | `macro_series_def`    | the macro series: source, unit, frequency, publication lag, sanity range     |

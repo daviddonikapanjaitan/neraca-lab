@@ -16,8 +16,8 @@ public record Assessment(Double score, String verdict, String thesis, List<Strin
 
     static final Set<String> VERDICTS = Set.of("STRONG_FIT", "FIT", "NEUTRAL", "WEAK", "REJECT");
 
-    /** The verdict band of a score. */
-    static String band(double score) {
+    /** The verdict band of a score (also of the rule-based Quant Score tab of a company). */
+    public static String band(double score) {
         if (score >= 80) {
             return "STRONG_FIT";
         }

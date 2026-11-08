@@ -41,6 +41,10 @@ public enum IncomeLineCategory {
             Map.entry("Dividends income", NON_OPERATING_GAIN_OR_LOSS),
             Map.entry("Investment income", NON_OPERATING_GAIN_OR_LOSS),
             Map.entry("Interest and finance costs", FINANCE_COST),
+            // the FY2021 template's name of the same line (619 FY2021 workbooks, never beside the later label; scan of
+            // 2026-11-08): unclassified, it failed the profit-before-tax check by exactly its amount (BAUT FY2021
+            // 1,467,215,810) and sent every FY2021 filing to the agent instead of the fast path
+            Map.entry("Finance costs", FINANCE_COST),
             Map.entry("Gains (losses) on changes in foreign exchange rates", NON_OPERATING_GAIN_OR_LOSS),
             Map.entry("Share of profit (loss) of associates accounted for using equity method", NON_OPERATING_GAIN_OR_LOSS),
             Map.entry("Share of profit (loss) of joint ventures accounted for using equity method", NON_OPERATING_GAIN_OR_LOSS),

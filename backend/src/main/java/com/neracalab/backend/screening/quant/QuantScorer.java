@@ -19,7 +19,7 @@ import com.neracalab.backend.screening.InvestorAgent;
 public final class QuantScorer {
 
     /** Which companies a criterion applies to. */
-    enum Applies { ALL, NON_FINANCIAL, FINANCIAL }
+    public enum Applies { ALL, NON_FINANCIAL, FINANCIAL }
 
     /**
      * @param poor   metric value worth 0 points
@@ -133,6 +133,29 @@ public final class QuantScorer {
 
     static Double logLiquidity(StockProfile p) {
         return p.avgDailyValue() == null || p.avgDailyValue() <= 0 ? null : Math.log10(p.avgDailyValue());
+    }
+
+    /**
+     * One criterion of a scorecard as the Quant Score tab shows it: the metric's key, the bounds (poor = 0 points,
+     * good = full points; poor above good when lower is better) and the companies it applies to.
+     */
+    public record CriterionInfo(String key, String label, double poor, double good, double weight, Applies applies) {
+
+        /** Whether the criterion applies to a financial (bank / insurer) or a non-financial company. */
+        public boolean appliesTo(boolean financial) {
+            return switch (applies) {
+                case ALL -> true;
+                case NON_FINANCIAL -> !financial;
+                case FINANCIAL -> financial;
+            };
+        }
+    }
+
+    /** The criteria of an agent's scorecard, in scoring order. */
+    public static List<CriterionInfo> card(InvestorAgent agent) {
+        return CARDS.get(agent).stream()
+                .map(c -> new CriterionInfo(c.key(), c.label(), c.poor(), c.good(), c.weight(), c.applies()))
+                .toList();
     }
 
     /** The scorecard of an agent (for the report and the prompts). */

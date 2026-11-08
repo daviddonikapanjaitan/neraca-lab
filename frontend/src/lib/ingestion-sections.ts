@@ -40,7 +40,7 @@ export const INGESTION_SECTIONS: IngestionSectionInfo[] = [
     title: "Screening Data IDX",
     heading: "Screening Data IDX",
     description:
-      "Refresh the market data of every IDX listing that the AI screening starts from, and the daily price history of every listing for the technical screening.",
+      "Refresh the market data of every IDX listing that the AI screening starts from, the daily price history of every listing for the technical screening, and the IDX company profiles (listing date, board, sector, dividends).",
     href: "/ingestion/screening-data",
     jobType: "FUNDAMENTALS",
   },

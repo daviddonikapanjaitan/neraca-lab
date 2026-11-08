@@ -166,6 +166,13 @@ Conventions (same as the database):
 All queries of one response run in one read-only REPEATABLE READ transaction, so the response is
 a consistent snapshot even while an upload writes the same company.
 
+### 3.1 Profile, dividends and Quant Score
+
+`GET /api/v1/companies/{exchange}/{ticker}/profile` (the Profile tab: IDX company profile, dividends, payout ratios) and
+`GET /api/v1/companies/{exchange}/{ticker}/scorecards` (the Quant Score tab: six rule-based agent scorecards), both
+COMPANIES; the IDX profile upload `POST /api/v1/companies/profiles/upload` and its status
+`GET /api/v1/companies/profiles/status`, both INGESTION. Details: [COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md).
+
 ## 4. Errors
 
 Errors are RFC 9457 ProblemDetail bodies (`application/problem+json`):
@@ -209,6 +216,7 @@ Details: [DB_SCHEMA_DOCS.md](DB_SCHEMA_DOCS.md) section 3.1, [AI_INGESTION_DOCS.
 | `CompanyControllerTest` | all three endpoints over MockMvc against the HRTA seed data: ordering, figures, `null` statements, coverage, 400 / 404 |
 | `CompanyUniquenessTest` | duplicate, lower-case, padded and exchange-less rows rejected; ingestion upsert keeps one row                          |
 | `CompanyCodesTest`      | ticker and exchange normalisation                                                                                      |
+| `CompanyProfileControllerTest` | profile upload, Profile tab, Quant Score ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md) section 5)          |
 | `CompanyCurrencyConversionTest` | SMDR's `conversion`: every period's closing and average USD/IDR rate equal the stored closes (FY2025 16,709 / 16,455.07 of 257), every valuation date's rate the close on or before it; none for BBCA (IDR) |
 
 Like `BackendApplicationTests`, they need the Postgres on localhost:5432 (the full stack from the

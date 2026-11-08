@@ -1,6 +1,7 @@
 /** Tabs of the company detail page; the value is kept in the URL as ?tab= (overview = no param). */
 export const DETAIL_TABS = [
   { value: "overview", label: "Overview" },
+  { value: "profile", label: "Profile" },
   { value: "income", label: "Income statement" },
   { value: "balance", label: "Balance sheet" },
   { value: "cashflow", label: "Cash flow" },
@@ -9,6 +10,7 @@ export const DETAIL_TABS = [
   { value: "valuation", label: "Valuation" },
   { value: "market", label: "Market & shares" },
   { value: "filings", label: "Filings" },
+  { value: "quant", label: "Quant Score" },
 ] as const
 
 export type DetailTab = (typeof DETAIL_TABS)[number]["value"]

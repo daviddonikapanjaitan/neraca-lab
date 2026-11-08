@@ -7,11 +7,13 @@ import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { SESSION_COOKIE } from "@/lib/session-cookie"
+import type { CompanyProfile, ProfileStatus } from "@/lib/company-profile"
 import type { MacroOutlook } from "@/lib/macro"
 import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } from "@/lib/macro-analysis"
 import type { ExcelStatus, MovementPage, OwnershipOptions, OwnershipReportPage } from "@/lib/ownership"
 import type { OnePercentOptions, OnePercentPage, OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
+import type { Scorecards } from "@/lib/scorecards"
 import type {
   TechnicalScreeningOptions,
   TechnicalScreeningReport,
@@ -145,6 +147,25 @@ export const getCompanyDetail = cache((exchange: string, ticker: string) =>
   get<CompanyDetail>(
     `/api/v1/companies/${encodeURIComponent(exchange)}/${encodeURIComponent(ticker)}`
   )
+)
+
+/** GET /api/v1/companies/{exchange}/{ticker}/profile (the Profile tab: IDX profile, dividends, payout ratios) */
+export const getCompanyProfile = cache((exchange: string, ticker: string) =>
+  get<CompanyProfile>(
+    `/api/v1/companies/${encodeURIComponent(exchange)}/${encodeURIComponent(ticker)}/profile`
+  )
+)
+
+/** GET /api/v1/companies/{exchange}/{ticker}/scorecards (the Quant Score tab: six rule-based agent scorecards) */
+export const getCompanyScorecards = cache((exchange: string, ticker: string) =>
+  get<Scorecards>(
+    `/api/v1/companies/${encodeURIComponent(exchange)}/${encodeURIComponent(ticker)}/scorecards`
+  )
+)
+
+/** GET /api/v1/companies/profiles/status?exchange= (IDX company profiles card) */
+export const getCompanyProfilesStatus = cache((exchange: string) =>
+  get<ProfileStatus>(`/api/v1/companies/profiles/status?exchange=${encodeURIComponent(exchange)}`)
 )
 
 /** GET /api/v1/ingestions?type=&limit= (first page of the most recent jobs, without results) */

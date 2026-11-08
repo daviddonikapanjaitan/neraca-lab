@@ -168,7 +168,9 @@ for every year, so growth rates stay those of the statements); without a rate th
 `company.currency` (companies of the companies table) and count as stale once, so the next refresh - of a
 screening's candidates, or the scheduled ETL - names the currency of every listing.
 
-Not available from public data: the IDX **listing board** (idx.co.id blocks automated clients).
+The IDX **listing board** cannot be fetched by the backend (idx.co.id blocks automated clients). Since V1.0.52 it is
+uploaded with the IDX company profiles into `company.listing_board` ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md)),
+but the screening does not read it yet.
 Stage 1 therefore uses proxies: price at least Rp 50 (the special-monitoring board trades below),
 a trade in the last 10 days (no suspension), liquidity, and `excluded-tickers` for known
 watchlist stocks. `stock_listing.board` is kept for when a source becomes available.

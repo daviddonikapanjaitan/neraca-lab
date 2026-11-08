@@ -53,6 +53,7 @@ foreign key.
 | `V1.0.48__data_KSEI_share_capital_shares.sql` | share counts of 23 companies without any: the share capital / a par that lands inside the issued count of KSEI's 1% list of 2026-10-30 (MENN, PTDU, COAL, PPGL, DOSS, EMMI, ESTI, HAJJ, IDEA, KLAS, MINE, PLAN, PSDN, RGAS, UFOE, VERN, WBSA, YOII), and the issued count of treasury holders whose EPS shows treasury under 2% (LPKR, PTPP, WIKA, DPUM, MCAS; treasury NULL); fills only empty counts |
 | `V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql` | counts stored at par Rp 1 corrected: MKTR 12,060,428,600, NAYZ 2,550,011,472, VICO 15,217,075,660, WAPO 1,240,923,111 (share capital at Rp 10 / 10 / 100 / 100 = KSEI); guarded on the exact wrong values; in `IngestionRepository.SHARE_SCRIPTS` |
 | `V1.0.50__data_PBSA_MORA_WGSH_PRDL_shares.sql` | PBSA's stock split 1:2 of 2026-10-13 (corporate action, 6,000,000,000 shares, earlier counts and EPS split-adjusted); MORA 47,774,192,736, WGSH 2,085,000,000, PRDL 1,742,900,000 after their 2026 share issues |
+| `V1.0.51__data_SOUL_shares.sql` | SOUL 1,082,500,000 shares from its IPO listing of 2023-01-06 (812,500,000 + 270,000,000 offered at Rp 110, 24.94% of the capital after it; KSEI 1,082,487,229) and the IPO corporate action: its filings end with the pre-IPO count |
 | `V1.0.36__schema_valuation_ebitda_basis.sql` | `valuation_snapshot.ebitda_basis`: the EBITDA of EV / EBITDA (TTM, else the full year inside the trailing window) |
 | `V1.0.35__data_ENRG_shares.sql`           | ENRG share counts its USD filings do not give and Yahoo Finance gives wrong: 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 2026-06-12 (and that corporate action); the rights issue of October 2026 not yet (its result not announced) |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric; a valuation on a period end whose trailing twelve months no longer exist keeps market cap / EV / P/B, its trailing ratios are cleared; the existing valuation dates are revalued too (2026-10-31: history rows kept the figures of their day). Runs at start; after an upload only the company's part (`ValuationRepository.refreshAfterFiling`, the same rows) |
@@ -231,7 +232,8 @@ uploads of the same company update the one row instead of inserting a second.
 | `country`         | `VARCHAR(100)` | yes  |         |                                                                       |
 | `currency`        | `CHAR(3)`      | yes  |         | ISO 4217 reporting currency of the financial statements               |
 | `fiscal_year_end` | `DATE`         | yes  |         | Most recent fiscal year end; its month/day define the fiscal calendar |
-| `ipo_date`        | `DATE`         | yes  |         |                                                                       |
+| `ipo_date`        | `DATE`         | yes  |         | Listing date (IDX: `TanggalPencatatan` of the IDX company profile, V1.0.52) |
+| `listing_board` .. `profile_updated_at` | | yes | | IDX company profile (V1.0.52): `listing_board`, `idx_sector`, `idx_sub_sector`, `idx_industry`, `idx_sub_industry`, `business_activity`, `share_registrar`, `idx_name`, `profile_updated_at` (section 4.15) |
 | `active`          | `BOOLEAN`      | no   | `TRUE`  |                                                                       |
 | `created_at`      | `TIMESTAMPTZ`  | no   | `now()` |                                                                       |
 | `updated_at`      | `TIMESTAMPTZ`  | no   | `now()` |                                                                       |
@@ -925,6 +927,19 @@ One AI macro analysis of a country's stock market, its index (Macro > AI Analysi
 |                              | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `PRIOR_ONLY`, `NO_SCORE` (check)                  |
 | `macro_analysis_lesson`      | `lesson_id`, `agent`, `lesson`, `occurrences`, `source_analysis`, `active` | | Reflexion memory of the macro agents; **unique** (agent, lesson); `active = false` drops a lesson |
 | `llm_usage`                  | `macro_analysis_id`            | UUID FK       | the macro analysis of a model call (`run_id`, `analysis_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_macro_analysis` |
+
+### 4.15 IDX company profiles (`V1.0.52__schema_company_profile.sql`)
+
+- `company`: the profile columns above, written by `POST /api/v1/companies/profiles/upload`; `ipo_date` only when
+  empty (a different date is a conflict, kept).
+- `company_profile_upload`: one row per uploaded file (`uq_company_profile_upload_file`: exchange + SHA-256; the same
+  file again writes nothing), counts and the full result (`result` JSONB).
+- `company_dividend`: IDX's cash dividends (source `idx`): `fiscal_year` (TahunBuku), `dividend_type`,
+  `cash_per_share` + `currency` as announced, `cum_date`, `ex_date`, `recording_date`, `payment_date`,
+  `total_amount` + `total_currency`, `upload_id`; a company's rows are replaced by each detail upload of it
+  (`uq_company_dividend`: company, source, fiscal year, cum, ex, amount). Yahoo's dividends stay in `corporate_event`.
+
+Details: [COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md).
 
 ## 5. Views (`V1.0.3__views.sql`)
 

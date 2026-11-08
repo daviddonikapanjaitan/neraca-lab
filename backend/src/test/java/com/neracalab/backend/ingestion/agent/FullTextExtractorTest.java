@@ -328,6 +328,62 @@ public class FullTextExtractorTest {
     }
 
     /**
+     * SSMS FY2021 (by nature, the FY2021 template has no cost of sales note): its FY2022 filing's note stored FY2021's
+     * cost of 2,997,853,995 thousand beside the same revenue 5,203,100,578. The FY2021 filing keeps that cost: gross
+     * profit 2,205,246,583, operating expenses by nature 3,651,580,188 - 2,997,853,995 = 653,726,193, operating income
+     * 1,650,075,516 as filed. Without a stored cost, or beside another revenue, the fields stay cleared as before.
+     */
+    @Test
+    void withoutANoteTheCostALaterFilingsNoteStoredIsKept() throws Exception {
+        IngestionSession session = session("SSMS", "2021-Tahunan");
+        assertThat(session.mapper().incomeByNature()).isTrue();
+        assertThat(session.mapper().hasCostOfSalesNote()).isFalse();
+        session.company(new com.neracalab.backend.ingestion.persistence.IngestionRepository.CompanyRow(1, "SSMS", "SSMS",
+                "PT Sawit Sumbermas Sarana Tbk", null, null, "IDR", java.time.LocalDate.of(2021, 12, 31)));
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1312000"; // the FY2021 template's text carries the Indonesian labels
+        String profitOrLoss = object(Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Penjualan dan pendapatan usaha")),
+                Map.entry("operating_expenses", terms(text, sheet, "+Beban tiket, penjualan, dan promosi",
+                        "+Bahan baku dan barang habis pakai", "+Beban manfaat karyawan",
+                        "+Beban penyusutan dan amortisasi", "+Beban lainnya")),
+                Map.entry("operating_income", terms(text, sheet, "+Penjualan dan pendapatan usaha", "+Pendapatan lainnya",
+                        "-Beban tiket, penjualan, dan promosi", "-Bahan baku dan barang habis pakai",
+                        "-Beban manfaat karyawan", "-Beban penyusutan dan amortisasi", "-Beban lainnya")),
+                Map.entry("pretax_income", terms(text, sheet, "+Jumlah laba (rugi) sebelum pajak penghasilan")),
+                Map.entry("income_tax", terms(text, sheet, "-Pendapatan (beban) pajak")),
+                Map.entry("net_income", terms(text, sheet, "+Jumlah laba (rugi)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Laba (rugi) yang dapat diatribusikan ke entitas induk"))));
+        String answer = "{\"income_statement\": " + profitOrLoss + ", \"balance_sheet\": {}, \"cash_flow_statement\": {}}";
+        var period = session.mapper().period(StatementColumn.CURRENT_PERIOD);
+
+        var repository = mock(com.neracalab.backend.ingestion.persistence.IngestionRepository.class);
+        when(repository.periodId(1L, period)).thenReturn(java.util.Optional.of(7L));
+        when(repository.readStatement("income_statement", 7L)).thenReturn(java.util.Optional.of(Map.of(
+                "revenue", new BigDecimal("5203100578000.0000"), "cost_of_revenue", new BigDecimal("2997853995000.0000"))));
+        answers(answer);
+        extractor(1, repository).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("cost_of_revenue")).isEqualByComparingTo("2997853995000");
+        assertThat(income.values().get("gross_profit")).isEqualByComparingTo("2205246583000");
+        assertThat(income.values().get("operating_expenses")).isEqualByComparingTo("653726193000");
+        assertThat(income.values().get("operating_income")).isEqualByComparingTo("1650075516000");
+        assertThat(income.rejected()).doesNotContain("cost_of_revenue", "gross_profit");
+        assertThat(income.derivations().get("cost_of_revenue")).contains("a later filing");
+
+        // a stored cost beside another revenue (a restatement) is not this filing's: cleared as before
+        IngestionSession other = session("SSMS", "2021-Tahunan");
+        other.company(session.company().orElseThrow());
+        when(repository.readStatement("income_statement", 7L)).thenReturn(java.util.Optional.of(Map.of(
+                "revenue", new BigDecimal("5203100577000.0000"), "cost_of_revenue", new BigDecimal("2997853995000.0000"))));
+        answers(answer);
+        extractor(1, repository).extract(other, List.of(StatementColumn.CURRENT_PERIOD), "by nature", new AgentTrace());
+        MappedStatement cleared = other.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(cleared.values().get("gross_profit")).isNull();
+        assertThat(cleared.rejected()).contains("cost_of_revenue", "gross_profit");
+    }
+
+    /**
      * BUKA FY2025 (by nature): the note's cost of sales 5,990,751,222 thousand ('Raw materials and consumables used' on
      * the face) is more than the operating expenses by nature, 4,432,364,338, which a gain of 1,988,280,296 filed as
      * negative 'Other expenses' nets down - so the year had no gross profit. The positive expense rows hold the cost.
@@ -1288,7 +1344,11 @@ public class FullTextExtractorTest {
     }
 
     private FullTextExtractor extractor(int rounds) {
-        return new FullTextExtractor(agent, null, null, JsonMapper.builder().build(),
+        return extractor(rounds, null);
+    }
+
+    private FullTextExtractor extractor(int rounds, com.neracalab.backend.ingestion.persistence.IngestionRepository repository) {
+        return new FullTextExtractor(agent, repository, null, JsonMapper.builder().build(),
                 new FallbackProperties("", "", true, Duration.ofMinutes(3), Duration.ofMinutes(3), Duration.ofSeconds(150), 120_000, rounds));
     }
 

@@ -10,6 +10,8 @@ and analyses, Claude Opus 5.5 writes the synthesis (the screening's models and p
 analysis is a background job; the report and its cost are saved, shown on **Screening > Analysis**
 and downloadable as PDF.
 
+Without AI, the same scorecards (`QuantScorer`) are on every company page's **Quant Score** tab, on the filings first and Yahoo's screening data for the gaps, computed on request at no cost ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md) section 3).
+
 ```
 [Company data, no AI]  company, reporting_period + statements + financial_metric, price_daily,
                        valuation_snapshot -> fact sheet (FactSheet)
