@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react"
 import { useRouter } from "next/navigation"
 
+import { CompanyProfilesCard } from "@/components/ingestion/company-profiles-card"
 import { FundamentalsCard } from "@/components/ingestion/fundamentals-card"
 import { IndexPriceCard } from "@/components/ingestion/index-price-card"
 import { JobsTable } from "@/components/ingestion/jobs-table"
@@ -19,6 +20,7 @@ import { RagMacroPdfCard } from "@/components/ingestion/rag-macro-pdf-card"
 import { RagNewsCard } from "@/components/ingestion/rag-news-card"
 import { RagPdfCard } from "@/components/ingestion/rag-pdf-card"
 import { UploadCard } from "@/components/ingestion/upload-card"
+import type { ProfileStatus } from "@/lib/company-profile"
 import { ingestionSection } from "@/lib/ingestion-sections"
 import type { ExcelStatus, OwnershipReportPage } from "@/lib/ownership"
 import type { OnePercentReportPage } from "@/lib/ownership-one-percent"
@@ -57,7 +59,13 @@ export type IngestionSectionData =
       provider: string
     }
   | { section: "macro"; macro: MacroStatus }
-  | { section: "screening-data"; fundamentals: FundamentalsStatus; listingPrices: ListingPricesStatus }
+  | {
+      section: "screening-data"
+      fundamentals: FundamentalsStatus
+      listingPrices: ListingPricesStatus
+      /** IDX company profiles: listing dates, boards, IDX-IC sectors, dividends */
+      profiles: ProfileStatus
+    }
   | {
       section: "rag-pdf"
       exchanges: Exchange[]
@@ -182,6 +190,7 @@ export function IngestionPageClient({ jobs, ...data }: IngestionSectionData & { 
             <div className="flex flex-col gap-4">
               <FundamentalsCard status={data.fundamentals} onSubmitted={submitted} />
               <ListingPricesCard status={data.listingPrices} onSubmitted={submitted} />
+              <CompanyProfilesCard initial={data.profiles} />
             </div>
           )}
           {data.section === "rag-news" && (

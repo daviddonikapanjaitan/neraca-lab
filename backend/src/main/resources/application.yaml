@@ -81,6 +81,7 @@ spring:
         - classpath:db/V1.0.36__schema_valuation_ebitda_basis.sql # the EBITDA of EV / EBITDA: TTM, else the full year
         - classpath:db/V1.0.40__schema_dev_context.sql            # development context of Claude Code (RAG)
         - classpath:db/V1.0.46__schema_rag_xbrl.sql               # IDX XBRL workbooks in the RAG vector store (source type XBRL)
+        - classpath:db/V1.0.52__schema_company_profile.sql        # IDX company profiles: listing date, board, IDX-IC sector, dividends
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql

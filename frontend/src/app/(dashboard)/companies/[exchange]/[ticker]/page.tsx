@@ -4,7 +4,9 @@ import { notFound } from "next/navigation"
 import { AccessDenied } from "@/components/access-denied"
 import { ApiErrorState } from "@/components/api-error-state"
 import { CompanyDetailView } from "@/components/company/company-detail-view"
-import { ApiError, getCompanyDetail, requireUser } from "@/lib/api"
+import { ApiError, getCompanyDetail, getCompanyProfile, getCompanyScorecards, requireUser } from "@/lib/api"
+import type { CompanyProfile } from "@/lib/company-profile"
+import type { Scorecards } from "@/lib/scorecards"
 import { companiesHref } from "@/lib/links"
 import { hasPermission, homePath } from "@/lib/permissions"
 import { isDetailTab } from "@/lib/tabs"
@@ -30,6 +32,18 @@ async function load(params: Params): Promise<
     return { detail: await getCompanyDetail(decode(exchange), decode(ticker)) }
   } catch (error) {
     if (error instanceof ApiError) return { error }
+    throw error
+  }
+}
+
+/** The data of a tab loaded beside the detail: a failure shows on that tab only. */
+type TabData<T> = { data: T; error?: never } | { data?: never; error: string }
+
+async function tabData<T>(load: () => Promise<T>): Promise<TabData<T>> {
+  try {
+    return { data: await load() }
+  } catch (error) {
+    if (error instanceof ApiError) return { error: error.detail || error.title }
     throw error
   }
 }
@@ -67,10 +81,20 @@ export default async function Page({ params, searchParams }: { params: Params; s
 
   const { tab: rawTab } = await searchParams
   const tab = Array.isArray(rawTab) ? rawTab[0] : rawTab
+  const { exchange, ticker } = detail.company
+  const [profile, scorecards] = await Promise.all([
+    tabData<CompanyProfile>(() => getCompanyProfile(exchange, ticker)),
+    tabData<Scorecards>(() => getCompanyScorecards(exchange, ticker)),
+  ])
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-      <CompanyDetailView detail={detail} initialTab={isDetailTab(tab) ? tab : "overview"} />
+      <CompanyDetailView
+        detail={detail}
+        profile={profile}
+        scorecards={scorecards}
+        initialTab={isDetailTab(tab) ? tab : "overview"}
+      />
     </div>
   )
 }

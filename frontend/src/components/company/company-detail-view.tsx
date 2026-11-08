@@ -7,6 +7,8 @@ import { FilingsTable } from "@/components/company/filings-table"
 import { MarketPanel } from "@/components/company/market-panel"
 import { MetricsTable } from "@/components/company/metrics-table"
 import { Overview } from "@/components/company/overview"
+import { ProfilePanel } from "@/components/company/profile-panel"
+import { QuantScorePanel } from "@/components/company/quant-score-panel"
 import { SegmentsPanel } from "@/components/company/segments-panel"
 import { StatementTable } from "@/components/company/statement-table"
 import { ALL_PERIOD_TYPES, CurrencyToggle, PeriodTypeFilter, ScaleToggle } from "@/components/company/toolbar"
@@ -24,7 +26,12 @@ import {
   type LineItem,
 } from "@/lib/statements"
 import { DETAIL_TABS, isDetailTab, type DetailTab } from "@/lib/tabs"
+import type { CompanyProfile } from "@/lib/company-profile"
+import type { Scorecards } from "@/lib/scorecards"
 import type { CompanyDetail, Period } from "@/lib/types"
+
+/** A tab's data loaded beside the detail, or why it could not be. */
+type TabData<T> = { data: T; error?: never } | { data?: never; error: string }
 
 const STATEMENT_NOTES: Record<"income" | "balance" | "cashflow", string> = {
   income: "Expenses are positive; H1 and 9M periods are year-to-date.",
@@ -32,7 +39,17 @@ const STATEMENT_NOTES: Record<"income" | "balance" | "cashflow", string> = {
   cashflow: "Signed as cash moves: inflows positive, outflows negative (in parentheses).",
 }
 
-export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetail; initialTab: DetailTab }) {
+export function CompanyDetailView({
+  detail,
+  profile,
+  scorecards,
+  initialTab,
+}: {
+  detail: CompanyDetail
+  profile: TabData<CompanyProfile>
+  scorecards: TabData<Scorecards>
+  initialTab: DetailTab
+}) {
   const [tab, setTab] = useState<DetailTab>(initialTab)
   const [periodType, setPeriodType] = useState<string>(ALL_PERIOD_TYPES)
   const [scale, setScale] = useState<AmountScale>("billions")
@@ -154,6 +171,10 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
           <Overview detail={detail} periodTypes={periodTypes} />
         </TabsContent>
 
+        <TabsContent value="profile" className="pt-2">
+          <ProfilePanel profile={profile.data ?? null} error={profile.error ?? null} />
+        </TabsContent>
+
         <TabsContent value="income" className="pt-2">
           {statementCard("income", "Income statement", INCOME_STATEMENT, (p) => p.incomeStatement)}
         </TabsContent>
@@ -234,6 +255,10 @@ export function CompanyDetailView({ detail, initialTab }: { detail: CompanyDetai
               <FilingsTable periods={detail.periods} />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="quant" className="pt-2">
+          <QuantScorePanel scorecards={scorecards.data ?? null} error={scorecards.error ?? null} />
         </TabsContent>
       </Tabs>
     </div>

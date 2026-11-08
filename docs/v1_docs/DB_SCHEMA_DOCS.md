@@ -232,7 +232,8 @@ uploads of the same company update the one row instead of inserting a second.
 | `country`         | `VARCHAR(100)` | yes  |         |                                                                       |
 | `currency`        | `CHAR(3)`      | yes  |         | ISO 4217 reporting currency of the financial statements               |
 | `fiscal_year_end` | `DATE`         | yes  |         | Most recent fiscal year end; its month/day define the fiscal calendar |
-| `ipo_date`        | `DATE`         | yes  |         |                                                                       |
+| `ipo_date`        | `DATE`         | yes  |         | Listing date (IDX: `TanggalPencatatan` of the IDX company profile, V1.0.52) |
+| `listing_board` .. `profile_updated_at` | | yes | | IDX company profile (V1.0.52): `listing_board`, `idx_sector`, `idx_sub_sector`, `idx_industry`, `idx_sub_industry`, `business_activity`, `share_registrar`, `idx_name`, `profile_updated_at` (section 4.15) |
 | `active`          | `BOOLEAN`      | no   | `TRUE`  |                                                                       |
 | `created_at`      | `TIMESTAMPTZ`  | no   | `now()` |                                                                       |
 | `updated_at`      | `TIMESTAMPTZ`  | no   | `now()` |                                                                       |
@@ -926,6 +927,19 @@ One AI macro analysis of a country's stock market, its index (Macro > AI Analysi
 |                              | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `PRIOR_ONLY`, `NO_SCORE` (check)                  |
 | `macro_analysis_lesson`      | `lesson_id`, `agent`, `lesson`, `occurrences`, `source_analysis`, `active` | | Reflexion memory of the macro agents; **unique** (agent, lesson); `active = false` drops a lesson |
 | `llm_usage`                  | `macro_analysis_id`            | UUID FK       | the macro analysis of a model call (`run_id`, `analysis_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_macro_analysis` |
+
+### 4.15 IDX company profiles (`V1.0.52__schema_company_profile.sql`)
+
+- `company`: the profile columns above, written by `POST /api/v1/companies/profiles/upload`; `ipo_date` only when
+  empty (a different date is a conflict, kept).
+- `company_profile_upload`: one row per uploaded file (`uq_company_profile_upload_file`: exchange + SHA-256; the same
+  file again writes nothing), counts and the full result (`result` JSONB).
+- `company_dividend`: IDX's cash dividends (source `idx`): `fiscal_year` (TahunBuku), `dividend_type`,
+  `cash_per_share` + `currency` as announced, `cum_date`, `ex_date`, `recording_date`, `payment_date`,
+  `total_amount` + `total_currency`, `upload_id`; a company's rows are replaced by each detail upload of it
+  (`uq_company_dividend`: company, source, fiscal year, cum, ex, amount). Yahoo's dividends stay in `corporate_event`.
+
+Details: [COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md).
 
 ## 5. Views (`V1.0.3__views.sql`)
 

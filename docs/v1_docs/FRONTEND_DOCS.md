@@ -108,6 +108,7 @@ in the URL (`?tab=income`, ...) without a server round trip, so every tab can be
 | Tab              | Content                                                                                                                                                                                                                                                                                                   |
 |------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Overview         | KPI tiles (revenue, net income to parent, total assets, equity, free cash flow, P/E, P/B, EV / operating profit) with the period they come from; revenue / gross profit / net income chart with a period-type filter (defaults to full years); data coverage; valuation multiples chart (P/E, P/B, EV/OP) |
+| Profile          | IDX company profile (listing date / IPO date, listing board, IDX-IC sector, business activity, share registrar), cash dividends (IDX and Yahoo) with the yield on the cum-date close, trailing yield and payout, payout ratio by fiscal year ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md)) |
 | Income statement | line items x periods                                                                                                                                                                                                                                                                                      |
 | Balance sheet    | line items x periods                                                                                                                                                                                                                                                                                      |
 | Cash flow        | line items x periods                                                                                                                                                                                                                                                                                      |
@@ -116,6 +117,7 @@ in the URL (`?tab=income`, ...) without a server round trip, so every tab can be
 | Valuation        | every valuation snapshot: price, market cap, EV, TTM revenue / EPS, forward EPS (the period's profit to the parent made a year: Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, / shares), P/E, BVPS (equity attributable to the parent / shares), P/B, P/S, EV/EBITDA (marked "(FY 2025)" when it is on the full year's EBITDA: `ebitdaBasis`), EV/Sales, EV/OP, FCF and earnings yield                                                                                                                                                                     |
 | Market & shares  | latest OHLCV price, market value, share counts per date, corporate actions                                                                                                                                                                                                                                |
 | Filings          | every reporting period: dates, audit status, which statements exist, segment and metric counts, source filing                                                                                                                                                                                             |
+| Quant Score      | the six fundamental agents' scorecards (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk) from preset rules, no AI: overall and verdict, per agent the score, coverage and every criterion against its poor / good bounds with its source, rule-based strengths / concerns / data gaps ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md)) |
 
 Statement tables:
 
@@ -320,6 +322,11 @@ selected) and the investor agents. A chosen stock that fails a tradability check
 watchlist) is analysed anyway and shows the reason among its red flags. Each page lists only its own runs (`scope=TIER` / `scope=SELECTION`);
 a report opened under the other page's URL (e.g. from the Ingestion jobs table) is redirected to its own
 (`components/screening/report-page.tsx`, shared by both report routes).
+
+The Ingestion page "Screening Data IDX" also has the "IDX company profiles" card (`company-profiles-card.tsx`): the
+collector script for a www.idx.co.id tab (Copy collector script), the upload of its JSON, the last result (unknown
+tickers, conflicts, listing dates to check, warnings) and the companies without a listing date
+([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md)).
 
 The Ingestion page "Screening Data IDX" has the "Screening data" card (runs the ETL); its jobs table opens
 on the ETL runs (tab "Screening data"), and every Ingestion page lists them and the screenings under the

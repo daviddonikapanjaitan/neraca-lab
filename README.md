@@ -47,6 +47,7 @@ start), then change its password in Admin Center > User Management.
 | [`DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md)             | start / stop scripts, containers, compose files, options, troubleshooting |
 | [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
 | [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
+| [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Quant Score tab (six rule-based agent scorecards) |
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
@@ -320,6 +321,7 @@ and upload them on the Ingestion page (or with the APIs below):
 | [Keterbukaan Informasi](https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi)                             | information disclosures of listed companies (company announcements and reports filed with IDX)           | `data/IDX_OWNERSHIP/<TICKER>/` (registration reports) | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
 | [Data Kepemilikan Saham](https://www.idx.co.id/id/perusahaan-tercatat/data-kepemilikan-saham/)                           | share ownership data of listed companies                                                                 | `data/IDX_OWNERSHIP/<TICKER>/`             | registration reports: `POST /api/v1/rag/pdf` with `documentType=REGISTRATION` |
 | [Pengumuman](https://www.idx.co.id/id/berita/pengumuman/) (KSEI: Kepemilikan Efek Diatas 5%)                              | KSEI's daily list of the shareholders of more than 5% of every listed company, by investor (`peng-<date>-<no>-lima-persen.xlsx`) | `data/IDX_OWNERSHIP_FIVE_PERCENTAGE/` | `POST /api/v1/rag/xlsx` with `documentType=OWNERSHIP_5_PERCENT` |
+| [Profil Perusahaan Tercatat](https://www.idx.co.id/id/perusahaan-tercatat/profil-perusahaan-tercatat/) | every listed company's profile (listing date, board, IDX-IC sector, business activity) and its dividend history: run the collector script of the "IDX company profiles" card in the browser's console of a www.idx.co.id tab, it saves `company-profiles-<date>.json` | anywhere (not stored) | Ingestion › Screening Data IDX › Upload profiles (`POST /api/v1/companies/profiles/upload`) |
 | [Pengumuman](https://www.idx.co.id/id/berita/pengumuman/) (KSEI: pemegang saham di atas 1%) | KSEI's monthly list of the shareholders of more than 1% of every listed company at the month end (`peng-<yyyy>-<mm>-<no>-satu-persen.xlsx`) | `data/IDX_OWNERSHIP_ONE_PERCENTAGE/` | `POST /api/v1/rag/xlsx` with `documentType=OWNERSHIP_1_PERCENT` |
 
 The monthly registration reports of securities holders (registrasi / LBRE PDFs) are what the
@@ -515,6 +517,8 @@ second row.
 curl -H "$AUTH"  http://localhost:8080/api/v1/exchanges                 # supported exchanges
 curl -H "$AUTH" "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
+curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/profile        # IDX profile, dividends, payout
+curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/scorecards     # Quant Score: six agents, no AI
 ```
 
 | Endpoint                                    | Returns                                                                                                                                                                                                                                                                                           |
@@ -1041,13 +1045,15 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 956 tests
+(cd backend && ./mvnw test)                      # 982 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
-The full backend suite takes about 15 minutes (2026-11-08: 956 tests in 175 classes, 15 min 29 s; the slowest are
-`DerivedDataRefreshTest` 4 min 20 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
-102 s, `TechnicalControllerTest` 43 s). Run it while the backend is quiet (no upload or price job: the tests share the
+The full backend suite takes about 15 minutes (2026-11-08: 982 tests in 179 classes, about 16 min; the slowest are
+`DerivedDataRefreshTest` 4 min 10 s - the refresh of every company, ~940 with filings - `OnePercentRepositoryTest`
+97 s, `AnalysisControllerTest` and `TechnicalControllerTest` 43 s). `PacedHttpClientPaceTest` measures request
+starts in milliseconds and can fail once under a busy machine (2026-11-08: one gap of 64 ms against 85); run it again
+alone before looking further. Run it while the backend is quiet (no upload or price job: the tests share the
 live database) and one run at a time; a run past 30 minutes or with no test class finishing for 5 minutes is stuck -
 look at the running test with `jstack <surefire pid>`. Before a new run make sure no Maven / surefire `java` process of an
 earlier, interrupted run is still alive (2026-11-05: an orphaned fork held 2.5 GB and the `target` folder).
@@ -1122,6 +1128,12 @@ RAG: `TextChunkerTest`, `EmbeddingClientTest`, `PdfTextTest` (the HRTA FY2025 PD
 (date range and paging on saved pages, only the news sites read), `RagNewsIngestionTest`, `NewsRetryTest` (passing failures of the news sites retried), `RagRepositoryTest` (pgvector store and cosine search, macro documents of a country by publication date, rolled back)
 and `RagControllerTest` (a company PDF and a macro PDF of Indonesia through the worker into the store with stub
 embeddings, validation, the United States and China not available yet, permission); `IngestionJobTypeConstraintTest` that every script re-creating the job-type check lists every job type; `XbrlDocumentTextTest`, `XbrlRagServiceTest` and `FinancialStatementQueueWorkersTest` the uploaded workbooks in the vector store (HRTA FY2025's sheets, headings, rows and chunks; stored as an XBRL financial statement, listed and searched apart from the ownership documents, not embedded twice, nothing stored for an unknown company or a failing provider; the upload job's outcome never changed by it); see `docs/v1_docs/RAG_DOCS.md`, section 7.
+
+Company profiles and Quant Score: `IdxProfileParserTest` (the IDX list, detail and collector files, boards, dates, both number
+notations), `DividendHistoryTest` (yield on the cum-date close, split basis, IDX + Yahoo as one row, USD reporters in
+rupiah, cash / declared / trailing payout), `CombinedProfileTest` (filings first, Yahoo for the gaps) and
+`CompanyProfileControllerTest` (upload, Profile tab, status, scorecards of HRTA, BBCA and AADI, rolled back); see
+`docs/v1_docs/COMPANY_PROFILE_DOCS.md`, section 5.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
@@ -1224,6 +1236,7 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
+| `company_profile_upload`, `company_dividend` | IDX company profile uploads (SHA-256, result) and IDX's cash dividends (fiscal year, per share, cum / ex / payment dates); the profile itself in `company` (`ipo_date`, `listing_board`, `idx_sector` ...) |
 | `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series` | technical analysis inputs: IHSG daily bars, dividends / splits (Yahoo), macro observations (with release dates) |
 | `market_instrument`, `instrument_daily` | Forex pairs and commodities and their bars (daily; the World Bank, IMF and FRED series monthly) |
 | `macro_series_def`    | the macro series: source, unit, frequency, publication lag, sanity range     |
