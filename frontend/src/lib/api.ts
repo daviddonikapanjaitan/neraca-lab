@@ -13,6 +13,7 @@ import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } fro
 import type { ExcelStatus, MovementPage, OwnershipOptions, OwnershipReportPage } from "@/lib/ownership"
 import type { OnePercentOptions, OnePercentPage, OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
+import type { Portfolio } from "@/lib/portfolio"
 import type { Scorecards } from "@/lib/scorecards"
 import type {
   TechnicalScreeningOptions,
@@ -156,12 +157,15 @@ export const getCompanyProfile = cache((exchange: string, ticker: string) =>
   )
 )
 
-/** GET /api/v1/companies/{exchange}/{ticker}/scorecards (the Quant Score tab: six rule-based agent scorecards) */
+/** GET /api/v1/companies/{exchange}/{ticker}/scorecards (the Fundamental (Score) tab: six rule-based agent scorecards) */
 export const getCompanyScorecards = cache((exchange: string, ticker: string) =>
   get<Scorecards>(
     `/api/v1/companies/${encodeURIComponent(exchange)}/${encodeURIComponent(ticker)}/scorecards`
   )
 )
+
+/** GET /api/v1/portfolio (Portfolio > Position of the signed-in user) */
+export const getPortfolio = cache(() => get<Portfolio>("/api/v1/portfolio"))
 
 /** GET /api/v1/companies/profiles/status?exchange= (IDX company profiles card) */
 export const getCompanyProfilesStatus = cache((exchange: string) =>

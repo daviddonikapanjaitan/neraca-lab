@@ -95,8 +95,9 @@ ProblemDetail through; unreachable backend = 503):
 | Exchange filter | the exchanges from `GET /api/v1/exchanges`; changing it navigates to `?exchange=` (shareable URL)                                    |
 | Search          | ticker, name, legal name, sector, industry (client side)                                                                             |
 | Sector filter   | the sectors of the listed companies                                                                                                  |
-| Table           | company, sector / industry, **Quant Score**, periods, latest period, latest price date, currency; sortable columns; a row (or "Details") opens page 2 |
-| Quant Score     | the overall of the six fundamental agents, the same number as the company's Quant Score tab (coloured >= 65 / >= 45 / below, the verdict under it; the cell opens `?tab=quant`). Loaded after the list from `/api/companies/quant-scores?exchange=` (`GET /api/v1/companies/quant-scores`; a few seconds when the backend has not kept them, then from memory), a skeleton meanwhile; sorting by it starts with the best score, unknown scores last; the card says how many are scored and when they were computed ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md) section 3a) |
+| Table           | company, Sector / Industry, **Fundamental (Score)**, **Technical (Score)**, periods, latest period, latest price date, currency; sortable columns; a row (or "Details") opens page 2 |
+| Technical (Score) | the overall of the four technical agents (Murphy, Keith Gill, Paul Tudor Jones, Druckenmiller), the same number as the company's Technical (Score) tab, with its stance; the cell opens `?tab=technical`. Loaded after the list from `/api/companies/technical-scores?exchange=` (15 - 40 s when the backend has not kept them, then from memory), a skeleton meanwhile ([TECHNICAL_DOCS.md](TECHNICAL_DOCS.md) section 10) |
+| Fundamental (Score) | the overall of the six fundamental agents, the same number as the company's Fundamental (Score) tab (coloured >= 65 / >= 45 / below, the verdict under it; the cell opens `?tab=quant`). Loaded after the list from `/api/companies/quant-scores?exchange=` (`GET /api/v1/companies/quant-scores`; a few seconds when the backend has not kept them, then from memory), a skeleton meanwhile; sorting by it starts with the best score, unknown scores last; the card says how many are scored and when they were computed ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md) section 3a) |
 | Empty states    | "no matching results" with "Clear filters", or "no companies yet" for an empty exchange                                              |
 | Errors          | unsupported exchange (400), backend unreachable                                                                                      |
 
@@ -118,7 +119,8 @@ in the URL (`?tab=income`, ...) without a server round trip, so every tab can be
 | Valuation        | every valuation snapshot: price, market cap, EV, TTM revenue / EPS, forward EPS (the period's profit to the parent made a year: Q1 x 4, H1 x 2, 9M x 4/3, FY x 1, / shares), P/E, BVPS (equity attributable to the parent / shares), P/B, P/S, EV/EBITDA (marked "(FY 2025)" when it is on the full year's EBITDA: `ebitdaBasis`), EV/Sales, EV/OP, FCF and earnings yield                                                                                                                                                                     |
 | Market & shares  | latest OHLCV price, market value, share counts per date, corporate actions                                                                                                                                                                                                                                |
 | Filings          | every reporting period: dates, audit status, which statements exist, segment and metric counts, source filing                                                                                                                                                                                             |
-| Quant Score      | the six fundamental agents' scorecards (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk) from preset rules, no AI: overall and verdict, per agent the score, coverage and every criterion against its poor / good bounds with its source, rule-based strengths / concerns / data gaps ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md)) |
+| Fundamental (Score) | (`?tab=quant`) the six fundamental agents' scorecards (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk) from preset rules, no AI: overall and verdict, per agent the score, coverage and every criterion against its poor / good bounds with its source, rule-based strengths / concerns / data gaps ([COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md)) |
+| Technical (Score) | (`?tab=technical`, loaded when first opened) the four technical agents of Technicals' preset summaries scored 0 - 100 and their overall with its stance and a summary; per agent its stance, buy at or below, sell (target), stop loss, reward / risk, thesis and evidence; no chart, no AI ([TECHNICAL_DOCS.md](TECHNICAL_DOCS.md) section 10) |
 
 Statement tables:
 
@@ -499,3 +501,13 @@ Notes:
   behaviour for streamed responses).
 - `AGENTS.md` / `CLAUDE.md` are generated by create-next-app and re-added by `next dev`; they point
   coding agents to the bundled Next.js 16 docs in `node_modules/next/dist/docs/`.
+
+## Portfolio
+
+Sidebar › Portfolio (between Companies and Macro, permission COMPANIES): **Position** (`/portfolio`) - the user's
+stocks with the Fundamentals of Companies (the columns of `instruction/Position Portfolio.xlsx`), the metrics (Portfolio
+and Stocks cards), the Live card (IDX phase, today's change, Refresh; the page reads the portfolio again every minute
+while the IDX day is on), the positions table (grouped headers, pinned Stock column, a scrollbar above and below, drag
+to slide; the Today column draws the day's 5-minute prices) and the allocation by sector (donut and the stocks of every
+slice); **Performance** (`/portfolio/performance`) - later. Details: [PORTFOLIO_DOCS.md](PORTFOLIO_DOCS.md).
+

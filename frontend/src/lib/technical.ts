@@ -250,6 +250,70 @@ export const summarySchema = z.object({
 })
 export type Summary = z.infer<typeof summarySchema>
 
+/** One preset as an agent of the Technical Score: its rules score on 0-100 (50 + 50 x score / maxScore) */
+const technicalAgentScoreSchema = z.object({
+  preset: z.enum(["murphy", "gill", "ptj", "druckenmiller"]),
+  name: z.string(),
+  score: num,
+  raw: num,
+  maxScore: num,
+  stance: z.enum(STANCES).nullable(),
+})
+export type TechnicalAgentScore = z.infer<typeof technicalAgentScoreSchema>
+
+/**
+ * GET .../score: the preset summaries with the Technical Score of each preset (agent) and their overall - a company's
+ * Technical (Score) tab (backend TechnicalScore; rules only, no AI model).
+ */
+export const technicalScoreSchema = summarySchema.extend({
+  technicalScore: z.object({
+    /** the average of the agents' scores, 0-100; null without summaries */
+    overall: nullableNum,
+    stance: z.enum(STANCES).nullable(),
+    agents: z.array(technicalAgentScoreSchema),
+    stances: z.record(z.string(), num),
+    summary: z.string(),
+    method: z.string(),
+  }),
+})
+export type TechnicalScoreResponse = z.infer<typeof technicalScoreSchema>
+
+/** One company of GET /api/v1/companies/technical-scores (the company list's Technical (Score) column). */
+export type TechnicalScoreRow = {
+  ticker: string
+  /** the overall of the Technical (Score) tab; null without prices or summaries */
+  overall: number | null
+  stance: Stance | null
+  /** agents whose own stance is Buy or Accumulate */
+  agentsBuying: number
+  agents: number
+  asOfDate: string | null
+  /** why there is no score */
+  error: string | null
+}
+
+/** GET /api/v1/companies/technical-scores?exchange= */
+export type TechnicalScoreBoard = {
+  exchange: string
+  computedAt: string
+  millis: number
+  cached: boolean
+  companies: number
+  scored: number
+  scores: TechnicalScoreRow[]
+}
+
+export function technicalScoresUrl(exchange: string): string {
+  return `/api/companies/technical-scores?${new URLSearchParams({ exchange })}`
+}
+
+export const STANCE_LABELS: Record<Stance, string> = {
+  BUY: "Buy",
+  ACCUMULATE: "Accumulate",
+  WAIT: "Wait",
+  AVOID: "Avoid",
+}
+
 export const marketSchema = z.object({
   exchange: z.string(),
   asOfDate: z.string().nullable(),

@@ -41,6 +41,7 @@ import com.neracalab.backend.technical.engine.SnapshotCalculator;
 import com.neracalab.backend.technical.engine.SnapshotCalculator.EventInfo;
 import com.neracalab.backend.technical.engine.Stats;
 import com.neracalab.backend.technical.engine.Structure;
+import com.neracalab.backend.technical.engine.TechnicalScore;
 import com.neracalab.backend.technical.idx.AutoRejection;
 import com.neracalab.backend.technical.idx.IdxTickSize;
 
@@ -885,8 +886,11 @@ public class TechnicalService {
             requireDaily(listing);
             return instrumentSnapshotJson(listing);
         }
-        List<Candle> daily = dailyBars(listing);
-        MarketContext market = marketContext(Exchange.of(listing.exchange()));
+        return stockSnapshotJson(listing, dailyBars(listing), marketContext(Exchange.of(listing.exchange())));
+    }
+
+    /** The snapshot of a company from its daily bars and its exchange's market context (stored, reused while unchanged). */
+    private String stockSnapshotJson(Listing listing, List<Candle> daily, MarketContext market) {
         List<EventInfo> events = eventInfos(listing);
         String hash = SnapshotCalculator.inputHash(daily, events, market, properties);
         var stored = repository.snapshot(listing.companyId());
@@ -1112,8 +1116,83 @@ public class TechnicalService {
     public Map<String, Object> summary(String exchange, String ticker) {
         Listing listing = listing(exchange, ticker);
         requireDaily(listing);
-        Map<String, Object> snapshot = snapshotDocument(listing);
-        IndicatorSet daily = indicatorSet(listing, Interval.D, Adjustment.SPLIT);
+        return summary(listing, snapshotDocument(listing), indicatorSet(listing, Interval.D, Adjustment.SPLIT));
+    }
+
+    /**
+     * The Technical (Score) tab of a company: the preset summaries ({@link #summary}) with their 0-100 scores and the
+     * overall ({@link TechnicalScore}) under {@code technicalScore}. Rules only, no model call.
+     */
+    public Map<String, Object> technicalScore(String exchange, String ticker) {
+        Map<String, Object> out = summary(exchange, ticker);
+        out.put("technicalScore", TechnicalScore.of(out).toMap());
+        return out;
+    }
+
+    /**
+     * A company's preset summaries from {@link #companySummaries}, or why it has none.
+     *
+     * @param summary as {@link #summary} returns it; null with {@code error}
+     */
+    public record CompanySummary(String ticker, Map<String, Object> summary, String error) {
+    }
+
+    /**
+     * The preset summaries of every company of an exchange in one pass (the Technical Score column of the company list):
+     * the same summaries as {@link #summary} per company, read with one listing query and one market context instead of
+     * one each, and without filling the chart cache. {@code parallel} companies are read at once.
+     */
+    @SuppressWarnings("unchecked")
+    public List<CompanySummary> companySummaries(Exchange exchange, int parallel) {
+        List<Listing> listings = repository.search(exchange, "", 100_000);
+        MarketContext market = marketContext(exchange);
+        java.util.concurrent.Semaphore slots = new java.util.concurrent.Semaphore(Math.max(1, parallel));
+        List<CompanySummary> out = new ArrayList<>(listings.size());
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            List<java.util.concurrent.Future<CompanySummary>> futures = new ArrayList<>(listings.size());
+            for (Listing l : listings) {
+                futures.add(pool.submit(() -> {
+                    if (l.tradingDays() == null || l.tradingDays() == 0) {
+                        return new CompanySummary(l.ticker(), null, "No prices stored");
+                    }
+                    slots.acquire();
+                    try {
+                        List<Candle> daily = repository.bars(l.companyId(), exchange.currency());
+                        if (daily.isEmpty()) {
+                            return new CompanySummary(l.ticker(), null, "No prices stored");
+                        }
+                        Map<String, Object> snapshot = json.readValue(stockSnapshotJson(l, daily, market), Map.class);
+                        IndicatorSet ind = IndicatorEngine.compute(Aggregation.aggregate(daily, Interval.D), Interval.D);
+                        return new CompanySummary(l.ticker(), summary(l, snapshot, ind), null);
+                    } catch (RuntimeException e) {
+                        // one company's data never hides the others
+                        log.warn("Preset summaries of {} {} failed: {}", exchange.code(), l.ticker(), e.toString());
+                        return new CompanySummary(l.ticker(), null, e.getMessage() == null ? e.toString() : e.getMessage());
+                    } finally {
+                        slots.release();
+                    }
+                }));
+            }
+            for (var f : futures) {
+                try {
+                    out.add(f.get());
+                } catch (java.util.concurrent.ExecutionException e) {
+                    throw new IllegalStateException("Preset summaries failed", e.getCause());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while reading the preset summaries", e);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** Changes when an exchange's stored prices, the exchange rates or the benchmark index change. */
+    public String pricesFingerprint(Exchange exchange) {
+        return exchangeFingerprint(exchange) + ":" + indexFingerprint();
+    }
+
+    private Map<String, Object> summary(Listing listing, Map<String, Object> snapshot, IndicatorSet daily) {
         IdxTickSize t = ticks(listing);
         Map<String, Object> out = PresetSummaries.summarize(new PresetSummaries.Input(snapshot, daily, t, type(listing)));
         out.put("companyName", listing.companyName());

@@ -1,5 +1,5 @@
-// The Quant Score tab of a company (backend ScorecardService): the six fundamental agents' scorecards from preset
-// rules, no model call.
+// The Fundamental (Score) tab of a company, formerly Quant Score (backend ScorecardService): the six fundamental
+// agents' scorecards from preset rules, no model call.
 
 import { formatMultiple, formatNumber, formatPercent } from "@/lib/format"
 
@@ -58,7 +58,7 @@ export type Scorecards = {
 /** One company of GET /api/v1/companies/quant-scores (the company list's column; backend QuantScoreBoard). */
 export type QuantScore = {
   ticker: string
-  /** the overall of the Quant Score tab; null when no agent has enough of its scorecard known */
+  /** the overall of the Fundamental (Score) tab; null when no agent has enough of its scorecard known */
   overall: number | null
   verdict: Verdict | null
   financial: boolean

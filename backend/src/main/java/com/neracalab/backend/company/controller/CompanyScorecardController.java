@@ -16,6 +16,7 @@ import com.neracalab.backend.company.CompanyService.CompanyNotFoundException;
 import com.neracalab.backend.company.Exchange.UnsupportedExchangeException;
 import com.neracalab.backend.company.Tickers.InvalidTickerException;
 import com.neracalab.backend.company.score.QuantScoreBoard;
+import com.neracalab.backend.company.score.TechnicalScoreBoard;
 import com.neracalab.backend.company.score.ScorecardService;
 import com.neracalab.backend.company.score.ScorecardService.Scorecards;
 
@@ -26,6 +27,8 @@ import com.neracalab.backend.company.score.ScorecardService.Scorecards;
  *       fundamental agents' scorecards</li>
  *   <li>{@code GET /api/v1/companies/quant-scores?exchange=IDX} - the overall score of every company of the exchange
  *       (the sortable column of the company list; {@link QuantScoreBoard}, kept in memory)</li>
+ *   <li>{@code GET /api/v1/companies/technical-scores?exchange=IDX} - the overall Technical Score of every company of
+ *       the exchange (the company list's Technical (Score) column; {@link TechnicalScoreBoard}, kept in memory)</li>
  * </ul>
  */
 @RestController
@@ -34,16 +37,26 @@ public class CompanyScorecardController {
 
     private final ScorecardService service;
     private final QuantScoreBoard board;
+    private final TechnicalScoreBoard technicalBoard;
 
-    public CompanyScorecardController(ScorecardService service, QuantScoreBoard board) {
+    public CompanyScorecardController(ScorecardService service, QuantScoreBoard board,
+                                      TechnicalScoreBoard technicalBoard) {
         this.service = service;
         this.board = board;
+        this.technicalBoard = technicalBoard;
     }
 
     @RequiresPermission(Permission.COMPANIES)
     @GetMapping("/quant-scores")
     public QuantScoreBoard.Board quantScores(@RequestParam(name = "exchange", defaultValue = "IDX") String exchange) {
         return board.board(exchange);
+    }
+
+    @RequiresPermission(Permission.COMPANIES)
+    @GetMapping("/technical-scores")
+    public TechnicalScoreBoard.Board technicalScores(
+            @RequestParam(name = "exchange", defaultValue = "IDX") String exchange) {
+        return technicalBoard.board(exchange);
     }
 
     @RequiresPermission(Permission.COMPANIES)

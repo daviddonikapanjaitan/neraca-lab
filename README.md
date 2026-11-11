@@ -47,7 +47,8 @@ start), then change its password in Admin Center > User Management.
 | [`DOCKER_DOCS.md`](docs/v1_docs/DOCKER_DOCS.md)             | start / stop scripts, containers, compose files, options, troubleshooting |
 | [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
 | [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
-| [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Quant Score tab (six rule-based agent scorecards) and the sortable overall Quant Score column of the company list |
+| [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Fundamental (Score) tab (formerly Quant Score: six rule-based agent scorecards) and the sortable Fundamental (Score) column of the company list |
+| [`PORTFOLIO_DOCS.md`](docs/v1_docs/PORTFOLIO_DOCS.md)       | Portfolio › Position: your stocks with the Fundamentals (the columns of the Position sheet), metrics, allocation by sector; intraday prices of the held stocks every 5 minutes during the IDX session; API, tables, tests |
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
@@ -59,7 +60,7 @@ start), then change its password in Admin Center > User Management.
 | [`OWNERSHIP_DOCS.md`](docs/v1_docs/OWNERSHIP_DOCS.md)       | Companies › Ownership (>=5%): KSEI's daily lists of the shareholders of more than 5% uploaded on Ingestion › Excel Documents (RAG), buys / sells / crossings of 5% day by day, accounts, aliases, the vector store and the AI analysis, API, tests |
 | [`OWNERSHIP_ONE_PERCENT_DOCS.md`](docs/v1_docs/OWNERSHIP_ONE_PERCENT_DOCS.md) | Companies › Ownership (>=1%): KSEI's monthly lists of the shareholders of more than 1%, investor types, the same investor listed twice, totals that do not add up, matching month to month (same name, renamed, moved block), out-of-order months, the vector store and the AI analysis, API, tests |
 | [`DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_SCHEMA_DOCS.md)       | database: every table, column, constraint and view, loading data          |
-| [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests |
+| [`TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md)       | technical analysis: Companies › Technicals page, indicator engine (ta4j), IDX tick sizes and ARA / ARB, APIs, refresh, tests; the Technical (Score) tab and the company list's Technical (Score) column (section 10) |
 | [`MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md)               | macro data (Ingestion › Macro): series and sources (FRED, Bank Indonesia, CNBC, CFTC), point in time, signals and the liquidity / risk regimes; the Macro › Outlook and Macro › Data pages |
 | [`MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md) | AI macro analysis (Macro › AI Analysis): research agent over the stored macro data, commodities, Forex, indexes and the macro documents (RAG), the Tudor Jones / Druckenmiller / Soros / Dalio agents, investability 0 - 100, cost, report, PDF |
 | [`DEV_CONTEXT_DOCS.md`](docs/v1_docs/DEV_CONTEXT_DOCS.md)   | development context of Claude Code (`dev_context`, RAG): issues, data gaps of tickers, fixes, decisions and procedures saved and searched by meaning and keywords, API `/api/v1/dev-context` |
@@ -84,6 +85,8 @@ neraca_lab/
 │       ├── java/.../ingestion/  AI upload endpoint: xlsx reader, mapper, agent, tools, repository,
 │       │                        stored files (checksum), background upload queue
 │       ├── java/.../price/      daily price ingestion: queue, providers, valuation refresh
+│       ├── java/.../portfolio/  Portfolio › Position: positions, cash, the Fundamentals columns, allocation;
+│       │                        intraday/ (Yahoo 5-minute prices of the held stocks, IDX session, schedule)
 │       ├── java/.../technical/  technical analysis: indicator engine (ta4j + custom), IDX rules, macro signals,
 │       │                        preset summaries, APIs, refresh
 │       ├── java/.../market/     Forex pairs and commodities: catalog, ingestion (Yahoo, World Bank), bad-print cleaning
@@ -293,7 +296,7 @@ role has one or more permissions, and the backend checks them on every API reque
 |-------------|--------------------------------------------------------------------------|
 | `ADMIN`     | Admin Center (User Management, Role Management) and `/api/v1/admin/**`   |
 | `INGESTION` | Ingestion pages, upload / price / RAG / job APIs (and the company list)  |
-| `COMPANIES` | Companies pages and company APIs                                         |
+| `COMPANIES` | Companies, Portfolio and Macro pages and their APIs (each user sees only their own portfolio) |
 | `SCREENING` | Screening pages (Fundamental (All), Fundamental (Selected), Technicals (All), Technicals (Selected), Analysis): runs, analyses, reports, PDF export |
 
 The root user `admin` (initial password `admin`, dummy profile data) has the built-in
@@ -518,8 +521,10 @@ curl -H "$AUTH"  http://localhost:8080/api/v1/exchanges                 # suppor
 curl -H "$AUTH" "http://localhost:8080/api/v1/companies?exchange=IDX"   # companies of an exchange
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA        # everything stored for one company
 curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/profile        # IDX profile, dividends, payout
-curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/scorecards     # Quant Score: six agents, no AI
-curl -H "$AUTH" "http://localhost:8080/api/v1/companies/quant-scores?exchange=IDX" # overall Quant Score of every company
+curl -H "$AUTH"  http://localhost:8080/api/v1/companies/IDX/HRTA/scorecards     # Fundamental (Score): six agents, no AI
+curl -H "$AUTH" "http://localhost:8080/api/v1/companies/quant-scores?exchange=IDX" # overall Fundamental Score of every company
+curl -H "$AUTH"  http://localhost:8080/api/v1/technical/IDX/HRTA/score          # Technical (Score): four agents, no AI
+curl -H "$AUTH" "http://localhost:8080/api/v1/companies/technical-scores?exchange=IDX" # overall Technical Score of every company
 ```
 
 | Endpoint                                    | Returns                                                                                                                                                                                                                                                                                           |
@@ -997,6 +1002,34 @@ curl -H "$AUTH" -H "Content-Type: application/json" -d '{"country":"ID","index":
 
 Details: [`docs/v1_docs/MACRO_ANALYSIS_DOCS.md`](docs/v1_docs/MACRO_ANALYSIS_DOCS.md).
 
+## Portfolio
+
+**Portfolio › Position** (sidebar › Portfolio, between Companies and Macro; permission COMPANIES) is the sheet Position of
+`instruction/Position Portfolio.xlsx` in the app. You enter each stock's average price, shares and date of the first buy,
+and the portfolio's cash and total investment; every other column comes from Companies › Fundamentals on each request:
+last price and change, market and average value, G/L, the weights, BVPS, forward EPS (the latest filing made a year),
+debt to equity, EV/EBITDA, PER, PBV, the dividend of this year (else last year) and its yield, the last filing, sector,
+forward EBITDA, shares outstanding, market cap, total debt (total liabilities, as in the sheet), cash, EV, forward
+operating profit and EV/OP; USD reporters in rupiah. The metrics: total cash, total investment, total profit and
+percentage profit, average total, market total, profit market and percentage profit market; below the table the
+allocation by sector (a donut and every slice's stocks with their weights). The table slides sideways with a scrollbar
+above and below it or by dragging. **Performance** comes later.
+
+**Intraday prices:** every 5 minutes on IDX trading days, from 09:00 to 16:20 WIB, the stocks held in any portfolio are
+read from Yahoo Finance (5-minute bars, through the paced client) into `intraday_quote` / `intraday_bar`. During the
+session the page shows the live price (green dot), the day's chart from open to close, the day's gain or loss per stock
+and in total, and the IDX phase (session 1, lunch break, session 2, pre-closing, post-trading); it reads the portfolio
+again every minute, and **Refresh** reads the prices at once. The positions and the daily prices are never written by
+it. `INTRADAY_SCHEDULE_CRON=0 */3 9-16 * * MON-FRI` makes it every 3 minutes, `INTRADAY_SCHEDULE_ENABLED=false` turns
+it off.
+
+```bash
+curl -H "$AUTH"  http://localhost:8080/api/v1/portfolio                        # positions, metrics, allocation, live
+curl -H "$AUTH" -X POST http://localhost:8080/api/v1/portfolio/intraday/refresh # read the intraday prices now
+```
+
+Details: [`docs/v1_docs/PORTFOLIO_DOCS.md`](docs/v1_docs/PORTFOLIO_DOCS.md).
+
 ## Frontend
 
 Next.js web app in `frontend/` with the
@@ -1012,7 +1045,10 @@ npm run dev                   # http://localhost:3000
 
 | Page                             | Content                                                                                                                                                            |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals, Registration, Ownership (>=5%), Ownership (>=1%)); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table, summary tiles        |
+| `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals, Registration, Ownership (>=5%), Ownership (>=1%)); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table (Sector / Industry, Fundamental (Score), Technical (Score), Periods, ...), summary tiles        |
+| `/companies/IDX/HRTA?tab=technical` | a company's Technical (Score) tab: the four technical agents scored 0 - 100 and their overall, each agent's buy / sell / stop, thesis and evidence (Fundamental (Score) is `?tab=quant`) |
+| `/portfolio`                     | Portfolio › Position: metrics, Live card (IDX phase, today's change, Refresh), positions with the Fundamentals columns and the day's intraday chart, allocation by sector |
+| `/portfolio/performance`         | Portfolio › Performance (later)                                                                                                                                      |
 | `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
@@ -1143,8 +1179,16 @@ Company profiles and Quant Score: `IdxProfileParserTest` (the IDX list, detail a
 notations), `DividendHistoryTest` (yield on the cum-date close, split basis, IDX + Yahoo as one row, USD reporters in
 rupiah, cash / declared / trailing payout), `CombinedProfileTest` (filings first, Yahoo for the gaps) and
 `CompanyProfileControllerTest` (upload, Profile tab, status, scorecards of HRTA, BBCA and AADI, rolled back) and
-`QuantScoreBoardTest` (the company list's column: every company's overall equal to its Quant Score tab, kept in memory); see
+`QuantScoreBoardTest` (the company list's column: every company's overall equal to its Fundamental (Score) tab, kept in memory); see
 `docs/v1_docs/COMPANY_PROFILE_DOCS.md`, section 5.
+Technical (Score): `TechnicalScoreTest` (0 - 100 per agent, the overall, the stance bands, the summary, the real HRTA
+summaries) and `TechnicalScoreBoardTest` (every IDX company's overall and stance equal to its tab, from memory the second
+time, both APIs); see `docs/v1_docs/TECHNICAL_DOCS.md`, section 10.
+Portfolio: `PortfolioTest` (every column against the Fundamentals, the sheet's formulas and metrics, a USD reporter in
+rupiah, one portfolio per user, the API's refusals), `PortfolioDividendTest` (this year's dividends else last year's,
+split basis, IDX vs Yahoo, the allocation), `IdxSessionAndYahooParseTest` (the IDX phases, Yahoo's intraday chart) and
+`IntradayTest` (the session as the last price with the day's change, no second fetch within a minute, the schedule only
+during the session, positions and daily prices unchanged; Yahoo stubbed); see `docs/v1_docs/PORTFOLIO_DOCS.md`.
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
@@ -1247,6 +1291,8 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `roles`, `role_permissions`, `user_roles` | roles, their permissions (`ADMIN`, `INGESTION`, `COMPANIES`, `SCREENING`), assignments |
 | `user_sessions`       | login sessions (SHA-256 of the token, expiry)                              |
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
+| `portfolio`, `portfolio_position` | a user's cash and total investment; their stocks (average price, shares, date in) |
+| `intraday_quote`, `intraday_bar` | the latest intraday quote and the 5-minute bars of the stocks held in portfolios (Yahoo, during the IDX session) |
 | `company_profile_upload`, `company_dividend` | IDX company profile uploads (SHA-256, result) and IDX's cash dividends (fiscal year, per share, cum / ex / payment dates); the profile itself in `company` (`ipo_date`, `listing_board`, `idx_sector` ...) |
 | `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series` | technical analysis inputs: IHSG daily bars, dividends / splits (Yahoo), macro observations (with release dates) |
 | `market_instrument`, `instrument_daily` | Forex pairs and commodities and their bars (daily; the World Bank, IMF and FRED series monthly) |

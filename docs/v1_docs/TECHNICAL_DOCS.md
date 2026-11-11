@@ -251,3 +251,39 @@ the market as `{exchange}` and the instrument code as `{ticker}` (`/api/v1/techn
   SMA 200 (±1.5), 12-1 month momentum (±1), the SMA 50 (±0.5). Murphy, Keith Gill and Paul Tudor Jones apply their rules
   to the bars unchanged. No preset reads macro data (since 2026-10-16; the macro view is the Macro page,
   [MACRO_DOCS.md](MACRO_DOCS.md), section 6a).
+
+## 10. Technical (Score): the company tab and the company list's column
+
+The four preset summaries of section 8, read as four agents on 0 - 100, with their overall - for one company on its
+**Technical (Score)** tab (after Fundamental (Score)) and for every company in the **Technical (Score)** column of the
+company list. Rules only, no model call, nothing stored (`technical.engine.TechnicalScore`).
+
+| | Rule |
+|---|---|
+| Agent score | 50 + 50 × the preset's rules score ÷ its maximum, clamped to 0 - 100 (the prior of the technical screening's agents, the same function) |
+| Overall | the average of the four agents |
+| Overall stance | by the share of the maximum ((overall − 50) ÷ 50), as Druckenmiller's rule: Buy from 75, Accumulate from 58.3, Wait from 41.7, Avoid below |
+| Summary | a sentence from the numbers: how many agents say Buy or Accumulate, the stances counted, the strongest and the weakest agent, whether they agree |
+
+The tab (loaded when first opened, from `GET .../score`) shows the overall with its stance and summary, a tile per agent
+(score, stance, rules score of ±max), the caveats, and per agent its stance, the buy at or below (or at or above for a
+buy-stop), sell (target) and stop-loss prices, reward / risk, thesis and evidence - the same as below the chart on
+Technicals, without the chart.
+
+| Method | Path | Permission | Returns |
+|---|---|---|---|
+| GET | `/api/v1/technical/{exchange}/{ticker}/score` | COMPANIES | the summary of `GET .../summary` with `technicalScore` {overall, stance, agents [{preset, name, score, raw, maxScore, stance}], stances, summary, method} |
+| GET | `/api/v1/companies/technical-scores?exchange=IDX` | COMPANIES | every company: `ticker`, `overall`, `stance`, `agentsBuying`, `agents`, `asOfDate`, `error` (no prices); `companies`, `scored`, `computedAt`, `millis`, `cached` |
+
+The list's scores (`company.score.TechnicalScoreBoard`) are those of the tab: `TechnicalService.companySummaries` reads
+every company of the exchange in one pass - one listing query and one market context instead of one each, the same
+snapshot (`indicator_snapshot`, reused while its inputs are unchanged) and the same daily indicators, without filling the
+chart cache - 12 companies at a time. 938 IDX companies take 15 - 40 s; the board is kept in memory per exchange until the
+exchange's prices, the exchange rates or IHSG change (`TechnicalService.pricesFingerprint`) or after
+`neracalab.companies.technical-score-ttl` (1 hour). The column shows a skeleton until then, sorts with the best score
+first and opens `?tab=technical`.
+
+Tests: `TechnicalScoreTest` (the 0 - 100 mapping and clamping, the average, the stance bands, the summary sentence, the
+real HRTA summaries), `TechnicalScoreBoardTest` (every IDX company listed, each overall and stance equal to its tab,
+the second request from memory, both APIs, an unknown exchange 400 and an unknown ticker 404).
+

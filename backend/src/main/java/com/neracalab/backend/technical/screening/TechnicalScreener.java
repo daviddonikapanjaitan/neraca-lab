@@ -35,6 +35,7 @@ import com.neracalab.backend.technical.engine.Interval;
 import com.neracalab.backend.technical.engine.MarketContext;
 import com.neracalab.backend.technical.engine.PresetSummaries;
 import com.neracalab.backend.technical.engine.SnapshotCalculator;
+import com.neracalab.backend.technical.engine.TechnicalScore;
 import com.neracalab.backend.technical.idx.IdxTickSize;
 import com.neracalab.backend.technical.screening.TechnicalPanel.Prior;
 
@@ -357,12 +358,8 @@ public class TechnicalScreener {
 
     /** A preset's score as 0-100: 50 + 50 x score / its maximum, clamped. */
     static double priorScore(Map<String, Object> preset) {
-        Double score = number(preset.get("score"));
-        Double max = number(preset.get("maxScore"));
-        if (score == null || max == null || max <= 0) {
-            return 50;
-        }
-        return round1(Math.max(0, Math.min(100, 50 + 50 * score / max)));
+        // the same 0-100 as a company's Technical (Score) tab
+        return TechnicalScore.agentScore(preset.get("score"), preset.get("maxScore"));
     }
 
     private static void sort(List<Evaluation> eligible) {

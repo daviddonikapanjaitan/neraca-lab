@@ -1,12 +1,14 @@
-# Neraca Lab - IDX company profiles, dividends and the Quant Score (v1)
+# Neraca Lab - IDX company profiles, dividends and the Fundamental (Score) (v1)
 
 Two tabs on the company page (`/companies/{exchange}/{ticker}`) and the ingestion behind them:
 
 - **Profile** (after Overview): the IDX company profile (listing date = IPO date, listing board, IDX-IC sector,
   main business activity, share registrar) and the dividends: every cash dividend with its yield, the trailing
   dividend yield and payout ratio, and the payout ratio of every fiscal year.
-- **Quant Score** (after Filings): the six fundamental agents' scorecards (Buffett, Munger, Lynch, Fisher, Keith Gill,
-  Risk) from preset rules on the stored data. No model call, no cost, nothing stored.
+- **Fundamental (Score)** (after Filings; named Quant Score before 2026-11-11, still `?tab=quant` and
+  `/scorecards`): the six fundamental agents' scorecards (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk) from preset
+  rules on the stored data. No model call, no cost, nothing stored. The **Technical (Score)** tab beside it is in
+  [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md) section 10.
 - **Ingestion › Screening Data IDX › IDX company profiles**: the card that loads the IDX profiles.
 
 ## 1. IDX company profiles
