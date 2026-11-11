@@ -166,12 +166,19 @@ Conventions (same as the database):
 All queries of one response run in one read-only REPEATABLE READ transaction, so the response is
 a consistent snapshot even while an upload writes the same company.
 
-### 3.1 Profile, dividends and Quant Score
+### 3.1 Profile, dividends, Fundamental (Score) and Technical (Score)
 
 `GET /api/v1/companies/{exchange}/{ticker}/profile` (the Profile tab: IDX company profile, dividends, payout ratios) and
-`GET /api/v1/companies/{exchange}/{ticker}/scorecards` (the Quant Score tab: six rule-based agent scorecards), both
+`GET /api/v1/companies/{exchange}/{ticker}/scorecards` (the Fundamental (Score) tab, formerly Quant Score: six
+rule-based agent scorecards) and
+`GET /api/v1/companies/quant-scores?exchange=IDX` (the overall score of every company, the company list's column), all
 COMPANIES; the IDX profile upload `POST /api/v1/companies/profiles/upload` and its status
 `GET /api/v1/companies/profiles/status`, both INGESTION. Details: [COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md).
+
+`GET /api/v1/technical/{exchange}/{ticker}/score` (the Technical (Score) tab) and
+`GET /api/v1/companies/technical-scores?exchange=IDX` (the overall Technical Score of every company, the company list's
+column), both COMPANIES: [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md) section 10. The user's portfolio (`/api/v1/portfolio`):
+[PORTFOLIO_DOCS.md](PORTFOLIO_DOCS.md).
 
 ## 4. Errors
 

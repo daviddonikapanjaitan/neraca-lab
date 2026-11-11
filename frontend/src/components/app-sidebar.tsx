@@ -4,6 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
+  BriefcaseBusinessIcon,
   Building2Icon,
   ChevronRightIcon,
   DatabaseZapIcon,
@@ -36,6 +37,7 @@ import {
 import { COMPANIES_SECTIONS } from "@/lib/companies-sections"
 import { INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { MACRO_HREF, MACRO_SECTIONS } from "@/lib/macro"
+import { PORTFOLIO_HREF, PORTFOLIO_SECTIONS } from "@/lib/portfolio"
 import { SCREENING_SECTIONS } from "@/lib/screening-sections"
 import { hasPermission, homePath } from "@/lib/permissions"
 import type { Permission, User } from "@/lib/types"
@@ -62,6 +64,14 @@ const navMarket: NavItem[] = [
     icon: <Building2Icon />,
     permission: "COMPANIES",
     pages: COMPANIES_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
+  },
+  {
+    // the user's own stocks, read with the Fundamentals of Companies
+    title: "Portfolio",
+    url: PORTFOLIO_HREF,
+    icon: <BriefcaseBusinessIcon />,
+    permission: "COMPANIES",
+    pages: PORTFOLIO_SECTIONS.map((s) => ({ title: s.title, url: s.href })),
   },
   {
     // the country's index read through its macro data (Druckenmiller, Paul Tudor Jones, Soros, Dalio) and its AI

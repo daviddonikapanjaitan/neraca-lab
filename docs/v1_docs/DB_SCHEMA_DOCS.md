@@ -941,6 +941,34 @@ One AI macro analysis of a country's stock market, its index (Macro > AI Analysi
 
 Details: [COMPANY_PROFILE_DOCS.md](COMPANY_PROFILE_DOCS.md).
 
+### 4.16 Portfolios (`V1.0.53__schema_portfolio.sql`)
+
+| Table | Column | Type | Notes |
+|---|---|---|---|
+| `portfolio` | `user_id` | BIGINT PK → `users` (cascade) | one row per user |
+| | `cash`, `total_investment` | NUMERIC(20,2) ≥ 0 | typed on Portfolio › Position (IDR) |
+| | `updated_at` | TIMESTAMPTZ | |
+| `portfolio_position` | `position_id` | BIGSERIAL PK | |
+| | `user_id` | BIGINT → `users` (cascade) | |
+| | `company_id` | BIGINT → `company` | `UNIQUE (user_id, company_id)`: one row per stock |
+| | `average_price` | NUMERIC(20,4) > 0 | Rp per share |
+| | `shares` | NUMERIC(20,0) > 0 | shares, not lots |
+| | `date_in` | DATE | first buy |
+| | `created_at`, `updated_at` | TIMESTAMPTZ | |
+
+Every other column of the page is computed on request from the tables above and `v_key_metrics`
+([PORTFOLIO_DOCS.md](PORTFOLIO_DOCS.md)).
+
+### 4.17 Intraday prices (`V1.0.54__schema_intraday.sql`)
+
+The stocks held in a portfolio, every 5 minutes during the IDX session (Yahoo Finance, listing currency). Written by the
+intraday refresh only; `price_daily` and the portfolio tables are never written by it.
+
+| Table | Columns | Notes |
+|---|---|---|
+| `intraday_quote` | `company_id` PK → `company` (cascade), `session_date`, `price` (> 0), `previous_close`, `day_open`, `day_high`, `day_low`, `volume`, `market_time`, `session_start`, `session_end`, `source`, `fetched_at` | the latest quote of the latest session; a later fetch never replaces a quote of a later trade |
+| `intraday_bar` | `(company_id, bar_time)` PK, `session_date`, `open_price`, `high_price`, `low_price`, `close_price`, `volume` | 5-minute bars; index `(company_id, session_date)`; bars older than `neracalab.intraday.keep-days` (10) are deleted |
+
 ## 5. Views (`V1.0.3__views.sql`)
 
 Deep-value checklist in the style of "Roaring Kitty" (Keith Gill): balance sheet first, then

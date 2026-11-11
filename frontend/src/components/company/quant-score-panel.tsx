@@ -130,7 +130,7 @@ function AgentCard({ card }: { card: AgentScorecard }) {
 }
 
 /**
- * The Quant Score tab: the six fundamental agents (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk) scored by preset
+ * The Fundamental (Score) tab (formerly Quant Score): the six fundamental agents (Buffett, Munger, Lynch, Fisher, Keith Gill, Risk) scored by preset
  * rules on the stored data - the filings, the valuation and the prices, with Yahoo Finance's screening data where
  * those lack a metric. No AI: the same scorecards as the quantitative part of Screening > Analysis.
  */
@@ -139,7 +139,7 @@ export function QuantScorePanel({ scorecards, error }: { scorecards: Scorecards 
     return (
       <Card>
         <CardContent>
-          <EmptyState variant="generic" title="The quant score cannot be loaded" description={error ?? "Unknown error"} />
+          <EmptyState variant="generic" title="The fundamental score cannot be loaded" description={error ?? "Unknown error"} />
         </CardContent>
       </Card>
     )
@@ -163,7 +163,7 @@ export function QuantScorePanel({ scorecards, error }: { scorecards: Scorecards 
             </div>
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">Overall quant score</span>
+                <span className="text-sm font-medium">Overall fundamental score</span>
                 {s.verdict && <Badge variant="outline">{VERDICT_LABELS[s.verdict]}</Badge>}
                 {s.financial && <Badge variant="secondary">Scored as a financial company</Badge>}
               </div>

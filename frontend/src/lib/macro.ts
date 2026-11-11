@@ -2,12 +2,16 @@
 
 export const MACRO_HREF = "/macro"
 
+/** Macro > Data: every series of Ingestion > Macro as a chart (backend MacroDataController). */
+export const MACRO_DATA_HREF = "/macro/data"
+
 /** Macro > AI Analysis: the AI macro analysis of a country (docs/v1_docs/MACRO_ANALYSIS_DOCS.md). */
 export const MACRO_ANALYSIS_HREF = "/macro/analysis"
 
 /** The Macro pages, shared by the sidebar dropdown and the breadcrumb. */
 export const MACRO_SECTIONS: { title: string; href: string }[] = [
   { title: "Outlook", href: MACRO_HREF },
+  { title: "Data", href: MACRO_DATA_HREF },
   { title: "AI Analysis", href: MACRO_ANALYSIS_HREF },
 ]
 
@@ -220,4 +224,91 @@ export function macroOutlookUrl(country: string, index: string, range: string): 
 
 export function isMacroRange(value: string | undefined): value is MacroRange {
   return !!value && (MACRO_RANGES as readonly string[]).includes(value)
+}
+
+// ------------------------------------------------------------------ Macro > Data
+
+/** LEVEL: an index or amount (changes in %); RATE: %, bps or points (changes in points); FLOW: a session's flow (sums). */
+export type MacroSeriesKind = "LEVEL" | "RATE" | "FLOW"
+
+export type MacroSeriesState = "UP_TO_DATE" | "BEHIND" | "NEVER_FETCHED" | "FAILING" | "MANUAL"
+
+/** A series of Ingestion > Macro with what is stored of it (GET /api/v1/macro/data/series). */
+export interface MacroDataSeries {
+  code: string
+  name: string
+  /** ID, US, CN or GLOBAL */
+  country: string
+  category: string
+  unit: string
+  frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY" | "EVENT"
+  source: string
+  sourceUrl: string | null
+  description: string | null
+  usedBy: string[]
+  rows: number
+  firstDate: string | null
+  lastDate: string | null
+  lastValue: number | null
+  lastRelease: string | null
+  state: MacroSeriesState
+  kind: MacroSeriesKind
+}
+
+export interface MacroDataSeriesList {
+  today: string
+  series: MacroDataSeries[]
+}
+
+export interface MacroDataPoint {
+  date: string
+  value: number
+  /** the day the observation was public */
+  released: string
+}
+
+export interface MacroDataChart {
+  range: MacroRange
+  kind: MacroSeriesKind
+  /** the window's first day; null for MAX */
+  from: string | null
+  /** the window's last day: the series' latest observation */
+  to: string | null
+  /** "WEEKLY": more than 2,000 observations in the window, drawn as the last of each week (a flow: the week's sum) */
+  sampled: "WEEKLY" | null
+  points: MacroDataPoint[]
+  /** of every observation in the window; null without any */
+  stats: {
+    observations: number
+    first: MacroDataPoint
+    last: MacroDataPoint
+    high: MacroDataPoint
+    low: MacroDataPoint
+    average: number
+    /** last - first (a flow: the window's sum) */
+    change: number
+    /** LEVEL only */
+    changePct: number | null
+  } | null
+  /** to the latest observation; a flow: the sum over the period */
+  changes: { period: string; from: string | null; change: number; pct: number | null }[]
+  /** the 12 latest observations, newest first */
+  recent: { date: string; value: number; released: string; change: number | null }[]
+}
+
+/** GET /api/v1/macro/data/series/{code}?range= */
+export interface MacroDataSeriesChart {
+  series: MacroDataSeries
+  chart: MacroDataChart
+}
+
+export function macroDataChartUrl(code: string, range: string): string {
+  return `/api/macro/data/series/${encodeURIComponent(code)}?${new URLSearchParams({ range })}`
+}
+
+export const MACRO_COUNTRY_LABELS: Record<string, string> = {
+  ID: "Indonesia",
+  US: "United States",
+  CN: "China",
+  GLOBAL: "Global",
 }

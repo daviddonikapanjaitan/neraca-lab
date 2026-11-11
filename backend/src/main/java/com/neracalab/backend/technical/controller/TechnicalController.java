@@ -50,6 +50,8 @@ import tools.jackson.databind.JsonNode;
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/snapshot} - the agent-ready IndicatorSnapshot (versioned JSON)</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/summary} - the preset summaries (stance, buy / sell / stop,
  *       thesis by fixed rules)</li>
+ *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/score} - the summaries with the 0-100 Technical Score of each
+ *       preset and their overall (a company's Technical (Score) tab)</li>
  *   <li>{@code GET /api/v1/technical/{exchange}/{ticker}/events} - corporate events for chart markers</li>
  *   <li>{@code GET /api/v1/technical/market?exchange=IDX&range=} - index regime and breadth (no macro data: the
  *       Macro page has them)</li>
@@ -127,6 +129,16 @@ public class TechnicalController {
     @GetMapping("/{exchange}/{ticker}/summary")
     public Map<String, Object> summary(@PathVariable("exchange") String exchange, @PathVariable("ticker") String ticker) {
         return service.summary(exchange, ticker);
+    }
+
+    /**
+     * The Technical (Score) tab of a company: the preset summaries with each agent's 0-100 score and the overall
+     * ({@code technicalScore}). Rules only, no model call.
+     */
+    @RequiresPermission(Permission.COMPANIES)
+    @GetMapping("/{exchange}/{ticker}/score")
+    public Map<String, Object> score(@PathVariable("exchange") String exchange, @PathVariable("ticker") String ticker) {
+        return service.technicalScore(exchange, ticker);
     }
 
     @RequiresPermission(Permission.COMPANIES)

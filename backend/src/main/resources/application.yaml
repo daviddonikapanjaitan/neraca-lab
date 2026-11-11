@@ -82,6 +82,8 @@ spring:
         - classpath:db/V1.0.40__schema_dev_context.sql            # development context of Claude Code (RAG)
         - classpath:db/V1.0.46__schema_rag_xbrl.sql               # IDX XBRL workbooks in the RAG vector store (source type XBRL)
         - classpath:db/V1.0.52__schema_company_profile.sql        # IDX company profiles: listing date, board, IDX-IC sector, dividends
+        - classpath:db/V1.0.53__schema_portfolio.sql              # Portfolio > Position: a user's stocks, cash and total investment
+        - classpath:db/V1.0.54__schema_intraday.sql               # intraday quotes and 5-minute bars of the stocks held in portfolios
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -220,6 +222,19 @@ neracalab:
       cron: "0 30 17 * * MON-FRI"
       zone: Asia/Jakarta
       exchange: IDX
+
+  # Intraday prices of the stocks held in Portfolio > Position (IntradayService): Yahoo Finance 5-minute bars of the
+  # IDX session, read through the same paced client as the daily prices. Written to intraday_quote / intraday_bar only:
+  # never to price_daily nor to the positions.
+  intraday:
+    schedule:
+      enabled: ${INTRADAY_SCHEDULE_ENABLED:true}
+      cron: ${INTRADAY_SCHEDULE_CRON:0 */5 9-16 * * MON-FRI}   # every 5 minutes (0 */3 ... for 3), Asia/Jakarta
+      zone: Asia/Jakarta
+    session-start: "09:00"     # IDX session 1 opens (WIB)
+    session-end: "16:20"       # after the post-trading session (16:15): the last fetch of the day
+    interval: 5m               # Yahoo bar size
+    keep-days: 10              # bars older than this are deleted
 
   # Forex pairs and commodities (Price Ingestion with the market Forex / Commodities, /api/v1/markets; charted on
   # Technicals). The catalog is market_instrument (V1.0.26__data_markets_macro.sql): USD/IDR, USD/JPY and the daily

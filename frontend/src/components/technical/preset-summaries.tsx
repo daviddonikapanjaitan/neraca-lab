@@ -9,7 +9,8 @@ import { formatDate, formatNumber } from "@/lib/format"
 import { formatLevel, type PresetId, type PresetSummary, type PriceLevel, type Stance, type Summary } from "@/lib/technical"
 import { cn } from "@/lib/utils"
 
-const STANCE_STYLE: Record<Stance, string> = {
+/** Badge colours of a stance (also the Technical (Score) tab of a company). */
+export const STANCE_STYLE: Record<Stance, string> = {
   BUY: "border-emerald-600/30 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400",
   ACCUMULATE: "border-sky-600/30 bg-sky-600/10 text-sky-700 dark:text-sky-400",
   WAIT: "border-amber-600/30 bg-amber-600/10 text-amber-700 dark:text-amber-400",
@@ -139,30 +140,38 @@ function PresetCard({
 
       <p className="text-sm leading-relaxed">{s.thesis}</p>
 
-      <details className="group text-sm">
-        <summary className="cursor-pointer text-xs font-medium text-muted-foreground select-none hover:text-foreground">
-          Evidence ({s.points.length}) · {s.style}
-        </summary>
-        <ul className="mt-2 space-y-1.5">
-          {s.points.map((p, i) => (
-            <li key={i} className="flex items-start gap-2 text-xs">
-              {p.tone === "POSITIVE" ? (
-                <TrendingUpIcon aria-label="supports" className="mt-px size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              ) : p.tone === "NEGATIVE" ? (
-                <TrendingDownIcon aria-label="against" className="mt-px size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
-              ) : (
-                <MinusIcon aria-label="neutral" className="mt-px size-3.5 shrink-0 text-muted-foreground" />
-              )}
-              <span>{p.text}</span>
-            </li>
-          ))}
-        </ul>
-      </details>
+      <Evidence summary={s} />
     </section>
   )
 }
 
-function PriceTile({
+/** The points the preset's rules read (supports / against / neutral), folded under "Evidence". */
+export function Evidence({ summary: s }: { summary: PresetSummary }) {
+  return (
+    <details className="group text-sm">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground select-none hover:text-foreground">
+        Evidence ({s.points.length}) · {s.style}
+      </summary>
+      <ul className="mt-2 space-y-1.5">
+        {s.points.map((p, i) => (
+          <li key={i} className="flex items-start gap-2 text-xs">
+            {p.tone === "POSITIVE" ? (
+              <TrendingUpIcon aria-label="supports" className="mt-px size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : p.tone === "NEGATIVE" ? (
+              <TrendingDownIcon aria-label="against" className="mt-px size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+            ) : (
+              <MinusIcon aria-label="neutral" className="mt-px size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span>{p.text}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+}
+
+/** A buy / sell / stop price with its distance from the close and why it was chosen. */
+export function PriceTile({
   label,
   level,
   decimals,

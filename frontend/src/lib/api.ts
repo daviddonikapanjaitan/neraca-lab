@@ -8,11 +8,12 @@ import { redirect } from "next/navigation"
 
 import { SESSION_COOKIE } from "@/lib/session-cookie"
 import type { CompanyProfile, ProfileStatus } from "@/lib/company-profile"
-import type { MacroOutlook } from "@/lib/macro"
+import type { MacroDataSeriesChart, MacroDataSeriesList, MacroOutlook } from "@/lib/macro"
 import type { MacroAnalysisOptions, MacroAnalysisPage, MacroAnalysisReport } from "@/lib/macro-analysis"
 import type { ExcelStatus, MovementPage, OwnershipOptions, OwnershipReportPage } from "@/lib/ownership"
 import type { OnePercentOptions, OnePercentPage, OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
+import type { Portfolio } from "@/lib/portfolio"
 import type { Scorecards } from "@/lib/scorecards"
 import type {
   TechnicalScreeningOptions,
@@ -156,12 +157,15 @@ export const getCompanyProfile = cache((exchange: string, ticker: string) =>
   )
 )
 
-/** GET /api/v1/companies/{exchange}/{ticker}/scorecards (the Quant Score tab: six rule-based agent scorecards) */
+/** GET /api/v1/companies/{exchange}/{ticker}/scorecards (the Fundamental (Score) tab: six rule-based agent scorecards) */
 export const getCompanyScorecards = cache((exchange: string, ticker: string) =>
   get<Scorecards>(
     `/api/v1/companies/${encodeURIComponent(exchange)}/${encodeURIComponent(ticker)}/scorecards`
   )
 )
+
+/** GET /api/v1/portfolio (Portfolio > Position of the signed-in user) */
+export const getPortfolio = cache(() => get<Portfolio>("/api/v1/portfolio"))
 
 /** GET /api/v1/companies/profiles/status?exchange= (IDX company profiles card) */
 export const getCompanyProfilesStatus = cache((exchange: string) =>
@@ -202,6 +206,16 @@ export const getMacroAnalysis = cache((id: string) =>
 export const getMacroOutlook = cache((country: string, index: string | undefined, range: string) =>
   get<MacroOutlook>(
     `/api/v1/macro/outlook?${new URLSearchParams({ country, range, ...(index ? { index } : {}) })}`
+  )
+)
+
+/** GET /api/v1/macro/data/series (Macro > Data: every series of Ingestion > Macro) */
+export const getMacroDataSeries = cache(() => get<MacroDataSeriesList>("/api/v1/macro/data/series"))
+
+/** GET /api/v1/macro/data/series/{code}?range= (Macro > Data: one series' chart) */
+export const getMacroDataChart = cache((code: string, range: string) =>
+  get<MacroDataSeriesChart>(
+    `/api/v1/macro/data/series/${encodeURIComponent(code)}?${new URLSearchParams({ range })}`
   )
 )
 

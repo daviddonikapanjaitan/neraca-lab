@@ -20,7 +20,8 @@ export default async function DashboardLayout({
   return (
     <SidebarProvider>
       <AppSidebar user={user} />
-      <SidebarInset>
+      {/* min-w-0: a wide table scrolls inside its card instead of widening the page */}
+      <SidebarInset className="min-w-0">
         <header className="flex h-16 shrink-0 items-center gap-2">
           <div className="flex min-w-0 items-center gap-2 px-4">
             <SidebarTrigger className="-ml-1" />

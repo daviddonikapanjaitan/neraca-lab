@@ -10,6 +10,7 @@ import { Overview } from "@/components/company/overview"
 import { ProfilePanel } from "@/components/company/profile-panel"
 import { QuantScorePanel } from "@/components/company/quant-score-panel"
 import { SegmentsPanel } from "@/components/company/segments-panel"
+import { TechnicalScorePanel } from "@/components/company/technical-score-panel"
 import { StatementTable } from "@/components/company/statement-table"
 import { ALL_PERIOD_TYPES, CurrencyToggle, PeriodTypeFilter, ScaleToggle } from "@/components/company/toolbar"
 import { ValuationsTable } from "@/components/company/valuations-table"
@@ -51,6 +52,8 @@ export function CompanyDetailView({
   initialTab: DetailTab
 }) {
   const [tab, setTab] = useState<DetailTab>(initialTab)
+  // the Technical (Score) tab loads its data when first opened (kept afterwards)
+  const [technicalOpened, setTechnicalOpened] = useState(initialTab === "technical")
   const [periodType, setPeriodType] = useState<string>(ALL_PERIOD_TYPES)
   const [scale, setScale] = useState<AmountScale>("billions")
   const reporting = detail.company.currency
@@ -85,6 +88,7 @@ export function CompanyDetailView({
   function changeTab(value: unknown) {
     if (!isDetailTab(value)) return
     setTab(value)
+    if (value === "technical") setTechnicalOpened(true)
     // keep the tab in the URL (shareable) without a server round trip
     const url = new URL(window.location.href)
     if (value === "overview") url.searchParams.delete("tab")
@@ -259,6 +263,10 @@ export function CompanyDetailView({
 
         <TabsContent value="quant" className="pt-2">
           <QuantScorePanel scorecards={scorecards.data ?? null} error={scorecards.error ?? null} />
+        </TabsContent>
+
+        <TabsContent value="technical" className="pt-2">
+          {technicalOpened && <TechnicalScorePanel exchange={detail.company.exchange} ticker={detail.company.ticker} />}
         </TabsContent>
       </Tabs>
     </div>

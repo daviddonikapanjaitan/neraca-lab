@@ -51,7 +51,41 @@ public class ScorecardRepository {
                 .optional();
     }
 
+    /** Every company of an exchange (the company list's overall Quant Score), by ticker. */
+    public List<CompanyRow> companies(String exchange) {
+        return jdbc.sql("""
+                        SELECT company_id, ticker, company_name, currency, sector, industry, idx_sector
+                        FROM company WHERE exchange = :e ORDER BY ticker""")
+                .param("e", exchange)
+                .query((rs, i) -> new CompanyRow(rs.getLong("company_id"), rs.getString("ticker"),
+                        rs.getString("company_name"), rs.getString("currency"), rs.getString("sector"),
+                        rs.getString("industry"), rs.getString("idx_sector")))
+                .list();
+    }
+
     /**
+     * A cheap sign (about 20 ms) that the data behind the scores changed: the filed periods, the valuation snapshots,
+     * the companies, the screening snapshots and the exchange rates. Daily prices and metrics rewritten in place are
+     * not in it (a scan of price_daily / financial_metric takes a second); {@link QuantScoreBoard}'s time limit covers
+     * them.
+     */
+    public String fingerprint() {
+        return jdbc.sql("""
+                        SELECT concat_ws('|',
+                            (SELECT count(*) || ':' || coalesce(max(created_at)::text, '') FROM reporting_period),
+                            (SELECT count(*) || ':' || coalesce(max(created_at)::text, '') || ':'
+                                    || coalesce(max(valuation_date)::text, '') FROM valuation_snapshot),
+                            (SELECT coalesce(max(updated_at)::text, '') FROM company),
+                            (SELECT coalesce(max(snapshot_date)::text, '') FROM fundamental_snapshot),
+                            (SELECT coalesce(max(created_at)::text, '') FROM fx_rate_daily))""")
+                .query(String.class).single();
+    }
+
+    /**
+     * Every read of financial_metric and the statements names the company as well: their unique indexes lead with
+     * company_id, so a read or join by period alone walks the whole table or index (BBCA: 18 ms instead of 0.5 ms for the
+     * balance-sheet metrics, 3.9 ms for the fiscal years).
+     *
      * @param listing          the currency the shares trade in
      * @param currency         the company's reporting currency (the stored prices)
      */
@@ -65,9 +99,9 @@ public class ScorecardRepository {
                                b.current_liabilities, b.retained_earnings,
                                cf.capital_expenditure, cf.operating_cash_flow
                         FROM reporting_period rp
-                        JOIN income_statement i ON i.period_id = rp.period_id
-                        LEFT JOIN balance_sheet b ON b.period_id = rp.period_id
-                        LEFT JOIN cash_flow_statement cf ON cf.period_id = rp.period_id
+                        JOIN income_statement i ON i.company_id = rp.company_id AND i.period_id = rp.period_id
+                        LEFT JOIN balance_sheet b ON b.company_id = rp.company_id AND b.period_id = rp.period_id
+                        LEFT JOIN cash_flow_statement cf ON cf.company_id = rp.company_id AND cf.period_id = rp.period_id
                         WHERE rp.company_id = :c AND rp.period_type = 'FY'
                         ORDER BY rp.fiscal_year DESC, rp.period_end DESC, rp.period_start ASC NULLS LAST
                         LIMIT :n""")
@@ -123,8 +157,9 @@ public class ScorecardRepository {
         if (latestFyPeriod != null) {
             jdbc.sql("""
                             SELECT metric_name, metric_value FROM financial_metric
-                            WHERE period_id = :p AND metric_name IN (:names) AND metric_value IS NOT NULL""")
-                    .param("p", latestFyPeriod).param("names", List.copyOf(YEAR_METRICS.keySet()))
+                            WHERE company_id = :c AND period_id = :p AND metric_name IN (:names)
+                              AND metric_value IS NOT NULL""")
+                    .param("c", companyId).param("p", latestFyPeriod).param("names", List.copyOf(YEAR_METRICS.keySet()))
                     .query((ResultSet rs) -> {
                         yearMetrics.put(YEAR_METRICS.get(rs.getString(1)), rs.getDouble(2));
                     });
@@ -136,7 +171,7 @@ public class ScorecardRepository {
         jdbc.sql("""
                         SELECT rp.fiscal_year || ' ' || rp.period_type AS period, fm.metric_name, fm.metric_value
                         FROM financial_metric fm JOIN reporting_period rp ON rp.period_id = fm.period_id
-                        WHERE fm.period_id = (
+                        WHERE fm.company_id = :c AND fm.period_id = (
                             SELECT b.period_id FROM balance_sheet b JOIN reporting_period p ON p.period_id = b.period_id
                             WHERE b.company_id = :c ORDER BY p.period_end DESC, p.period_start ASC NULLS LAST LIMIT 1)
                           AND fm.metric_name IN (:names) AND fm.metric_value IS NOT NULL""")

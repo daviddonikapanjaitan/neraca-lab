@@ -10,7 +10,9 @@ export const DETAIL_TABS = [
   { value: "valuation", label: "Valuation" },
   { value: "market", label: "Market & shares" },
   { value: "filings", label: "Filings" },
-  { value: "quant", label: "Quant Score" },
+  // "quant" keeps the links of before (?tab=quant): the fundamental agents' scorecards
+  { value: "quant", label: "Fundamental (Score)" },
+  { value: "technical", label: "Technical (Score)" },
 ] as const
 
 export type DetailTab = (typeof DETAIL_TABS)[number]["value"]
