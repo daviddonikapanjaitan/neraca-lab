@@ -60,3 +60,6 @@ next-env.d.ts
 ### Local instruction notes ###
 INSTRUCTION.md
 /instruction/
+
+# PostgreSQL backups and their scripts (backup_postgres/): local only
+/backup_postgres/
