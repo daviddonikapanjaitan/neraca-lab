@@ -76,6 +76,34 @@ class IngestionServiceUnitTest {
     }
 
     /**
+     * PURE's FY2019 workbook declares "Ribuan / In Thousand" over full amounts: total assets 842,614,668,686, where the
+     * FY2020 filing's comparative stored 834,220,445,836 for 2019-12-31 (restated, 1% off). Its EPS (-21) fits both units.
+     */
+    @Test
+    void fullAmountsUnderAThousandsDeclarationAreReadInFullWhenTheStoredPeriodEndProvesIt() throws Exception {
+        byte[] fy2019 = workbook("PURE", "2019-Tahunan");
+        company("PURE", 3200);
+        when(repository.totalAssets(3200, LocalDate.parse("2019-12-31"))).thenReturn(Optional.of(new BigDecimal("834220445836")));
+
+        FilingMapper mapper = service.open(fy2019, "FinancialStatement-2019-Tahunan-PURE.xlsx").mapper();
+
+        assertThat(mapper.unit()).isEqualByComparingTo("1");
+        assertThat(mapper.balanceSheet(StatementColumn.CURRENT_PERIOD, null).orElseThrow().values().get("total_assets"))
+                .isEqualByComparingTo("842614668686");
+    }
+
+    @Test
+    void theThousandsDeclarationStandsWhenTheStoredFigureIsInThousandsToo() throws Exception {
+        byte[] fy2019 = workbook("PURE", "2019-Tahunan");
+        company("PURE", 3200);
+        when(repository.totalAssets(anyLong(), any())).thenReturn(Optional.empty());
+        assertThat(service.open(fy2019, "FinancialStatement-2019-Tahunan-PURE.xlsx").mapper().unit()).isEqualByComparingTo("1000");
+
+        when(repository.totalAssets(3200, LocalDate.parse("2019-12-31"))).thenReturn(Optional.of(new BigDecimal("842614668686000")));
+        assertThat(service.open(fy2019, "FinancialStatement-2019-Tahunan-PURE.xlsx").mapper().unit()).isEqualByComparingTo("1000");
+    }
+
+    /**
      * IPCC's 9M 2026 workbook files its EPS in hundred-thousandths (0.000974 thousand for Rp 97.4): the par value inferred
      * from it is Rp 1 and gives 181,838,482,000 shares at 2025-12-31, where its FY2025 filing stored 1,818,384,820.
      */

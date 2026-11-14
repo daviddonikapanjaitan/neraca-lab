@@ -676,8 +676,8 @@ changes the upload's status. Switch off with `neracalab.ingestion.rag-after-uplo
 
 ## 5. Tests
 
-The full backend suite (2026-11-05): 923 tests in 169 classes, 14 min 17 s, all passing; `DerivedDataRefreshTest`
-(every company's derived data, ~940 companies) takes 3 min 22 s. A run is watched while it runs (finished test classes
+The full backend suite (2026-11-14): 1,032 tests in 189 classes, 15 - 16 min, all passing; `DerivedDataRefreshTest`
+(every company's derived data, ~940 companies) takes 4 min 30 s. A run is watched while it runs (finished test classes
 in `target/surefire-reports`, `jstack` of the surefire fork): past 30 minutes or 5 minutes without a finished class it
 is stuck. An interrupted run can leave its Maven / surefire `java` processes alive (2.5 GB, the same `target`): stop
 them before the next run.
@@ -733,7 +733,7 @@ them before the next run.
 | `BmblBoatSharesTest` (Docker Postgres) | V1.0.43: BMBL 1,030,080,995 (share capital at par Rp 40, H1 2026 EPS -1.05), BOAT 3,501,680,000 from its IPO of 2024-11-12; market cap = price x count |
 | `ShareCountCorrectionsTest` (Docker Postgres) | V1.0.44: MSIN 60,676,178,205 and its H1 2026 EPS 4.69, SMGA 7,000,000,000 / 8,750,000,000, RMKE 21,875,000,000 with its split of 2026-07-17 recorded, WIFI, INET and PACK after their share issues |
 | `FilingMapperAdmrArtoBrmsTest` (unit) | the error log of 2026-10-18: ADMR lines filed with decimals outside the investing total (-322,409,000); ARTO's syirkah funds from their lines (526,059 / 110,361 million); BRMS's EPS filed per 1,000 shares (0.00035 per share with Yahoo's 141,784,040,338 shares; counts that fit neither way change nothing) |
-| `IngestionServiceUnitTest` (unit) | IMJS FY2024 ("Full Amount" over millions) is read in millions when FY2023's stored total assets prove it, keeps its unit without such a figure; IPCC 9M 2026's par-derived counts contradicting the stored FY2025 count are dropped (kept after a recorded split), ATIC's share issue kept |
+| `IngestionServiceUnitTest` (unit) | IMJS FY2024 ("Full Amount" over millions) is read in millions when FY2023's stored total assets prove it, keeps its unit without such a figure; IPCC 9M 2026's par-derived counts contradicting the stored FY2025 count are dropped (kept after a recorded split), ATIC's share issue kept; PURE FY2019 ("In Thousand" over full amounts) read in full when the stored 2019-12-31 figure of FY2020's comparative proves it, kept in thousands without it |
 | `KoinHillSharesTest` (Docker Postgres) | V1.0.45: KOIN 980,843,732 at every date and no reverse split at 2023-01-01; HILL 14,741,500,000 at 2024-12-31 / 2025-12-31; FLMC 781,250,000, no count of 1 |
 | `IngestionVerifierOverdraftTest` (unit) | GGRM: overdrafts netted against cash are a note, other stored figures a problem; LPPF FY2023 within the stored short-term debt; LAJU FY2022: an ending cash cell with a binary fraction beyond the stored scale is the stored amount |
 | `FilingMapperEpsCellTest` (unit) | FLMC FY2025's EPS cell holding the profit gives no share count; CBPE FY2021's 35,000 shares before its IPO stay |
@@ -743,6 +743,9 @@ them before the next run.
 | `FilingMapperSecuritiesTest` (unit) | a broker read in the Securities taxonomy (PADI FY2025: 5220000 by liquidity, decided by the model) with 11,307,246,524 shares at par Rp 25; TRIM FY2025 in thousands 7,109,300,000 at Rp 50 |
 | `FilingMapperFy2021TemplateTest` (unit) | the FY2021 template's 'Finance costs' is interest expense: BAUT, SIDO, CPIN FY2021 map without unclassified lines or failed checks (fast path) |
 | `FilingMapperRightOfUseTest` (unit) | right-of-use assets within PP&E: SGRO, KING, OBAT, UDNG, JPFA FY2025 depreciation from the PP&E roll-forward; HELI, IATA FY2024, FISH stay not disclosed |
+| `FilingMapperColumnEpsUnitTest` (unit) | a comparative EPS filed in the rounding unit read in it (BJTM 9M 2025 70.62, AGRO H1 2025 1.33); an EPS giving more than 1e13 shares not stored (BJBR 9M 2025); a pre-IPO EPS kept (MORA FY2019 1,005,543); no non-current assets where total assets = current assets (AIMS FY2019) |
+| `FullTextExtractorTest.aProfitAfterTaxIsNotStoredAsTheProfitBeforeTax` (unit) | ASGR FY2020: the model's 'Total profit (loss)' (an Indonesian-labelled row) as profit before tax is not stored, not rejected and no open item |
+| `MkntSharesTest`, `HillSplitTest`, `EltySharesTest`, `CmnpSharesTest` (Postgres) | the data scripts V1.0.55 - V1.0.58: MKNT 1,029,990,000,000 after its PMTHMETD, HILL's 2021 - 2023 counts split-adjusted 1:5, ELTY 43,521,913,019, CMNP 6,696,354,390 |
 | `IngestionVerifierOverdraftTest.theFy2021ShortTermLoansRowIsDebtAndExplainsTheOverdrafts` (unit) | the FY2021 'Short-term loans' row is short-term debt (BAUT 12,286,039,664) and explains the overdrafts (BAUT, SKLT, CLPI) |
 | `IngestionVerifierRoundingTest.aBreakdownThatIsTheRevenueRoundedToAMillionIsANote` (unit) | TRST FY2021: a breakdown equal to the revenue rounded to a million is a note |
 | `FullTextExtractorTest.withoutANoteTheCostALaterFilingsNoteStoredIsKept` (unit, scripted model) | SSMS FY2021 (no cost of sales note) keeps the cost a later filing's note stored: gross profit 2,205,246,583 thousand, operating expenses without the cost; beside another revenue it stays cleared |
@@ -1054,6 +1057,42 @@ WHERE error_id = 26;
 | `final_status`, `final_message` | how the upload ended: `SUCCEEDED`, `INCOMPLETE`, `FAILED`, or `REJECTED` (422)       |
 | `fixed_by_claude_code`  | `FALSE` until Claude Code has fixed the cause (default `FALSE`)                             |
 | `fixed_at`, `fix_note`  | when, and what was changed - or why it cannot be fixed in code                              |
+
+### The review of 2026-11-14 (errors 2176 - 2254): the FY2019 / FY2020 workbooks, EPS scales, a unit proven downwards
+
+Hermes' run of 2026-11-13 added 1,303 FY2019 / FY2020 annual workbooks (630 + 673; 1,296 SUCCEEDED, 10 INCOMPLETE,
+all with their period stored) and left 58 open rows. The FY2019 / FY2020 workbooks use the FY2021 template (a scan of
+the balance-sheet, profit or loss and cash flow labels per year found no label that later years lack), so the FY2021
+fixes cover them. The re-uploads of the fixes added rows 2245 - 2254. All 68 rows closed (dev_context 314 - 326).
+Full suite 1,032 / 1,032 on a quiet backend (15 min 49 s).
+
+| Cause | Rows | Fix |
+|---|---|---|
+| **A comparative EPS filed in the rounding unit** beside a current EPS in rupiah (BJTM 9M 2026, millions: 72.995 and 0.00007062 for Rp 70.62; LIFE, AGRO, VIVA ...): stored unscaled for some 30 interim periods of 2025; the contradiction check covered only the current column | (39 stored EPS) | `FilingMapper.columnEpsInRoundingUnit`: the column's EPS in the declared unit when as filed it gives more than 1e13 shares and in the unit a count within 2x of the other column's (63 of 7,776 workbook columns). `FilingMapper.impossibleEps`: an EPS giving more than 1e13 shares is not stored, also in the full-text extraction (48 columns). A pre-IPO EPS (too few shares) is real and kept (MORA FY2019 on 588,235 shares). `FilingMapperColumnEpsUnitTest`. Stored rows cleared by SQL, 38 filings uploaded again: BJTM 9M 2025 70.62, VIVA H1 2025 72.46 ... |
+| **A workbook declaring thousands over full amounts** (PURE FY2019: 842,614,668,686; FY2020's comparative 834,220,445,836): FY2018 / FY2019 stored 1,000x too large. `provenUnit` only proved a larger unit, from the prior year end | 0 (found by the two-currency check) | `IngestionService.provenSmallerUnit`: the stored total assets of the filing's period end or prior year end within 2% in the smaller unit, 100x off in the declared one, the EPS plausible in both; `IngestionServiceUnitTest`. PURE 2018 / 2019 deleted, FY2020 then FY2019 uploaded again |
+| **No non-current assets** (AIMS FY2019 / FY2018, URBN FY2018: total assets = total current assets, the total empty) | 2 | `FilingMapper.balanceSheet`: 0 with a warning; fast path |
+| **Profit before tax read from the profit after tax** by the full-text extraction (ASGR FY2020 / FY2021: no PBT or tax row; 47,783 stored, the face's lines give 63,720) | 6 | `FullTextExtractor.afterTaxProfitRow`: not stored, without clearing another filing's figure and without an open item; `FullTextExtractorTest.aProfitAfterTaxIsNotStoredAsTheProfitBeforeTax`. FY2021 now 111,886 from the FY2022 filing; FY2020 empty |
+| **Transitional fiscal years** (ITMA FY2020 9 months, SQMI FY2019 9 months and its FY2020 filing, RIGS FY2019 15 months) refused by `PeriodRef.yearToDate` | 4 | Not changed: a period-model decision for the user (dev_context 316) |
+| **The filings' cash**: balance-sheet cash beside an exactly rolling cash flow (BBLD, AMOR, BPII, INCF, INDO, WOMF, UCID, SSMS, SMMA); cash flows that do not add up (AGRS, AGAR 15 rupiah, CPRI exactly 500,000,000, SHIP, TNCA) or financing totals without lines (BEKS, DADA) | 17 | Not changed (dev_context 314, 315) |
+| **EPS cells** (LFLO, NICL, TAXI, INPC, PSAB) and real pre-IPO EPS (AYLS, HRME, KETR, MORA, PGJO) flagged as 'Amounts contradict the declared rounding'; no revenue filed (PEGE, MITI FY2019, BAPI FY2019 comparative) | 17 | Not changed (dev_context 200, 285) |
+| **CASA FY2020 / FY2019**: 'Reinsurance premiums' in a bank template counted in revenue by the model (revenue 11,763,902 for 11,760,362 million; profit from operation as filed) | 1 | Open for the user (dev_context 318; insurance lines are the model's by decision 237) |
+| **Refused by design**: FY2019 / FY2020 in another currency than the stored statements (ANJT, ARGO, DEWA, ESTI, KOBX, MBSS, RIGS; ALMI, SMMT) | 16 | Not changed (dev_context 317) |
+
+Share counts (`valuation_check.py`, 891 companies): `V1.0.55__data_MKNT_shares.sql` (PMTHMETD of 2026-09-30: 5,500,000,000 ->
+1,029,990,000,000; market cap 187x too small), `V1.0.56__data_HILL_split.sql` (split 1:5 of 2025-03-14 applied to 2021 -
+2023), `V1.0.57__data_ELTY_shares.sql` (43,521,913,019: two par series; one par Rp 100 gave 49,121,910,000; in
+`SHARE_SCRIPTS`), `V1.0.58__data_CMNP_shares.sql` (6,696,354,390 from 2025-12-31). SHARE_GAP 25 -> 22.
+
+### Valuation gaps and income completeness of 2026-11-14
+
+185 companies with a valuation gap at their latest valuation: 47 without any valuation (all known: no share count or no
+prices, dev_context 240, 145), 85 financials by design (no EV ratios), 9 without TTM (IPO / missing FY2025 workbook /
+currency change: BACH, RANS, ANJT, ESTI, JELI, EMMI, JECX, PRDL, WBSA), 42 without EV/EBITDA - 20 new ones (CITY, EAST,
+FILM, HEXA, IOTF, IPAC, IPOL, KDTN, MGRO, NETV, PJAA, PTSP, PYFA, SILO, TCID, WEHA, DYAN, GOTO, SGRO, WGSH) because the
+9M 2026 window needs the 2025 interims' D&A (comparatives without it) and FY2025's amortization is not derivable (the
+intangibles grew without or beyond the cash paid: dev_context 319). Income: FY2018 - FY2020 gross profit empty for
+27 / 32 / 30 by-nature filers (the FY2019 / FY2020 template has no cost of sales note: dev_context 285); FY2025 without
+an income statement for the 17 known (missing workbooks, row 214; ANJT / ESTI currency; BACH / RANS IPO).
 
 ### The review of 2026-11-08 (errors 1966 - 2131): the FY2021 template, right-of-use assets within PP&E
 

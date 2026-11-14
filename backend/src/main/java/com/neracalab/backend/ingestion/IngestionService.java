@@ -163,6 +163,10 @@ public class IngestionService {
      * only period a thousand or a million times off its neighbours (2026-10-31).
      */
     BigDecimal provenUnit(FilingMapper mapper) {
+        BigDecimal smaller = provenSmallerUnit(mapper);
+        if (smaller != null) {
+            return smaller;
+        }
         FilingInfo info = mapper.info();
         BigDecimal filed = mapper.filedPriorYearEndTotalAssets();
         if (filed == null || filed.signum() <= 0 || info.priorYearEnd() == null) {
@@ -184,6 +188,66 @@ public class IngestionService {
                         info.fileName(), unit.toPlainString(), info.rounding(), filed.toPlainString(), unit.toPlainString(),
                         stored.toPlainString());
                 return unit;
+            }
+        }
+        return null;
+    }
+
+    /** Relative difference a later filing's restated comparative may have from a filing's own figure of that date. */
+    private static final BigDecimal RESTATED_TOLERANCE = new BigDecimal("0.02");
+
+    /**
+     * The smaller unit a workbook's amounts are really in when it declares a larger one, {@code null} when the declared
+     * one stands. PURE's FY2019 workbook declares "Ribuan / In Thousand" over full amounts (total assets 842,614,668,686;
+     * the FY2020 filing's comparative for 2019-12-31 is 834,220,445,836, restated): read as declared, FY2019 and FY2018
+     * were stored a thousand times too large (842,614,668,686,000). Its EPS (-21 for -27,366,433,157 to the parent) gives
+     * 1.3 billion shares as filed and 1.3 trillion in thousands, both possible, and its amounts are no multiples of
+     * 1,000, so the workbook alone cannot tell. The stored total assets of the filing's current period end or prior year
+     * end (another filing's) decide: in the smaller unit the filed figure is within 2% of them (a restatement), in the
+     * declared one more than a hundred times off, and the EPS gives a plausible count in the smaller unit.
+     */
+    BigDecimal provenSmallerUnit(FilingMapper mapper) {
+        FilingInfo info = mapper.info();
+        // the EPS must leave the unit open: a plausible count in the declared unit too, and not filed in the rounding
+        // unit itself (IMJS FY2025, millions: EPS 0.00001262 for Rp 12.62 gives 9.7 billion shares only as full amounts)
+        if (mapper.unit().compareTo(BigDecimal.ONE) <= 0 || mapper.epsScale().compareTo(BigDecimal.ONE) != 0
+                || !mapper.epsPlausibleIn(mapper.unit())) {
+            return null;
+        }
+        var company = repository.findCompany(info.ticker()).orElse(null);
+        if (company == null) {
+            return null;
+        }
+        List<Map.Entry<BigDecimal, LocalDate>> figures = new ArrayList<>();
+        if (mapper.filedCurrentTotalAssets() != null) {
+            figures.add(Map.entry(mapper.filedCurrentTotalAssets(), info.current().end()));
+        }
+        if (mapper.filedPriorYearEndTotalAssets() != null && info.priorYearEnd() != null) {
+            figures.add(Map.entry(mapper.filedPriorYearEndTotalAssets(), info.priorYearEnd().end()));
+        }
+        for (var figure : figures) {
+            BigDecimal filed = figure.getKey();
+            if (filed.signum() <= 0) {
+                continue;
+            }
+            BigDecimal stored = repository.totalAssets(company.companyId(), figure.getValue()).orElse(null);
+            if (stored == null || stored.signum() <= 0
+                    || filed.multiply(mapper.unit()).divide(stored, java.math.MathContext.DECIMAL64).compareTo(new BigDecimal("100")) <= 0) {
+                continue;
+            }
+            for (BigDecimal factor : UNIT_FACTORS) {
+                if (mapper.unit().remainder(factor).signum() != 0) {
+                    continue;
+                }
+                BigDecimal unit = mapper.unit().divide(factor);
+                BigDecimal inUnit = filed.multiply(unit);
+                if (mapper.epsPlausibleIn(unit) && inUnit.subtract(stored).abs()
+                        .divide(stored, java.math.MathContext.DECIMAL64).compareTo(RESTATED_TOLERANCE) <= 0) {
+                    log.info("{}: amounts read in units of {} (declared '{}'): total assets at {} {} x {} = stored {}",
+                            info.fileName(), unit.toPlainString(), info.rounding(), figure.getValue(), filed.toPlainString(),
+                            unit.toPlainString(), stored.toPlainString());
+                    return unit;
+                }
             }
         }
         return null;

@@ -1131,6 +1131,40 @@ public class FullTextExtractorTest {
     }
 
     /**
+     * ASGR's FY2020 workbook leaves 'Total profit (loss) before tax' and the tax row empty (profit 47,783 million; the
+     * face's lines give a profit before tax of 63,720 million). The model mapped the total profit as profit before tax,
+     * which stored a profit before tax equal to the profit and no tax; a profit after tax is not stored as one before tax.
+     */
+    @Test
+    void aProfitAfterTaxIsNotStoredAsTheProfitBeforeTax() throws Exception {
+        IngestionSession session = session("ASGR", "2020-Tahunan");
+        WorkbookText text = new WorkbookText(session.mapper().workbook(), 120_000);
+        String sheet = "1311000";
+        // the sheet is wider than its English label column: its rows are shown with their Indonesian labels
+        Map<String, String> profitOrLoss = Map.ofEntries(
+                Map.entry("revenue", terms(text, sheet, "+Penjualan dan pendapatan usaha")),
+                Map.entry("cost_of_revenue", terms(text, sheet, "+Beban pokok penjualan dan pendapatan")),
+                Map.entry("gross_profit", terms(text, sheet, "+Jumlah laba bruto")),
+                Map.entry("operating_expenses", terms(text, sheet, "+Beban penjualan", "+Beban umum dan administrasi")),
+                Map.entry("pretax_income", terms(text, sheet, "+Jumlah laba (rugi)")),
+                Map.entry("net_income", terms(text, sheet, "+Jumlah laba (rugi)")),
+                Map.entry("net_income_to_parent", terms(text, sheet, "+Laba (rugi) yang dapat diatribusikan ke entitas induk")));
+        answers("{\"income_statement\": " + object(profitOrLoss) + ", \"notes\": []}");
+
+        FullTextExtractor.Report report = extractor(1).extract(session, List.of(StatementColumn.CURRENT_PERIOD), "test",
+                new AgentTrace());
+
+        // left out on purpose, so no open item: the upload is not INCOMPLETE for a figure the filing does not report
+        assertThat(report.problems()).noneMatch(p -> p.contains("pretax_income has no amount"));
+        MappedStatement income = session.income(StatementColumn.CURRENT_PERIOD).orElseThrow();
+        assertThat(income.values().get("pretax_income")).isNull();
+        // not rejected: a profit before tax another filing stored (the face's lines, 63,720 million) is not cleared
+        assertThat(income.rejected()).doesNotContain("pretax_income");
+        assertThat(income.derivations().get("pretax_income")).contains("'Jumlah laba (rugi)'");
+        assertThat(income.values().get("net_income")).isEqualByComparingTo("47783000000");
+    }
+
+    /**
      * ABDA H1 2026 (error 1246), PSAK 117 from 2025: the H1 2025 column keeps four cells of the former presentation the
      * H1 2026 column leaves empty (unearned premiums -36,572,748, premium income ceded 2,178,670, estimated claims
      * liability -4,409,958, commission 54,538,876 thousand). With them revenue - costs were -2,274,276 for a profit

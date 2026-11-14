@@ -201,6 +201,7 @@ public final class FilingMapper {
         this.unit = units.amounts();
         this.epsScale = units.eps();
         this.precision = provenUnit != null ? provenUnit : info.unitMultiplier();
+        columnEpsInRoundingUnit();
         if (balanceSheet == null) {
             String supported = financial ? IdxSheets.BALANCE_SHEET_LIQUIDITY : IdxSheets.BALANCE_SHEET;
             String other = financial ? IdxSheets.BALANCE_SHEET : IdxSheets.BALANCE_SHEET_LIQUIDITY;
@@ -427,7 +428,7 @@ public final class FilingMapper {
 
     private Units provenUnits(BigDecimal proven) {
         warnings.add("The workbook declares '" + info.rounding() + "' but its amounts are in units of " + proven.toPlainString()
-                + ": its prior year end total assets are the stored figure in that unit, and profit / basic EPS then implies "
+                + ": its total assets at a date another filing stored are that filing's figure in that unit, and profit / basic EPS then implies "
                 + impliedSharesPerUnit().multiply(proven).setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares");
         return new Units(proven, BigDecimal.ONE);
     }
@@ -446,6 +447,18 @@ public final class FilingMapper {
     public BigDecimal filedPriorYearEndTotalAssets() {
         StatementTable b = balanceSheetAsFiled();
         return b == null ? null : b.value("Total assets", 1);
+    }
+
+    /** Total assets at the current period end as filed (not scaled), {@code null} when the balance sheet has none. */
+    public BigDecimal filedCurrentTotalAssets() {
+        StatementTable b = balanceSheetAsFiled();
+        return b == null ? null : b.value("Total assets", 0);
+    }
+
+    /** Whether profit attributable to the parent / basic EPS gives a plausible share count with the amounts in {@code unit}. */
+    public boolean epsPlausibleIn(BigDecimal unit) {
+        BigDecimal implied = impliedSharesPerUnit();
+        return implied != null && plausibleShares(implied.multiply(unit));
     }
 
     /** Multipliers an EPS may be filed off by: as filed, in thousands, in millions. */
@@ -681,6 +694,83 @@ public final class FilingMapper {
 
     private static boolean plausibleShares(BigDecimal shares) {
         return shares.compareTo(MIN_PLAUSIBLE_SHARES) >= 0 && shares.compareTo(MAX_PLAUSIBLE_SHARES) <= 0;
+    }
+
+    /**
+     * One column's EPS filed in the workbook's rounding unit while the other column's is in rupiah (or dollars). BJTM's
+     * 9M 2026 workbook (millions) files 72.995 for 9M 2026 and 0.00007062 for 9M 2025 (Rp 70.62: 1,060,391 million /
+     * 0.00007062 = 1.5e16 shares as filed, 15.0 billion in millions, as 9M 2026's 15.0 billion); LIFE 9M 2026 113 beside
+     * 0.000084, AGRO H1 2026 (thousands) 0.49 beside 0.00133 (Rp 1.33), VIVA H1 2026 3.98 beside 0.07246. The comparative
+     * EPS was stored unscaled for some 30 interim periods of 2025, whose own filings are not uploaded. A column's EPS is
+     * read in the rounding unit only when as filed it gives more shares than any listed company has
+     * ({@link #MAX_PLAUSIBLE_SHARES}), in the unit a plausible count, and that count is within a factor of two of the
+     * other column's (as filed and plausible) - the same shares, a year apart. A warning says so.
+     */
+    private void columnEpsInRoundingUnit() {
+        BigDecimal declared = info.unitMultiplier();
+        StatementTable profitOrLoss = profitOrLossAsFiled();
+        if (declared.compareTo(BigDecimal.ONE) <= 0 || profitOrLoss == null) {
+            return;
+        }
+        BigDecimal[] implied = new BigDecimal[2];
+        for (int ctx = 0; ctx <= 1; ctx++) {
+            BigDecimal parent = amount(profitOrLoss.value(PROFIT_PARENT, ctx));
+            BigDecimal eps = profitOrLoss.value(EPS_BASIC, ctx);
+            if (parent != null && eps != null && parent.signum() != 0 && eps.signum() == parent.signum()) {
+                implied[ctx] = parent.divide(eps.multiply(epsScale), MathContext.DECIMAL64);
+            }
+        }
+        for (int ctx = 0; ctx <= 1; ctx++) {
+            BigDecimal own = implied[ctx];
+            BigDecimal other = implied[1 - ctx];
+            if (own == null || other == null || own.compareTo(MAX_PLAUSIBLE_SHARES) <= 0 || !plausibleShares(other)) {
+                continue;
+            }
+            BigDecimal inUnit = own.divide(declared, MathContext.DECIMAL64);
+            BigDecimal ratio = inUnit.divide(other, MathContext.DECIMAL64);
+            if (!plausibleShares(inUnit) || ratio.compareTo(new BigDecimal("0.5")) < 0 || ratio.compareTo(new BigDecimal("2")) > 0) {
+                continue;
+            }
+            columnEpsFactor[ctx] = declared;
+            warnings.add("The workbook's " + (ctx == 0 ? info.current() : info.prior()).key() + " basic EPS "
+                    + profitOrLoss.value(EPS_BASIC, ctx).stripTrailingZeros().toPlainString() + " is filed in its rounding unit ('"
+                    + info.rounding() + "'): profit attributable to the parent / EPS gives "
+                    + own.setScale(0, RoundingMode.HALF_UP).toPlainString() + " shares as filed, "
+                    + inUnit.setScale(0, RoundingMode.HALF_UP).toPlainString() + " in the unit, as the other column's "
+                    + other.setScale(0, RoundingMode.HALF_UP).toPlainString() + "; its per-share figures are multiplied by "
+                    + declared.toPlainString());
+        }
+    }
+
+    /**
+     * Whether profit attributable to the parent / EPS gives more shares than any listed company has
+     * ({@link #MAX_PLAUSIBLE_SHARES}; GOTO, the most, 1.2 trillion): an EPS filed in another scale that no rule could
+     * correct (BJBR's 9M 2026 workbook files 9M 2025's EPS 0.00000075 in millions for Rp 75, a hundred times off the
+     * rounding unit too; DLTA FY2025 0.00000187 thousand for Rp 187). Such an EPS is not stored. Fewer shares than
+     * plausible are no such proof: before an IPO a company has few shares and a large EPS (BLUE FY2018 513,610 on
+     * 25,000 shares, MORA FY2019 1,005,543 on 588,235).
+     */
+    public static boolean impossibleEps(BigDecimal parent, BigDecimal eps) {
+        return parent != null && eps != null && parent.signum() != 0 && eps.signum() != 0
+                && parent.divide(eps, MathContext.DECIMAL64).abs().compareTo(MAX_PLAUSIBLE_SHARES) > 0;
+    }
+
+    /**
+     * The per-share fields of a column that {@link #impossibleEps} leaves out (stored NULL, also over a value stored
+     * before), with a warning for each.
+     */
+    public static java.util.Set<String> impossibleEpsFields(BigDecimal parent, BigDecimal basic, BigDecimal diluted, List<Check> checks) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        for (Map.Entry<String, BigDecimal> e : java.util.Arrays.asList(Map.entry("basic_eps", basic == null ? ZERO : basic),
+                Map.entry("diluted_eps", diluted == null ? ZERO : diluted))) {
+            if (impossibleEps(parent, e.getValue())) {
+                out.add(e.getKey());
+                checks.add(Check.warning("eps", e.getKey() + " " + e.getValue().toPlainString() + " gives profit attributable to "
+                        + "the parent / EPS = " + parent.divide(e.getValue(), MathContext.DECIMAL64).abs().setScale(0, RoundingMode.HALF_UP)
+                        .toPlainString() + " shares, more than any listed company has: an EPS in another scale; not stored"));
+            }
+        }
+        return out;
     }
 
     /**
@@ -1321,6 +1411,12 @@ public final class FilingMapper {
         basicEps = reconciled[0];
         dilutedEps = reconciled[1];
         java.util.Set<String> rejected = java.util.Set.of();
+        java.util.Set<String> impossible = impossibleEpsFields(parent, basicEps, dilutedEps, checks);
+        if (!impossible.isEmpty()) {
+            basicEps = impossible.contains("basic_eps") ? null : basicEps;
+            dilutedEps = impossible.contains("diluted_eps") ? null : dilutedEps;
+            rejected = impossible;
+        }
         if (epsContradiction() != null) {
             // neither the EPS nor a share count of this filing can be trusted: cleared even where stored before
             checks.add(Check.warning("eps_columns", epsContradiction() + "; the EPS and share count of this column are not stored"));
@@ -1441,6 +1537,12 @@ public final class FilingMapper {
         basicEps = reconciled[0];
         dilutedEps = reconciled[1];
         java.util.Set<String> rejected = java.util.Set.of();
+        java.util.Set<String> impossible = impossibleEpsFields(parent, basicEps, dilutedEps, checks);
+        if (!impossible.isEmpty()) {
+            basicEps = impossible.contains("basic_eps") ? null : basicEps;
+            dilutedEps = impossible.contains("diluted_eps") ? null : dilutedEps;
+            rejected = impossible;
+        }
         if (epsContradiction() != null) {
             // neither the EPS nor a share count of this filing can be trusted: cleared even where stored before
             checks.add(Check.warning("eps_columns", epsContradiction() + "; the EPS and share count of this column are not stored"));
@@ -1816,8 +1918,17 @@ public final class FilingMapper {
         List<Check> checks = new ArrayList<>();
         Map<String, String> how = new LinkedHashMap<>();
         BigDecimal currentAssets = req(b, "Total current assets", ctx, checks);
-        BigDecimal nonCurrentAssets = req(b, "Total non-current assets", ctx, checks);
         BigDecimal totalAssets = req(b, "Total assets", ctx, checks);
+        BigDecimal nonCurrentAssets = amount(b.value("Total non-current assets", ctx));
+        if (nonCurrentAssets == null && currentAssets != null && totalAssets != null && currentAssets.compareTo(totalAssets) == 0) {
+            // a company whose assets are all current leaves the total empty (AIMS FY2019 and FY2018: total current assets
+            // = total assets = 17,531,591,615 and 17,533,206,467, no non-current row filled; URBN FY2018 1,622,298,113,795)
+            nonCurrentAssets = ZERO;
+            checks.add(Check.warning("non_current_assets", "'Total non-current assets' is not reported and total assets = total "
+                    + "current assets " + totalAssets.toPlainString() + ": no non-current assets (0)"));
+        } else if (nonCurrentAssets == null) {
+            checks.add(Check.error("required", "'Total non-current assets' is not reported"));
+        }
         BigDecimal currentLiabilities = req(b, "Total current liabilities", ctx, checks);
         BigDecimal nonCurrentLiabilities = req(b, "Total non-current liabilities", ctx, checks);
         BigDecimal totalLiabilities = req(b, "Total liabilities", ctx, checks);
@@ -3509,6 +3620,9 @@ public final class FilingMapper {
         for (StatementColumn column : List.of(StatementColumn.CURRENT_PERIOD, StatementColumn.PRIOR_PERIOD)) {
             StatementColumn other = column == StatementColumn.CURRENT_PERIOD ? StatementColumn.PRIOR_PERIOD
                     : StatementColumn.CURRENT_PERIOD;
+            if (columnEpsFactor[durationIndex(column)].compareTo(BigDecimal.ONE) != 0) {
+                continue;   // already read in the rounding unit (columnEpsInRoundingUnit)
+            }
             List<LocalDate> own = filing.snapshots().stream().map(ShareAt::date).filter(d -> columnOfDate(d) == column)
                     .filter(byDate::containsKey).distinct().toList();
             boolean otherFits = filing.snapshots().stream().map(ShareAt::date)

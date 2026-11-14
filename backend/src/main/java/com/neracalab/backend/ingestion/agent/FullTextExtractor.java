@@ -161,6 +161,30 @@ public class FullTextExtractor {
 
     private static final Set<String> PER_SHARE = Set.of("basic_eps", "diluted_eps");
 
+    /** Profit or loss rows after tax: never a profit before tax (ASGR FY2020). */
+    private static final Set<String> AFTER_TAX_PROFIT = Set.of("Total profit (loss)",
+            "Total profit (loss) from continuing operations", "Profit (loss) attributable to parent entity");
+
+    /**
+     * Whether a referenced row is one of {@link #AFTER_TAX_PROFIT}, by its English label in any cell of the row: a sheet
+     * wider than its label column shows the model the Indonesian label (ASGR FY2020: 'Jumlah laba (rugi)').
+     */
+    private static boolean afterTaxProfitRow(FilingMapper mapper, WorkbookText.Row row) {
+        if (AFTER_TAX_PROFIT.contains(row.label())) {
+            return true;
+        }
+        var sheet = mapper.workbook().sheet(row.sheet()).orElse(null);
+        if (sheet == null) {
+            return false;
+        }
+        for (int c = 0; c < sheet.width(row.index()); c++) {
+            if (sheet.cell(row.index(), c) instanceof String s && AFTER_TAX_PROFIT.contains(s.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * End of the message about a field whose answer named a row that cannot be used. Such a field gets no value;
      * the model is asked again, and a field still broken in its last answer is an open item of the upload.
@@ -1015,6 +1039,8 @@ public class FullTextExtractor {
             how.put("gross_profit", cost == null ? "revenue (no cost of revenue)" : "revenue - cost of revenue");
         }
         Set<String> rejected = new java.util.LinkedHashSet<>();
+        // fields left empty because the filing does not report them, without clearing a value another filing stored
+        Set<String> notReported = new java.util.LinkedHashSet<>();
         List<Counted> grossProfitRows = counted.getOrDefault("gross_profit", List.of());
         if (target.kind() == Kind.INCOME && values.get("revenue") == null && values.get("gross_profit") != null
                 && !grossProfitRows.isEmpty() && grossProfitRows.stream().allMatch(c -> c.term().sign() < 0)) {
@@ -1046,6 +1072,30 @@ public class FullTextExtractor {
                 values.put(eps, null);
                 how.put(eps, "not stored: " + epsContradiction);
                 rejected.add(eps);
+            }
+        }
+        List<Check> epsChecks = new ArrayList<>();
+        if (target.kind() == Kind.INCOME) {
+            // an EPS giving more shares than any listed company has is in another scale (FilingMapper#impossibleEps)
+            for (String eps : FilingMapper.impossibleEpsFields(values.get("net_income_to_parent"), values.get("basic_eps"),
+                    values.get("diluted_eps"), epsChecks)) {
+                values.put(eps, null);
+                how.put(eps, "not stored: profit attributable to the parent / EPS gives more shares than any listed company has");
+                rejected.add(eps);
+            }
+            // profit before tax read from an after-tax total: ASGR's FY2020 and FY2021 workbooks leave 'Total profit (loss)
+            // before tax' and the tax row empty, and the model mapped 'Total profit (loss)' (47,783 million) as profit
+            // before tax, where the face's own lines give 539,241 - 161,126 - 301,329 + 6,673 - 16,269 - 1,041 - 2,429 =
+            // 63,720 million. A figure the filing does not state is not stored (nor the tax it would imply); a profit
+            // before tax another filing stored (the FY2021 upload's comparative: the face's lines, 63,720) is kept
+            List<Counted> pretaxRows = counted.getOrDefault("pretax_income", List.of());
+            if (values.get("pretax_income") != null && !pretaxRows.isEmpty()
+                    && pretaxRows.stream().allMatch(c -> afterTaxProfitRow(mapper, c.term().row()))) {
+                values.put("pretax_income", null);
+                how.put("pretax_income", "not stored: the model named only " + pretaxRows.stream().map(c -> "'"
+                        + c.term().row().label() + "'").distinct().toList() + ", a profit after tax; the filing reports no "
+                        + "profit before tax in this column");
+                notReported.add("pretax_income");
             }
         }
         if (target.kind() == Kind.BALANCE_SHEET) {
@@ -1083,7 +1133,7 @@ public class FullTextExtractor {
             }
         }
 
-        List<Check> checks = new ArrayList<>();
+        List<Check> checks = new ArrayList<>(epsChecks);
         BigDecimal tolerance = mapper.unit().max(BigDecimal.ONE).multiply(BigDecimal.valueOf(2));
         if (target.kind() == Kind.CASH_FLOW) {
             emptySectionAsZero(values, how, tolerance);
@@ -1097,7 +1147,10 @@ public class FullTextExtractor {
             }
         }
         for (String required : REQUIRED.get(table)) {
-            if (values.get(required) == null) {
+            if (values.get(required) == null && (rejected.contains(required) || notReported.contains(required))) {
+                // left out on purpose because the filing does not report it (ASGR FY2020: no profit before tax): no open item
+                checks.add(Check.warning("full_text", required + " not stored: " + how.get(required)));
+            } else if (values.get(required) == null) {
                 issues.add(required + " has no amount: its rows are empty in " + columnName(target) + " or it is not mapped");
             }
         }

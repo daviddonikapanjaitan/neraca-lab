@@ -48,7 +48,7 @@ public class IngestionRepository {
             "db/V1.0.12__data_SMDR_shares.sql", "db/V1.0.13__data_BNGA_shares.sql",
             "db/V1.0.24__data_BACH_shares.sql", "db/V1.0.31__data_BNBR_shares.sql", "db/V1.0.42__data_BBHI_shares.sql",
             "db/V1.0.44__data_MSIN_RMKE_SMGA_WIFI_INET_PACK_shares.sql", "db/V1.0.45__data_KOIN_HILL_shares.sql",
-            "db/V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql");
+            "db/V1.0.49__data_MKTR_NAYZ_VICO_WAPO_shares.sql", "db/V1.0.57__data_ELTY_shares.sql");
 
     private final JdbcClient jdbc;
     private final DataSource dataSource;
