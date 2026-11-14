@@ -339,6 +339,7 @@ export type IngestionJobType =
   | "LISTING_PRICES"
   | "TECHNICAL_SCREENING"
   | "RAG_XLSX"
+  | "PORTFOLIO_ANALYSIS"
 
 /**
  * PDF: an uploaded PDF; NEWS: a news article; XLSX: a company's document built from Excel lists (its ownership); XBRL:

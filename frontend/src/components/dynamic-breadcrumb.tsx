@@ -20,7 +20,7 @@ import {
 } from "@/lib/companies-sections"
 import { INGESTION_HOME, INGESTION_SECTIONS } from "@/lib/ingestion-sections"
 import { MACRO_ANALYSIS_HREF, MACRO_DATA_HREF, MACRO_HREF } from "@/lib/macro"
-import { PORTFOLIO_HREF, PORTFOLIO_PERFORMANCE_HREF } from "@/lib/portfolio"
+import { PORTFOLIO_ANALYSIS_HREF, PORTFOLIO_HREF, PORTFOLIO_PERFORMANCE_HREF } from "@/lib/portfolio"
 import {
   ANALYSIS_HREF,
   SELECTED_STOCKS_HREF,
@@ -54,6 +54,7 @@ const ADMIN_PAGES: Record<string, string> = {
  * /screening/analysis/<id>  -> Screening / Analysis / Report
  * /portfolio                -> Portfolio / Position
  * /portfolio/performance    -> Portfolio / Performance
+ * /portfolio/analysis/<id>  -> Portfolio / Analysis / Report
  * /macro                    -> Macro / Outlook
  * /macro/data               -> Macro / Data
  * /macro/analysis/<id>      -> Macro / AI Analysis / Report
@@ -95,6 +96,14 @@ function crumbs(pathname: string): Crumb[] {
     ]
   }
   if (segments[0] === "portfolio") {
+    if (segments[1] === "analysis") {
+      const crumbs: Crumb[] = [
+        { label: "Portfolio", href: PORTFOLIO_HREF },
+        { label: "Analysis", href: PORTFOLIO_ANALYSIS_HREF },
+      ]
+      if (segments[2]) crumbs.push({ label: "Report", href: pathname })
+      return crumbs
+    }
     return [
       { label: "Portfolio", href: PORTFOLIO_HREF },
       segments[1] === "performance"

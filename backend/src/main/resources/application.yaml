@@ -84,6 +84,9 @@ spring:
         - classpath:db/V1.0.52__schema_company_profile.sql        # IDX company profiles: listing date, board, IDX-IC sector, dividends
         - classpath:db/V1.0.53__schema_portfolio.sql              # Portfolio > Position: a user's stocks, cash and total investment
         - classpath:db/V1.0.54__schema_intraday.sql               # intraday quotes and 5-minute bars of the stocks held in portfolios
+        - classpath:db/V1.0.59__schema_portfolio_performance.sql  # Portfolio > Performance: the years of the sheet, a snapshot per trading day
+        - classpath:db/V1.0.60__schema_portfolio_analysis.sql     # Portfolio > Analysis: AI recommendations (runs, candidates, lessons)
+        - classpath:db/V1.0.61__schema_portfolio_analysis_steps.sql # Portfolio > Analysis: fundamental only, or fundamental then technical
       data-locations:
         - classpath:db/V1.0.4__data_HRTA_financials.sql
         - classpath:db/V1.0.5__data_HRTA_market.sql
@@ -239,6 +242,45 @@ neracalab:
     session-end: "16:20"       # after the post-trading session (16:15): the last fetch of the day
     interval: 5m               # Yahoo bar size
     keep-days: 10              # bars older than this are deleted
+
+  # Portfolio > Performance (PortfolioPerformanceService): a snapshot of every portfolio and of IHSG / LQ45 per IDX
+  # trading day, at or after the end of the session. The schedule runs every 15 minutes from 17:00 to 23:45 WIB on
+  # weekdays and saves a portfolio once a day (a backend down at 17:00 still saves the day later that evening); before
+  # saving it reads the stocks' latest prices and the index bars of the day. A day without an IHSG bar or an intraday
+  # session of the day (an exchange holiday) is skipped.
+  performance:
+    save-from: "17:00"         # WIB: the earliest time of a day's snapshot (the session close cutoff of the prices)
+    first-year: 2022           # the first year of the chart's "All" range (the sheet's first row)
+    last-year: 2026            # the chart runs to the end of this year at least (later years follow the calendar)
+    schedule:
+      enabled: ${PERFORMANCE_SCHEDULE_ENABLED:true}
+      cron: "0 0/15 17-23 * * MON-FRI"
+      zone: Asia/Jakarta
+
+  # Portfolio > Analysis (PortfolioAnalysisService; docs/v1_docs/PORTFOLIO_DOCS.md): AI recommendations for a portfolio -
+  # sell, decrease, hold, increase, buy, cash. Step 1 the Fundamental (Score), step 2 the Technical (Score) of step 1's
+  # stocks (never combined), then the fundamental and the technical DeepSeek agents (Reflection, Reflexion) and the Opus
+  # synthesis; the limits (stocks held, 33% per stock and per sector, half-Kelly sizing, lots) are enforced in Java.
+  # Models and prices: neracalab.screening.llm.
+  portfolio-analysis:
+    budget-usd: ${PORTFOLIO_ANALYSIS_BUDGET_USD:0.75}   # hard cost cap of one run
+    synthesis-reserve-usd: 0.35       # kept free for the synthesis (Opus) while the agents run
+    default-max-stocks: 25
+    max-stocks-limit: 50
+    max-selected: 100
+    min-fundamental-score: 50       # step 1: the lowest Fundamental (Score) that passes
+    fundamental-multiplier: 3       # step 1 keeps the best max-stocks x 3 (at most 120)
+    max-fundamental-shortlist: 120
+    technical-multiplier: 2         # step 2 keeps, of step 1's, the best max-stocks x 2 by Technical (Score) (at most 60)
+    max-technical-shortlist: 60
+    llm-weight: 0.4                 # an agent's final score: 0.6 x rules + 0.4 x AI
+    max-position-weight: 0.33       # no stock above 33% of the capital
+    max-sector-weight: 0.33         # no sector above 33% of the capital
+    kelly-fraction: 0.5             # half-Kelly
+    min-position-weight: 0.01       # no new position below 1% of the capital
+    lot-size: 100                   # IDX: 100 shares per lot
+    agent-max-tokens: 700
+    synthesis-max-tokens: 20000
 
   # Forex pairs and commodities (Price Ingestion with the market Forex / Commodities, /api/v1/markets; charted on
   # Technicals). The catalog is market_instrument (V1.0.26__data_markets_macro.sql): USD/IDR, USD/JPY and the daily

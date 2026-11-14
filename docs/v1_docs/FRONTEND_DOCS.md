@@ -509,5 +509,12 @@ stocks with the Fundamentals of Companies (the columns of `instruction/Position 
 and Stocks cards), the Live card (IDX phase, today's change, Refresh; the page reads the portfolio again every minute
 while the IDX day is on), the positions table (grouped headers, pinned Stock column, a scrollbar above and below, drag
 to slide; the Today column draws the day's 5-minute prices) and the allocation by sector (donut and the stocks of every
-slice); **Performance** (`/portfolio/performance`) - later. Details: [PORTFOLIO_DOCS.md](PORTFOLIO_DOCS.md).
+slice); **Performance** (`/portfolio/performance`) - the sheet tracking_performance: a range (2022 - 2026 or one
+year), the portfolio against IHSG and LQ45 on one chart to the end of 2026, the years side by side and in an editable
+table, and the daily snapshots saved at 17:00 WIB (Save today); **Analysis** (`/portfolio/analysis`, a report at
+`/portfolio/analysis/{id}`) - AI recommendations: the analysis steps (fundamental only, or fundamental then technical),
+the most stocks to hold, all companies or selected ones (searchable multi-select with both scores), capital to add; the
+runs list (refreshed while one runs); the report (polled every 3 s while it runs): summary, recommendations (click a row
+for the agents' reasoning), sectors and cash before / after, the limits checked, how the stocks were chosen, the stocks
+analysed and left out, notes, model usage. Details: [PORTFOLIO_DOCS.md](PORTFOLIO_DOCS.md).
 

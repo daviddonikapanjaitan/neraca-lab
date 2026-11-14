@@ -1,12 +1,14 @@
 // Portfolio pages (backend PortfolioController, GET /api/v1/portfolio): Position, the sheet Position of
-// instruction/Position Portfolio.xlsx, and Performance (planned). Shared by the sidebar, the breadcrumb and the pages.
+// instruction/Position Portfolio.xlsx, and Performance (the sheet tracking_performance, lib/portfolio-performance.ts). Shared by the sidebar, the breadcrumb and the pages.
 
 export const PORTFOLIO_HREF = "/portfolio"
 export const PORTFOLIO_PERFORMANCE_HREF = "/portfolio/performance"
+export const PORTFOLIO_ANALYSIS_HREF = "/portfolio/analysis"
 
 export const PORTFOLIO_SECTIONS: { title: string; href: string }[] = [
   { title: "Position", href: PORTFOLIO_HREF },
   { title: "Performance", href: PORTFOLIO_PERFORMANCE_HREF },
+  { title: "Analysis", href: PORTFOLIO_ANALYSIS_HREF },
 ]
 
 /**

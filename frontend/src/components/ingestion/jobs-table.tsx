@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import {
   ActivityIcon,
+  BriefcaseBusinessIcon,
   ChartCandlestickIcon,
   ChevronRightIcon,
   CircleAlertIcon,
@@ -75,6 +76,7 @@ const TYPE_ICON: Record<IngestionJobType, typeof FileSpreadsheetIcon> = {
   LISTING_PRICES: ChartCandlestickIcon,
   TECHNICAL_SCREENING: ActivityIcon,
   RAG_XLSX: SheetIcon,
+  PORTFOLIO_ANALYSIS: BriefcaseBusinessIcon,
 }
 
 /** Refresh interval while a job is active, and otherwise. */
@@ -98,6 +100,7 @@ const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: "MACRO_ANALYSIS", label: "Macro analyses" },
   { value: "LISTING_PRICES", label: "Price history" },
   { value: "TECHNICAL_SCREENING", label: "Technical screenings" },
+  { value: "PORTFOLIO_ANALYSIS", label: "Portfolio analyses" },
 ]
 
 const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: string }[] = [

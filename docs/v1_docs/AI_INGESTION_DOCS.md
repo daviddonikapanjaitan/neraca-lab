@@ -676,7 +676,7 @@ changes the upload's status. Switch off with `neracalab.ingestion.rag-after-uplo
 
 ## 5. Tests
 
-The full backend suite (2026-11-14): 1,032 tests in 189 classes, 15 - 16 min, all passing; `DerivedDataRefreshTest`
+The full backend suite (2026-11-15): 1,050 tests in 196 classes, 16 min, all passing; `DerivedDataRefreshTest`
 (every company's derived data, ~940 companies) takes 4 min 30 s. A run is watched while it runs (finished test classes
 in `target/surefire-reports`, `jstack` of the surefire fork): past 30 minutes or 5 minutes without a finished class it
 is stuck. An interrupted run can leave its Maven / surefire `java` processes alive (2.5 GB, the same `target`): stop
