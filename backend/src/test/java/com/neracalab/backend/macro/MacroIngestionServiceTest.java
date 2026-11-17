@@ -39,6 +39,8 @@ class MacroIngestionServiceTest {
     private final MacroRepository repository = mock(MacroRepository.class);
     private final List<LocalDate> asked = new ArrayList<>();
     private List<MacroSource.Observation> answer = List.of();
+    /** Set: the source stops early with {@link #answer} (a history read in chunks, an HTTP 429). */
+    private MacroSource.PartialFetch stopEarly;
     private final MacroSource source = new MacroSource() {
         @Override
         public String name() {
@@ -48,11 +50,15 @@ class MacroIngestionServiceTest {
         @Override
         public List<Observation> fetch(MacroSeries series, LocalDate from, LocalDate today) {
             asked.add(from);
+            if (stopEarly != null) {
+                throw stopEarly;
+            }
             return answer;
         }
     };
     private final MacroIngestionService service = new MacroIngestionService(repository, List.of(source),
-            new MacroProperties("f", "c", "t", "s", 45, 300, new MacroProperties.Schedule(false, "0 0 20 * * *", "Asia/Jakarta"),
+            new MacroProperties("f", "c", "t", "s", "cpc", "bom", "lp", "chirps", 45, 300,
+                    new MacroProperties.Schedule(false, "0 0 20 * * *", "Asia/Jakarta"),
                     new MacroProperties.OutlookCache(true, java.time.Duration.ofHours(1))),
             Clock.fixed(ZonedDateTime.of(2026, 10, 16, 9, 0, 0, 0, JAKARTA).toInstant(), JAKARTA));
 
@@ -87,6 +93,30 @@ class MacroIngestionServiceTest {
         Row september = rows.getValue().getLast();
         assertThat(september.periodEnd()).isEqualTo(LocalDate.of(2026, 9, 30));
         assertThat(september.releaseDate()).isEqualTo(LocalDate.of(2026, 10, 15));
+    }
+
+    @Test
+    void aFetchThatStopsEarlyStoresWhatItReadAndSaysWhereToContinue() {
+        MacroSeries cpi = MacroSeriesTest.series("US_CPI_INDEX", "MONTHLY", 15);
+        when(repository.latestDate("US_CPI_INDEX")).thenReturn(Optional.empty(), Optional.of(LocalDate.of(2000, 2, 1)));
+        stopEarly = new MacroSource.PartialFetch("read 2 months", List.of(obs("2000-01-01", "170.0"),
+                obs("2000-02-01", "171.0")), LocalDate.of(2000, 3, 1), java.time.Duration.ZERO);
+
+        MacroIngestionService.Result result = service.ingest(cpi, false);
+
+        assertThat(result.inserted()).isEqualTo(2);                       // what was read is stored
+        verify(repository).upsert(eq("US_CPI_INDEX"), eq("fred"), anyList());
+        assertThat(result.partial()).isEqualTo("read 2 months");
+        assertThat(result.resumeFrom()).isEqualTo(LocalDate.of(2000, 3, 1));
+        assertThat(result.continueAfter()).isZero();
+        assertThat(MacroIngestionTracker.succeeded(result)).endsWith("to be continued from 2000-03-01 (queued again)");
+        // the continuation reads from where the fetch stopped, not from the overlap before the latest observation
+        stopEarly = null;
+        answer = List.of();
+        MacroIngestionService.Result next = service.ingest(cpi, false, LocalDate.of(2000, 3, 1));
+        assertThat(asked).containsExactly(LocalDate.of(2000, 1, 1), LocalDate.of(2000, 3, 1));
+        assertThat(next.partial()).isNull();
+        assertThat(next.continueAfter()).isNull();
     }
 
     @Test

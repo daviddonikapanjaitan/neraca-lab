@@ -9,12 +9,15 @@ import com.neracalab.backend.analysis.Texts;
 /**
  * One macro agent's view of a country's stock market (model reply).
  *
- * @param score  0-100: how investable the market is now through the agent's lens
- * @param stance BUY, ACCUMULATE, WAIT or AVOID
- * @param note   the critic's note when the reflection reviewed it
+ * @param score   0-100: how investable the market is now through the agent's lens
+ * @param stance  BUY, ACCUMULATE, WAIT or AVOID
+ * @param climate how the weather (El Nino / La Nina, the IOD, Indonesia's rainfall and drought) bears on the call,
+ *                through the agent's lens
+ * @param note    the critic's note when the reflection reviewed it
  */
 public record MacroAssessment(Double score, String stance, String thesis, List<String> supports, List<String> risks,
-                              List<String> buyWhen, List<String> sellWhen, List<String> signalsUsed, String note) {
+                              List<String> buyWhen, List<String> sellWhen, List<String> signalsUsed, String climate,
+                              String note) {
 
     static final Set<String> STANCES = Set.of("BUY", "ACCUMULATE", "WAIT", "AVOID");
 
@@ -58,6 +61,6 @@ public record MacroAssessment(Double score, String stance, String thesis, List<S
         }
         return new MacroAssessment(s, st, Texts.clipOrNull(thesis, 450), Texts.clip(supports, 3, 160),
                 Texts.clip(risks, 3, 160), Texts.clip(buyWhen, 2, 160), Texts.clip(sellWhen, 2, 160),
-                Texts.clip(signalsUsed, 12, 40), Texts.clipOrNull(note, 300));
+                Texts.clip(signalsUsed, 12, 40), Texts.clipOrNull(climate, 300), Texts.clipOrNull(note, 300));
     }
 }

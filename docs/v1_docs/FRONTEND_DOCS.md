@@ -230,8 +230,9 @@ unknown country or index in the URL shows Indonesia / IHSG.
 | Controls | country (Indonesia; United States and China disabled, "coming later"), index (IHSG, LQ45), 6M .. MAX, the as-of date |
 | Index | a plain line chart (Recharts), no indicators; close, 1M / 3M / YTD / 1Y, 52-week range; the investability score and the action badge |
 | Macro panel | "Macro panel (liquidity and risk regimes, rates, dollar)": both regimes with every vote and their state 3 months before; a chart per series grouped Indonesia / Global liquidity and risk, each with its last value, a Supportive / Headwind / Neutral badge, the summary and the preset that reads it |
-| Preset summaries | Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio (two per row on a wide screen): stance, label, score, thesis, buy when / sell when, the evidence on request |
+| Preset summaries | Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio (two per row on a wide screen): stance, label, score, thesis, the investor's weather reading (badge, "context, no vote"), buy when / sell when, the evidence on request |
 | Commodities and currencies | exports, imports, currencies (the nine pairs) and havens / references: last, 1M / 3M / 1Y, 52-week range, a 1Y sparkline, a Supportive / Headwind / Neutral badge with what it means for the country; the terms of trade on top, then the rupiah against its Asian peers (weaker than / in line with / firmer than the region, with its summary) |
+| Weather (since 2026-11-16) | "Weather: El Niño / La Niña, rainfall and drought", between the commodities and the presets: the ENSO and Indonesia risk badges, the summary and season; **Global** - El Niño / La Niña (RONI, ONI, Niño 3.4, SOI 30-day), the Indian Ocean Dipole and NOAA's forecast as boxes, the other producers' table, the global charts; **Indonesia** - its risk, the palm oil / coal / rice regions' table (month, mm and normal, % of normal, 3 months, SPI-3 and its state), the rainfall (% of normal) and SPI charts; what it means for the sectors; how each investor reads it; notes. Context only: no vote in the score |
 | Conclusion | the score (0 - 100) on a bar with the 40 / 60 marks, verdict and action, the summary, the buy / accumulate / sell conditions with met ones ticked (the group that applies now highlighted), what would change the call, the six parts of the score (weight, reading, points, why) |
 | Right column | sticky on a wide screen (`xl`, 340 px): the AI panel (`components/macro/macro-ai-panel.tsx`: the latest AI macro analysis of the index - investability, verdict, action, the agents' stances, the thesis, the rules' score - "Run AI analysis", a link to the report; polls every 3 s while one is active) and the country's indexes (IHSG, LQ45) |
 | Other | notes (series without data, an index not stored yet) and the disclaimer |
@@ -240,9 +241,11 @@ Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6a.
 
 ### 3.2b' Macro › Data - `/macro/data?series=US_10Y&range=5Y` (`COMPANIES`)
 
-Every series of Ingestion › Macro as one large chart: a series dropdown grouped by country, the ranges, the chart (a
-line; net foreign buying as bars; average line, zoom brush), the changes 1M - 5Y, the range's statistics, about the
-series and its 12 latest observations. Server page `app/(dashboard)/macro/data/page.tsx` (`GET /api/v1/macro/data/series`
+Every series of Ingestion › Macro as one large chart: a series dropdown grouped by country with the weather apart
+(Weather — Global, Weather — Indonesia), the ranges, the chart (a line; net foreign buying as bars; average line, zoom
+brush; a rainfall series with the dashed 1991 - 2020 normal of each month; a weather index with its El Niño / La Niña,
+IOD, SOI or drought thresholds), the changes 1M - 5Y, the range's statistics (a rainfall series: the latest month and 3
+months in % of normal), about the series and its 12 latest observations. Server page `app/(dashboard)/macro/data/page.tsx` (`GET /api/v1/macro/data/series`
 and `/series/{code}`), client `components/macro/macro-data-client.tsx` reloading through `/api/macro/data/series/[code]`
 and keeping the choice in the URL. Details: [MACRO_DOCS.md](MACRO_DOCS.md), section 6b.
 
@@ -251,7 +254,7 @@ and keeping the choice in the URL. Details: [MACRO_DOCS.md](MACRO_DOCS.md), sect
 | Page | Content |
 |---|---|
 | `/macro/analysis` | `macro-analysis-form.tsx`: country (Indonesia; the others "coming later"), index, the four agents, the models, the budget and what the database holds; "Run analysis" opens the report. `macro-analyses-table.tsx`: the analyses of every country and index, most recent first (country · index, status, investability, action, conviction, cost, requested), paged, polled while one is active |
-| `/macro/analysis/[id]` | `macro-analysis-report.tsx`: progress while it runs (polls every 3 s), then the tiles (investability, action, rules score, AI cost, duration), the executive summary (thesis, bull / bear case, risks, monitor, sector tilts, data gaps, adjustment), one card per agent (prior, AI, final score, stance, thesis, supports, risks, buy / sell when, reflection), the research brief (evidence refs, tool results, ReAct steps), the rules the agents read, the commodities and currencies (with the rupiah against its Asian peers), notes, model calls and the PDF download |
+| `/macro/analysis/[id]` | `macro-analysis-report.tsx`: progress while it runs (polls every 3 s), then the tiles (investability, action, rules score, AI cost, duration), the executive summary (thesis, bull / bear case, risks, monitor, sector tilts, the weather view, data gaps, adjustment), one card per agent (prior, AI, final score, stance, thesis, supports, risks, buy / sell when, its weather reading, reflection), the research brief (with its weather paragraph; evidence refs, tool results, ReAct steps), the rules the agents read, the commodities and currencies (with the rupiah against its Asian peers), the weather the agents read (global apart from Indonesia, the sectors, the presets' readings), notes, model calls and the PDF download |
 
 Route handlers: `/api/macro/analyses` (GET list, POST), `/api/macro/analyses/[id]`, `/api/macro/analyses/[id]/pdf`.
 Details: [MACRO_ANALYSIS_DOCS.md](MACRO_ANALYSIS_DOCS.md).
@@ -270,7 +273,7 @@ first; in the collapsed sidebar the icon opens it). Pages, sidebar entries and b
 | Screening Data IDX (`/ingestion/screening-data`) | Screening data (stored listings, active ETL run)                          |
 | PDF Documents (RAG) (`/ingestion/rag-pdf`) | PDF document upload (exchange, company, document type: Financial Statement, the default, or Registration), then the stored PDF documents with their type ([RAG_DOCS.md](RAG_DOCS.md), [REGISTRATION_DOCS.md](REGISTRATION_DOCS.md)) |
 | News (RAG) (`/ingestion/rag-news`) | News ingestion (IDX companies, date range), then the stored news articles      |
-| Macro (`/ingestion/macro`) | `macro-card.tsx`: "Update all macro data to today" (counts per state), then one table per region (Indonesia, United States, Global and China): series with code, frequency, unit and the presets using it; source (link) and its publication lag; latest value and date; state (up to date, behind and when due, not fetched, failing and why, CSV upload); Fetch, Full, CSV upload, Chart (a sheet with the history and the latest observations with their release dates). `GET /api/v1/macro/series`; route handlers `/api/macro/ingestions`, `/updates`, `/series/{code}`, `/series/{code}/upload` ([MACRO_DOCS.md](MACRO_DOCS.md)) |
+| Macro (`/ingestion/macro`) | `macro-card.tsx`: "Update all macro data to today" (counts per state), then one table per region (Indonesia, United States, Global and China) and the weather in two tables of its own (Weather — Global, Weather — Indonesia, each with what it holds): series with code, frequency, unit and the presets using it; source (link) and its publication lag; latest value and date; state (up to date, behind and when due, not fetched, failing and why, CSV upload); Fetch, Full, CSV upload, Chart (a sheet with the history and the latest observations with their release dates). `GET /api/v1/macro/series`; route handlers `/api/macro/ingestions`, `/updates`, `/series/{code}`, `/series/{code}/upload` ([MACRO_DOCS.md](MACRO_DOCS.md)) |
 
 Every page shows its card, then the summary tiles and the jobs table. The table opens on the page's
 own job type (IDX XBRL: Financial statements, Price Ingestion: Prices, Screening Data IDX: Screening

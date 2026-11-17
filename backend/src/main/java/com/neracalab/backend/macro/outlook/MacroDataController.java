@@ -55,7 +55,8 @@ public class MacroDataController {
     public record SeriesList(LocalDate today, List<Series> series) {
     }
 
-    public record SeriesChart(Series series, MacroSeriesChart.Chart chart) {
+    /** @param normals a rainfall series (unit mm): its 1991 - 2020 monthly normals; else null */
+    public record SeriesChart(Series series, MacroSeriesChart.Chart chart, MacroSeriesChart.Normals normals) {
     }
 
     private final MacroService macro;
@@ -78,9 +79,9 @@ public class MacroDataController {
         String r = MacroOutlookService.range(range); // an unknown range: 400 before any read
         SeriesStatus status = macro.seriesStatus(code); // 404 for an unknown code
         Series series = Series.of(status);
-        MacroSeriesChart.Chart chart = MacroSeriesChart.of(repository.observations(status.code(), null), series.kind(),
-                r);
-        return new SeriesChart(series, chart);
+        List<MacroRepository.Row> rows = repository.observations(status.code(), null);
+        MacroSeriesChart.Chart chart = MacroSeriesChart.of(rows, series.kind(), r);
+        return new SeriesChart(series, chart, "mm".equals(series.unit()) ? MacroSeriesChart.normals(rows) : null);
     }
 
     @ExceptionHandler(SeriesNotFoundException.class)

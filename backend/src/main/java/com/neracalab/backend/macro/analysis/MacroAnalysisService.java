@@ -263,7 +263,7 @@ public class MacroAnalysisService {
             rows.add(new AgentRow(agent.name(), agent.label(), priors.get(agent).score(), score(a), finals.get(agent),
                     a == null ? null : a.stance(), a == null ? null : a.thesis(),
                     a == null ? List.of() : a.supports(), a == null ? List.of() : a.risks(),
-                    o.issues().stream().map(Issue::message).toList()));
+                    o.issues().stream().map(Issue::message).toList(), a == null ? null : a.climate()));
         }
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("subject", context.get("subject"));
@@ -277,6 +277,7 @@ public class MacroAnalysisService {
         input.put("indexes", context.get("indexes"));
         input.put("termsOfTrade", markets == null ? null : markets.get("termsOfTrade"));
         input.put("regionalCurrencies", markets == null ? null : markets.get("regionalCurrencies"));
+        input.put("weather", context.get("weather"));
         input.put("agents", rows);
         input.put("research", r.brief());
         input.put("dataNotes", List.copyOf(notes.messages));
@@ -310,6 +311,7 @@ public class MacroAnalysisService {
         synthesisDoc.put("keyRisks", syn.keyRisks());
         synthesisDoc.put("monitor", syn.monitor());
         synthesisDoc.put("sectorTilts", syn.sectorTilts());
+        synthesisDoc.put("climate", syn.climate());
         synthesisDoc.put("dataGaps", syn.dataGaps());
         synthesisDoc.put("adjustmentReason", syn.adjustmentReason());
         synthesisDoc.put("agentsMean", agentsMean);
@@ -378,8 +380,27 @@ public class MacroAnalysisService {
             m.put("regionalCurrencies", markets.get("regionalCurrencies"));
             c.put("markets", m);
         }
+        c.put("weather", weather(view));
         c.put("rulesVersion", view.get("rulesVersion"));
         return c;
+    }
+
+    /**
+     * The weather of the view without its chart points (global and Indonesia, the sector implications, each preset's
+     * climate reading); the charts keep their code, title, unit and latest value.
+     */
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> weather(Map<String, Object> view) {
+        Object w = view.get("weather");
+        if (!(w instanceof Map<?, ?> weather)) {
+            return null;
+        }
+        Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) weather);
+        Object charts = copy.get("charts");
+        if (charts instanceof List<?> list) {
+            copy.put("charts", list.stream().map(MacroAnalysisService::withoutPoints).toList());
+        }
+        return copy;
     }
 
     /** A copy of a map without its chart points. */
@@ -414,6 +435,10 @@ public class MacroAnalysisService {
         b.append(" Index ").append(index.get("code")).append(": ").append(index.get("close")).append(", ")
                 .append(index.get("vsSma200Pct")).append("% against its 200-day average, 1Y ")
                 .append(index.get("change1yPct")).append("%.");
+        Map<String, Object> weather = (Map<String, Object>) view.get("weather");
+        if (weather != null && weather.get("summary") != null) {
+            b.append(" Weather (rules): ").append(weather.get("summary"));
+        }
         return b.toString();
     }
 
@@ -583,7 +608,8 @@ public class MacroAnalysisService {
         repository.saveAgentScore(id, new MacroAnalysisRepository.AgentRow(agent, prior.score(), priorDetail, score(a),
                 finalScore, a == null ? null : a.stance(), a == null ? null : a.thesis(),
                 a == null ? List.of() : a.supports(), a == null ? List.of() : a.risks(),
-                a == null ? List.of() : a.buyWhen(), a == null ? List.of() : a.sellWhen(), reflection, status));
+                a == null ? List.of() : a.buyWhen(), a == null ? List.of() : a.sellWhen(), reflection, status,
+                a == null ? null : a.climate()));
     }
 
     // ------------------------------------------------------------------ scores

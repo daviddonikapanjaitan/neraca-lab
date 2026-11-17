@@ -24,15 +24,32 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { requestJson } from "@/lib/client-api"
 import { EMPTY, formatDate, formatNumber } from "@/lib/format"
+import { isWeatherCategory, unitLabel } from "@/lib/macro"
 import type { IngestionJob, MacroHistory, MacroResult, MacroSeriesStatus, MacroState, MacroStatus, MacroUpdate } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 type Notice = { tone: "success" | "error"; text: string }
 
-const GROUPS: { title: string; countries: string[] }[] = [
-  { title: "Indonesia", countries: ["ID"] },
-  { title: "United States", countries: ["US"] },
-  { title: "Global and China", countries: ["GLOBAL", "CN"] },
+/** The tables: the economy by country, then the weather - global apart from Indonesia's. */
+const GROUPS: { title: string; description?: string; matches: (s: MacroSeriesStatus) => boolean }[] = [
+  { title: "Indonesia", matches: (s) => s.country === "ID" && !isWeatherCategory(s.category) },
+  { title: "United States", matches: (s) => s.country === "US" && !isWeatherCategory(s.category) },
+  {
+    title: "Global and China",
+    matches: (s) => (s.country === "GLOBAL" || s.country === "CN") && !isWeatherCategory(s.category),
+  },
+  {
+    title: "Weather — Global",
+    description:
+      "El Niño / La Niña (RONI, ONI, Niño 3.4, SOI), the Indian Ocean Dipole, NOAA's ENSO forecast, and the rainfall and drought of the other producers (Malaysia's palm oil, Australia's coal, India's monsoon).",
+    matches: (s) => isWeatherCategory(s.category) && s.country !== "ID",
+  },
+  {
+    title: "Weather — Indonesia",
+    description:
+      "Rainfall (CHIRPS v3.0) and drought (SPI-3) of Indonesia's palm oil, coal and rice regions. The first fetch reads 1981 onward in chunks of 60 months, paced for the CHIRPS server (several hours in the background; each chunk is stored and the next one queued, a rate limit waits 15 minutes); the SPI follows when its rainfall is complete.",
+    matches: (s) => isWeatherCategory(s.category) && s.country === "ID",
+  },
 ]
 
 const STATE_META: Record<MacroState, { label: string; className: string }> = {
@@ -43,13 +60,18 @@ const STATE_META: Record<MacroState, { label: string; className: string }> = {
   MANUAL: { label: "CSV upload", className: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
 }
 
-const PRESET_LABEL: Record<string, string> = { DRUCKENMILLER: "Druckenmiller", TUDOR_JONES: "Tudor Jones" }
+const PRESET_LABEL: Record<string, string> = {
+  DRUCKENMILLER: "Druckenmiller",
+  TUDOR_JONES: "Tudor Jones",
+  SOROS: "Soros",
+  DALIO: "Dalio",
+}
 
-/** 5.75 % / 146,320 USD mn / 102.55 index: the value with its unit */
+/** 5.75 % / 146,320 USD mn / 102.55 index / 1.97 °C: the value with its unit */
 function valueWithUnit(value: number | null, unit: string): string {
   if (value === null) return EMPTY
   const digits = Math.abs(value) >= 1000 ? 0 : 2
-  return unit === "%" ? `${formatNumber(value, digits)}%` : `${formatNumber(value, digits)} ${unit}`
+  return unit === "%" ? `${formatNumber(value, digits)}%` : `${formatNumber(value, digits)} ${unitLabel(unit)}`
 }
 
 const historyConfig = {
@@ -57,9 +79,10 @@ const historyConfig = {
 } satisfies ChartConfig
 
 /**
- * Ingestion › Macro: every macro series of the Druckenmiller and Paul Tudor Jones views with what is stored of it,
- * "Update all macro data" (every series whose next release is due), one series fetched again or with its full history,
- * a CSV upload for the series without a source a program may read, and the history of a series.
+ * Ingestion › Macro: every macro series of the Druckenmiller, Paul Tudor Jones, Soros and Dalio views with what is
+ * stored of it - the economy by country, then the weather (global apart from Indonesia's) - "Update all macro data"
+ * (every series whose next release is due), one series fetched again or with its full history, a CSV upload for the
+ * series without a source a program may read, and the history of a series.
  */
 export function MacroCard({ status, onSubmitted }: { status: MacroStatus; onSubmitted: (job: IngestionJob) => void }) {
   const router = useRouter()
@@ -179,8 +202,9 @@ export function MacroCard({ status, onSubmitted }: { status: MacroStatus; onSubm
               nothing is stored; an unusually large move is stored and listed as a warning.
             </li>
             <li>
-              FRED, Bank Indonesia, CNBC and the CFTC are asked one request at a time with a pause in between; a site that
-              refuses an automated request is not worked around (upload a CSV of <code>obs_date,value</code> instead).
+              FRED, Bank Indonesia, CNBC, the CFTC and the weather sources (NOAA, JAMSTEC, Long Paddock, CHIRPS) are asked
+              one request at a time with a pause in between; a site that refuses an automated request is not worked around
+              (upload a CSV of <code>obs_date,value</code> instead).
             </li>
           </ul>
           {notice && <NoticeLine notice={notice} />}
@@ -192,12 +216,13 @@ export function MacroCard({ status, onSubmitted }: { status: MacroStatus; onSubm
       </Card>
 
       {GROUPS.map((group) => {
-        const items = status.items.filter((s) => group.countries.includes(s.country))
+        const items = status.items.filter(group.matches)
         if (items.length === 0) return null
         return (
           <Card key={group.title} className="min-w-0">
             <CardHeader>
               <CardTitle>{group.title}</CardTitle>
+              {group.description && <CardDescription>{group.description}</CardDescription>}
             </CardHeader>
             <CardContent className="px-0">
               <Table>
@@ -256,7 +281,7 @@ function SeriesRow({
       <TableCell className="max-w-[300px] pl-4 whitespace-normal">
         <div className="font-medium">{s.name}</div>
         <div className="text-xs text-muted-foreground">
-          <span className="font-mono">{s.code}</span> · {s.frequency.toLowerCase()} · {s.unit}
+          <span className="font-mono">{s.code}</span> · {s.frequency.toLowerCase()} · {unitLabel(s.unit)}
           {s.priority === 1 ? " · core" : ""}
         </div>
         <div className="mt-1 flex flex-wrap gap-1">
@@ -348,7 +373,7 @@ function HistorySheet({ state, onClose }: { state: HistoryState | null; onClose:
           <SheetTitle>{history?.series.name ?? code}</SheetTitle>
           <SheetDescription>
             {history
-              ? `${history.series.unit} · ${history.series.frequency.toLowerCase()} · ${history.series.sourceLabel} · ${history.points.length.toLocaleString("en-US")} observations`
+              ? `${unitLabel(history.series.unit)} · ${history.series.frequency.toLowerCase()} · ${history.series.sourceLabel} · ${history.points.length.toLocaleString("en-US")} observations`
               : "Loading…"}
           </SheetDescription>
         </SheetHeader>

@@ -27,13 +27,17 @@ import com.neracalab.backend.technical.engine.MarketContext.Observation;
  *       quadrant, real rates and credit), each with a stance, the thesis, the evidence and when to buy and when to
  *       sell - the macro side, not the chart;</li>
  *   <li><b>conclusion</b>: an investability score (0 - 100) from six weighted parts, the verdict, the action and the
- *       conditions of buying and selling with whether each is met.</li>
+ *       conditions of buying and selling with whether each is met;</li>
+ *   <li><b>weather</b>: El Nino / La Nina, the IOD, the ENSO forecast and the other producers' rainfall (global), the
+ *       rainfall and drought of Indonesia's palm oil, coal and rice regions, what it means for the sectors, and each
+ *       preset's {@code climate} reading ({@link ClimateBoard}) - context with no vote in the score.</li>
  * </ul>
  * Point in time: only observations released on or before the as-of date are read (as the snapshot does).
  */
 public final class MacroOutlook {
 
-    public static final String RULES_VERSION = "2026-10-17.1";
+    /** 2026-11-16.1: the weather section and each preset's climate reading (no vote: the score is unchanged). */
+    public static final String RULES_VERSION = "2026-11-16.1";
 
     /** BI's inflation target for 2025 - 2027: 2.5 % +/- 1. */
     static final double BI_TARGET_LOW = 1.5;
@@ -88,6 +92,8 @@ public final class MacroOutlook {
     private Map<String, Object> regimes;
     private Map<String, Object> regimesThen;
     private IndexRead read;
+    /** The weather series' reading ({@link ClimateBoard}): the weather section and the presets' climate readings. */
+    private ClimateBoard climate;
 
     private MacroOutlook(String indexCode, String indexName, List<Candle> index, Map<String, List<Observation>> macro,
                          LocalDate asOf, LocalDate from, Map<String, String> sources) {
@@ -150,7 +156,11 @@ public final class MacroOutlook {
         reg.put("risk", regimeWithThen("risk"));
         out.put("regimes", reg);
         out.put("panels", panels());
-        out.put("presets", List.of(tudorJones(), druckenmiller(), soros(), dalio()));
+        climate = ClimateBoard.read(macro, asOf, from);
+        List<Map<String, Object>> presets = List.of(tudorJones(), druckenmiller(), soros(), dalio());
+        presets.forEach(this::addClimate);
+        out.put("presets", presets);
+        out.put("weather", weather(presets));
         out.put("conclusion", conclusion());
         notes.addAll(signalNotes);
         out.put("notes", notes);
@@ -1368,6 +1378,129 @@ public final class MacroOutlook {
         Double score = regimeScore(key);
         return state == null ? "unknown" : lower(state).replace('_', ' ') + " (" + sp(score, 0) + " of "
                 + regimeSignals(key) + ")";
+    }
+
+    // ------------------------------------------------------------------ weather
+
+    /** The preset's climate reading ({@code climate}: tone and text), also its last evidence point; no vote. */
+    @SuppressWarnings("unchecked")
+    private void addClimate(Map<String, Object> preset) {
+        String[] a = climateAssessment(String.valueOf(preset.get("preset")));
+        Map<String, Object> c = new LinkedHashMap<>();
+        c.put("tone", a[0]);
+        c.put("text", a[1]);
+        preset.put("climate", c);
+        ((List<Map<String, Object>>) preset.get("points")).add(point(a[0], "Climate (no vote): " + a[1]));
+    }
+
+    /** The weather section ({@link ClimateBoard}) with the four investors' readings of it. */
+    private Map<String, Object> weather(List<Map<String, Object>> presets) {
+        Map<String, Object> m = climate.section();
+        List<Map<String, Object>> assessments = new ArrayList<>();
+        for (Map<String, Object> p : presets) {
+            Map<String, Object> a = new LinkedHashMap<>();
+            a.put("preset", p.get("preset"));
+            a.put("name", p.get("name"));
+            a.putAll(map(p, "climate"));
+            assessments.add(a);
+        }
+        m.put("assessments", assessments);
+        return m;
+    }
+
+    /**
+     * {tone, text}: how an investor reads the weather - as context, without a vote.
+     * <ul>
+     *   <li>Paul Tudor Jones: not his timeframe; it reaches the regime only through inflation and bond yields.</li>
+     *   <li>Druckenmiller: the ENSO forecast 6 - 12 months ahead and what it leaves Bank Indonesia.</li>
+     *   <li>Soros: a drought as the trigger of the loop food inflation - weaker rupiah - BI hiking - outflows.</li>
+     *   <li>Dalio: the inflation axis of the quadrant (food) and the terms of trade (palm oil, coal).</li>
+     * </ul>
+     */
+    String[] climateAssessment(String preset) {
+        String risk = climate.risk;
+        if (risk == null && climate.ensoState == null) {
+            return new String[] {NEUTRAL, "No weather data stored: no climate reading (Ingestion > Macro, the weather "
+                    + "series)."};
+        }
+        boolean dry = "DROUGHT".equals(risk) || "DRY_RISK".equals(risk);
+        boolean wet = "WET".equals(risk) || "WET_RISK".equals(risk);
+        String state = ensoPhrase() + "; Indonesia " + ClimateBoard.riskLabel(risk).toLowerCase(Locale.ROOT);
+        Map<String, Object> inf = signal("inflation");
+        Double cpi = dbl(inf, "idCpiYoy");
+        String cpiTrend = str(inf, "idTrend");
+        String rupiah = str(signal("dollar"), "rupiahTrend");
+        String bi = str(signal("biPolicy"), "state");
+        return switch (preset) {
+            case "ptj" -> {
+                String sbnTrend = str(signal("sbn10y"), "trend");
+                boolean showing = "RISING".equals(cpiTrend) || "RISING".equals(sbnTrend);
+                yield dry ? new String[] {showing ? NEGATIVE : NEUTRAL, state + ". Weather is not his timeframe and does "
+                        + "not move the 200-day rule; it reaches the regime through food inflation and bond yields - "
+                        + (showing ? "already showing (" + (cpi == null ? "" : "CPI " + f(cpi, 2) + "% ") + lower(cpiTrend)
+                        + ", SBN 10Y " + lower(sbnTrend) + "): respect it, tighten stops."
+                        : "not visible yet in CPI or SBN yields; watch them.")}
+                        : new String[] {NEUTRAL, state + ". No weather pressure on inflation or yields: nothing for the "
+                        + "regime."};
+            }
+            case "druckenmiller" -> {
+                Double e6 = climate.probElNino6m;
+                Double l6 = climate.probLaNina6m;
+                String forecast = climate.probElNino3m == null ? "no NOAA forecast stored"
+                        : "NOAA: El Nino " + f(climate.probElNino3m, 0) + "% in 3 months, " + f(e6, 0) + "% in 6";
+                if ("EL_NINO".equals(climate.ensoState) && e6 != null && e6 <= 30) {
+                    yield new String[] {POSITIVE, state + ". " + forecast + ": El Nino is expected to fade, so the food "
+                            + "inflation it brings should ease within a year - room for Bank Indonesia to cut 6 - 12 months "
+                            + "out, the turn he positions for early."};
+                }
+                if (dry) {
+                    yield new String[] {NEGATIVE, state + ". " + forecast + ": the drought keeps food inflation up "
+                            + (e6 != null && e6 < 50 ? "until El Nino fades" : "into next year") + " and narrows Bank "
+                            + "Indonesia's room to cut - liquidity stays tighter for longer."};
+                }
+                if ((l6 != null && l6 >= 50) || wet) {
+                    yield new String[] {POSITIVE, state + ". " + forecast + (l6 == null ? "" : ", La Nina " + f(l6, 0)
+                            + "% in 6") + ": good harvests contain food inflation, leaving Bank Indonesia room to ease."};
+                }
+                yield new String[] {NEUTRAL, state + ". " + forecast + ": no weather push on Bank Indonesia's path."};
+            }
+            case "soros" -> {
+                boolean loopShowing = "WEAKENING".equals(rupiah) || "HIKING".equals(bi);
+                yield dry ? new String[] {loopShowing ? NEGATIVE : NEUTRAL, state + ". A drought can trigger the loop: "
+                        + "food inflation, a weaker rupiah, BI defending it, foreign money leaving (2015: El Nino and haze). "
+                        + (loopShowing ? "The loop is already turning that way (rupiah " + lower(rupiah) + ", BI "
+                        + lower(bi) + ")." : "Not in the loop yet (rupiah " + lower(rupiah) + ", BI " + lower(bi)
+                        + "): a trigger to watch.")}
+                        : new String[] {NEUTRAL, state + ". No climate trigger for the loop of foreign money, the rupiah "
+                        + "and BI."};
+            }
+            case "dalio" -> {
+                Quadrant q = quadrant();
+                boolean slowing = "SLOWING".equals(q.growth());
+                yield dry ? new String[] {NEGATIVE, state + ". A food supply shock pushes the inflation axis up"
+                        + (slowing ? " while growth slows: it tilts the machine toward stagflation, which he never buys"
+                        : "") + "; palm oil and coal prices may help the terms of trade, but not the consumer."}
+                        : wet ? new String[] {POSITIVE, state + ". Good harvests pull food inflation down (the disinflation "
+                        + "side of the quadrant); wet coal regions are a volume risk for the miners."}
+                        : new String[] {NEUTRAL, state + ". No weather push on the growth / inflation quadrant."};
+            }
+            default -> new String[] {NEUTRAL, state + "."};
+        };
+    }
+
+    /** "Strong El Nino (RONI +1.97 in ASO 2026)", "ENSO-neutral", "ENSO unknown" */
+    private String ensoPhrase() {
+        if (climate.ensoState == null) {
+            return "ENSO unknown";
+        }
+        String s = switch (climate.ensoState) {
+            case "EL_NINO" -> lower(climate.ensoStrength) + " El Nino";
+            case "LA_NINA" -> lower(climate.ensoStrength) + " La Nina";
+            default -> "ENSO-neutral";
+        };
+        s = Character.toUpperCase(s.charAt(0)) + s.substring(1);
+        return s + " (RONI " + sp(climate.roni, 2) + " in " + climate.roniSeason + ")"
+                + (climate.iodState == null ? "" : ", IOD " + lower(climate.iodState));
     }
 
     // ------------------------------------------------------------------ conclusion

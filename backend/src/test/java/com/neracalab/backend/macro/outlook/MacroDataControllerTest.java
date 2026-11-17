@@ -65,7 +65,9 @@ class MacroDataControllerTest {
         for (JsonNode s : list.get("series")) {
             String code = s.get("code").asString();
             String expected = code.equals("ID_FOREIGN_NET_BUY") ? "FLOW"
-                    : java.util.Set.of("%", "bps", "points").contains(s.get("unit").asString()) ? "RATE" : "LEVEL";
+                    // a weather index around zero (an anomaly in degC, the SOI, the SPI) changes in points, as a rate
+                    : java.util.Set.of("%", "bps", "points", "degC", "SOI", "SPI").contains(s.get("unit").asString())
+                    ? "RATE" : "LEVEL";
             assertThat(s.get("kind").asString()).as(code).isEqualTo(expected);
             // nothing of the ingestion jobs is shown here
             assertThat(s.has("lastJobMessage")).isFalse();

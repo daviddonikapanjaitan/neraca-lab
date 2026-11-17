@@ -15,6 +15,7 @@ import java.util.Set;
  *       Druckenmiller scoring high into tightening liquidity, Soros into a vicious loop, Dalio buying stagflation)</li>
  *   <li>UNKNOWN_SIGNAL: the agent cites signals that are not in the dossier</li>
  *   <li>EMPTY: no score or no thesis</li>
+ *   <li>NO_CLIMATE: no climate reading (how the weather bears on the call: every agent gives one)</li>
  * </ul>
  */
 public final class MacroValidator {
@@ -74,6 +75,10 @@ public final class MacroValidator {
         }
         if (a.thesis() == null || a.thesis().isBlank()) {
             issues.add(new Issue("EMPTY", "No thesis was given"));
+        }
+        if (a.climate() == null || a.climate().isBlank()) {
+            issues.add(new Issue("NO_CLIMATE", "No climate reading was given: say in climate how the dossier's weather "
+                    + "(El Nino / La Nina, the IOD, Indonesia's rainfall and drought) bears on your call"));
         }
         return issues;
     }

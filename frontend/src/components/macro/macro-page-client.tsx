@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
+import { CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts"
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
   CircleIcon,
+  CloudRainIcon,
   LoaderIcon,
   MinusIcon,
   TrendingDownIcon,
@@ -36,10 +37,16 @@ import {
   type MacroRange,
   type MacroRegimeThen,
   type MacroStance,
+  type MacroWeather,
   type MarketRow,
   type RegionalCurrencies,
+  type SpiState,
   type Tone,
   type Verdict,
+  type WeatherChart,
+  type WeatherRegion,
+  type WeatherRisk,
+  unitLabel,
 } from "@/lib/macro"
 import { cn } from "@/lib/utils"
 
@@ -199,6 +206,7 @@ export function MacroPageClient({ initial }: { initial: MacroOutlook }) {
           <IndexCard data={data} />
           <MacroPanelCard data={data} />
           <MarketsCard data={data} />
+          {data.weather && <WeatherCard weather={data.weather} country={data.country.name} />}
           <PresetsCard data={data} />
           <ConclusionCard data={data} />
           {data.notes.length > 0 && (
@@ -577,6 +585,308 @@ function RegimeBox({ title, regime, good, bad }: { title: string; regime: MacroR
   )
 }
 
+// ------------------------------------------------------------------ weather
+
+const RISK_STYLE: Record<WeatherRisk, string> = {
+  DROUGHT: "border-amber-600/40 text-amber-700 dark:text-amber-400",
+  DRY_RISK: "border-amber-600/40 text-amber-700 dark:text-amber-400",
+  NORMAL: "text-muted-foreground",
+  WET_RISK: "border-sky-600/40 text-sky-700 dark:text-sky-400",
+  WET: "border-sky-600/40 text-sky-700 dark:text-sky-400",
+}
+
+const SPI_LABEL: Record<SpiState, string> = {
+  EXTREME_DROUGHT: "extreme drought",
+  SEVERE_DROUGHT: "severe drought",
+  MODERATE_DROUGHT: "moderate drought",
+  NEAR_NORMAL: "near normal",
+  WET: "wet",
+  VERY_WET: "very wet",
+}
+
+function spiClass(state: SpiState | null): string {
+  if (!state) return "text-muted-foreground"
+  if (state.endsWith("DROUGHT")) return "text-amber-700 dark:text-amber-400"
+  if (state === "WET" || state === "VERY_WET") return "text-sky-700 dark:text-sky-400"
+  return ""
+}
+
+function monthOf(iso: string | null | undefined): string {
+  return iso ? formatDate(iso).replace(/^\d+ /, "") : EMPTY
+}
+
+/**
+ * The weather: global (El Nino / La Nina, the Indian Ocean Dipole, NOAA's forecast, the other producers) apart from
+ * Indonesia (its palm oil, coal and rice regions), what it means for the sectors and how each investor reads it. Context
+ * with no vote in the regimes, the presets' stances or the investability score.
+ */
+function WeatherCard({ weather: w, country }: { weather: MacroWeather; country: string }) {
+  const global = w.charts.filter((c) => c.group === "Global")
+  const local = w.charts.filter((c) => c.group === "Indonesia")
+  const enso = w.global.enso
+  const ensoBadge = enso.state
+    ? enso.state === "NEUTRAL"
+      ? "ENSO-neutral"
+      : `${enso.strength ? enso.strength.replace("_", " ").toLowerCase() + " " : ""}${enso.state === "EL_NINO" ? "El Niño" : "La Niña"}`
+    : null
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CloudRainIcon aria-hidden className="size-4 text-primary" />
+          Weather: El Niño / La Niña, rainfall and drought
+        </CardTitle>
+        <CardDescription>
+          Global climate apart from {country}&apos;s own rainfall, what they mean for plantations, coal, food inflation and
+          the rupiah, and how each investor reads them · context only: no vote in the regimes, the presets or the score ·
+          data from Ingestion › Macro (Weather), as published by {formatDate(w.asOfDate)}
+        </CardDescription>
+        <CardAction className="flex flex-wrap items-center gap-2">
+          {ensoBadge && (
+            <Badge variant="outline" className={cn(TONE_STYLE[enso.tone])}>
+              {ensoBadge.charAt(0).toUpperCase() + ensoBadge.slice(1)}
+            </Badge>
+          )}
+          {w.indonesia.risk && (
+            <Badge variant="outline" className={cn("font-semibold", RISK_STYLE[w.indonesia.risk])}>
+              Indonesia: {w.indonesia.riskLabel.toLowerCase()}
+            </Badge>
+          )}
+        </CardAction>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <p className="text-sm leading-relaxed">{w.summary}</p>
+        <p className="text-xs text-muted-foreground">{w.season.text}</p>
+
+        {/* Global */}
+        <section aria-label="Global weather" className="space-y-3">
+          <h3 className="text-sm font-semibold">Global</h3>
+          <div className="grid gap-3 md:grid-cols-3">
+            <WeatherBox
+              title="El Niño / La Niña"
+              tone={enso.tone}
+              figures={[
+                ["RONI", enso.roni === null ? EMPTY : `${signed(enso.roni, 2, " °C")}${enso.roniSeason ? ` (${enso.roniSeason})` : ""}`],
+                ["ONI", enso.oni === null ? EMPTY : signed(enso.oni, 2, " °C")],
+                ["Niño 3.4 weekly", enso.nino34Weekly === null ? EMPTY : signed(enso.nino34Weekly, 1, " °C")],
+                ["SOI 30-day", enso.soi30d === null ? EMPTY : signed(enso.soi30d, 1, "")],
+              ]}
+              text={enso.summary}
+            />
+            <WeatherBox
+              title="Indian Ocean Dipole"
+              tone={w.global.iod.tone}
+              figures={[
+                ["DMI", w.global.iod.value === null ? EMPTY : `${signed(w.global.iod.value, 2, " °C")} (${monthOf(w.global.iod.month)})`],
+                ["State", w.global.iod.state ? w.global.iod.state.toLowerCase() : EMPTY],
+              ]}
+              text={w.global.iod.summary}
+            />
+            <WeatherBox
+              title="NOAA ENSO forecast"
+              tone={w.global.forecast.tone}
+              figures={[
+                ["El Niño in 3 / 6 months", `${formatNumber(w.global.forecast.elNino3m, 0)}% / ${formatNumber(w.global.forecast.elNino6m, 0)}%`],
+                ["La Niña in 3 / 6 months", `${formatNumber(w.global.forecast.laNina3m, 0)}% / ${formatNumber(w.global.forecast.laNina6m, 0)}%`],
+                ["Issued", formatDate(w.global.forecast.issued)],
+              ]}
+              text={w.global.forecast.summary}
+            />
+          </div>
+          {w.global.producers.length > 0 && (
+            <RegionTable title="The other producers (Malaysia's palm oil, Australia's coal, India's monsoon)" regions={w.global.producers} />
+          )}
+          {global.length > 0 && (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {global.map((c) => (
+                <WeatherChartTile key={c.code} chart={c} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Indonesia */}
+        <section aria-label="Indonesia's weather" className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold">{country}</h3>
+            {w.indonesia.risk && (
+              <Badge variant="outline" className={cn(RISK_STYLE[w.indonesia.risk])}>
+                {w.indonesia.riskLabel}
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm leading-relaxed">{w.indonesia.summary}</p>
+          {w.indonesia.regions.length > 0 ? (
+            <RegionTable title="Palm oil, coal and rice regions" regions={w.indonesia.regions} />
+          ) : (
+            <EmptyState
+              variant="chart"
+              title="No rainfall stored yet"
+              description="Fetch the Weather — Indonesia series on Ingestion › Macro (each rainfall series in full once, then its SPI)."
+            />
+          )}
+          {local.length > 0 && (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {local.map((c) => (
+                <WeatherChartTile key={c.code} chart={c} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        {w.implications.length > 0 && (
+          <section aria-label="What it means" className="space-y-2">
+            <h3 className="text-sm font-semibold">What it means</h3>
+            <ul className="space-y-1.5">
+              {w.implications.map((i) => (
+                <li key={i.sector} className="flex items-start gap-2 text-sm">
+                  <ToneIcon tone={i.tone} />
+                  <span>
+                    <span className="font-medium">{i.sector}:</span> {i.text}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {w.assessments.length > 0 && (
+          <section aria-label="How each investor reads the weather" className="space-y-2">
+            <h3 className="text-sm font-semibold">How each investor reads it</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              {w.assessments.map((a) => (
+                <div key={a.preset} className="space-y-1 rounded-lg border px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium">{a.name}</p>
+                    <Badge variant="outline" className={cn(TONE_STYLE[a.tone])}>
+                      {TONE_LABEL[a.tone]}
+                    </Badge>
+                  </div>
+                  <p className="text-xs leading-relaxed">{a.text}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {w.notes.length > 0 && (
+          <ul role="note" className="space-y-1 text-xs text-amber-800 dark:text-amber-300">
+            {w.notes.map((n) => (
+              <li key={n} className="flex items-start gap-2">
+                <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+                <span>{n}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function WeatherBox({ title, tone, figures, text }: { title: string; tone: Tone; figures: [string, string][]; text: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 rounded-xl border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium">{title}</p>
+        <Badge variant="outline" className={cn("shrink-0", TONE_STYLE[tone])}>
+          {TONE_LABEL[tone]}
+        </Badge>
+      </div>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
+        {figures.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="text-right font-mono tabular-nums">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-xs leading-relaxed">{text}</p>
+    </div>
+  )
+}
+
+function RegionTable({ title, regions }: { title: string; regions: WeatherRegion[] }) {
+  return (
+    <div className="min-w-0 rounded-lg border">
+      <p className="px-3 pt-2 text-xs font-medium text-muted-foreground">{title}</p>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="pl-3">Region</TableHead>
+            <TableHead>Month</TableHead>
+            <TableHead className="text-right">Rain</TableHead>
+            <TableHead className="text-right">% normal</TableHead>
+            <TableHead className="text-right">3 months</TableHead>
+            <TableHead className="pr-3 text-right">SPI-3</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {regions.map((r) => (
+            <TableRow key={r.code} title={r.summary}>
+              <TableCell className="pl-3 whitespace-normal">
+                <div className="text-sm">{r.name}</div>
+                <div className="text-[11px] text-muted-foreground">{r.role}</div>
+              </TableCell>
+              <TableCell className="text-xs">
+                {monthOf(r.month)}
+                {r.stale && <span className="text-amber-600 dark:text-amber-400"> · stale</span>}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">
+                {r.rainfallMm === null ? EMPTY : `${formatNumber(r.rainfallMm, 0)} mm`}
+                {r.normalMm !== null && <div className="text-[10px] text-muted-foreground">normal {formatNumber(r.normalMm, 0)}</div>}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">
+                {r.pctOfNormal === null ? EMPTY : `${formatNumber(r.pctOfNormal, 0)}%`}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">
+                {r.pct3mOfNormal === null ? EMPTY : `${formatNumber(r.pct3mOfNormal, 0)}%`}
+              </TableCell>
+              <TableCell className={cn("pr-3 text-right font-mono text-xs tabular-nums", spiClass(r.spiState))}>
+                {r.spi3 === null ? EMPTY : signed(r.spi3, 2, "")}
+                {r.spiState && <div className="text-[10px]">{SPI_LABEL[r.spiState]}</div>}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function WeatherChartTile({ chart: c }: { chart: WeatherChart }) {
+  const data = c.points.map(([t, v]) => ({ date: dateOf(t), value: v }))
+  const unit = c.unit === "%" ? "%" : ` ${unitLabel(c.unit)}`
+  // the reference: 100% of normal for rainfall, zero for an anomaly, the SOI or the SPI; nothing for a probability
+  const reference = c.pctOfNormal ? 100 : c.unit === "%" ? null : 0
+  return (
+    <div className="flex min-w-0 flex-col gap-2 rounded-xl border p-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{c.title}</p>
+        <p className="text-xs text-muted-foreground">
+          <span className="font-mono text-foreground tabular-nums">{formatNumber(c.lastValue, c.digits)}</span>
+          {unit} · {formatDate(c.lastDate)}
+        </p>
+      </div>
+      {data.length > 1 ? (
+        <ChartContainer config={lineConfig} className="aspect-auto h-[110px] w-full">
+          <LineChart data={data} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
+            <XAxis dataKey="date" hide />
+            <YAxis hide domain={["auto", "auto"]} />
+            <ChartTooltip content={<ChartTooltipContent labelFormatter={(v) => formatDate(String(v))} />} />
+            {reference !== null && <ReferenceLine y={reference} stroke="var(--muted-foreground)" strokeDasharray="3 3" />}
+            <Line dataKey="value" stroke="var(--color-value)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
+          </LineChart>
+        </ChartContainer>
+      ) : (
+        <div className="flex h-[110px] items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
+          {data.length === 1 ? "One observation in this range" : "No observation in this range"}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ------------------------------------------------------------------ presets
 
 function PresetsCard({ data }: { data: MacroOutlook }) {
@@ -586,7 +896,8 @@ function PresetsCard({ data }: { data: MacroOutlook }) {
         <CardTitle>Preset summaries</CardTitle>
         <CardDescription>
           {data.index.code} read the way Paul Tudor Jones, Stanley Druckenmiller, George Soros and Ray Dalio read markets: the
-          macro side - money, rates, inflation, growth, the dollar, foreign flows, credit and volatility - not the chart.
+          macro side - money, rates, inflation, growth, the dollar, foreign flows, credit and volatility - not the chart;
+          each also reads the weather, as context without a vote.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 xl:grid-cols-2">
@@ -620,6 +931,18 @@ function PresetCard({ preset: p }: { preset: MacroPreset }) {
         </p>
       </div>
       <p className="text-sm leading-relaxed">{p.thesis}</p>
+      {p.climate && (
+        <div className="flex items-start gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+          <CloudRainIcon aria-hidden className="mt-px size-3.5 shrink-0 text-muted-foreground" />
+          <p>
+            <span className="font-medium">Weather</span>{" "}
+            <Badge variant="outline" className={cn("mx-1 px-1.5 py-0 text-[10px]", TONE_STYLE[p.climate.tone])}>
+              {TONE_LABEL[p.climate.tone]}
+            </Badge>
+            {p.climate.text} <span className="text-muted-foreground">(context, no vote)</span>
+          </p>
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <TriggerList title="Buy when" items={p.buyWhen} tone="buy" />
         <TriggerList title="Sell when" items={p.sellWhen} tone="sell" />

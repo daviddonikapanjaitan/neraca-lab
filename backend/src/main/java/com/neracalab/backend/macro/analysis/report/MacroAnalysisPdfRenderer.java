@@ -75,6 +75,7 @@ public class MacroAnalysisPdfRenderer {
         research(doc, report.research());
         rules(doc, report.context());
         markets(doc, report.context());
+        weather(doc, report.context());
         notes(doc, report.notes());
         usage(doc, report.usage());
         Paragraph p = new Paragraph("This report is generated automatically from the stored macro series, index, commodity "
@@ -156,6 +157,13 @@ public class MacroAnalysisPdfRenderer {
                 doc.add(p);
             }
         }
+        if (text(syn.path("climate")) != null) {
+            Paragraph h = new Paragraph("Weather (El Nino / La Nina, rainfall, drought)", new Font(Font.HELVETICA, 9,
+                    Font.BOLD, Color.BLACK));
+            h.setSpacingBefore(3);
+            doc.add(h);
+            doc.add(new Paragraph(text(syn.path("climate")), BODY));
+        }
         list(doc, "Data gaps", syn.path("dataGaps"), MUTED);
         if (text(syn.path("adjustmentReason")) != null) {
             doc.add(new Paragraph("Score adjustment: " + text(syn.path("adjustmentReason")), MUTED_BODY));
@@ -189,6 +197,9 @@ public class MacroAnalysisPdfRenderer {
             appendList(t, "Risks", s.risks());
             appendList(t, "Buy when", s.buyWhen());
             appendList(t, "Sell when", s.sellWhen());
+            if (s.climate() != null && !s.climate().isBlank()) {
+                t.append("\nWeather: ").append(s.climate());
+            }
             table.addCell(cell(t.toString(), SMALL, Element.ALIGN_LEFT));
             table.addCell(cell(reflection(s), SMALL_MUTED, Element.ALIGN_LEFT));
         }
@@ -212,6 +223,7 @@ public class MacroAnalysisPdfRenderer {
         field(doc, "Inflation and rates", brief.path("inflationRates"));
         field(doc, "External", brief.path("external"));
         field(doc, "Growth", brief.path("growth"));
+        field(doc, "Weather", brief.path("climate"));
         list(doc, "Risks", brief.path("risks"), BAD);
         list(doc, "Catalysts", brief.path("catalysts"), GOOD);
         JsonNode evidence = brief.path("evidence");
@@ -346,6 +358,77 @@ public class MacroAnalysisPdfRenderer {
             table.addCell(cell(nvl(text(r.path("relevance"))), SMALL_MUTED, Element.ALIGN_LEFT));
         }
         doc.add(table);
+    }
+
+    /** The weather the agents read: global apart from Indonesia, the sectors, each preset's climate reading. */
+    private void weather(Document doc, JsonNode context) {
+        JsonNode weather = context == null ? null : context.path("weather");
+        if (weather == null || weather.isMissingNode() || weather.isNull()) {
+            return;
+        }
+        heading(doc, "Weather (rules, no AI; no vote in the score)");
+        if (text(weather.path("summary")) != null) {
+            doc.add(new Paragraph(text(weather.path("summary")), BODY));
+        }
+        JsonNode global = weather.path("global");
+        Paragraph g = new Paragraph("Global", H2);
+        g.setSpacingBefore(4);
+        doc.add(g);
+        for (String key : List.of("enso", "iod", "forecast")) {
+            if (text(global.path(key).path("summary")) != null) {
+                doc.add(new Paragraph(text(global.path(key).path("summary")), BODY));
+            }
+        }
+        global.path("producers").forEach(p -> doc.add(new Paragraph(nvl(text(p.path("summary"))), BODY)));
+        Paragraph id = new Paragraph("Indonesia: " + nvl(text(weather.path("indonesia").path("riskLabel"))), H2);
+        id.setSpacingBefore(4);
+        doc.add(id);
+        if (text(weather.path("indonesia").path("summary")) != null) {
+            doc.add(new Paragraph(text(weather.path("indonesia").path("summary")), BODY));
+        }
+        JsonNode regions = weather.path("indonesia").path("regions");
+        if (regions.isArray() && !regions.isEmpty()) {
+            PdfPTable table = new PdfPTable(new float[] {30, 12, 12, 12, 10, 24});
+            table.setWidthPercentage(100);
+            table.setSpacingBefore(4);
+            table.setHeaderRows(1);
+            for (String h : List.of("Region", "Month", "Rain (mm)", "% of normal", "SPI-3", "Reading")) {
+                table.addCell(headerCell(h));
+            }
+            for (JsonNode r : regions) {
+                table.addCell(cell(r.path("name").asString(""), SMALL_BOLD, Element.ALIGN_LEFT));
+                table.addCell(cell(r.path("month").asString(""), SMALL, Element.ALIGN_LEFT));
+                table.addCell(cell(nvl(text(r.path("rainfallMm"))), SMALL, Element.ALIGN_RIGHT));
+                table.addCell(cell(nvl(text(r.path("pctOfNormal"))), SMALL, Element.ALIGN_RIGHT));
+                table.addCell(cell(nvl(text(r.path("spi3"))), SMALL, Element.ALIGN_RIGHT));
+                table.addCell(cell(nvl(text(r.path("spiState"))).toLowerCase(Locale.ROOT).replace('_', ' '), SMALL_MUTED,
+                        Element.ALIGN_LEFT));
+            }
+            doc.add(table);
+        }
+        JsonNode implications = weather.path("implications");
+        if (implications.isArray() && !implications.isEmpty()) {
+            Paragraph h = new Paragraph("What it means", H2);
+            h.setSpacingBefore(4);
+            doc.add(h);
+            for (JsonNode i : implications) {
+                String tone = i.path("tone").asString("NEUTRAL");
+                Paragraph p = new Paragraph();
+                p.add(new Chunk(i.path("sector").asString("") + ": ", new Font(Font.HELVETICA, 9, Font.BOLD,
+                        "POSITIVE".equals(tone) ? GOOD : "NEGATIVE".equals(tone) ? BAD : MUTED)));
+                p.add(new Chunk(i.path("text").asString(""), BODY));
+                doc.add(p);
+            }
+        }
+        JsonNode assessments = weather.path("assessments");
+        if (assessments.isArray() && !assessments.isEmpty()) {
+            Paragraph h = new Paragraph("How each investor reads it (rules)", H2);
+            h.setSpacingBefore(4);
+            doc.add(h);
+            for (JsonNode a : assessments) {
+                doc.add(new Paragraph(a.path("name").asString("") + ": " + a.path("text").asString(""), SMALL));
+            }
+        }
     }
 
     private void notes(Document doc, JsonNode notes) {

@@ -32,6 +32,8 @@ public final class MacroJob {
     private final MacroSeries series;
     private final boolean full;
     private final Requester requestedBy;
+    /** The continuation of a fetch that stopped early: the first date to read (null: a normal fetch). */
+    private final java.time.LocalDate resumeFrom;
     private final Instant requestedAt = Instant.now();
 
     private Status status = Status.QUEUED;
@@ -42,9 +44,22 @@ public final class MacroJob {
     private Result result;
 
     MacroJob(MacroSeries series, boolean full, Requester requestedBy) {
+        this(series, full, requestedBy, null);
+    }
+
+    MacroJob(MacroSeries series, boolean full, Requester requestedBy, java.time.LocalDate resumeFrom) {
         this.series = series;
         this.full = full;
         this.requestedBy = requestedBy;
+        this.resumeFrom = resumeFrom;
+    }
+
+    Requester requestedBy() {
+        return requestedBy;
+    }
+
+    java.time.LocalDate resumeFrom() {
+        return resumeFrom;
     }
 
     public UUID id() {

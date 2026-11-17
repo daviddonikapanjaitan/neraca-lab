@@ -165,6 +165,8 @@ neraca_lab/
 │               ├── V1.0.56__data_HILL_split.sql  (HILL split 1:5 of 2025-03-14)
 │               ├── V1.0.57__data_ELTY_shares.sql  (ELTY two par series)
 │               ├── V1.0.58__data_CMNP_shares.sql  (CMNP counts of 2025 - 2026)
+│               ├── V1.0.62__schema_macro_weather.sql  (weather sources; macro_analysis_agent_score.climate)
+│               ├── V1.0.63__data_macro_weather.sql  (24 weather series: global GL_*, Indonesia ID_*)
 │               ├── V1.0.40__schema_dev_context.sql  (dev_context: the development context of Claude Code, with embeddings)
 │               ├── V1.0.46__schema_rag_xbrl.sql  (source type XBRL: the uploaded IDX XBRL workbooks in the RAG vector store)
 │               ├── V1.0.6__data_metrics_valuation.sql
@@ -935,13 +937,23 @@ Details: [`docs/v1_docs/TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md).
 ## Macro data
 
 **Ingestion › Macro** collects the macro data of the Druckenmiller and Paul Tudor Jones views (requirements:
-[`macro.md`](macro.md)). There are 25 series:
+[`macro.md`](macro.md)). There are 49 series: 25 macro and 24 weather:
 - **Indonesia:** BI rate, CPI, SBN 10Y, reserves, M2 (Bank Indonesia pages and SEKI tables, CNBC).
 - **United States:** Fed funds, 10Y / 2Y, CPI and core CPI, Fed balance sheet, TGA, reverse repo, high-yield spread,
   breakeven, M2, VIX (FRED), the dollar index (Yahoo Finance).
 - **Positioning:** gold, crude and the dollar (CFTC).
 - **Four series without a source a program may read** (IDX foreign flows, SBN foreign ownership, Indonesia CDS, China
   PMI) take a CSV upload.
+- **Weather - Global** (`GL_*`): El Nino / La Nina (NOAA's RONI and ONI, weekly Nino 3.4, NOAA's El Nino / La Nina
+  chances 3 and 6 months ahead), the Southern Oscillation Index (monthly and 30-day, Long Paddock), the Indian Ocean
+  Dipole (JAMSTEC), and the rainfall and drought of the other producers: Malaysia's palm oil, Australia's coal basins,
+  India's monsoon.
+- **Weather - Indonesia** (`ID_*`): the rainfall and drought of Sumatra's and Kalimantan's palm oil regions,
+  Kalimantan's coal regions and Java's rice regions.
+- Rainfall is monthly from CHIRPS v3.0 (1981 onward, regional means of the 0.05-degree grid, read with HTTP range
+  requests); drought is the 3-month Standardized Precipitation Index (SPI-3) computed from the stored rainfall against
+  its 1991 - 2020 normal. CHIRPS throttles bulk downloads, so a long fetch stores what it read, waits and continues by
+  itself. Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 1a.
 
 How the data is handled:
 - Every value is checked before it is stored (range, dates); large moves are listed as warnings.
@@ -965,7 +977,11 @@ equities), the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summa
 when / sell when) and the
 conclusion: an investability score from 0 to 100 (six weighted parts), the verdict (investable / selective / not
 investable now) and the action (buy, accumulate, wait, sell / reduce) with the buy and sell conditions met or not.
-Fixed rules in Java, no AI model (`MacroOutlook`). LQ45 (`^JKLQ45`) is stored with IHSG by the same index job.
+Fixed rules in Java, no AI model (`MacroOutlook`). A **Weather** section (`ClimateBoard`) shows the global and the
+Indonesian weather apart - the El Nino / La Nina state, the IOD, NOAA's forecast, each region's rainfall in % of normal
+and its SPI-3, Indonesia's risk (drought, dry risk, normal, wet risk, wet) and what it means for plantations, coal,
+food inflation and the rupiah - and each of the four investors' reading of it; it is context with no vote (the scores
+are the same with or without it, tested) until a backtest supports one. LQ45 (`^JKLQ45`) is stored with IHSG by the same index job.
 The page reads as of today (Jakarta): USD/IDR is the latest close of the Forex price ingestion (Yahoo Finance `IDR=X`)
 as soon as it is stored, and every chart names its source. Companies › Technicals reads no macro data: its presets and
 panels are technical only.
@@ -980,7 +996,9 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/macro/data/series/US_10Y?range=5Y"
 chart chosen from a dropdown (grouped by country) over the same ranges: a line (net foreign buying on IDX as green / red
 bars), the range's average, a zoom brush, the changes 1M - 5Y (rates in points, levels in percent, flows as sums), the
 range's high, low, average and change, what the series is and where it comes from, and its 12 latest observations. A range
-ends at the series' latest observation; more than 2,000 observations are drawn weekly. Details:
+ends at the series' latest observation; more than 2,000 observations are drawn weekly. The weather series are grouped
+apart (Weather - Global, Weather - Indonesia), drawn with their thresholds (El Nino / La Nina +-0.5, IOD +-0.4, SOI
++-7, drought -1), and a rainfall chart adds each month's 1991 - 2020 normal as a dashed line. Details:
 [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6b.
 
 The outlook is cached in Redis (about 10 - 30 ms instead of 0.5 s; header `X-Cache`), cleared whenever index, macro,
@@ -997,7 +1015,9 @@ commodities, currency pairs (the rupiah, its Asian peers, EUR/USD, AUD/JPY) and 
 Documents (RAG), only those published by the as-of date; refs D1, D2, ...); four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
 Dalio - each score how investable the country is (0 - 100), checked by a validator and a critic (Reflection) and
 taught by earlier runs (Reflexion); Claude Opus 5.5 writes the synthesis (summary, bull / bear case, risks, what to
-monitor, sector tilts, at most +-5 points). Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
+monitor, sector tilts, at most +-5 points). The weather goes into all of it: the research brief has a climate part,
+every agent must give a climate view (else the validator rejects the reply, `NO_CLIMATE`), and the synthesis and the
+PDF report have a climate section. Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
 AI) + 20 % the Macro page's rules score, with the verdict and the action of the rules. About $0.05 and 30 - 50 s per
 analysis (budget $0.20). Indonesia now; the United States and China later.
 
@@ -1307,6 +1327,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.56__data_HILL_split.sql` | HILL's split 1:5 of 2025-03-14: the 2021 - 2023 counts and EPS split-adjusted |
 | `V1.0.57__data_ELTY_shares.sql` | ELTY 43,521,913,019 shares (two par series), replacing 49,121,910,000. In `SHARE_SCRIPTS` |
 | `V1.0.58__data_CMNP_shares.sql` | CMNP 6,696,354,390 shares from 2025-12-31 (share capital / Rp 500 = KSEI) |
+| `V1.0.62__schema_macro_weather.sql` | the weather sources (`noaa_cpc`, `jamstec`, `longpaddock`, `chirps`, `spi`) in the macro source check; the agents' `climate` column in `macro_analysis_agent_score` |
+| `V1.0.63__data_macro_weather.sql` | 24 weather series in `macro_series_def`: global (`GL_*`: El Nino / La Nina, SOI, IOD, NOAA's chances, the other producers' rainfall and SPI-3) and Indonesia (`ID_*`: rainfall and SPI-3 of 4 regions) |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |

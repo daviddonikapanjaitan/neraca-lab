@@ -36,7 +36,14 @@ final class MacroAnalysisPrompts {
             commodities (coal, nickel, palm oil) and the index itself. Read the rupiah against its Asian peers \
             (USDCNY, USDMYR, USDPHP, USDINR, USDKRW): weaker than the region is a pressure of the country's own, \
             weaker with it is the dollar's; EURUSD is the dollar (a rise is a weaker dollar) and AUDJPY risk \
-            appetite (a fall: carry trades unwinding). Stop as soon as the main questions are \
+            appetite (a fall: carry trades unwinding). Read the weather too, global apart from Indonesian: \
+            GL_ENSO_RONI (El Nino at +0.5 or more, La Nina at -0.5 or less), GL_IOD_DMI (positive at +0.4: a dry \
+            Sumatra and Java from July to November), GL_PROB_ELNINO_3M / GL_PROB_LANINA_3M (NOAA's forecast; its \
+            change is the surprise), the other producers' rainfall (GL_RAIN_* in mm, GL_SPI3_* drought) and \
+            Indonesia's palm oil, coal and rice regions (ID_RAIN_*, ID_SPI3_*: SPI-3 -1 drought, +1.5 very wet). \
+            ENSO and the IOD drive Indonesia's June - November rainfall; a drought cuts palm oil output 6 - 12 months \
+            later and lifts rice prices and food inflation. Compare a weather series with COAL, PALM_OIL or the CPI \
+            only when it decides the call. Stop as soon as the main questions are \
             answered; never repeat a call. The range of a history is of its window only: call a value a record only \
             when it is the storedHigh or storedLow the tool returns (and say since when the data are stored).
 
@@ -44,8 +51,9 @@ final class MacroAnalysisPrompts {
             {"regime":"<= 50 words: where the country is in the cycle","liquidity":"<= 40 words",\
             "inflationRates":"<= 40 words: inflation, the central bank, real rates, bond yields",\
             "external":"<= 40 words: currency, reserves, foreign flows, commodity terms of trade",\
-            "growth":"<= 40 words","risks":["<= 15 words"],"catalysts":["<= 15 words"],\
-            "evidence":[{"ref":"T1","fact":"<= 25 words"}]}
+            "growth":"<= 40 words","climate":"<= 40 words: El Nino / La Nina, the IOD, Indonesia's rainfall and \
+            drought, and what they mean for palm oil, coal, food inflation","risks":["<= 15 words"],\
+            "catalysts":["<= 15 words"],"evidence":[{"ref":"T1","fact":"<= 25 words"}]}
             At most 4 risks, 4 catalysts and 8 evidence items. Every fact must come from a tool result or the dossier; \
             cite the ref of a tool result (T1 ... or D1 ...). Say "not in the data" rather than guessing.""";
 
@@ -62,22 +70,29 @@ final class MacroAnalysisPrompts {
             four investor presets of the rules with their stance and evidence, the rules' investability score with \
             its parts, the country's indexes, its commodity prices and currency pairs with what each means for the \
             country, the rupiah against its Asian peers (regionalCurrencies: a rupiah weaker than the region is a \
-            pressure of the country's own, one weaker with it the dollar's), and a research brief built from the stored history and the country's macro documents with \
+            pressure of the country's own, one weaker with it the dollar's), the weather (weather: global - El Nino / \
+            La Nina, the Indian Ocean Dipole, NOAA's ENSO forecast, the other producers' rainfall and drought - and \
+            Indonesia - the rainfall and drought of its palm oil, coal and rice regions - with what it means for the \
+            sectors and each investor preset's climate reading; context with no vote in the rules' score), and a \
+            research brief built from the stored history and the country's macro documents with \
             references (T1, T2, ... for the stored data; D1, D2, ... for document excerpts, as of their publication \
             date). Last come your persona, your rules prior and your task.
             Rules: use only the data given and never invent numbers. Changes are percent (prices) or points (rates). \
             Macro data lag the market; a series marked stale is unknown now. A high or low of a window or a 52-week \
             range is not a record (the research brief names a record only from the stored history). Your rules prior is \
             the preset of your investor: depart from it only for reasons visible in the dossier. Cite brief references (e.g. T2) in your \
-            thesis when you rely on them. Be decisive and concise.
+            thesis when you rely on them. The weather moves sectors and inflation over months, not the index from day \
+            to day: weigh it through your own lens and say how in climate. Be decisive and concise.
             Reply with one JSON object only, no markdown. In signalsUsed list keys or codes of the dossier \
-            (e.g. liquidity, risk, BI_RATE, USD_IDR, COAL, termsOfTrade, regionalCurrencies, AUDJPY).""";
+            (e.g. liquidity, risk, BI_RATE, USD_IDR, COAL, termsOfTrade, regionalCurrencies, AUDJPY, weather, \
+            GL_ENSO_RONI, ID_SPI3_KAL_PALM).""";
 
     /** The reply format of a macro agent. */
     static final String ASSESSMENT_FORMAT = """
             {"score":0-100,"stance":"BUY|ACCUMULATE|WAIT|AVOID","thesis":"<= 50 words",\
             "supports":["<= 20 words"],"risks":["<= 20 words"],"buyWhen":["<= 20 words"],"sellWhen":["<= 20 words"],\
-            "signalsUsed":["<= 12 keys"]}
+            "signalsUsed":["<= 12 keys"],"climate":"<= 35 words: how El Nino / La Nina, the IOD and Indonesia's \
+            rainfall and drought bear on your call (say so when they do not)"}
             At most 3 supports, 3 risks, 2 buyWhen and 2 sellWhen. Score bands: 80-100 strongly investable (BUY), \
             65-79 investable (BUY or ACCUMULATE), 50-64 selective (ACCUMULATE or WAIT), 35-49 not now (WAIT or AVOID), \
             0-34 avoid (AVOID).""";
@@ -89,25 +104,31 @@ final class MacroAnalysisPrompts {
                     Nothing is bought below its 200-day moving average. You read the regime: volatility (VIX), credit \
                     spreads, the US yield curve, the dollar, inflation and the country's bond yields. You want the \
                     trend and the regime on your side; when risk is off you cut exposure and tighten stops, and you \
-                    respect a market that falls on good news.""";
+                    respect a market that falls on good news. The weather is not your timeframe: it matters to you \
+                    only when it shows up in the regime - food inflation re-accelerating, bond yields rising.""";
             case DRUCKENMILLER -> """
                     Stanley Druckenmiller. Liquidity, not earnings, moves the overall market: watch the central banks. \
                     You look 12 - 24 months ahead at the direction of central banks (the Fed and Bank Indonesia), US \
                     net liquidity, credit, the dollar, the rupiah and foreign money. You buy when money is getting \
                     easier even before prices turn, you sell when it is tightening, and you size up when everything \
-                    lines up.""";
+                    lines up. You read NOAA's ENSO forecast as you read central banks, ahead: an El Nino drought keeps \
+                    food inflation up and narrows Bank Indonesia's room to cut; its expected end opens it.""";
             case SOROS -> """
                     George Soros. Reflexivity: perceptions and fundamentals feed each other. For an emerging market \
                     the loop is foreign money, the currency and the central bank: inflows strengthen the rupiah, which \
                     lets Bank Indonesia ease, which draws more money - a boom - and the same loop runs in reverse as a \
                     bust (outflows, a weaker rupiah, BI hiking to defend it, reserves spent). You ride a self- \
-                    reinforcing boom early and get out when its premise fails; you look for the turn.""";
+                    reinforcing boom early and get out when its premise fails; you look for the turn. A drought can \
+                    trigger the bust loop - food inflation, a weaker rupiah, BI defending it, money leaving (2015: El \
+                    Nino and haze); you watch whether the loop picks it up.""";
             case DALIO -> """
                     Ray Dalio. The economic machine: growth and inflation decide which assets do well (Goldilocks, \
                     reflation, stagflation, deflationary slowdown), the cost of money - real interest rates - and \
                     credit decide whether the debt cycle helps or squeezes, and for a commodity exporter the terms of \
                     trade matter. You stay balanced (All Weather) unless the environment clearly favours equities, and \
-                    you never buy stagflation.""";
+                    you never buy stagflation. The weather moves both your axes: an El Nino drought is a food supply \
+                    shock on the inflation axis (with slowing growth, a tilt toward stagflation), and palm oil and \
+                    coal prices move the terms of trade.""";
         };
     }
 
@@ -119,7 +140,9 @@ final class MacroAnalysisPrompts {
             investable it is now (0-100); each final score blends the rules' preset of that investor with the agent's \
             judgement, after a reflection review. You get their scores, stances and reasoning, the overall \
             investability score (the agents' mean blended with the rules' score), the rules' conclusion, the regimes, \
-            the index trend, the commodity terms of trade, the rupiah against its Asian peers and the research brief.
+            the index trend, the commodity terms of trade, the rupiah against its Asian peers, the weather (global: El \
+            Nino / La Nina, the IOD, NOAA's forecast, the other producers; Indonesia: its regions' rainfall and drought; \
+            each agent's climate reading) and the research brief.
 
             Your tasks:
             1. Write an executive summary for an investment committee: the macro regime, where the agents agree and \
@@ -127,8 +150,11 @@ final class MacroAnalysisPrompts {
             2. Give the bull case, the bear case, the key risks and what to monitor next (the series and levels that \
             would change the call).
             3. Give a conviction (HIGH, MEDIUM, LOW) and a thesis.
-            4. Give up to 4 sector tilts for the country's stock market that follow from the macro and commodity data \
-            (e.g. coal miners, banks, consumer staples, property): OVERWEIGHT, NEUTRAL or UNDERWEIGHT, with why.
+            4. Give up to 4 sector tilts for the country's stock market that follow from the macro, commodity and \
+            weather data (e.g. coal miners, plantations, banks, consumer staples, property): OVERWEIGHT, NEUTRAL or \
+            UNDERWEIGHT, with why.
+            5a. Write the climate view: the global weather, Indonesia's, where the agents agree on it, and what it means \
+            for the call and the sectors (palm oil 6 - 12 months on, coal, food inflation and Bank Indonesia).
             5. Optionally adjust the overall score by -5 to +5 points when the agents miss something visible in the \
             data (e.g. they disagree, a turn the rules lag, stale data). Usually 0; give a reason for any non-zero \
             adjustment.
@@ -141,6 +167,7 @@ final class MacroAnalysisPrompts {
             {"executiveSummary":"<= 220 words","conviction":"HIGH|MEDIUM|LOW","thesis":"<= 60 words",\
             "bullCase":["<= 20 words"],"bearCase":["<= 20 words"],"keyRisks":["<= 15 words"],\
             "monitor":["<= 15 words"],"sectorTilts":[{"sector":"<= 4 words","tilt":"OVERWEIGHT|NEUTRAL|UNDERWEIGHT",\
-            "why":"<= 20 words"}],"dataGaps":["<= 15 words"],"adjustment":0,"adjustmentReason":"<= 20 words"}
+            "why":"<= 20 words"}],"climate":"<= 80 words","dataGaps":["<= 15 words"],"adjustment":0,\
+            "adjustmentReason":"<= 20 words"}
             At most 4 items per list (3 data gaps).""";
 }

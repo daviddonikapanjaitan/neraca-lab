@@ -10,6 +10,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param cnbcBaseUrl  CNBC chart bars (the SBN 10Y yield)
  * @param cftcBaseUrl  CFTC Public Reporting (Socrata) dataset of the legacy futures-only Commitments of Traders
  * @param biSekiBaseUrl Bank Indonesia SEKI tables ({@code {base}/TABEL5_9.xls})
+ * @param cpcBaseUrl   NOAA Climate Prediction Center: the ENSO index files ({@code {base}/data/indices/RONI.ascii.txt})
+ *                     and the ENSO probabilities ({@code {base}/products/analysis_monitoring/enso/roni/probabilities/})
+ * @param jamstecBaseUrl JAMSTEC SINTEX-F climate index files ({@code {base}/SINTEX_DMI.csv}: the Indian Ocean Dipole)
+ * @param longPaddockBaseUrl Queensland Government (Long Paddock) SOI files ({@code {base}/MonthlySOI1887-1989Base.txt})
+ * @param chirpsBaseUrl CHIRPS v3.0 monthly global cloud-optimized GeoTIFFs ({@code {base}/chirps-v3.0.2026.10.cog})
  * @param overlapDays  an incremental fetch starts this many days before the latest stored observation, so that recent
  *                     revisions are picked up
  * @param jobHistory   finished jobs kept in memory
@@ -21,6 +26,11 @@ public record MacroProperties(
         @DefaultValue("https://ts-api.cnbc.com/harmony/app") String cnbcBaseUrl,
         @DefaultValue("https://publicreporting.cftc.gov/resource/6dca-aqww.json") String cftcBaseUrl,
         @DefaultValue("https://www.bi.go.id/SEKI/tabel") String biSekiBaseUrl,
+        @DefaultValue("https://www.cpc.ncep.noaa.gov") String cpcBaseUrl,
+        @DefaultValue("https://www.jamstec.go.jp/virtualearth/data/SINTEX") String jamstecBaseUrl,
+        @DefaultValue("https://data.longpaddock.qld.gov.au/SeasonalClimateOutlook/SouthernOscillationIndex/SOIDataFiles")
+        String longPaddockBaseUrl,
+        @DefaultValue("https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/cogs") String chirpsBaseUrl,
         @DefaultValue("45") int overlapDays,
         @DefaultValue("300") int jobHistory,
         @DefaultValue Schedule schedule,

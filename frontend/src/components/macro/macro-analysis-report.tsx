@@ -7,6 +7,7 @@ import {
   BookOpenTextIcon,
   BrainCircuitIcon,
   CircleAlertIcon,
+  CloudRainIcon,
   CoinsIcon,
   GaugeIcon,
   LandmarkIcon,
@@ -231,6 +232,14 @@ export function MacroAnalysisReport({ initial }: { initial: Report }) {
                 </ul>
               </div>
             )}
+            {syn.climate && (
+              <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <CloudRainIcon aria-hidden className="size-3.5" /> Weather (El Niño / La Niña, rainfall, drought)
+                </p>
+                <p className="mt-1 text-sm">{syn.climate}</p>
+              </div>
+            )}
             {syn.dataGaps.length > 0 && <p className="text-xs text-muted-foreground">Data gaps: {syn.dataGaps.join("; ")}</p>}
           </CardContent>
         </Card>
@@ -267,6 +276,8 @@ export function MacroAnalysisReport({ initial }: { initial: Report }) {
         <RulesSnapshot report={report} />
         <MarketsSnapshot report={report} />
       </div>
+
+      <WeatherSnapshot report={report} />
 
       <Card>
         <CardHeader>
@@ -388,6 +399,14 @@ function AgentCard({ agent: a }: { agent: MacroAgentView }) {
         <MiniList title="Buy when" items={a.buyWhen} />
         <MiniList title="Sell when" items={a.sellWhen} />
       </div>
+      {a.climate && (
+        <p className="flex items-start gap-1.5 rounded-md border bg-muted/30 px-2 py-1 text-xs">
+          <CloudRainIcon aria-hidden className="mt-px size-3.5 shrink-0 text-muted-foreground" />
+          <span>
+            <span className="font-medium">Weather:</span> {a.climate}
+          </span>
+        </p>
+      )}
       {(issues.length > 0 || a.reflection?.error) && (
         <p className="rounded-md bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground">
           {issues.length > 0 && `Reflection flagged: ${issues.map((i) => i.code.toLowerCase()).join(", ")}`}
@@ -452,6 +471,7 @@ function Research({ report, active }: { report: Report; active: boolean }) {
                   ["Inflation and rates", brief.inflationRates],
                   ["External", brief.external],
                   ["Growth", brief.growth],
+                  ["Weather", brief.climate ?? null],
                 ] as const
               )
                 .filter(([, text]) => text)
@@ -612,6 +632,66 @@ function RulesSnapshot({ report }: { report: Report }) {
               ))}
             </div>
           </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** The weather the agents read: global apart from the country's own, the sectors, each preset's reading (no vote). */
+function WeatherSnapshot({ report }: { report: Report }) {
+  const w = report.context?.weather
+  if (!w) return null
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CloudRainIcon className="size-4 text-primary" /> Weather the agents read
+        </CardTitle>
+        <CardDescription>{w.summary}</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 text-xs lg:grid-cols-2">
+        <div className="space-y-1.5">
+          <p className="font-medium text-muted-foreground">Global</p>
+          {[w.global.enso, w.global.iod, w.global.forecast].map((x, i) => (
+            <p key={i} className={cn(x.tone !== "NEUTRAL" && TONE_CLASS[x.tone])}>
+              {x.summary}
+            </p>
+          ))}
+          {w.global.producers.map((p) => (
+            <p key={p.code} className={cn(p.tone !== "NEUTRAL" && TONE_CLASS[p.tone])}>
+              {p.summary}
+            </p>
+          ))}
+        </div>
+        <div className="space-y-1.5">
+          <p className="font-medium text-muted-foreground">
+            {report.context?.subject.countryName ?? "Indonesia"}: {w.indonesia.riskLabel.toLowerCase()}
+          </p>
+          {w.indonesia.regions.map((r) => (
+            <p key={r.code} className={cn(r.tone !== "NEUTRAL" && TONE_CLASS[r.tone])}>
+              {r.summary}
+            </p>
+          ))}
+          {w.implications.map((i) => (
+            <p key={i.sector}>
+              <span className={cn("font-medium", TONE_CLASS[i.tone])}>{i.sector}:</span> {i.text}
+            </p>
+          ))}
+        </div>
+        {w.assessments.length > 0 && (
+          <div className="space-y-1 lg:col-span-2">
+            <p className="font-medium text-muted-foreground">How each preset of the rules read it (no vote)</p>
+            <ul className="grid gap-1.5 sm:grid-cols-2">
+              {w.assessments.map((a) => (
+                <li key={a.preset} className="rounded-lg border px-2.5 py-1.5">
+                  <span className="font-medium">{a.name}</span>{" "}
+                  <span className={cn(TONE_CLASS[a.tone])}>({TONE_LABEL[a.tone]})</span>
+                  <span className="mt-0.5 block text-muted-foreground">{a.text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </CardContent>
     </Card>
