@@ -64,6 +64,84 @@ What macro.md lists but is not ingested:
 
 These can be added as manual series with a CSV.
 
+## 1a. Weather (since 2026-11-16): El Nino / La Nina, rainfall, drought - global and Indonesia
+
+Seeded by `V1.0.63__data_macro_weather.sql` (the sources' check: `V1.0.62__schema_macro_weather.sql`). Two groups that are
+never mixed: **global** (code `GL_*`, country `GLOBAL`) - the state of the world's climate and of the other producers -
+and **Indonesia** (code `ID_*`, country `ID`) - the rainfall and drought of its palm oil, coal and rice regions.
+Categories `WEATHER_ENSO`, `WEATHER_IOD`, `WEATHER_RAIN`, `WEATHER_DROUGHT`; every one is read by all four presets.
+The research behind the choice (45 years of rainfall against the indexes) is in
+`instruction/quant/1_quant_testing/la_nina_el_nino_rainfall_drought_index.md`, sections 11 - 13.
+
+| Code | Series | Unit | Frequency | Source | Lag | Dated on |
+|---|---|---|---|---|---|---|
+| `GL_ENSO_RONI` | El Nino / La Nina: Relative ONI (NOAA's official index since 2026) | degC | monthly | NOAA CPC `RONI.ascii.txt` (1950-) | 7 | the 1st of the season's **last** month (ASO 2026 -> 2026-10-01) |
+| `GL_ENSO_ONI` | Oceanic Nino Index (classic) | degC | monthly | NOAA CPC `oni.ascii.txt` (1950-) | 7 | as RONI |
+| `GL_NINO34_WK` | Nino 3.4 weekly anomaly (OISST) | degC | weekly | NOAA CPC `wksst9120.for` (1981-) | 5 | the week's centre (Wednesday) |
+| `GL_SOI` | Southern Oscillation Index, monthly (BoM scaling) | SOI | monthly | Long Paddock `MonthlySOI1887-1989Base.txt` (1991-06-) | 3 | the 1st |
+| `GL_SOI_30D` | SOI 30-day, daily | SOI | daily | Long Paddock `DailySOI1887-1989Base.txt`: the mean of 30 consecutive daily SOI (1991-07-) | 1 | the window's last day |
+| `GL_IOD_DMI` | Indian Ocean Dipole (DMI), observed | degC | monthly | JAMSTEC `SINTEX_DMI.csv`, column `Obs` (1982-) | 10 | the 1st |
+| `GL_PROB_ELNINO_3M`, `GL_PROB_LANINA_3M` | NOAA's chance of El Nino / La Nina for the season centred 3 months after the issue | % | event | NOAA CPC probability table (current page + monthly archive, from April 2026) | 0 | the second Thursday of the issue month (CPC's issue day) |
+| `GL_PROB_ELNINO_6M`, `GL_PROB_LANINA_6M` | the same, 6 months ahead | % | event | as above | 0 | as above |
+| `GL_RAIN_MY_PALM`, `GL_RAIN_AU_COAL`, `GL_RAIN_IN_MONSOON` | rainfall of Malaysia's palm oil regions, Australia's coal basins (Bowen, Hunter), India's monsoon | mm | monthly | CHIRPS v3.0 (1981-) | 15 | the 1st |
+| `ID_RAIN_SUM_PALM`, `ID_RAIN_KAL_PALM`, `ID_RAIN_KAL_COAL`, `ID_RAIN_JAVA_RICE` | rainfall of Sumatra's and Kalimantan's palm oil regions, Kalimantan's coal regions, Java's rice regions | mm | monthly | CHIRPS v3.0 (1981-) | 15 | the 1st |
+| `GL_SPI3_*`, `ID_SPI3_*` (one per rainfall series) | drought: 3-month Standardized Precipitation Index of the rainfall series | SPI | monthly | derived (`spi`) from the stored rainfall | 15 | the 1st |
+
+**Sources and how they are read** (all through `PoliteHttpClient`: its User-Agent names the application, 2 s between
+two requests to a host; checked live on 2026-11-16):
+
+| Source (`source`) | Class | How |
+|---|---|---|
+| NOAA CPC (`noaa_cpc`) | `NoaaCpcSource` | `{cpc}/data/indices/<file>`: `SEAS YR [TOTAL] ANOM` (the anomaly is the last column; CPC labels DJF with January's year and NDJ with November's, so NDJ 2024 ends in January 2025); `wksst9120.for` is fixed width with the numbers run together (`20.6-0.1`): the 6th number of a week is the Nino 3.4 anomaly. The probabilities: `{cpc}/products/analysis_monitoring/enso/roni/probabilities/` (`table#probabilities-table`, the issue month in "Issued November 2026") and `.../archives/?type=probabilities&month=MM&year=YYYY` (`table#enso-archives-table`); columns found by their headings, row k must be the season centred k months after the issue month or the job fails; a month without an archived table (March 2026) is skipped. |
+| JAMSTEC (`jamstec`) | `JamstecSource` | `{jamstec}/SINTEX_DMI.csv`: `time,Obs,Mean,...` - the observed column; the forecast rows (no observation) are left out; `2026-10-15` -> 2026-10-01. |
+| Long Paddock (`longpaddock`) | `LongPaddockSource` | `{longpaddock}/MonthlySOI1887-1989Base.txt` (`Year Month SOI`); `.../DailySOI1887-1989Base.txt#30D`: `Year Day Tahiti Darwin SOI` (Day of the year) averaged over 30 consecutive days, a window with a missing day left out (equal to Long Paddock's "average SOI for last 30 days": -11.00 on 2026-11-16). |
+| CHIRPS (`chirps`) | `ChirpsSource`, `CogReader`, `TiffLzw` | `{chirps}/chirps-v3.0.<yyyy>.<mm>.cog` - the monthly global cloud-optimized GeoTIFF (7200 x 2400 float32, 0.05 degree, 60 N - 60 S, LZW, 512-pixel tiles). Read with **HTTP range requests**: the first 16 KB (all image directories), then only the full-resolution tiles the regions touch, adjacent tiles in one request (about 4 requests a month for all seven regions). A region (`ChirpsSource.REGIONS`) is a list of boxes that avoid foreign land (Sumatra's leave out Peninsular Malaysia; Kalimantan's stay south of Sarawak); its value is the cos(latitude)-weighted mean of the land pixels whose centre lies in a box (the sea is NoData, -9999). One month gives every region and is kept in memory 12 hours, so after the first rainfall series the others need no request. A file missing for one of the last three months is not published yet (the fetch stops); one missing further back fails the job. |
+| SPI (`spi`) | `SpiSource`, `StandardizedPrecipitation` | no request: the stored rainfall of `source_ref`; 3-month totals; per calendar end month a gamma distribution (Thom's estimate) fitted to 1991 - 2020 with the share of zero totals apart; the cumulative probability as a standard normal score, bounded to +/- 4.5; at least 25 base years per calendar month or the job fails ("fetch ... in full first"). -1 moderate drought, -1.5 severe, -2 extreme; +1.5 very wet. |
+
+Not used: the **Bureau of Meteorology**'s weekly IOD and daily SOI files answer **HTTP 403** to a crawler that names
+itself (they worked only with a browser's User-Agent) - no work-around, the same numbers come from JAMSTEC and Long
+Paddock; NOAA PSL's HadISST DMI stopped in May 2026; OSMC's weekly DMI lags seven weeks; BMKG publishes images and
+PDFs only; CHIRPS 2.0 is retired.
+
+**The COG overviews are not read.** The CHIRPS files carry four overview levels, resampled across the sea mask: coastal
+pixels ring to 800 mm or go negative (Java, September 2015: 12.7 mm at full resolution, 121 mm in the 0.2-degree
+overview). Only the full-resolution tiles are used; the Java reader agrees with an independent reader (Pillow / libtiff)
+to the hundredth of a mm on every region (September 2026: Sumatra 126.19, Kalimantan palm 60.74, coal 35.34, Java 22.26,
+Malaysia 238.52, Australia 7.57, India 183.09).
+
+**First load: in chunks, paced, never losing what was read.** The CHIRPS server throttles a bulk download from one
+address: at the default 2 s it answered HTTP 429 after about 85 range requests (2026-11-16, ~3 MB of tiles a month).
+So:
+- its host waits **8 s** between two requests (`neracalab.crawl.host-delays."[data.chc.ucsb.edu]"`; every other host
+  keeps `min-delay` 2 s);
+- a fetch reads at most **60 months** over the network (`ChirpsSource.MAX_MONTHS_PER_FETCH`; months from memory do not
+  count), **stores them**, and ends with a `MacroSource.PartialFetch`: the job succeeds ("Stored ... - to be continued
+  from 1986-01-01 (queued again)") and the queue submits the series again **from that month** at the end of the queue,
+  so other series are never held up for long;
+- an HTTP 429 also ends the fetch with what it read (stored); the refused request is **not retried** - the series is
+  asked again **15 minutes later** from the month that was refused;
+- a continuation that read nothing is asked again at most 6 times in a row (`MAX_IDLE_CONTINUATIONS`), each wait
+  twice the one before (15, 30, 60, 120, 240, 480 minutes: a daily quota is waited out), then the series waits for the
+  next Fetch / "Update all"; a continuation that stored something resets the count;
+- when a rainfall series has read everything, the queue runs its SPI series (`spi` with that `source_ref`).
+
+The whole 1981 - now history is about 550 months x ~4 requests x 8 s, **several hours** in the background the first
+time (each region pushes the frontier on: a month read for one region serves the others from memory for 12 hours).
+Afterwards a fetch reads the 45-day overlap: two or three months, under a minute.
+
+**The first load is done (2026-11-17):** the 7 rainfall series hold 1981-01 - 2026-10 (550 months each) and the 7
+SPI-3 series 1981-03 - 2026-10 (548 each). 1981-01 - 2017-06 came by CSV upload (`source = manual`) from an offline
+reader of the same tiles, regions and weighting (identical on every month both had read), because CHIRPS answered 429
+after ~1.3 GB on 2026-11-16; 2017-07 onward by `ChirpsSource` in rounds of ~30 - 35 months between 429s. A backend
+restart drops the queued continuations (they live in memory): after one, Fetch the rainfall series again (not Full) and
+it continues from its latest stored month.
+
+**Point in time.** The release dates are publication estimates: RONI / ONI by the 7th of the month after the season
+(NOAA updated them on 2026-11-03), weekly Nino 3.4 the Monday after the week, JAMSTEC about the 10th, CHIRPS about the
+13th - 15th of the next month, NOAA's probabilities on their issue day. Vintages are not kept: ONI and RONI are revised
+(the ERSST v6 switch of September 2026 changed the whole history), CHIRPS final replaces nothing (only final monthly
+files are read).
+
 ## 2. Ingestion
 
 **Job model**
@@ -118,10 +196,14 @@ A series with an older latest observation is **behind**; "Update all macro data"
 
 All requests go through `crawl.PoliteHttpClient`:
 - a User-Agent that names the application (`neracalab.crawl.user-agent`);
-- one request per host at a time, with **2 s** between two requests to the same host;
+- one request per host at a time, with **2 s** between two requests to the same host (a longer pause for a host listed
+  in `neracalab.crawl.host-delays`: the CHIRPS server, 8 s);
+- HTTP range requests (`getRange`) for the cloud-optimized GeoTIFFs of the rainfall;
 - a cookie store;
 - **no retries and no work-arounds**: a refusal (403, 429, a bot challenge) fails the job with its status, and the
-  series can be uploaded as a CSV instead.
+  series can be uploaded as a CSV instead. The one exception is how much is kept: the CHIRPS rainfall, read month by
+  month, stores the months read before a 429 and asks again 15 minutes later from the refused month (section 1a) - the
+  refused request itself is never repeated at once.
 
 Parsers fail loudly on a layout they do not know.
 
@@ -193,7 +275,8 @@ signals. Each vote is listed with its reason.
 ## 6. Ingestion › Macro page
 
 - **"Update all macro data to today"**: counts per state and one button.
-- **One table per region** (Indonesia, United States, Global and China), with columns:
+- **One table per region** (Indonesia, United States, Global and China), then the weather in two tables of its own
+  (**Weather - Global**, **Weather - Indonesia**; section 1a), with columns:
   - series (code, frequency, unit, which preset uses it);
   - source (link) and its publication lag;
   - latest value and date;
@@ -309,6 +392,45 @@ On 2026-10-16 (IHSG 5,185, 26 % below its 200-day average of 7,033): liquidity t
 6), BI hiking with a restrictive real rate, inflation inside the band, a firmer rupiah - **36 / 100, not investable now,
 sell / reduce**; the Paul Tudor Jones and Druckenmiller presets AVOID.
 
+**Weather** (2026-11-16, rules version `2026-11-16.1`; `macro.outlook.ClimateBoard`, between the commodities and the
+presets; `weather` of the outlook): context with **no vote** - the regimes, the presets' stances and scores and the
+investability score are exactly the same with or without it (tested), because the link from the weather to the index is
+not backtested.
+
+- **Global**: El Nino / La Nina from RONI (state at +/- 0.5; weak, moderate 1.0, strong 1.5, very strong 2.0; its trend at
+  +/- 0.3 against three months before; stale after four months), with ONI, the weekly Nino 3.4 and the 30-day SOI; the
+  Indian Ocean Dipole from JAMSTEC's monthly DMI (+/- 0.4; stale after 75 days; it matters from July to November);
+  NOAA's forecast (El Nino / La Nina in 3 and 6 months, the change since the previous issue, a move of 15 points or more
+  called out as the surprise); the other producers (Malaysia's palm oil, Australia's coal, India's monsoon): the latest
+  month in % of its 1991 - 2020 normal, the 3 months together, SPI-3.
+- **Indonesia**: the four regions the same way, and its risk: **DROUGHT** (two or more regions at SPI-3 -1 or less),
+  **WET** (two or more at +1.5 or more), **DRY_RISK** (El Nino or a positive IOD in the dry season, June - November, or
+  NOAA at 60 % or more for El Nino in three months when those months are in the dry season), **WET_RISK** (the same for La
+  Nina / a negative IOD), else NORMAL. Tone for the equities: DROUGHT and DRY_RISK a headwind, else neutral.
+- **What it means**: plantations (a drought in the palm oil regions, or a strong El Nino in the dry season: supportive
+  for CPO prices, a volume risk next year), coal (Australia's basins very wet: supportive for the price; Kalimantan's
+  very wet: slower output; Kalimantan in drought: low rivers), food inflation and Bank Indonesia (Java's drought, El Nino
+  in the dry season, a weak Indian monsoon from July: a headwind; good rains: supportive), the rupiah, growth and haze (a
+  dry August - November on peat).
+- **The four investors** (each preset's `climate`, also its last evidence point "Climate (no vote): ..."): Paul Tudor
+  Jones - not his timeframe; a headwind only when the drought shows in rising CPI or SBN yields. Druckenmiller - the ENSO
+  forecast and Bank Indonesia's room: a drought keeps BI tight (until El Nino fades when NOAA gives it under 50 % in six
+  months); El Nino expected to end (30 % or less in six months) is the turn he buys early; La Nina or good rains leave BI
+  room. Soros - a drought as the trigger of the bust loop (food inflation, a weaker rupiah, BI defending it): a headwind
+  when the rupiah weakens or BI hikes, else a trigger to watch. Dalio - a food supply shock on the inflation axis (toward
+  stagflation when growth slows), good rains disinflationary.
+
+On 2026-11-16: strong El Nino (RONI +1.97 in ASO 2026, ONI +2.46), IOD positive (+0.94 in October), NOAA 100 % El Nino in
+three months and 38 % in six. The Climate Hazards Center's own SPI-3 grid put Kalimantan's palm oil and coal regions in
+extreme drought (about -2.1) and Sumatra in moderate drought to the end of October 2026; until the stored rainfall
+reached October 2026 the page read Indonesia as **dry risk**.
+
+On 2026-11-17, with the first load done, the stored SPI-3 agrees and the page reads Indonesia as **DROUGHT** (October
+2026): Kalimantan palm oil -2.01 and coal -2.19 (extreme drought; 48 % and 49 % of the month's normal rainfall),
+Sumatra palm oil -1.09 (moderate, 67 %), Java rice -0.82 (near normal, 44 % in a dry month). The other producers:
+India's monsoon -1.51 (severe drought), Malaysia -0.84 (near normal), Australia's coal basins +1.09 (wet, 287 % of
+normal).
+
 | Endpoint (permission COMPANIES) | Returns |
 |---|---|
 | `GET /api/v1/macro/outlook/countries` | the countries (`available`) and their indexes (`rows`, `lastDate`) |
@@ -332,8 +454,15 @@ exchange's; the outlook is as of today); a cached request takes about 10 - 30 ms
 ## 6b. Macro › Data (sidebar › Macro › Data, permission COMPANIES)
 
 `/macro/data?series=US_10Y&range=5Y`: every series of Ingestion › Macro (section 1) as one large chart, chosen from a
-dropdown grouped by country (Indonesia, United States, Global, China; a series without data is disabled), with the
-Outlook's ranges (6M, 1Y, 3Y, 5Y, 10Y, MAX). Read only: fetches and uploads stay on Ingestion › Macro (INGESTION).
+dropdown grouped by country (Indonesia, United States, Global, China) and the weather apart (**Weather - Global**,
+**Weather - Indonesia**; a series without data is disabled), with the Outlook's ranges (6M, 1Y, 3Y, 5Y, 10Y, MAX). Read
+only: fetches and uploads stay on Ingestion › Macro (INGESTION).
+
+- **Weather**: an anomaly (degC), the SOI and the SPI are RATE (changes in points, degC for an anomaly) and drawn with
+  their thresholds (El Nino / La Nina +/- 0.5, the IOD +/- 0.4, the SOI +/- 7, drought -1 and very wet +1.5) instead of
+  the average. A rainfall series (unit mm) also returns `normals` (`MacroSeriesChart.normals`: the 1991 - 2020 mean of
+  each calendar month, the latest month and the last 3 months in % of normal): the chart draws the normal of each month
+  as a dashed line, and the statistics add both percentages.
 
 - **Window.** A range ends at the series' **latest observation**, not today, so a series published late (a monthly
   figure, a manual CSV such as the CDS) still shows its range; the page names that date and the series' state (up to
@@ -372,6 +501,9 @@ Code: `macro.outlook.MacroDataController`, `MacroSeriesChart` (pure); frontend `
   not follow the months) fails the job; it does not store wrong months.
 - **Manual series**: IDX foreign flows, SBN ownership, CDS and the China PMI have no free source a program may read.
   Until a CSV is uploaded, their signals (`foreignFlows`, `china`) are null.
+- **Weather**: the regions are boxes, not province polygons (a few border pixels); daily rainfall, fire hotspots (NASA
+  FIRMS) and the MJO are not ingested (instruction md section 12.4 lists them); NOAA's forecast history starts in April
+  2026 (its archive); the weather casts no vote in the score until a backtest supports one.
 - **SBN 10Y**: CNBC has no 2014 and starts in September 2011, so a change over a window that falls in 2014 is null.
 
 ## 8. Tests
@@ -389,3 +521,6 @@ Code: `macro.outlook.MacroDataController`, `MacroSeriesChart` (pure); frontend `
 | `MacroOutlookTest` | The Macro page's rules on synthetic data: tight money, risk-off and a downtrend not investable (SELL, all four presets AVOID, the panels' tones); easy money, risk-on and an uptrend investable (BUY); good macro below the 200-day average accumulated, not bought; the derived series (curve, net liquidity, CPI YoY) and point in time; missing data noted, not guessed; Soros's loop (-3 of 4 a bust, +4 of 5 a boom); Dalio's Goldilocks bought, stagflation never. |
 | `MacroOutlookControllerTest` | The countries (Indonesia with IHSG and LQ45; the US and China later), the outlook's sections on the stored data, USD/IDR = the latest Forex close (date, value, source), the refusals (400), a login required. |
 | `IndexIngestionServiceTest` | LQ45 ingested with IHSG from its own latest day, its failure not failing IHSG; up to date only when both are. |
+| `MacroIngestionQueueTest` | A fetch that stopped early continued from where it stopped, then the rainfall's SPI queued; continuations that read nothing stopped after `MAX_IDLE_CONTINUATIONS` (6). |
+| `MacroWeatherSourcesTest` | The weather sources on their real layouts: RONI / ONI seasons dated on their last month (DJF, NDJ across the year), the weekly Nino 3.4 with glued numbers, NOAA's probability table (current and archived ids, row order checked, the second-Thursday issue day), JAMSTEC's observed DMI, Long Paddock's monthly SOI and 30-day mean (a gap leaves a window out); TIFF LZW against an encoder through full tables; a CHIRPS-like GeoTIFF read over byte ranges (land mean, sea left out), a month not published yet ending a fetch and one month serving every region from memory, a missing old month failing; a long history read in chunks of 60 months (cached months not counted) and an HTTP 429 keeping the months read before it, with where and when to continue; a slow host's own pause; the SPI against scipy's gamma and normal (1e-6), its base period and windows, the SPI source refusing an incomplete rainfall history. |
+| `ClimateBoardTest` | A strong El Nino with a positive IOD and a Kalimantan / Sumatra drought: the global and Indonesian parts apart, % of normal and SPI states, the sectors' tones; point in time (ASO unknown on 5 November, NOAA's October issue read before the November one); a stale IOD unknown; a forecast raising a dry risk only for the dry season; no data said plainly; every preset's climate reading with the stances, scores and investability unchanged by the weather; Druckenmiller's turn when El Nino is expected to end; the rainfall normals and kinds of Macro › Data. |

@@ -48,7 +48,7 @@ start), then change its password in Admin Center > User Management.
 | [`FRONTEND_DOCS.md`](docs/v1_docs/FRONTEND_DOCS.md)         | web app: pages, tabs, data flow, formatting, structure                    |
 | [`COMPANY_API_DOCS.md`](docs/v1_docs/COMPANY_API_DOCS.md)   | exchange and company APIs: parameters, every response field, errors       |
 | [`COMPANY_PROFILE_DOCS.md`](docs/v1_docs/COMPANY_PROFILE_DOCS.md) | IDX company profiles (listing date, board, IDX-IC sector) and their upload, the Profile tab's dividends (yield, payout ratio), the Fundamental (Score) tab (formerly Quant Score: six rule-based agent scorecards) and the sortable Fundamental (Score) column of the company list |
-| [`PORTFOLIO_DOCS.md`](docs/v1_docs/PORTFOLIO_DOCS.md)       | Portfolio › Position: your stocks with the Fundamentals (the columns of the Position sheet), metrics, allocation by sector; intraday prices of the held stocks every 5 minutes during the IDX session; API, tables, tests |
+| [`PORTFOLIO_DOCS.md`](docs/v1_docs/PORTFOLIO_DOCS.md)       | Portfolio › Position: your stocks with the Fundamentals (the columns of the Position sheet), metrics, allocation by sector; intraday prices of the held stocks every 5 minutes during the IDX session; Portfolio › Performance (the years, the 17:00 WIB daily snapshot, the chart vs IHSG / LQ45); Portfolio › Analysis (AI recommendations: fundamental then technical steps, DeepSeek agents, Opus synthesis, 33% limits, half-Kelly); API, tables, tests |
 | [`AI_INGESTION_DOCS.md`](docs/v1_docs/AI_INGESTION_DOCS.md) | AI upload endpoint: agent design, tools, workbook mapping, tests          |
 | [`PRICE_INGESTION_DOCS.md`](docs/v1_docs/PRICE_INGESTION_DOCS.md) | daily price ingestion: endpoints, providers, polite crawling, settings |
 | [`INGESTION_JOBS_DOCS.md`](docs/v1_docs/INGESTION_JOBS_DOCS.md) | async ingestion: stored uploads (checksum), job progress, list and download APIs |
@@ -86,7 +86,9 @@ neraca_lab/
 │       │                        stored files (checksum), background upload queue
 │       ├── java/.../price/      daily price ingestion: queue, providers, valuation refresh
 │       ├── java/.../portfolio/  Portfolio › Position: positions, cash, the Fundamentals columns, allocation;
-│       │                        intraday/ (Yahoo 5-minute prices of the held stocks, IDX session, schedule)
+│       │                        intraday/ (Yahoo 5-minute prices of the held stocks, IDX session, schedule);
+│       │                        performance/ (Performance: the years, the 17:00 WIB daily snapshot, chart vs IHSG / LQ45);
+│       │                        analysis/ (Analysis: fundamental then technical steps, DeepSeek agents, Opus synthesis, 33% limits)
 │       ├── java/.../technical/  technical analysis: indicator engine (ta4j + custom), IDX rules, macro signals,
 │       │                        preset summaries, APIs, refresh
 │       ├── java/.../market/     Forex pairs and commodities: catalog, ingestion (Yahoo, World Bank), bad-print cleaning
@@ -163,6 +165,8 @@ neraca_lab/
 │               ├── V1.0.56__data_HILL_split.sql  (HILL split 1:5 of 2025-03-14)
 │               ├── V1.0.57__data_ELTY_shares.sql  (ELTY two par series)
 │               ├── V1.0.58__data_CMNP_shares.sql  (CMNP counts of 2025 - 2026)
+│               ├── V1.0.62__schema_macro_weather.sql  (weather sources; macro_analysis_agent_score.climate)
+│               ├── V1.0.63__data_macro_weather.sql  (24 weather series: global GL_*, Indonesia ID_*)
 │               ├── V1.0.40__schema_dev_context.sql  (dev_context: the development context of Claude Code, with embeddings)
 │               ├── V1.0.46__schema_rag_xbrl.sql  (source type XBRL: the uploaded IDX XBRL workbooks in the RAG vector store)
 │               ├── V1.0.6__data_metrics_valuation.sql
@@ -933,13 +937,23 @@ Details: [`docs/v1_docs/TECHNICAL_DOCS.md`](docs/v1_docs/TECHNICAL_DOCS.md).
 ## Macro data
 
 **Ingestion › Macro** collects the macro data of the Druckenmiller and Paul Tudor Jones views (requirements:
-[`macro.md`](macro.md)). There are 25 series:
+[`macro.md`](macro.md)). There are 49 series: 25 macro and 24 weather:
 - **Indonesia:** BI rate, CPI, SBN 10Y, reserves, M2 (Bank Indonesia pages and SEKI tables, CNBC).
 - **United States:** Fed funds, 10Y / 2Y, CPI and core CPI, Fed balance sheet, TGA, reverse repo, high-yield spread,
   breakeven, M2, VIX (FRED), the dollar index (Yahoo Finance).
 - **Positioning:** gold, crude and the dollar (CFTC).
 - **Four series without a source a program may read** (IDX foreign flows, SBN foreign ownership, Indonesia CDS, China
   PMI) take a CSV upload.
+- **Weather - Global** (`GL_*`): El Nino / La Nina (NOAA's RONI and ONI, weekly Nino 3.4, NOAA's El Nino / La Nina
+  chances 3 and 6 months ahead), the Southern Oscillation Index (monthly and 30-day, Long Paddock), the Indian Ocean
+  Dipole (JAMSTEC), and the rainfall and drought of the other producers: Malaysia's palm oil, Australia's coal basins,
+  India's monsoon.
+- **Weather - Indonesia** (`ID_*`): the rainfall and drought of Sumatra's and Kalimantan's palm oil regions,
+  Kalimantan's coal regions and Java's rice regions.
+- Rainfall is monthly from CHIRPS v3.0 (1981 onward, regional means of the 0.05-degree grid, read with HTTP range
+  requests); drought is the 3-month Standardized Precipitation Index (SPI-3) computed from the stored rainfall against
+  its 1991 - 2020 normal. CHIRPS throttles bulk downloads, so a long fetch stores what it read, waits and continues by
+  itself. Details: [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 1a.
 
 How the data is handled:
 - Every value is checked before it is stored (range, dates); large moves are listed as warnings.
@@ -963,7 +977,11 @@ equities), the Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summa
 when / sell when) and the
 conclusion: an investability score from 0 to 100 (six weighted parts), the verdict (investable / selective / not
 investable now) and the action (buy, accumulate, wait, sell / reduce) with the buy and sell conditions met or not.
-Fixed rules in Java, no AI model (`MacroOutlook`). LQ45 (`^JKLQ45`) is stored with IHSG by the same index job.
+Fixed rules in Java, no AI model (`MacroOutlook`). A **Weather** section (`ClimateBoard`) shows the global and the
+Indonesian weather apart - the El Nino / La Nina state, the IOD, NOAA's forecast, each region's rainfall in % of normal
+and its SPI-3, Indonesia's risk (drought, dry risk, normal, wet risk, wet) and what it means for plantations, coal,
+food inflation and the rupiah - and each of the four investors' reading of it; it is context with no vote (the scores
+are the same with or without it, tested) until a backtest supports one. LQ45 (`^JKLQ45`) is stored with IHSG by the same index job.
 The page reads as of today (Jakarta): USD/IDR is the latest close of the Forex price ingestion (Yahoo Finance `IDR=X`)
 as soon as it is stored, and every chart names its source. Companies › Technicals reads no macro data: its presets and
 panels are technical only.
@@ -978,7 +996,9 @@ curl -H "$AUTH" "http://localhost:8080/api/v1/macro/data/series/US_10Y?range=5Y"
 chart chosen from a dropdown (grouped by country) over the same ranges: a line (net foreign buying on IDX as green / red
 bars), the range's average, a zoom brush, the changes 1M - 5Y (rates in points, levels in percent, flows as sums), the
 range's high, low, average and change, what the series is and where it comes from, and its 12 latest observations. A range
-ends at the series' latest observation; more than 2,000 observations are drawn weekly. Details:
+ends at the series' latest observation; more than 2,000 observations are drawn weekly. The weather series are grouped
+apart (Weather - Global, Weather - Indonesia), drawn with their thresholds (El Nino / La Nina +-0.5, IOD +-0.4, SOI
++-7, drought -1), and a rainfall chart adds each month's 1991 - 2020 normal as a dashed line. Details:
 [`docs/v1_docs/MACRO_DOCS.md`](docs/v1_docs/MACRO_DOCS.md), section 6b.
 
 The outlook is cached in Redis (about 10 - 30 ms instead of 0.5 s; header `X-Cache`), cleared whenever index, macro,
@@ -995,7 +1015,9 @@ commodities, currency pairs (the rupiah, its Asian peers, EUR/USD, AUD/JPY) and 
 Documents (RAG), only those published by the as-of date; refs D1, D2, ...); four macro agents - Paul Tudor Jones, Druckenmiller, George Soros and Ray
 Dalio - each score how investable the country is (0 - 100), checked by a validator and a critic (Reflection) and
 taught by earlier runs (Reflexion); Claude Opus 5.5 writes the synthesis (summary, bull / bear case, risks, what to
-monitor, sector tilts, at most +-5 points). Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
+monitor, sector tilts, at most +-5 points). The weather goes into all of it: the research brief has a climate part,
+every agent must give a climate view (else the validator rejects the reply, `NO_CLIMATE`), and the synthesis and the
+PDF report have a climate section. Investability = 80 % the agents' mean (each 60 % its rules preset, 40 % the
 AI) + 20 % the Macro page's rules score, with the verdict and the action of the rules. About $0.05 and 30 - 50 s per
 analysis (budget $0.20). Indonesia now; the United States and China later.
 
@@ -1017,7 +1039,29 @@ forward EBITDA, shares outstanding, market cap, total debt (total liabilities, a
 operating profit and EV/OP; USD reporters in rupiah. The metrics: total cash, total investment, total profit and
 percentage profit, average total, market total, profit market and percentage profit market; below the table the
 allocation by sector (a donut and every slice's stocks with their weights). The table slides sideways with a scrollbar
-above and below it or by dragging. **Performance** comes later.
+above and below it or by dragging.
+
+**Portfolio › Performance** is the sheet `tracking_performance` of the same workbook: a row per year (2022 - 2026) with
+the start capital (the market value + cash at the end of the year before), the money put in, the cash, market value
+and average value at the year end and the dividends - POT G/L = market value + cash - start capital - new investment,
+POT G/L % = POT G/L / start capital, Deviden % = dividend / (market value + cash) - compared with IHSG and LQ45 over
+the same calendar year (`index_daily`). One chart, as on Macro › Data, draws the change of the portfolio, IHSG and LQ45
+since the last close of the year before the range (2022 - 2026, or one year) to the end of 2026; a bar chart puts the
+years side by side. **Every IDX trading day at or after 17:00 WIB** (the end of the session) a snapshot of each
+portfolio is saved to `portfolio_performance_daily`: market value, average value, cash, the profit or loss (of the
+stocks, and the year's POT G/L so far) and IHSG / LQ45 with their change of the day and of the year - the schedule
+runs every 15 minutes from 17:00 to 23:45 WIB on weekdays and saves a day once (also when the backend was down at
+17:00), reading the stocks' closing prices and the day's index bars first; an exchange holiday is skipped. **Save
+today** on the page does it at once (from 17:00). `PERFORMANCE_SCHEDULE_ENABLED=false` turns the schedule off.
+
+**Portfolio › Analysis** recommends which stocks to sell, decrease, hold, increase or buy with the capital and how much
+cash to keep, at most N stocks (default 25). The stocks to choose from: every company of Companies › Fundamentals (bulk)
+or the ones selected; the steps: **fundamental only**, or **fundamental then technical** (the default). In order and
+never combined: step 1 keeps the best Fundamental (Score), step 2 keeps, of those, the
+best Technical (Score); the fundamental agent (DeepSeek) judges each business (PASS / FAIL), the technical agent
+(DeepSeek) the timing of the stocks it passed (Reflection, Reflexion); half-Kelly sizes each idea; Claude Opus 5.5 builds
+the portfolio; Java enforces the limits - at most 33% of the capital in one stock or one sector, at most N stocks, whole
+lots, the cash never negative. Cost cap $0.75 per run (`PORTFOLIO_ANALYSIS_BUDGET_USD`); starting a run needs SCREENING.
 
 **Intraday prices:** every 5 minutes on IDX trading days, from 09:00 to 16:20 WIB, the stocks held in any portfolio are
 read from Yahoo Finance (5-minute bars, through the paced client) into `intraday_quote` / `intraday_bar`. During the
@@ -1030,6 +1074,12 @@ it off.
 ```bash
 curl -H "$AUTH"  http://localhost:8080/api/v1/portfolio                        # positions, metrics, allocation, live
 curl -H "$AUTH" -X POST http://localhost:8080/api/v1/portfolio/intraday/refresh # read the intraday prices now
+curl -H "$AUTH"  "http://localhost:8080/api/v1/portfolio/performance?range=ALL"  # chart, years, snapshots (range ALL | 2022 ... 2026)
+curl -H "$AUTH" -X PUT -H "Content-Type: application/json"      -d '{"startCapital":148975379,"newInvestment":0,"cash":27474186,"marketValue":291955200,"dividend":6029988}'      http://localhost:8080/api/v1/portfolio/performance/years/2025              # a year's row (DELETE removes it)
+curl -H "$AUTH" -X POST http://localhost:8080/api/v1/portfolio/performance/snapshots # save today's snapshot (from 17:00 WIB; 409 before)
+curl -H "$AUTH" -H "Content-Type: application/json" -d '{"mode":"BULK","maxStocks":25,"addedCapital":0}' \
+     http://localhost:8080/api/v1/portfolio/analyses                            # start an AI portfolio analysis (202)
+curl -H "$AUTH"  http://localhost:8080/api/v1/portfolio/analyses/<id>           # its report
 ```
 
 Details: [`docs/v1_docs/PORTFOLIO_DOCS.md`](docs/v1_docs/PORTFOLIO_DOCS.md).
@@ -1052,7 +1102,8 @@ npm run dev                   # http://localhost:3000
 | `/companies?exchange=IDX`        | Companies dropdown (Fundamentals, Technicals, Registration, Ownership (>=5%), Ownership (>=1%)); Fundamentals: companies of an exchange: exchange filter, search, sector filter, sortable table (Sector / Industry, Fundamental (Score), Technical (Score), Periods, ...), summary tiles        |
 | `/companies/IDX/HRTA?tab=technical` | a company's Technical (Score) tab: the four technical agents scored 0 - 100 and their overall, each agent's buy / sell / stop, thesis and evidence (Fundamental (Score) is `?tab=quant`) |
 | `/portfolio`                     | Portfolio › Position: metrics, Live card (IDX phase, today's change, Refresh), positions with the Fundamentals columns and the day's intraday chart, allocation by sector |
-| `/portfolio/performance`         | Portfolio › Performance (later)                                                                                                                                      |
+| `/portfolio/analysis`, `/portfolio/analysis/{id}` | Portfolio › Analysis: the form (most stocks to hold, all companies or selected ones, capital to add), the runs; a report: summary, recommendations (sell / decrease / hold / increase / buy, target weights, trades in lots), sectors and cash before / after, the limits checked, the steps, the stocks analysed and left out, cost |
+| `/portfolio/performance`         | Portfolio › Performance: range (2022 - 2026 or one year), the portfolio vs IHSG and LQ45 on one chart to the end of 2026, the years side by side and in a table (editable), the daily snapshots saved at 17:00 WIB (Save today) |
 | `/companies/technicals`          | Technicals: candlestick chart (TradingView Lightweight Charts; palm oil and the monthly series as a plain line of the close) with overlays, levels, events, ARA / ARB days and lower panes; exchange or market (IDX, Forex, Commodities), ticker / currency / commodity search, interval, range, price basis, indicator presets (Murphy, Keith Gill, PTJ, Druckenmiller) with a summary of each below the chart (stance, buy / sell / stop, thesis); the IHSG and LQ45 indexes (search IHSG or LQ45; LQ45 is compared with IHSG); key levels, snapshot, volume profile and IHSG regime panels (technical only, no macro); PNG / CSV export. Settings saved per user and in the URL |
 | `/macro?country=ID&index=IHSG`   | Macro: country (Indonesia; US and China later) and index (IHSG, LQ45) dropdowns, range; the index as a plain line; the macro panel (liquidity and risk regimes, a chart per series with a summary); Paul Tudor Jones, Druckenmiller, George Soros and Ray Dalio summaries (macro side: stance, buy when / sell when); the conclusion (investability score 0 - 100, verdict, action, the buy / accumulate / sell conditions met or not, what would change the call) |
 | `/credits`                       | third-party notices (TradingView Lightweight Charts™)                                                                                                             |
@@ -1095,11 +1146,11 @@ The backend tests need the Postgres on localhost:5432 (the full stack, or
 `cd backend && docker compose up -d postgres redis`).
 
 ```bash
-(cd backend && ./mvnw test)                      # 1,032 tests
+(cd backend && ./mvnw test)                      # 1,050 tests
 (cd frontend && npm run lint && npm run build)   # type check, lint, production build
 ```
 
-The full backend suite takes about 16 minutes (2026-11-14: 1,032 tests in 189 classes, 15 min 49 s, all passing; the
+The full backend suite takes about 16 minutes (2026-11-15: 1,050 tests in 196 classes, 16 min 00 s, all passing; the
 slowest are `DerivedDataRefreshTest` 4 min 26 s - the refresh of every company, ~940 with filings -
 `OnePercentRepositoryTest` 82 s, `AnalysisControllerTest` 49 s, `TechnicalControllerTest` 34 s). `PacedHttpClientPaceTest` measures request
 starts in milliseconds and can fail once under a busy machine (2026-11-08: one gap of 64 ms against 85); run it again
@@ -1193,7 +1244,13 @@ Portfolio: `PortfolioTest` (every column against the Fundamentals, the sheet's f
 rupiah, one portfolio per user, the API's refusals), `PortfolioDividendTest` (this year's dividends else last year's,
 split basis, IDX vs Yahoo, the allocation), `IdxSessionAndYahooParseTest` (the IDX phases, Yahoo's intraday chart) and
 `IntradayTest` (the session as the last price with the day's change, no second fetch within a minute, the schedule only
-during the session, positions and daily prices unchanged; Yahoo stubbed); see `docs/v1_docs/PORTFOLIO_DOCS.md`.
+during the session, positions and daily prices unchanged; Yahoo stubbed), `PerformanceTest` (the sheet
+tracking_performance's POT G/L, POT G/L % and Deviden %, the start capital from the year before, IHSG / LQ45 of the
+calendar year, the chart's chained years to the end of 2026, the 17:00 snapshot: not before 17:00, not on a weekend or an
+exchange holiday, once a day, its figures against Position and index_daily, the API's refusals; Yahoo stubbed); see
+`docs/v1_docs/PORTFOLIO_DOCS.md`. `PortfolioAnalysisRulesTest` and `PortfolioAnalysisControllerTest`: Portfolio ›
+Analysis (the steps in order, half-Kelly, the 33% limits, lots, the fallback, the validators; a whole run with a scripted
+model).
 Analysis: `AnalysisAgentsTest` (scripted model: research only with documents, ReAct with a vector-store
 search, invented refs dropped, tool limits, synthesis bounds and fallback, fact sheet, also translated into IDR for a USD reporter) and
 `AnalysisControllerTest` (HRTA end to end on its stored statements and PDF chunks with a model answering
@@ -1270,6 +1327,8 @@ table can reference any other with a plain foreign key. Objects are referenced u
 | `V1.0.56__data_HILL_split.sql` | HILL's split 1:5 of 2025-03-14: the 2021 - 2023 counts and EPS split-adjusted |
 | `V1.0.57__data_ELTY_shares.sql` | ELTY 43,521,913,019 shares (two par series), replacing 49,121,910,000. In `SHARE_SCRIPTS` |
 | `V1.0.58__data_CMNP_shares.sql` | CMNP 6,696,354,390 shares from 2025-12-31 (share capital / Rp 500 = KSEI) |
+| `V1.0.62__schema_macro_weather.sql` | the weather sources (`noaa_cpc`, `jamstec`, `longpaddock`, `chirps`, `spi`) in the macro source check; the agents' `climate` column in `macro_analysis_agent_score` |
+| `V1.0.63__data_macro_weather.sql` | 24 weather series in `macro_series_def`: global (`GL_*`: El Nino / La Nina, SOI, IOD, NOAA's chances, the other producers' rainfall and SPI-3) and Indonesia (`ID_*`: rainfall and SPI-3 of 4 regions) |
 | `V1.0.35__data_ENRG_shares.sql`       | ENRG share counts, which its USD filings do not give and Yahoo Finance gives wrong (30.3 billion; the EPS implies 25.5 - 26.5 billion): 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 218,313,500 shares on 2026-06-12; the rights issue of October 2026 (up to 13,282,271,875 shares) to be added once its result is announced |
 | `V1.0.6__data_metrics_valuation.sql`  | derived for all companies: market snapshots, valuation snapshots, metrics  |
 | `V1.0.26__data_markets_macro.sql`     | the catalogs: 35 instruments (9 currency pairs - USD/IDR, USD/JPY, USD/CNY, USD/MYR, USD/PHP, USD/INR, USD/KRW, EUR/USD, AUD/JPY - and 26 commodities) and 25 macro series with their sources |
@@ -1302,6 +1361,8 @@ Full column-level reference: [`docs/v1_docs/DB_SCHEMA_DOCS.md`](docs/v1_docs/DB_
 | `stock_listing`, `fundamental_snapshot` | screening universe and its daily market data / fundamentals (Yahoo ETL) |
 | `portfolio`, `portfolio_position` | a user's cash and total investment; their stocks (average price, shares, date in) |
 | `intraday_quote`, `intraday_bar` | the latest intraday quote and the 5-minute bars of the stocks held in portfolios (Yahoo, during the IDX session) |
+| `portfolio_analysis_run`, `portfolio_analysis_candidate`, `portfolio_analysis_lesson` | Portfolio › Analysis: a run (capital, funnel, synthesis, allocation, checks); its stocks (both steps, both agents, Kelly, the recommendation); the agents' Reflexion lessons |
+| `portfolio_performance_year`, `portfolio_performance_daily` | Portfolio › Performance: a user's years (the sheet tracking_performance); a snapshot per IDX trading day saved at 17:00 WIB (market value, average value, profit or loss, IHSG / LQ45 change) |
 | `company_profile_upload`, `company_dividend` | IDX company profile uploads (SHA-256, result) and IDX's cash dividends (fiscal year, per share, cum / ex / payment dates); the profile itself in `company` (`ipo_date`, `listing_board`, `idx_sector` ...) |
 | `index_daily`, `corporate_event`, `corporate_event_fetch`, `macro_series` | technical analysis inputs: IHSG daily bars, dividends / splits (Yahoo), macro observations (with release dates) |
 | `market_instrument`, `instrument_daily` | Forex pairs and commodities and their bars (daily; the World Bank, IMF and FRED series monthly) |

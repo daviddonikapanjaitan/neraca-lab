@@ -55,10 +55,19 @@ public class MacroIngestionService {
      * @param latestRelease its release date
      * @param warnings      large moves between two observations (at most 20)
      * @param revisions     "2026-08-01: 3.10 -> 3.12" (at most 20)
+     * @param partial       why the source stopped early (a history read in chunks, an HTTP 429); null: it read all
+     * @param resumeFrom    the first date the source did not read: the next fetch starts there (null: nothing left)
+     * @param continueAfter when the queue asks the source again for the rest (null: nothing left)
      */
     public record Result(String source, int requests, LocalDate requestedFrom, boolean fullHistory, int received,
                          int kept, int inserted, int revised, int unchanged, LocalDate latestDate,
-                         LocalDate latestRelease, List<String> warnings, List<String> revisions) {
+                         LocalDate latestRelease, List<String> warnings, List<String> revisions, String partial,
+                         LocalDate resumeFrom, java.time.Duration continueAfter) {
+
+        Result withPartial(MacroSource.PartialFetch p) {
+            return new Result(source, requests, requestedFrom, fullHistory, received, kept, inserted, revised, unchanged,
+                    latestDate, latestRelease, warnings, revisions, p.getMessage(), p.resumeFrom(), p.continueAfter());
+        }
     }
 
     private final MacroRepository repository;
@@ -84,6 +93,16 @@ public class MacroIngestionService {
 
     /** Fetches a series from its source and stores what is new or revised. */
     public Result ingest(MacroSeries series, boolean full) {
+        return ingest(series, full, null);
+    }
+
+    /**
+     * {@link #ingest(MacroSeries, boolean)} from a given date: the continuation of a fetch that stopped early
+     * ({@link Result#resumeFrom()}).
+     *
+     * @param resumeFrom the first date to read (null: the overlap window, or the history for a full fetch)
+     */
+    public Result ingest(MacroSeries series, boolean full, LocalDate resumeFrom) {
         if (series.manual()) {
             throw new IllegalArgumentException(series.code() + " has no source a program may read: upload a CSV");
         }
@@ -94,11 +113,23 @@ public class MacroIngestionService {
         LocalDate today = today();
         Optional<LocalDate> latest = repository.latestDate(series.code());
         boolean fullHistory = full || latest.isEmpty();
-        LocalDate from = fullHistory ? series.historyFrom()
+        LocalDate from = resumeFrom != null ? max(series.historyFrom(), resumeFrom)
+                : fullHistory ? series.historyFrom()
                 : max(series.historyFrom(), latest.get().minusDays(properties.overlapDays()));
-        List<Observation> received = source.fetch(series, from, today);
+        List<Observation> received;
+        MacroSource.PartialFetch partial = null;
+        try {
+            received = source.fetch(series, from, today);
+        } catch (MacroSource.PartialFetch p) {
+            // the source stopped early: what it read is stored, the rest follows (MacroIngestionQueue)
+            partial = p;
+            received = p.observations();
+        }
         List<Observation> kept = received.stream().filter(o -> !o.date().isBefore(from)).toList();
         Result result = store(series, kept, series.source(), 1, from, fullHistory, received.size());
+        if (partial != null) {
+            result = result.withPartial(partial);
+        }
         log.info("macro {}: {}", series.code(), result);
         return result;
     }
@@ -164,7 +195,7 @@ public class MacroIngestionService {
         LocalDate latest = repository.latestDate(series.code()).orElse(null);
         return new Result(source, requests, requestedFrom, fullHistory, received, sorted.size(), inserted, revised,
                 unchanged, latest, latest == null ? null : series.releaseDate(latest), List.copyOf(warnings),
-                List.copyOf(revisions));
+                List.copyOf(revisions), null, null, null);
     }
 
     private static String plain(BigDecimal v) {

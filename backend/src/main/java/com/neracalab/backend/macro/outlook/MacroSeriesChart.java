@@ -17,7 +17,8 @@ import com.neracalab.backend.macro.MacroRepository.Row;
  * date.
  * <ul>
  *   <li>LEVEL (an index, an amount): changes in percent and in units</li>
- *   <li>RATE (unit %, bps or points: a rate, a yield, a spread): changes in units (points) only</li>
+ *   <li>RATE (unit %, bps or points: a rate, a yield, a spread; degC, SOI or SPI: a weather index around zero): changes
+ *       in units (points) only</li>
  *   <li>FLOW (net foreign buying on IDX: one session's flow): a period is the sum of its observations</li>
  * </ul>
  * More than {@link #MAX_POINTS} observations in the window are drawn weekly (the last observation of each week; a
@@ -29,7 +30,11 @@ public final class MacroSeriesChart {
     public static final int MAX_POINTS = 2_000;
 
     /** Units read in points. */
-    static final Set<String> RATE_UNITS = Set.of("%", "bps", "points");
+    /**
+     * Units whose changes are read in points, not percent: rates, yields, spreads, and the weather indexes that cross
+     * zero (an ENSO or IOD anomaly in degC, the SOI, the SPI drought index).
+     */
+    static final Set<String> RATE_UNITS = Set.of("%", "bps", "points", "degC", "SOI", "SPI");
 
     public enum Kind { LEVEL, RATE, FLOW }
 
@@ -69,6 +74,61 @@ public final class MacroSeriesChart {
     }
 
     private MacroSeriesChart() {
+    }
+
+    /**
+     * The normals of a monthly rainfall series (unit mm): its rainfall is mostly the monsoon cycle, so it is read against
+     * the 1991 - 2020 mean of the same calendar month.
+     *
+     * @param monthly       the mean of January .. December (null for a month with fewer than 25 years in 1991 - 2020)
+     * @param latestPct     the latest month in percent of its normal
+     * @param threeMonthPct the latest 3 months in percent of the sum of their normals (null with a month missing)
+     */
+    public record Normals(List<BigDecimal> monthly, BigDecimal latestPct, BigDecimal threeMonthPct) {
+    }
+
+    /** The normals of a monthly rainfall series; null without any observation. */
+    public static Normals normals(List<Row> rows) {
+        if (rows.isEmpty()) {
+            return null;
+        }
+        double[] sum = new double[13];
+        int[] n = new int[13];
+        for (Row r : rows) {
+            int y = r.obsDate().getYear();
+            if (y >= 1991 && y <= 2020) {
+                sum[r.obsDate().getMonthValue()] += r.value().doubleValue();
+                n[r.obsDate().getMonthValue()]++;
+            }
+        }
+        Double[] normal = new Double[13];
+        List<BigDecimal> monthly = new ArrayList<>();
+        for (int m = 1; m <= 12; m++) {
+            normal[m] = n[m] >= 25 ? sum[m] / n[m] : null;
+            monthly.add(normal[m] == null ? null : BigDecimal.valueOf(normal[m]).setScale(1, RoundingMode.HALF_UP));
+        }
+        Row last = rows.getLast();
+        Double lastNormal = normal[last.obsDate().getMonthValue()];
+        BigDecimal latestPct = lastNormal == null || lastNormal <= 0 ? null
+                : BigDecimal.valueOf(last.value().doubleValue() / lastNormal * 100).setScale(0, RoundingMode.HALF_UP);
+        BigDecimal threePct = null;
+        if (rows.size() >= 3) {
+            double s = 0;
+            double ns = 0;
+            boolean complete = true;
+            for (int k = 0; k < 3; k++) {
+                Row r = rows.get(rows.size() - 1 - k);
+                Double nm = normal[r.obsDate().getMonthValue()];
+                if (!r.obsDate().withDayOfMonth(1).equals(last.obsDate().withDayOfMonth(1).minusMonths(k)) || nm == null) {
+                    complete = false;
+                    break;
+                }
+                s += r.value().doubleValue();
+                ns += nm;
+            }
+            threePct = complete && ns > 0 ? BigDecimal.valueOf(s / ns * 100).setScale(0, RoundingMode.HALF_UP) : null;
+        }
+        return new Normals(monthly, latestPct, threePct);
     }
 
     public static Kind kind(String code, String unit) {

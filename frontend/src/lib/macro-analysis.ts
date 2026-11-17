@@ -7,6 +7,7 @@ import {
   type MarketRow,
   type MacroIndexRow,
   type MacroPreset,
+  type MacroWeather,
   type RegionalCurrencies,
   type Tone,
 } from "@/lib/macro"
@@ -107,6 +108,8 @@ export interface MacroAgentView {
     error?: string
   } | null
   status: "ASSESSED" | "REVISED" | "PRIOR_ONLY" | "NO_SCORE"
+  /** how the agent reads the weather; null in analyses of before 2026-11-16 */
+  climate?: string | null
 }
 
 export interface MacroBriefView {
@@ -115,6 +118,8 @@ export interface MacroBriefView {
   inflationRates: string | null
   external: string | null
   growth: string | null
+  /** El Nino / La Nina, the IOD, rainfall and drought; absent before 2026-11-16 */
+  climate?: string | null
   risks: string[]
   catalysts: string[]
   /** facts with the ref of the tool result they come from (T1, T2, ...) */
@@ -161,6 +166,8 @@ export interface MacroSynthesisView {
   keyRisks: string[]
   monitor: string[]
   sectorTilts: SectorTilt[]
+  /** the weather (global and Indonesia) and what it means for the call and the sectors; absent before 2026-11-16 */
+  climate?: string | null
   dataGaps: string[]
   adjustmentReason: string | null
   agentsMean: number | null
@@ -185,6 +192,8 @@ export interface MacroAnalysisContext {
     /** the rupiah against its Asian peers; absent in analyses of before 2026-10-23 */
     regionalCurrencies?: RegionalCurrencies | null
   }
+  /** the weather the agents read (charts without points); absent in analyses of before 2026-11-16 */
+  weather?: (Omit<MacroWeather, "charts"> & { charts: Omit<MacroWeather["charts"][number], "points">[] }) | null
   rulesVersion: string
 }
 

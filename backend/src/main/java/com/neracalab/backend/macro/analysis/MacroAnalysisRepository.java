@@ -56,10 +56,10 @@ public class MacroAnalysisRepository {
                          String conviction, Object synthesis, Object notes) {
     }
 
-    /** One agent's row. */
+    /** One agent's row ({@code climate}: its reading of the weather). */
     public record AgentRow(MacroAgent agent, Double priorScore, Object priorDetail, Double llmScore, Double finalScore,
                            String stance, String thesis, Object supports, Object risks, Object buyWhen, Object sellWhen,
-                           Object reflection, String status) {
+                           Object reflection, String status, String climate) {
     }
 
     // ------------------------------------------------------------------ writes
@@ -110,16 +110,16 @@ public class MacroAnalysisRepository {
     public void saveAgentScore(UUID id, AgentRow a) {
         jdbc.sql("""
                         INSERT INTO macro_analysis_agent_score (analysis_id, agent, prior_score, prior_detail, llm_score,
-                            final_score, stance, thesis, supports, risks, buy_when, sell_when, reflection, status)
+                            final_score, stance, thesis, supports, risks, buy_when, sell_when, reflection, status, climate)
                         VALUES (:id, :agent, :prior, CAST(:detail AS jsonb), :llm, :final, :stance, :thesis,
                                 CAST(:supports AS jsonb), CAST(:risks AS jsonb), CAST(:buy AS jsonb), CAST(:sell AS jsonb),
-                                CAST(:reflection AS jsonb), :status)
+                                CAST(:reflection AS jsonb), :status, :climate)
                         ON CONFLICT (analysis_id, agent) DO UPDATE SET
                             prior_score = EXCLUDED.prior_score, prior_detail = EXCLUDED.prior_detail,
                             llm_score = EXCLUDED.llm_score, final_score = EXCLUDED.final_score, stance = EXCLUDED.stance,
                             thesis = EXCLUDED.thesis, supports = EXCLUDED.supports, risks = EXCLUDED.risks,
                             buy_when = EXCLUDED.buy_when, sell_when = EXCLUDED.sell_when,
-                            reflection = EXCLUDED.reflection, status = EXCLUDED.status""")
+                            reflection = EXCLUDED.reflection, status = EXCLUDED.status, climate = EXCLUDED.climate""")
                 .param("id", id)
                 .param("agent", a.agent().name())
                 .param("prior", a.priorScore(), Types.NUMERIC)
@@ -134,6 +134,7 @@ public class MacroAnalysisRepository {
                 .param("sell", toJson(a.sellWhen()), Types.VARCHAR)
                 .param("reflection", toJson(a.reflection()), Types.VARCHAR)
                 .param("status", a.status())
+                .param("climate", a.climate(), Types.VARCHAR)
                 .update();
     }
 
@@ -284,7 +285,7 @@ public class MacroAnalysisRepository {
         return jdbc.sql("""
                         SELECT agent, prior_score, prior_detail::text AS prior_detail, llm_score, final_score, stance, thesis,
                                supports::text AS supports, risks::text AS risks, buy_when::text AS buy_when,
-                               sell_when::text AS sell_when, reflection::text AS reflection, status
+                               sell_when::text AS sell_when, reflection::text AS reflection, status, climate
                         FROM macro_analysis_agent_score WHERE analysis_id = :id""")
                 .param("id", id)
                 .query((rs, i) -> {
@@ -293,7 +294,7 @@ public class MacroAnalysisRepository {
                             tree(rs.getString("prior_detail")), dblOrNull(rs, "llm_score"), dblOrNull(rs, "final_score"),
                             rs.getString("stance"), rs.getString("thesis"), tree(rs.getString("supports")),
                             tree(rs.getString("risks")), tree(rs.getString("buy_when")), tree(rs.getString("sell_when")),
-                            tree(rs.getString("reflection")), rs.getString("status"));
+                            tree(rs.getString("reflection")), rs.getString("status"), rs.getString("climate"));
                 })
                 .list().stream()
                 .sorted(Comparator.comparingInt(s -> s.agent().ordinal()))

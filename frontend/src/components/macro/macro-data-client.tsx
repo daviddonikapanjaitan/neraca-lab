@@ -26,7 +26,10 @@ import {
   MACRO_COUNTRY_LABELS,
   MACRO_DATA_HREF,
   MACRO_RANGES,
+  isWeatherCategory,
   macroDataChartUrl,
+  macroGroupLabel,
+  unitLabel,
   type MacroDataSeries,
   type MacroDataSeriesChart,
   type MacroDataSeriesList,
@@ -37,6 +40,7 @@ import { cn } from "@/lib/utils"
 
 const lineConfig = {
   value: { label: "Value", theme: { light: "oklch(0.371 0 0)", dark: "oklch(0.87 0 0)" } },
+  normal: { label: "1991 - 2020 normal", theme: { light: "oklch(0.6 0 0)", dark: "oklch(0.6 0 0)" } },
 } satisfies ChartConfig
 
 const POSITIVE = "var(--color-emerald-600, #059669)"
@@ -68,15 +72,31 @@ const FREQUENCY_LABEL: Record<string, string> = {
 
 /** Decimals of a series' values: rates and indexes with 2, basis points and large amounts without. */
 function digitsOf(series: MacroDataSeries): number {
-  if (series.unit === "%" || series.unit === "points") return 2
-  if (series.unit === "bps" || series.unit === "contracts") return 0
+  if (series.unit === "%" || series.unit === "points" || series.unit === "degC" || series.unit === "SPI") return 2
+  if (series.unit === "SOI") return 1
+  if (series.unit === "bps" || series.unit === "contracts" || series.unit === "mm") return 0
   const v = Math.abs(series.lastValue ?? 0)
   return v >= 1000 ? 0 : v >= 10 ? 1 : 2
 }
 
 function unitSuffix(unit: string): string {
   if (unit === "%") return "%"
-  return ` ${unit}`
+  return ` ${unitLabel(unit)}`
+}
+
+/**
+ * The thresholds drawn on a weather index: El Nino / La Nina, a positive / negative IOD, drought / very wet; {@code dry}
+ * marks the side that dries Indonesia (drawn amber; the wet side blue).
+ */
+function thresholdsOf(series: MacroDataSeries): { y: number; label: string; dry: boolean }[] {
+  if (!isWeatherCategory(series.category)) return []
+  if (series.category === "WEATHER_IOD") {
+    return [{ y: 0.4, label: "positive IOD", dry: true }, { y: -0.4, label: "negative IOD", dry: false }]
+  }
+  if (series.unit === "SPI") return [{ y: -1, label: "drought", dry: true }, { y: 1.5, label: "very wet", dry: false }]
+  if (series.unit === "SOI") return [{ y: -7, label: "El Niño", dry: true }, { y: 7, label: "La Niña", dry: false }]
+  if (series.unit === "degC") return [{ y: 0.5, label: "El Niño", dry: true }, { y: -0.5, label: "La Niña", dry: false }]
+  return []
 }
 
 /** A value with its unit: "4.25%", "182 bps", "9,512,345 IDR bn". */
@@ -91,7 +111,9 @@ function changeText(change: number | null, pct: number | null, series: MacroData
   const sign = change > 0 ? "+" : ""
   const digits = digitsOf(series)
   if (series.kind === "RATE") {
-    return series.unit === "bps" ? `${sign}${formatNumber(change, 0)} bps` : `${sign}${formatNumber(change, 2)} points`
+    if (series.unit === "bps") return `${sign}${formatNumber(change, 0)} bps`
+    if (series.unit === "degC") return `${sign}${formatNumber(change, 2)} °C`
+    return `${sign}${formatNumber(change, 2)} points`
   }
   const units = `${sign}${formatNumber(change, digits)}${unitSuffix(series.unit)}`
   if (series.kind === "LEVEL" && pct !== null && Number.isFinite(pct)) {
@@ -114,9 +136,10 @@ function axisTick(value: number, digits: number): string {
 }
 
 /**
- * Macro > Data: a dropdown of every series of Ingestion > Macro (grouped by country), the range, one large chart (a
- * line; net foreign buying as bars), its statistics and changes, what the series is and its latest observations. A
- * change reloads the chart and keeps the choice in the URL.
+ * Macro > Data: a dropdown of every series of Ingestion > Macro (grouped by country, the weather apart: global and
+ * Indonesia), the range, one large chart (a line; net foreign buying as bars; a rainfall series with its 1991 - 2020
+ * normal; a weather index with its thresholds), its statistics and changes, what the series is and its latest
+ * observations. A change reloads the chart and keeps the choice in the URL.
  */
 export function MacroDataClient({ list, initial }: { list: MacroDataSeriesList; initial: MacroDataSeriesChart }) {
   const router = useRouter()
@@ -149,13 +172,14 @@ export function MacroDataClient({ list, initial }: { list: MacroDataSeriesList; 
     [router]
   )
 
-  // the series grouped by country, in catalog order
+  // the series grouped by country - the weather apart, global and Indonesia - in catalog order
   const groups = useMemo(() => {
-    const out: { country: string; series: MacroDataSeries[] }[] = []
+    const out: { label: string; series: MacroDataSeries[] }[] = []
     for (const s of list.series) {
-      const group = out.find((g) => g.country === s.country)
+      const label = macroGroupLabel(s)
+      const group = out.find((g) => g.label === label)
       if (group) group.series.push(s)
-      else out.push({ country: s.country, series: [s] })
+      else out.push({ label, series: [s] })
     }
     return out
   }, [list.series])
@@ -177,8 +201,8 @@ export function MacroDataClient({ list, initial }: { list: MacroDataSeriesList; 
           </SelectTrigger>
           <SelectContent>
             {groups.map((g) => (
-              <SelectGroup key={g.country}>
-                <SelectLabel>{MACRO_COUNTRY_LABELS[g.country] ?? g.country}</SelectLabel>
+              <SelectGroup key={g.label}>
+                <SelectLabel>{g.label}</SelectLabel>
                 {g.series.map((x) => (
                   <SelectItem key={x.code} value={x.code} disabled={x.rows === 0}>
                     {x.name}
@@ -234,7 +258,12 @@ function ChartCard({ data }: { data: MacroDataSeriesChart }) {
   const s = data.series
   const c = data.chart
   const digits = digitsOf(s)
-  const points = c.points
+  const normals = data.normals?.monthly ?? null
+  // a rainfall series: each month beside the 1991 - 2020 normal of its calendar month
+  const points = normals
+    ? c.points.map((p) => ({ ...p, normal: normals[Number(p.date.slice(5, 7)) - 1] ?? undefined }))
+    : c.points
+  const thresholds = thresholdsOf(s)
   const flow = c.kind === "FLOW"
   const last = c.stats?.last ?? null
 
@@ -310,12 +339,34 @@ function ChartCard({ data }: { data: MacroDataSeriesChart }) {
                   />
                 }
               />
-              {c.stats && (
+              {c.stats && !normals && thresholds.length === 0 && (
                 <ReferenceLine
                   y={c.stats.average}
                   stroke="var(--muted-foreground)"
                   strokeDasharray="4 4"
                   label={{ value: `avg ${formatNumber(c.stats.average, digits)}`, position: "insideTopLeft", fontSize: 11, fill: "var(--muted-foreground)" }}
+                />
+              )}
+              {thresholds.map((t) => (
+                <ReferenceLine
+                  key={t.label}
+                  y={t.y}
+                  stroke={t.dry ? "var(--color-amber-600, #d97706)" : "var(--color-sky-600, #0284c7)"}
+                  strokeDasharray="4 4"
+                  label={{ value: t.label, position: "insideTopLeft", fontSize: 11, fill: "var(--muted-foreground)" }}
+                />
+              ))}
+              {thresholds.length > 0 && <ReferenceLine y={0} stroke="var(--border)" />}
+              {normals && (
+                <Line
+                  dataKey="normal"
+                  name="1991 - 2020 normal"
+                  type="monotone"
+                  stroke="var(--muted-foreground)"
+                  strokeDasharray="4 4"
+                  dot={false}
+                  strokeWidth={1.25}
+                  isAnimationActive={false}
                 />
               )}
               <Line
@@ -336,7 +387,11 @@ function ChartCard({ data }: { data: MacroDataSeriesChart }) {
           {" "}(the range ends at the latest observation)
           {c.sampled === "WEEKLY" && (flow ? " · drawn weekly: the sum of each week" : " · drawn weekly: the last observation of each week")}
           {points.length > 60 && " · drag the handles below the chart to zoom"}
-          {c.kind === "LEVEL" && c.stats && " · dashed line: the range's average"}
+          {normals
+            ? " · dashed line: the 1991 - 2020 normal of each calendar month"
+            : thresholds.length > 0
+              ? ` · dashed lines: ${thresholds.map((t) => `${t.label} at ${t.y > 0 ? "+" : ""}${t.y}`).join(", ")}`
+              : c.kind === "LEVEL" && c.stats && " · dashed line: the range's average"}
         </p>
       </CardContent>
     </Card>
@@ -362,6 +417,26 @@ function StatsCard({ data }: { data: MacroDataSeriesChart }) {
       tone: toneOf(st.change),
     },
   ]
+  const normals = data.normals
+  if (normals) {
+    // rainfall is mostly the monsoon cycle: read against the same calendar months of 1991 - 2020
+    const pctTone = (p: number | null) =>
+      p === null ? undefined : p < 75 ? "text-amber-700 dark:text-amber-400" : p > 130 ? "text-sky-700 dark:text-sky-400" : undefined
+    tiles.push(
+      {
+        label: "Latest month vs normal",
+        value: normals.latestPct === null ? EMPTY : `${formatNumber(normals.latestPct, 0)}%`,
+        hint: `${formatDate(st.last.date).replace(/^\d+ /, "")} against the 1991 - 2020 mean of its month`,
+        tone: pctTone(normals.latestPct),
+      },
+      {
+        label: "Last 3 months vs normal",
+        value: normals.threeMonthPct === null ? EMPTY : `${formatNumber(normals.threeMonthPct, 0)}%`,
+        hint: "the drought index (SPI-3) reads the same window",
+        tone: pctTone(normals.threeMonthPct),
+      }
+    )
+  }
   return (
     <Card size="sm">
       <CardHeader>
@@ -389,8 +464,9 @@ function AboutCard({ series: s }: { series: MacroDataSeries }) {
   const rows: [string, ReactNode][] = [
     ["Code", <span key="c" className="font-mono">{s.code}</span>],
     ["Country", MACRO_COUNTRY_LABELS[s.country] ?? s.country],
-    ["Category", s.category.charAt(0) + s.category.slice(1).toLowerCase()],
-    ["Unit", s.unit],
+    ["Group", macroGroupLabel(s)],
+    ["Category", (s.category.charAt(0) + s.category.slice(1).toLowerCase()).replaceAll("_", " ")],
+    ["Unit", unitLabel(s.unit)],
     ["Frequency", FREQUENCY_LABEL[s.frequency] ?? s.frequency],
     [
       "Source",

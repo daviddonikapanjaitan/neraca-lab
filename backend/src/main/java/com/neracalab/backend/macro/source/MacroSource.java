@@ -17,6 +17,43 @@ public interface MacroSource {
     record Observation(LocalDate date, BigDecimal value) {
     }
 
+    /**
+     * A fetch that stopped early with what it read so far (oldest first, complete as far as it goes): the ingestion
+     * stores those observations and the queue asks again after {@code continueAfter} - a long history read in chunks
+     * ({@code Duration.ZERO}: at the end of the queue), or a server that answered HTTP 429 (later). The request that
+     * was refused is not retried.
+     */
+    final class PartialFetch extends RuntimeException {
+
+        private final transient List<Observation> observations;
+        private final LocalDate resumeFrom;
+        private final java.time.Duration continueAfter;
+
+        /**
+         * @param resumeFrom    the first date not read: the next fetch starts there
+         * @param continueAfter when to ask again ({@code Duration.ZERO}: at the end of the queue)
+         */
+        public PartialFetch(String reason, List<Observation> observations, LocalDate resumeFrom,
+                            java.time.Duration continueAfter) {
+            super(reason);
+            this.observations = List.copyOf(observations);
+            this.resumeFrom = resumeFrom;
+            this.continueAfter = continueAfter;
+        }
+
+        public List<Observation> observations() {
+            return observations;
+        }
+
+        public LocalDate resumeFrom() {
+            return resumeFrom;
+        }
+
+        public java.time.Duration continueAfter() {
+            return continueAfter;
+        }
+    }
+
     /** The {@code macro_series_def.source} this implementation reads (fred, bi, ...). */
     String name();
 

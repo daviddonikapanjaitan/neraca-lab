@@ -41,9 +41,10 @@ public class MacroSynthesisAgent {
     private static final Set<String> CONVICTIONS = Set.of("HIGH", "MEDIUM", "LOW");
     private static final Set<String> TILTS = Set.of("OVERWEIGHT", "NEUTRAL", "UNDERWEIGHT");
 
-    /** One macro agent as the synthesis sees it. */
+    /** One macro agent as the synthesis sees it ({@code climate}: its reading of the weather). */
     public record AgentRow(String agent, String label, Double priorScore, Double aiScore, Double finalScore, String stance,
-                           String thesis, List<String> supports, List<String> risks, List<String> reflection) {
+                           String thesis, List<String> supports, List<String> risks, List<String> reflection,
+                           String climate) {
     }
 
     /** A sector of the country's stock market the macro favours or not. */
@@ -51,12 +52,13 @@ public class MacroSynthesisAgent {
     }
 
     /**
+     * @param climate  the weather (global and Indonesia) and what it means for the call and the sectors
      * @param model    the model that wrote it; null for the deterministic fallback
      * @param fallback why the fallback was used (null: the model wrote it)
      */
     public record MacroSynthesis(String executiveSummary, String conviction, String thesis, List<String> bullCase,
                                  List<String> bearCase, List<String> keyRisks, List<String> monitor,
-                                 List<SectorTilt> sectorTilts, List<String> dataGaps, Double adjustment,
+                                 List<SectorTilt> sectorTilts, String climate, List<String> dataGaps, Double adjustment,
                                  String adjustmentReason, String model, String fallback) {
     }
 
@@ -106,8 +108,8 @@ public class MacroSynthesisAgent {
                 .limit(4).toList();
         return new MacroSynthesis(Texts.clip(s.executiveSummary(), 2400), known, Texts.clipOrNull(s.thesis(), 500),
                 Texts.clip(s.bullCase(), 4, 200), Texts.clip(s.bearCase(), 4, 200), Texts.clip(s.keyRisks(), 4, 160),
-                Texts.clip(s.monitor(), 4, 160), tilts, Texts.clip(s.dataGaps(), 3, 160), adjustment,
-                adjustment == 0 ? null : Texts.clipOrNull(s.adjustmentReason(), 200), model, null);
+                Texts.clip(s.monitor(), 4, 160), tilts, Texts.clipOrNull(s.climate(), 600), Texts.clip(s.dataGaps(), 3, 160),
+                adjustment, adjustment == 0 ? null : Texts.clipOrNull(s.adjustmentReason(), 200), model, null);
     }
 
     /** HIGH from 70 or up to 30 (a clear call either way), MEDIUM from 60 or up to 40, otherwise LOW. */
@@ -154,7 +156,12 @@ public class MacroSynthesisAgent {
         }
         List<String> risks = brief == null ? List.of() : brief.risks();
         List<String> monitor = brief == null ? List.of() : brief.catalysts();
+        // the weather: the research brief's reading, else each agent's
+        String climate = brief != null && brief.climate() != null ? brief.climate()
+                : agents.stream().filter(a -> a.climate() != null && !a.climate().isBlank())
+                .map(a -> a.label() + ": " + a.climate()).collect(Collectors.joining(" "));
         return new MacroSynthesis(summary, conviction(overall), null, Texts.clip(bull, 4, 200), Texts.clip(bear, 4, 200),
-                Texts.clip(risks, 4, 160), Texts.clip(monitor, 4, 160), List.of(), List.of(), 0d, null, null, reason);
+                Texts.clip(risks, 4, 160), Texts.clip(monitor, 4, 160), List.of(),
+                climate == null || climate.isBlank() ? null : Texts.clip(climate, 600), List.of(), 0d, null, null, reason);
     }
 }

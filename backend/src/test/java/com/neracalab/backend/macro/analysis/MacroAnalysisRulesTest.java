@@ -298,14 +298,28 @@ class MacroAnalysisRulesTest {
         }
         // a score far from the prior, a stance outside its band, signals not in the dossier
         List<Issue> issues = MacroValidator.validate(MacroAgent.DALIO, new MacroAssessment(20.0, "BUY", "x",
-                List.of("a"), List.of(), List.of(), List.of(), List.of("liquidity", "GDP"), null), 70.0, good, keys);
+                List.of("a"), List.of(), List.of(), List.of(), List.of("liquidity", "GDP"), "El Nino: food inflation",
+                null), 70.0, good, keys);
         assertThat(codes(issues)).containsExactly("DIVERGENCE", "STANCE", "UNKNOWN_SIGNAL");
         assertThat(issues.get(2).message()).endsWith("GDP");
     }
 
+    @Test
+    void everyAgentMustReadTheWeather() {
+        MacroValidator.Facts good = new MacroValidator.Facts(true, 5.0, "EASING", "VIRTUOUS", "GOLDILOCKS");
+        Set<String> keys = Set.of("LIQUIDITY");
+        for (MacroAgent agent : MacroAgent.values()) {
+            MacroAssessment silent = new MacroAssessment(72.0, "BUY", "thesis", List.of("a"), List.of("b"), List.of(),
+                    List.of(), List.of("liquidity"), "  ", null).normalized();
+            List<Issue> issues = MacroValidator.validate(agent, silent, 70.0, good, keys);
+            assertThat(codes(issues)).as(agent.name()).containsExactly("NO_CLIMATE");
+            assertThat(MacroLessons.lesson(agent, "NO_CLIMATE")).contains("climate");
+        }
+    }
+
     private static MacroAssessment answer(double score, String stance) {
         return new MacroAssessment(score, stance, "thesis", List.of("a"), List.of("b"), List.of(), List.of(),
-                List.of("liquidity"), null).normalized();
+                List.of("liquidity"), "No weather push on the call", null).normalized();
     }
 
     private static List<String> codes(List<Issue> issues) {
@@ -315,7 +329,7 @@ class MacroAnalysisRulesTest {
     @Test
     void anAnswerIsNormalizedToKnownStancesAndBounds() {
         MacroAssessment a = new MacroAssessment(104.6, "strong buy", " x ", List.of("1", "2", "3", "4"), null, null, null,
-                null, null).normalized();
+                null, null, null).normalized();
         assertThat(a.score()).isEqualTo(100.0);
         assertThat(a.stance()).isEqualTo("BUY");
         assertThat(a.supports()).hasSize(3);
@@ -371,7 +385,8 @@ class MacroAnalysisRulesTest {
     void theSynthesisIsBounded() {
         MacroSynthesis s = MacroSynthesisAgent.normalize(new MacroSynthesis("summary", "very high", null, null, null, null,
                 null, List.of(new SectorTilt("Coal", "overweight", "up"), new SectorTilt(" ", "UNDERWEIGHT", "x"),
-                new SectorTilt("Banks", "sideways", null)), null, -12.4, "too bullish", null, null), 50.0, "opus");
+                new SectorTilt("Banks", "sideways", null)), "El Nino dries the palm oil regions", null, -12.4, "too bullish",
+                null, null), 50.0, "opus");
         assertThat(s.adjustment()).isEqualTo(-5.0);
         assertThat(s.conviction()).isEqualTo("LOW");    // unknown: from the score, 50 is no clear call
         assertThat(s.sectorTilts()).extracting(SectorTilt::tilt).containsExactly("OVERWEIGHT", "NEUTRAL");

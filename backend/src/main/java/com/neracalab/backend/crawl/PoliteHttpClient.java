@@ -23,7 +23,8 @@ import org.springframework.stereotype.Component;
  * The HTTP client of the crawlers (macro sources, World Bank commodity prices).
  * <ul>
  *   <li>a User-Agent that names the application ({@code neracalab.crawl.user-agent})</li>
- *   <li>at most one request per host at a time, and {@code min-delay} (2 s) between two requests to the same host</li>
+ *   <li>at most one request per host at a time, and {@code min-delay} (2 s) between two requests to the same host, or
+ *       the host's own longer pause ({@code host-delays}: a server that throttles a bulk download)</li>
  *   <li>a cookie store (the export of an ASP.NET page needs the session cookie of the page it was read from)</li>
  *   <li>no retries and no work-arounds: a refused request (403, 429, a bot challenge) fails the job with its status</li>
  * </ul>
@@ -75,6 +76,33 @@ public class PoliteHttpClient {
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build());
     }
 
+    /**
+     * GET of the bytes {@code first} to {@code last} (inclusive) of a file (an HTTP range request: a cloud-optimized
+     * GeoTIFF is read a few tiles at a time). The status is not checked: a 206 carries the range, a 404 says the file is
+     * not there (yet); {@link #requireRange} checks it.
+     */
+    public Response getRange(URI uri, long first, long last) {
+        if (first < 0 || last < first) {
+            throw new IllegalArgumentException("Bad byte range " + first + "-" + last);
+        }
+        return send(builder(uri).header("Range", "bytes=" + first + "-" + last).GET().build());
+    }
+
+    /**
+     * Fails unless the response is a 206 with exactly the {@code length} bytes asked for (a 200 means the server ignored
+     * the range and sent the whole file).
+     */
+    public static byte[] requireRange(URI uri, Response response, long length) {
+        requireOk(uri, response);
+        if (response.status() != 206) {
+            throw new SourceException(describe(uri) + " ignored the byte range (HTTP " + response.status() + ")");
+        }
+        if (response.body().length != length) {
+            throw new SourceException(describe(uri) + " sent " + response.body().length + " bytes of a range of " + length);
+        }
+        return response.body();
+    }
+
     /** GET that must answer 2xx; the body as text. */
     public String getText(URI uri) {
         Response response = get(uri);
@@ -87,9 +115,11 @@ public class PoliteHttpClient {
         if (response.ok()) {
             return;
         }
+        if (response.status() == 429) {
+            throw new SourceException.RateLimited(describe(uri) + " answered HTTP 429 (rate limit; try again later)");
+        }
         String hint = response.status() == 403 || response.status() == 503 && response.text().contains("challenge")
-                ? " (the site refused an automated request; enter the data by CSV upload instead)"
-                : response.status() == 429 ? " (rate limit; try again later)" : "";
+                ? " (the site refused an automated request; enter the data by CSV upload instead)" : "";
         throw new SourceException(describe(uri) + " answered HTTP " + response.status() + hint);
     }
 
@@ -122,7 +152,7 @@ public class PoliteHttpClient {
                 throw new SourceException("Interrupted while requesting " + describe(uri), e);
             } finally {
                 synchronized (nextRequestAt) {
-                    nextRequestAt.put(host, Instant.now().plus(properties.minDelay()));
+                    nextRequestAt.put(host, Instant.now().plus(properties.delay(host)));
                 }
             }
         }

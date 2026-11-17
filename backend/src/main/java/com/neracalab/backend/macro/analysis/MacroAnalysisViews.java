@@ -65,7 +65,8 @@ public final class MacroAnalysisViews {
      */
     public record MacroAgentView(MacroAgent agent, String label, String focus, Double priorScore, JsonNode priorDetail,
                                  Double aiScore, Double finalScore, String stance, String thesis, JsonNode supports,
-                                 JsonNode risks, JsonNode buyWhen, JsonNode sellWhen, JsonNode reflection, String status) {
+                                 JsonNode risks, JsonNode buyWhen, JsonNode sellWhen, JsonNode reflection, String status,
+                                 String climate) {
     }
 
     /**

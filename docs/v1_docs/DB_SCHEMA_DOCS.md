@@ -61,6 +61,8 @@ foreign key.
 | `V1.0.36__schema_valuation_ebitda_basis.sql` | `valuation_snapshot.ebitda_basis`: the EBITDA of EV / EBITDA (TTM, else the full year inside the trailing window) |
 | `V1.0.35__data_ENRG_shares.sql`           | ENRG share counts its USD filings do not give and Yahoo Finance gives wrong: 26,346,230,250 at 2025-12-31, 26,564,543,750 from the private placement of 2026-06-12 (and that corporate action); the rights issue of October 2026 not yet (its result not announced) |
 | `V1.0.6__data_metrics_valuation.sql`      | derived for all companies: market_snapshot, valuation_snapshot, financial_metric; a valuation on a period end whose trailing twelve months no longer exist keeps market cap / EV / P/B, its trailing ratios are cleared; the existing valuation dates are revalued too (2026-10-31: history rows kept the figures of their day). Runs at start; after an upload only the company's part (`ValuationRepository.refreshAfterFiling`, the same rows) |
+| `V1.0.62__schema_macro_weather.sql`       | the weather of Ingestion › Macro ([MACRO_DOCS.md](MACRO_DOCS.md) section 1a): `ck_macro_series_def_source` re-created with `noaa_cpc`, `jamstec`, `longpaddock`, `chirps`, `spi`; `macro_analysis_agent_score.climate` (each macro agent's reading of the weather) |
+| `V1.0.63__data_macro_weather.sql`         | 24 weather series in `macro_series_def`, global (`GL_*`, country GLOBAL: RONI, ONI, weekly Nino 3.4, monthly and 30-day SOI, IOD, NOAA's El Nino / La Nina chances in 3 and 6 months, the rainfall and SPI-3 of Malaysia's palm oil, Australia's coal and India's monsoon) and Indonesia (`ID_*`: the rainfall and SPI-3 of the Sumatra and Kalimantan palm oil, Kalimantan coal and Java rice regions); categories `WEATHER_ENSO`, `WEATHER_IOD`, `WEATHER_RAIN`, `WEATHER_DROUGHT`; brought back to their definition on every start (after V1.0.26) |
 | `V1.0.26__data_markets_macro.sql`         | the catalogs: 35 instruments (USDIDR, USDJPY, USDCNY, USDMYR, USDPHP, USDINR, USDKRW, EURUSD, AUDJPY; BRENT, WTI, NATURAL_GAS, LNG, COAL, GOLD, SILVER, COPPER, ALUMINIUM, IRON_ORE, STEEL_HRC, NICKEL, TIN, COBALT, PALM_OIL, PALM_OIL_MYR, SOYBEAN_OIL, SOYBEAN_MEAL, CORN, WHEAT, SUGAR, RUBBER, PULP, UREA, DAP, POTASH) and 25 macro series (FRED, Bank Indonesia, CNBC, CFTC, Yahoo, manual), each brought back to its definition on every start. The instruments are updated where their definition changed and inserted where missing, so a start draws no `instrument_id` (a SMALLSERIAL): the former `INSERT ... ON CONFLICT` drew 35 values per start until the sequence ran out at 32,767 on 2026-10-31 and no start succeeded; the sequence is set back to the highest id in use |
 
 New filings can also be loaded at runtime through the upload endpoint, which writes the same
@@ -929,6 +931,7 @@ One AI macro analysis of a country's stock market, its index (Macro > AI Analysi
 |                              | `llm_score`, `final_score`     | NUMERIC       | AI score; 60% prior + 40% AI (either alone without the other)           |
 |                              | `stance`, `thesis`, `supports`, `risks`, `buy_when`, `sell_when`, `reflection` | | the agent's view (stance `BUY` .. `AVOID`, check) and its Reflection review |
 |                              | `status`                       | VARCHAR(20)   | `ASSESSED`, `REVISED`, `PRIOR_ONLY`, `NO_SCORE` (check)                  |
+|                              | `climate`                      | TEXT          | the agent's reading of the weather (El Nino / La Nina, the IOD, Indonesia's rainfall and drought); V1.0.62, null before 2026-11-16 |
 | `macro_analysis_lesson`      | `lesson_id`, `agent`, `lesson`, `occurrences`, `source_analysis`, `active` | | Reflexion memory of the macro agents; **unique** (agent, lesson); `active = false` drops a lesson |
 | `llm_usage`                  | `macro_analysis_id`            | UUID FK       | the macro analysis of a model call (`run_id`, `analysis_id` NULL), `ON DELETE CASCADE`; index `ix_llm_usage_macro_analysis` |
 
@@ -972,6 +975,28 @@ intraday refresh only; `price_daily` and the portfolio tables are never written 
 |---|---|---|
 | `intraday_quote` | `company_id` PK → `company` (cascade), `session_date`, `price` (> 0), `previous_close`, `day_open`, `day_high`, `day_low`, `volume`, `market_time`, `session_start`, `session_end`, `source`, `fetched_at` | the latest quote of the latest session; a later fetch never replaces a quote of a later trade |
 | `intraday_bar` | `(company_id, bar_time)` PK, `session_date`, `open_price`, `high_price`, `low_price`, `close_price`, `volume` | 5-minute bars; index `(company_id, session_date)`; bars older than `neracalab.intraday.keep-days` (10) are deleted |
+
+### 4.18 Portfolio performance (`V1.0.59__schema_portfolio_performance.sql`)
+
+Portfolio › Performance (the sheet `tracking_performance` of `instruction/Position Portfolio.xlsx`).
+
+| Table | Columns | Notes |
+|---|---|---|
+| `portfolio_performance_year` | `(user_id, year)` PK, `user_id` → `users` (cascade), `start_capital`, `new_investment`, `dividend`, `cash`, `market_value`, `average_value` (NUMERIC(20,2)), `ihsg_ytd`, `lq45_ytd` (NUMERIC(12,6)), `note`, `updated_at` | a year as typed; POT G/L = market value + cash - start capital - new investment; the year's last daily snapshot takes precedence over the typed year end |
+| `portfolio_performance_daily` | `(user_id, snapshot_date)` PK, `captured_at`, `source` (SCHEDULE / MANUAL), `positions`, `priced`, `priced_today`, `cash`, `market_value`, `average_value`, `profit_loss(_pct)`, `day_gain(_pct)`, `total_investment`, `year_start_capital`, `year_new_investment`, `ytd_profit(_pct)`, `ihsg_close`, `ihsg_date`, `ihsg_change_pct`, `ihsg_ytd_pct`, `lq45_*` | one snapshot per IDX trading day, saved at or after 17:00 WIB (`PerformanceSchedule`, or Save today) |
+
+### 4.19 Portfolio analysis (`V1.0.60__schema_portfolio_analysis.sql`, `V1.0.61__schema_portfolio_analysis_steps.sql`)
+
+Portfolio › Analysis: AI recommendations (sell, decrease, hold, increase, buy, cash).
+
+| Table | Columns | Notes |
+|---|---|---|
+| `portfolio_analysis_run` | `run_id` PK → `ingestion_job` (cascade, type `PORTFOLIO_ANALYSIS`), `user_id` → `users` (cascade), `exchange`, `mode` (BULK / SELECTED), `steps` (FUNDAMENTAL_TECHNICAL / FUNDAMENTAL, V1.0.61), `tickers` JSONB (SELECTED only, `ck_portfolio_analysis_scope`), `max_stocks`, `added_capital`, `budget_usd`, `capital`, `funnel`, `synthesis`, `allocation`, `checks`, `notes` (JSONB), `model_calls`, `prompt_tokens`, `completion_tokens`, `cost_usd`, `created_at` | index `(user_id, created_at DESC)` |
+| `portfolio_analysis_candidate` | `candidate_id` PK, `run_id` → run (cascade), `ticker` (`UNIQUE (run_id, ticker)`), `company_name`, `sector`, `held`, `position`, `close_price`, `price_date`, `fundamental_score`, `fundamental_verdict`, `fundamental_rank`, `technical_score`, `technical_stance`, `technical_rank`, `stage`, `fundamental_ai`, `technical_ai`, `kelly`, `action`, `recommendation`, `conviction`, `thesis`, `red_flags`, `final_rank` | `stage`: FUNDAMENTAL_OUT, TECHNICAL_OUT, FUNDAMENTAL_AI_OUT, TECHNICAL_AI_OUT, RECOMMENDED, NOT_CHOSEN, HELD; `action`: BUY, INCREASE, HOLD, DECREASE, SELL |
+| `portfolio_analysis_lesson` | `lesson_id` PK, `agent` (FUNDAMENTAL / TECHNICAL), `issue_kind` (`UNIQUE (agent, issue_kind)`), `lesson`, `occurrences`, `first_run_id`, `last_run_id`, `active` | Reflexion memory of the two agents |
+
+`llm_usage.portfolio_analysis_id` (→ run, cascade) holds the model calls of a run. `ck_ingestion_job_type` lists
+`PORTFOLIO_ANALYSIS` (re-created by V1.0.10 and V1.0.14 on every start). Details: [PORTFOLIO_DOCS.md](PORTFOLIO_DOCS.md).
 
 ## 5. Views (`V1.0.3__views.sql`)
 

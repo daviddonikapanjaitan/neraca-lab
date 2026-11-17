@@ -106,6 +106,13 @@
 			<artifactId>ta4j-core</artifactId>
 			<version>${ta4j.version}</version>
 		</dependency>
+		<!-- the gamma and normal distributions of the drought index (SPI) of the weather series; the version another
+		     dependency already brought in transitively, declared here so the SPI does not depend on that -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-math3</artifactId>
+			<version>3.6.1</version>
+		</dependency>
 		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>

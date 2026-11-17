@@ -29,5 +29,10 @@ public enum IngestionJobType {
      * Excel document into the database and the RAG vector store: KSEI's daily list of the shareholders of more than
      * 5% (Companies > Ownership (>=5%))
      */
-    RAG_XLSX
+    RAG_XLSX,
+    /**
+     * AI recommendations of Portfolio &gt; Analysis: the fundamental step, the technical step, the two DeepSeek agents,
+     * the Opus synthesis of the portfolio (sell, decrease, hold, increase, buy, cash)
+     */
+    PORTFOLIO_ANALYSIS
 }

@@ -180,7 +180,7 @@ public class MacroOutlookService {
             } else {
                 String unit = def == null ? null : def.unit();
                 info.put(code, new SeriesInfo(def == null ? code : def.name(), unit,
-                        unit != null && List.of("%", "bps", "points").contains(unit), FLOW_SERIES.contains(code)));
+                        unit != null && MacroSeriesChart.RATE_UNITS.contains(unit), FLOW_SERIES.contains(code)));
             }
         });
         Map<String, List<Candle>> prices = new LinkedHashMap<>();
@@ -227,6 +227,11 @@ public class MacroOutlookService {
                 case "cnbc" -> "CNBC";
                 case "yahoo" -> "Yahoo Finance";
                 case "cftc" -> "CFTC";
+                case "noaa_cpc" -> "NOAA Climate Prediction Center";
+                case "jamstec" -> "JAMSTEC (SINTEX-F, observed)";
+                case "longpaddock" -> "Long Paddock (Queensland Government, BoM SOI)";
+                case "chirps" -> "CHIRPS v3.0 (UCSB Climate Hazards Center)";
+                case "spi" -> "SPI-3 of the CHIRPS rainfall (1991 - 2020 base)";
                 case "manual" -> "CSV upload (Ingestion > Macro)";
                 default -> def.source();
             });

@@ -14,6 +14,12 @@ import type { ExcelStatus, MovementPage, OwnershipOptions, OwnershipReportPage }
 import type { OnePercentOptions, OnePercentPage, OnePercentReportPage } from "@/lib/ownership-one-percent"
 import type { InsiderPage, RegistrationOptions } from "@/lib/registration"
 import type { Portfolio } from "@/lib/portfolio"
+import type {
+  AnalysisOptions as PortfolioAnalysisOptions,
+  AnalysisReport as PortfolioAnalysisReport,
+  AnalysisRun as PortfolioAnalysisRun,
+} from "@/lib/portfolio-analysis"
+import { performanceQuery, type Performance } from "@/lib/portfolio-performance"
 import type { Scorecards } from "@/lib/scorecards"
 import type {
   TechnicalScreeningOptions,
@@ -166,6 +172,26 @@ export const getCompanyScorecards = cache((exchange: string, ticker: string) =>
 
 /** GET /api/v1/portfolio (Portfolio > Position of the signed-in user) */
 export const getPortfolio = cache(() => get<Portfolio>("/api/v1/portfolio"))
+
+/** GET /api/v1/portfolio/analyses/options (Portfolio > Analysis: limits, the portfolio, companies with their scores) */
+export const getPortfolioAnalysisOptions = cache(() =>
+  get<PortfolioAnalysisOptions>("/api/v1/portfolio/analyses/options")
+)
+
+/** GET /api/v1/portfolio/analyses?limit= (the user's runs, most recent first) */
+export const getPortfolioAnalyses = cache((limit: number) =>
+  get<PortfolioAnalysisRun[]>(`/api/v1/portfolio/analyses?${new URLSearchParams({ limit: String(limit) })}`)
+)
+
+/** GET /api/v1/portfolio/analyses/{id} */
+export const getPortfolioAnalysis = cache((id: string) =>
+  get<PortfolioAnalysisReport>(`/api/v1/portfolio/analyses/${encodeURIComponent(id)}`)
+)
+
+/** GET /api/v1/portfolio/performance?range= (Portfolio > Performance) */
+export const getPortfolioPerformance = cache((range: string) =>
+  get<Performance>(`/api/v1/portfolio/performance${performanceQuery(range)}`)
+)
 
 /** GET /api/v1/companies/profiles/status?exchange= (IDX company profiles card) */
 export const getCompanyProfilesStatus = cache((exchange: string) =>

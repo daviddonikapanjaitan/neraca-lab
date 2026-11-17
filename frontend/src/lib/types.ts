@@ -339,6 +339,7 @@ export type IngestionJobType =
   | "LISTING_PRICES"
   | "TECHNICAL_SCREENING"
   | "RAG_XLSX"
+  | "PORTFOLIO_ANALYSIS"
 
 /**
  * PDF: an uploaded PDF; NEWS: a news article; XLSX: a company's document built from Excel lists (its ownership); XBRL:
@@ -739,13 +740,13 @@ export interface MacroSeriesStatus {
   category: string
   unit: string
   frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY" | "EVENT"
-  /** fred | yahoo | bi | bi_seki | cnbc | cftc | manual */
+  /** fred | yahoo | bi | bi_seki | cnbc | cftc | manual; the weather: noaa_cpc | jamstec | longpaddock | chirps | spi */
   source: string
   sourceLabel: string
   sourceUrl: string | null
   releaseLagDays: number
   priority: number
-  /** DRUCKENMILLER, TUDOR_JONES */
+  /** DRUCKENMILLER, TUDOR_JONES, SOROS, DALIO */
   usedBy: string[]
   description: string | null
   rows: number

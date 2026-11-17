@@ -57,11 +57,15 @@ public class MacroIngestionTracker implements MacroIngestionQueue.Listener {
         String latest = r.latestDate() == null ? "" : ", latest " + r.latestDate();
         String warnings = r.warnings().isEmpty() ? "" : " (" + r.warnings().size() + " large "
                 + (r.warnings().size() == 1 ? "move" : "moves") + " to check)";
+        // a fetch that stopped early: the rest follows from where it stopped
+        String partial = r.partial() == null ? "" : r.continueAfter() == null || r.continueAfter().isZero()
+                ? " - to be continued from " + r.resumeFrom() + " (queued again)"
+                : " - " + r.partial();
         if (r.inserted() + r.revised() == 0) {
-            return "No new observation" + latest + warnings;
+            return "No new observation" + latest + warnings + partial;
         }
         return "Stored " + r.inserted() + " new and " + r.revised() + " revised "
-                + (r.inserted() + r.revised() == 1 ? "observation" : "observations") + latest + warnings;
+                + (r.inserted() + r.revised() == 1 ? "observation" : "observations") + latest + warnings + partial;
     }
 
     /** "FRED", "Bank Indonesia", ... */
@@ -73,6 +77,11 @@ public class MacroIngestionTracker implements MacroIngestionQueue.Listener {
             case "bi_seki" -> "Bank Indonesia SEKI";
             case "cnbc" -> "CNBC";
             case "cftc" -> "the CFTC";
+            case "noaa_cpc" -> "NOAA CPC";
+            case "jamstec" -> "JAMSTEC";
+            case "longpaddock" -> "Long Paddock (Queensland)";
+            case "chirps" -> "CHIRPS (UCSB Climate Hazards Center)";
+            case "spi" -> "the stored rainfall (SPI)";
             case "manual" -> "a CSV upload";
             default -> source;
         };

@@ -79,6 +79,8 @@ public class MacroLessons {
             case "STANCE" -> "Keep the stance inside its score band: BUY 65-100, ACCUMULATE 50-79, WAIT 35-64, AVOID 0-49.";
             case "UNKNOWN_SIGNAL" -> "In signalsUsed cite only keys and codes that appear in the macro dossier.";
             case "EMPTY" -> "Always give a score and a thesis.";
+            case "NO_CLIMATE" -> "Always fill climate: how the dossier's weather (El Nino / La Nina, the IOD, Indonesia's "
+                    + "rainfall and drought) bears on your call, through your own lens.";
             case "RULE" -> switch (agent) {
                 case TUDOR_JONES -> "Do not score 65+ or BUY while the index is below its 200-day average.";
                 case DRUCKENMILLER -> "Do not score 70+ while the liquidity regime is tightening unless money is visibly turning easier.";

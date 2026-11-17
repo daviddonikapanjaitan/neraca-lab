@@ -83,6 +83,116 @@ export interface MacroPreset {
   loop?: string | null
   /** Dalio: the growth / inflation quadrant */
   quadrant?: string | null
+  /** how the investor reads the weather (no vote); absent in answers of before 2026-11-16 */
+  climate?: { tone: Tone; text: string }
+}
+
+// ------------------------------------------------------------------ weather (ClimateBoard in the backend)
+
+/** The weather series' categories on Ingestion › Macro and Macro › Data. */
+export const WEATHER_CATEGORIES = ["WEATHER_ENSO", "WEATHER_IOD", "WEATHER_RAIN", "WEATHER_DROUGHT"] as const
+
+export function isWeatherCategory(category: string | null | undefined): boolean {
+  return !!category && category.startsWith("WEATHER_")
+}
+
+/** A unit as shown ("degC" is stored ASCII). */
+export function unitLabel(unit: string): string {
+  return unit === "degC" ? "°C" : unit
+}
+
+export type WeatherRisk = "DROUGHT" | "DRY_RISK" | "NORMAL" | "WET_RISK" | "WET"
+export type SpiState =
+  | "EXTREME_DROUGHT"
+  | "SEVERE_DROUGHT"
+  | "MODERATE_DROUGHT"
+  | "NEAR_NORMAL"
+  | "WET"
+  | "VERY_WET"
+
+/** A rainfall region: Indonesia's palm oil, coal and rice regions, or another producer. */
+export interface WeatherRegion {
+  code: string
+  spiCode: string
+  name: string
+  role: string
+  /** the latest month (its 1st) */
+  month: string
+  stale: boolean
+  rainfallMm: number | null
+  /** the 1991 - 2020 mean of that calendar month */
+  normalMm: number | null
+  pctOfNormal: number | null
+  pct3mOfNormal: number | null
+  spi3: number | null
+  spiState: SpiState | null
+  tone: Tone
+  summary: string
+}
+
+export interface WeatherChart {
+  code: string
+  group: "Global" | "Indonesia"
+  title: string
+  unit: string
+  digits: number
+  /** a rainfall chart drawn as % of the 1991 - 2020 normal */
+  pctOfNormal: boolean
+  /** [epoch seconds, value] */
+  points: [number, number][]
+  lastDate: string
+  lastValue: number
+}
+
+/** The weather of the Macro page: global and Indonesia apart, the sectors and the four investors' readings. */
+export interface MacroWeather {
+  asOfDate: string
+  season: { drySeason: boolean; text: string }
+  global: {
+    enso: {
+      state: "EL_NINO" | "LA_NINA" | "NEUTRAL" | null
+      strength: "WEAK" | "MODERATE" | "STRONG" | "VERY_STRONG" | null
+      roni: number | null
+      roniSeason: string | null
+      roniChange3m: number | null
+      trend: "STRENGTHENING" | "WEAKENING" | "STEADY" | null
+      oni: number | null
+      nino34Weekly: number | null
+      nino34WeekOf: string | null
+      soi30d: number | null
+      soi30dTo: string | null
+      soiMonthly: number | null
+      soiMonth: string | null
+      tone: Tone
+      summary: string
+    }
+    iod: { state: "POSITIVE" | "NEGATIVE" | "NEUTRAL" | null; value: number | null; month: string | null; tone: Tone; summary: string }
+    forecast: {
+      issued: string | null
+      elNino3m: number | null
+      laNina3m: number | null
+      elNino6m: number | null
+      laNina6m: number | null
+      elNino3mChange: number | null
+      tone: Tone
+      summary: string
+    }
+    producers: WeatherRegion[]
+  }
+  indonesia: {
+    regions: WeatherRegion[]
+    risk: WeatherRisk | null
+    riskLabel: string
+    tone: Tone | null
+    summary: string
+  }
+  implications: { sector: string; tone: Tone; text: string }[]
+  tone: Tone | null
+  summary: string
+  charts: WeatherChart[]
+  notes: string[]
+  /** each investor's reading of it (the presets' climate) */
+  assessments: { preset: MacroPreset["preset"]; name: string; tone: Tone; text: string }[]
 }
 
 /** One index of the country beside the others (IHSG and LQ45). */
@@ -211,6 +321,8 @@ export interface MacroOutlook {
   indexes: MacroIndexRow[]
   /** the commodities and currency pairs of the price ingestion */
   markets: MarketBoard
+  /** El Nino / La Nina, the IOD, rainfall and drought (global and Indonesia); absent before 2026-11-16 */
+  weather?: MacroWeather
   notes: string[]
   rulesVersion: string
   disclaimer: string
@@ -300,6 +412,13 @@ export interface MacroDataChart {
 export interface MacroDataSeriesChart {
   series: MacroDataSeries
   chart: MacroDataChart
+  /** a rainfall series (unit mm): its 1991 - 2020 monthly normals; else null */
+  normals?: {
+    /** January .. December (null: fewer than 25 years) */
+    monthly: (number | null)[]
+    latestPct: number | null
+    threeMonthPct: number | null
+  } | null
 }
 
 export function macroDataChartUrl(code: string, range: string): string {
@@ -311,4 +430,15 @@ export const MACRO_COUNTRY_LABELS: Record<string, string> = {
   US: "United States",
   CN: "China",
   GLOBAL: "Global",
+}
+
+/**
+ * The group of a series on Macro › Data and Ingestion › Macro: the weather apart from the economy, and within it the
+ * global weather apart from Indonesia's.
+ */
+export function macroGroupLabel(series: { country: string; category: string }): string {
+  if (isWeatherCategory(series.category)) {
+    return series.country === "ID" ? "Weather — Indonesia" : "Weather — Global"
+  }
+  return MACRO_COUNTRY_LABELS[series.country] ?? series.country
 }

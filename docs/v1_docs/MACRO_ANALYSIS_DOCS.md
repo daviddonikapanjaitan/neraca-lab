@@ -94,6 +94,15 @@ All from the database, as of today (Jakarta) and point in time (a macro observat
   trade, the report and its PDF show its summary. The prompts tell the research agent to read the rupiah against its
   peers (weaker than the region: the country's own pressure; weaker with it: the dollar's), EUR/USD as the dollar
   and AUD/JPY as risk appetite, and the agents that `regionalCurrencies` and the pair codes are signals they may cite.
+- **The weather** (since 2026-11-16; `weather` of the dossier, `ClimateBoard`, [MACRO_DOCS.md](MACRO_DOCS.md) sections
+  1a and 6a): **global** - El Nino / La Nina (RONI, ONI, the weekly Nino 3.4, the SOI), the Indian Ocean Dipole, NOAA's
+  ENSO forecast and the other producers' rainfall and drought - apart from **Indonesia** - the rainfall (% of normal) and
+  drought (SPI-3) of its palm oil, coal and rice regions and its risk (drought, dry risk, normal, wet risk, wet) - with
+  what it means for plantations, coal, food inflation and Bank Indonesia, the rupiah and haze, and each preset's
+  `climate` reading (no vote in the rules). The charts are kept without their points. The research agent is told the
+  rules' weather summary and the weather codes (`GL_ENSO_RONI`, `GL_IOD_DMI`, `GL_PROB_*`, `GL_RAIN_*`, `GL_SPI3_*`,
+  `ID_RAIN_*`, `ID_SPI3_*`) its tools read, and writes a `climate` paragraph in its brief; the synthesis gets the weather
+  and writes a **climate view** (the global and Indonesian weather and what it means for the call and the sectors).
 
 The research agent's tools (`MacroTools`) read the stored histories:
 
@@ -145,6 +154,13 @@ regime: VIX, credit, the curve, the dollar), Druckenmiller (liquidity: central b
 foreign money, 12 - 24 months ahead), Soros (reflexivity: the loop of foreign money, the rupiah and Bank Indonesia;
 boom and bust), Dalio (the growth / inflation quadrant, real rates, credit, terms of trade; never buys stagflation).
 
+**Every agent reads the weather** (since 2026-11-16): its reply has a `climate` field (at most 35 words: how El Nino /
+La Nina, the IOD and Indonesia's rainfall and drought bear on its call, or that they do not), stored in
+`macro_analysis_agent_score.climate` and shown on the report and its PDF. The personas say how each investor reads it:
+Tudor Jones only when it shows in the regime (food inflation, bond yields); Druckenmiller through NOAA's forecast and
+Bank Indonesia's room to cut; Soros as a trigger of the bust loop (food inflation, a weaker rupiah, BI defending it);
+Dalio on the inflation axis (a food supply shock; toward stagflation with slowing growth) and the terms of trade.
+
 **Validator issues**
 
 | Code | When |
@@ -154,6 +170,7 @@ boom and bust), Dalio (the growth / inflation quadrant, real rates, credit, term
 | RULE | The answer breaks the investor's own rule: Tudor Jones buying below the 200-day average; Druckenmiller 70+ while liquidity is TIGHTENING; Soros 70+ while the loop is VICIOUS; Dalio buying in STAGFLATION. |
 | UNKNOWN_SIGNAL | It cites signals that are not in the dossier. |
 | EMPTY | No score or no thesis. |
+| NO_CLIMATE | No climate reading (every agent must say how the weather bears on its call); its lesson asks for it. |
 
 ## 5. Scores
 
@@ -200,7 +217,7 @@ The models are those of the screening (`neracalab.screening.llm`: `research-mode
 | Table | Holds |
 |---|---|
 | `macro_analysis_run` | One analysis (`analysis_id` = the job id): country, index, agents, budget, as-of date, rules / overall score, adjustment, verdict, action, conviction, `context` (what the agents saw), `research`, `synthesis`, `notes`, cost and tokens. |
-| `macro_analysis_agent_score` | Each agent's prior, AI and final score, stance, thesis, supports, risks, buy / sell when, reflection, status (ASSESSED, REVISED, PRIOR_ONLY, NO_SCORE). |
+| `macro_analysis_agent_score` | Each agent's prior, AI and final score, stance, thesis, supports, risks, buy / sell when, reflection, status (ASSESSED, REVISED, PRIOR_ONLY, NO_SCORE), `climate` (its reading of the weather; `V1.0.62__schema_macro_weather.sql`, null before 2026-11-16). |
 | `macro_analysis_lesson` | Reflexion memory of the macro agents (`active = false` drops a lesson). |
 | `llm_usage.macro_analysis_id` | The model calls of an analysis. |
 
@@ -211,7 +228,8 @@ The models are those of the screening (`neracalab.screening.llm`: `research-mode
 | Test | Covers |
 |---|---|
 | `MacroAnalysisControllerTest` | The options; an analysis of Indonesia end to end on stored macro data, commodities and indexes with a scripted model (research with tools, four agents assessed or revised, the synthesis, scores, verdict, action, usage rows, the PDF), with two macro documents stored: the one published by the as-of date listed to the research agent and found by its document search (D1, kept as evidence and in the dossier), the one published after it not read and noted; an active analysis of the same index returned, not queued again; invalid requests (400) and agent names by code, preset or surname. |
-| `MacroAnalysisRulesTest` | `history` reads only what was published by the as-of date (stored high and low); a flow summed per month with changes in points; correlation and the tool limits; the document search (refs D1, D2 kept for the same chunk, excerpts, a repeated query refused, its own limit) offered only when the country has documents; the report's notes on documents not read; the validator holding each investor to his own rules; answers normalized; the prior from the preset; the blend and the action table; the synthesis bounded to +-5. |
+| `MacroAnalysisRulesTest` | `history` reads only what was published by the as-of date (stored high and low); a flow summed per month with changes in points; correlation and the tool limits; the document search (refs D1, D2 kept for the same chunk, excerpts, a repeated query refused, its own limit) offered only when the country has documents; the report's notes on documents not read; the validator holding each investor to his own rules and every agent to a
+climate reading (NO_CLIMATE); answers normalized; the prior from the preset; the blend and the action table; the synthesis bounded to +-5. |
 | `MarketBoardTest` | Exports, imports and the rupiah read for Indonesia (tones, terms of trade); stale data neutral, an empty board says so; the yuan, the dollar (EUR/USD) and risk appetite (AUD/JPY) read, a peer neutral on its own and none voting in the terms of trade; the rupiah weaker than, in line with and firmer than its Asian peers, unknown with fewer than 3 peers or without USD/IDR. |
 | `AccessControlTest` | The macro analyses need COMPANIES. |
 
